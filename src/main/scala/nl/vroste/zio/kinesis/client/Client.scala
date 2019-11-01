@@ -124,6 +124,14 @@ class Client(val kinesisClient: KinesisAsyncClient) {
           )
       }
 
+  private val retryOnResourceInUseSchedule: ZSchedule[Clock, Throwable, ((Duration, Int), Throwable)] =
+    ZSchedule.exponential(1.second) &&
+      ZSchedule.recurs(3) &&
+      ZSchedule.doWhile[Throwable] {
+        case _: ResourceInUseException => true
+        case _                         => false
+      }
+
   /**
    * Creates a [[ZStream]] of the records in the given shard
    *
@@ -148,19 +156,16 @@ class Client(val kinesisClient: KinesisAsyncClient) {
 
         subscribeResponse = asZIO {
           kinesisClient.subscribeToShard(
-            builder => {
-              builder.consumerARN(consumerARN).shardId(shardID).startingPosition(startingPosition);
-              ()
-            },
+            consumer[SubscribeToShardRequest.Builder](
+              builder =>
+                builder
+                  .consumerARN(consumerARN)
+                  .shardId(shardID)
+                  .startingPosition(startingPosition)
+            ),
             subscribeToShardResponseHandler(runtime, streamP)
           )
-        }.map { r =>
-          println(s"Got subscribe to shard response: ${r}")
-          r
-        }.retry(ZSchedule.exponential(1.second) && ZSchedule.recurs(3) && ZSchedule.doWhile[Throwable] {
-          case _: ResourceInUseException => true
-          case _                         => false
-        })
+        }.retry(retryOnResourceInUseSchedule)
         // subscribeResponse only completes with failure, not with success. It does not contain information of value anyway
         _      <- subscribeResponse.unit race streamP.await
         stream <- streamP.await
