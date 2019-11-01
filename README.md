@@ -28,7 +28,7 @@ val consumerARN = "arn:aws:etc"
 val client = Client.create
 
 client.use { c => 
-  val stream = c.consumeStream(
+  c.consumeStream(
       consumerARN = consumerARN,
       streamName = streamName,
       shardStartingPositions = _ =>
@@ -37,8 +37,16 @@ client.use { c =>
         ),
       serde = Serde.asciiString
     )
-    .flatMapPar(Int.MaxValue) { shardStream => shardStream }
-  stream.tap(record => Task(println(record))).runDrain
+    .flatMapPar(Int.MaxValue) { shardStream => 
+      shardStream.mapM { record =>
+        // Do something with the record here
+        // println(record.data)
+        // and finally checkpoint the sequence number
+        // customCheckpointer.checkpoint(record.shardID, record.sequenceNumber)
+        Task.unit
+      }
+    }
+  .runDrain
 }
 ```
 

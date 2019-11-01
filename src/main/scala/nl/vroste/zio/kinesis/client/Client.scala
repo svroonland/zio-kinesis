@@ -1,5 +1,6 @@
 package nl.vroste.zio.kinesis.client
 
+import java.time.Instant
 import java.util.concurrent.CompletableFuture
 
 import nl.vroste.zio.kinesis.client.Consumer.ConsumerRecord
@@ -8,6 +9,7 @@ import nl.vroste.zio.kinesis.client.serde.Deserializer
 import software.amazon.awssdk.core.async.SdkPublisher
 import software.amazon.awssdk.services.kinesis.model.{
   DeregisterStreamConsumerResponse,
+  EncryptionType,
   ListShardsRequest,
   ListShardsResponse,
   ListStreamsRequest,
@@ -105,7 +107,6 @@ class Client private (client: KinesisAsyncClient) {
         streamP <- Promise.make[Throwable, ZStream[Any, Throwable, Record]]
         runtime <- ZIO.runtime[Any]
 
-        // TODO renew the subscription periodically
         subscribeResponse = asZIO {
           client.subscribeToShard(
             builder => {
@@ -128,7 +129,14 @@ class Client private (client: KinesisAsyncClient) {
     }.flatMap(identity)
       .mapM { record =>
         serde.deserialize(record.data().asByteArray()).map { data =>
-          ConsumerRecord(record.partitionKey(), data, record.sequenceNumber())
+          ConsumerRecord(
+            record.sequenceNumber(),
+            record.approximateArrivalTimestamp(),
+            data,
+            record.partitionKey(),
+            record.encryptionType(),
+            shardID
+          )
         }
       }
       .repeat(ZSchedule.forever) // Subscription stops after 5 minutes
@@ -192,7 +200,14 @@ object Client {
 
 object Consumer {
 
-  case class ConsumerRecord[T](partitionKey: String, data: T, sequenceNumber: String)
+  case class ConsumerRecord[T](
+    sequenceNumber: String,
+    approximateArrivalTimestamp: Instant,
+    data: T,
+    partitionKey: String,
+    encryptionType: EncryptionType,
+    shardID: String
+  )
 
 }
 
