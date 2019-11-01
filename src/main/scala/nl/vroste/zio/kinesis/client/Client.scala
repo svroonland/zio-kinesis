@@ -168,11 +168,22 @@ class Client private (client: KinesisAsyncClient) {
 }
 
 object Client {
+
+  /**
+   * Create a client with the region and credentials from the default providers
+   *
+   * @return Managed resource that is closed after use
+   */
   def create: ZManaged[Any, Throwable, Client] =
     ZManaged.fromAutoCloseable {
       ZIO.effect(KinesisAsyncClient.create())
     }.map(new Client(_))
 
+  /**
+   * Create a custom client
+   *
+   * @return Managed resource that is closed after use
+   */
   def build(builder: KinesisAsyncClientBuilder): ZManaged[Any, Throwable, Client] =
     ZManaged.fromAutoCloseable {
       ZIO.effect(builder.build())
