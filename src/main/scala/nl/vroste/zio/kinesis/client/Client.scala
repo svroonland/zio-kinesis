@@ -3,8 +3,6 @@ package nl.vroste.zio.kinesis.client
 import java.time.Instant
 import java.util.concurrent.CompletableFuture
 
-import nl.vroste.zio.kinesis.client.Consumer.ConsumerRecord
-import nl.vroste.zio.kinesis.client.Util._
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import software.amazon.awssdk.core.async.SdkPublisher
 import software.amazon.awssdk.services.kinesis.model.{
@@ -43,6 +41,7 @@ import scala.collection.JavaConverters._
 
 class Client(val kinesisClient: KinesisAsyncClient) {
   import Client._
+  import Util._
 
   def listStreams(request: ListStreamsRequest): Task[ListStreamsResponse] =
     asZIO(kinesisClient.listStreams(request))
@@ -241,26 +240,6 @@ object Client {
       ZIO.effect(builder.build())
     }.map(new Client(_))
 
-  // To avoid 'Discarded non-Unit value' warnings
-  private def consumer[T](f: T => T): java.util.function.Consumer[T] = x => {
-    f(x)
-    ()
-  }
-
-  type Token = String
-  private def paginatedRequest[R, E, A](fetch: Option[Token] => ZIO[R, E, (A, Option[Token])]): ZStream[R, E, A] =
-    ZStream.fromEffect(fetch(None)).flatMap {
-      case (results, nextTokenOpt) =>
-        ZStream.succeed(results) ++ (nextTokenOpt match {
-          case None => ZStream.empty
-          case Some(nextToken) =>
-            ZStream.paginate[R, E, A, Token](nextToken)(token => fetch(Some(token)))
-        })
-    }
-}
-
-object Consumer {
-
   case class ConsumerRecord[T](
     sequenceNumber: String,
     approximateArrivalTimestamp: Instant,
@@ -272,9 +251,23 @@ object Consumer {
 
 }
 
-object Util {
+private object Util {
   def asZIO[T](f: => CompletableFuture[T]): Task[T] = ZIO.fromCompletionStage(ZIO(f).orDie)
 
-  def withClientAsZIO[E, T](f: KinesisAsyncClient => CompletableFuture[T]): ZIO[KinesisAsyncClient, Throwable, T] =
-    ZIO.environment[KinesisAsyncClient].flatMap(client => asZIO(f(client)))
+  // To avoid 'Discarded non-Unit value' warnings
+  def consumer[T](f: T => T): java.util.function.Consumer[T] = x => {
+    f(x)
+    ()
+  }
+
+  type Token = String
+  def paginatedRequest[R, E, A](fetch: Option[Token] => ZIO[R, E, (A, Option[Token])]): ZStream[R, E, A] =
+    ZStream.fromEffect(fetch(None)).flatMap {
+      case (results, nextTokenOpt) =>
+        ZStream.succeed(results) ++ (nextTokenOpt match {
+          case None => ZStream.empty
+          case Some(nextToken) =>
+            ZStream.paginate[R, E, A, Token](nextToken)(token => fetch(Some(token)))
+        })
+    }
 }
