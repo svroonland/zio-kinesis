@@ -14,6 +14,10 @@ import software.amazon.awssdk.services.kinesis.model.{
   ListShardsResponse,
   ListStreamsRequest,
   ListStreamsResponse,
+  PutRecordRequest,
+  PutRecordResponse,
+  PutRecordsRequest,
+  PutRecordsResponse,
   Record,
   RegisterStreamConsumerRequest,
   ResourceInUseException,
@@ -34,12 +38,18 @@ import zio.{ Promise, Task, ZIO, ZManaged, ZSchedule }
 
 import scala.collection.JavaConverters._
 
-class Client private (client: KinesisAsyncClient) {
+class Client(val kinesisClient: KinesisAsyncClient) {
   def listStreams(request: ListStreamsRequest): Task[ListStreamsResponse] =
-    asZIO(client.listStreams(request))
+    asZIO(kinesisClient.listStreams(request))
 
   def listShards(request: ListShardsRequest): Task[ListShardsResponse] =
-    asZIO(client.listShards(request))
+    asZIO(kinesisClient.listShards(request))
+
+  def putRecord(request: PutRecordRequest): Task[PutRecordResponse] =
+    asZIO(kinesisClient.putRecord(request))
+
+  def putRecords(request: PutRecordsRequest): Task[PutRecordsResponse] =
+    asZIO(kinesisClient.putRecords(request))
 
   /**
    * Registers a stream consumer for use during the lifetime of the managed resource
@@ -108,7 +118,7 @@ class Client private (client: KinesisAsyncClient) {
         runtime <- ZIO.runtime[Any]
 
         subscribeResponse = asZIO {
-          client.subscribeToShard(
+          kinesisClient.subscribeToShard(
             builder => {
               builder.consumerARN(consumerARN).shardId(shardID).startingPosition(startingPosition);
               ()
@@ -164,11 +174,11 @@ class Client private (client: KinesisAsyncClient) {
     builder: RegisterStreamConsumerRequest.Builder => RegisterStreamConsumerRequest.Builder
   ): ZIO[Any, Throwable, KConsumer] =
     asZIO {
-      client.registerStreamConsumer(builder(RegisterStreamConsumerRequest.builder()).build())
+      kinesisClient.registerStreamConsumer(builder(RegisterStreamConsumerRequest.builder()).build())
     }.map(_.consumer())
 
   def deregisterStreamConsumer(consumerARN: String): ZIO[Any, Throwable, DeregisterStreamConsumerResponse] = asZIO {
-    client.deregisterStreamConsumer(r => {
+    kinesisClient.deregisterStreamConsumer(r => {
       r.consumerARN(consumerARN);
       ()
     })
