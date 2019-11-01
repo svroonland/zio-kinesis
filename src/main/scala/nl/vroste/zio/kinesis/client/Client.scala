@@ -10,8 +10,9 @@ import software.amazon.awssdk.core.async.SdkPublisher
 import software.amazon.awssdk.services.kinesis.model.{
   DeregisterStreamConsumerResponse,
   EncryptionType,
+  GetShardIteratorRequest,
+  GetShardIteratorResponse,
   ListShardsRequest,
-  ListShardsResponse,
   ListStreamsRequest,
   ListStreamsResponse,
   PutRecordRequest,
@@ -21,9 +22,11 @@ import software.amazon.awssdk.services.kinesis.model.{
   Record,
   RegisterStreamConsumerRequest,
   ResourceInUseException,
+  Shard,
   StartingPosition,
   SubscribeToShardEvent,
   SubscribeToShardEventStream,
+  SubscribeToShardRequest,
   SubscribeToShardResponse,
   SubscribeToShardResponseHandler,
   Consumer => KConsumer
@@ -33,17 +36,45 @@ import zio.clock.Clock
 import zio.duration._
 import zio.interop.javaz._
 import zio.interop.reactiveStreams._
-import zio.stream.ZStream
-import zio.{ Promise, Task, ZIO, ZManaged, ZSchedule }
+import zio.stream.{ Stream, ZStream }
+import zio.{ Chunk, Promise, Task, ZIO, ZManaged, ZSchedule }
 
 import scala.collection.JavaConverters._
 
 class Client(val kinesisClient: KinesisAsyncClient) {
+  import Client._
+
   def listStreams(request: ListStreamsRequest): Task[ListStreamsResponse] =
     asZIO(kinesisClient.listStreams(request))
 
-  def listShards(request: ListShardsRequest): Task[ListShardsResponse] =
-    asZIO(kinesisClient.listShards(request))
+  /**
+   * List all shards in a stream
+   *
+   * Handles paginated responses from the AWS API in a streaming manner
+   *
+   * @param request Request parameters
+   * @param fetchSize Number of results to fetch in one request (maxResults parameter).
+   *                  Overwrites the maxResults in the request
+   */
+  def listShards(request: ListShardsRequest, fetchSize: Int = 10000): Stream[Throwable, Shard] =
+    paginatedRequest { token =>
+      asZIO {
+        val requestWithToken =
+          request.copy(
+            consumer[ListShardsRequest.Builder](
+              builder =>
+                token
+                  .map(builder.nextToken(_).streamName(null))
+                  .getOrElse(builder)
+                  .maxResults(fetchSize)
+            )
+          )
+        kinesisClient.listShards(requestWithToken)
+      }.map(response => (response.shards().asScala, Option(response.nextToken())))
+    }.mapConcatChunk(Chunk.fromIterable)
+
+  def getShardIterator(request: GetShardIteratorRequest): Task[GetShardIteratorResponse] =
+    asZIO(kinesisClient.getShardIterator(request))
 
   def putRecord(request: PutRecordRequest): Task[PutRecordResponse] =
     asZIO(kinesisClient.putRecord(request))
@@ -81,9 +112,7 @@ class Client(val kinesisClient: KinesisAsyncClient) {
     shardStartingPositions: String => Task[StartingPosition],
     serde: Deserializer[R, T]
   ): ZStream[Clock, Throwable, ZStream[R with Clock, Throwable, ConsumerRecord[T]]] =
-    ZStream
-      .fromEffect(listShards(ListShardsRequest.builder().streamName(streamName).build()))
-      .mapConcat(_.shards().asScala)
+    listShards(ListShardsRequest.builder().streamName(streamName).build())
       .mapM(shard => shardStartingPositions(shard.shardId()).map((shard, _)))
       .map {
         case (shard, startingPosition) =>
@@ -206,6 +235,23 @@ object Client {
     ZManaged.fromAutoCloseable {
       ZIO.effect(builder.build())
     }.map(new Client(_))
+
+  // To avoid 'Discarded non-Unit value' warnings
+  private def consumer[T](f: T => T): java.util.function.Consumer[T] = x => {
+    f(x)
+    ()
+  }
+
+  type Token = String
+  private def paginatedRequest[R, E, A](fetch: Option[Token] => ZIO[R, E, (A, Option[Token])]): ZStream[R, E, A] =
+    ZStream.fromEffect(fetch(None)).flatMap {
+      case (results, nextTokenOpt) =>
+        ZStream.succeed(results) ++ (nextTokenOpt match {
+          case None => ZStream.empty
+          case Some(nextToken) =>
+            ZStream.paginate[R, E, A, Token](nextToken)(token => fetch(Some(token)))
+        })
+    }
 }
 
 object Consumer {
