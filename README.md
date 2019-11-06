@@ -50,6 +50,9 @@ stream.runDrain
 
 Refer to the [AWS Kinesis Streams API Reference](https://docs.aws.amazon.com/kinesis/latest/APIReference/Welcome.html) for more information.
 
+## Admin operations
+The more administrative operations like creating and deleting streams are available in the `AdminClient`.
+
 ## Credits
 
 The Serde construct in this library is inspired by [zio-kafka](https://github.com/zio/zio-kafka)

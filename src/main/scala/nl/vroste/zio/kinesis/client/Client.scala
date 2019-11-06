@@ -19,8 +19,16 @@ class Client(val kinesisClient: KinesisAsyncClient) {
   import Client._
   import Util._
 
-  def listStreams(request: ListStreamsRequest): Task[ListStreamsResponse] =
-    asZIO(kinesisClient.listStreams(request))
+  /**
+   * Registers a stream consumer for use during the lifetime of the managed resource
+   *
+   * @param consumerName Name of the consumer
+   * @param streamARN    ARN of the stream to consume
+   * @return Managed resource that unregisters the stream consumer after use
+   */
+  def createConsumer(consumerName: String, streamARN: String): ZManaged[Any, Throwable, Consumer] =
+    registerStreamConsumer(_.consumerName(consumerName).streamARN(streamARN))
+      .toManaged(consumer => deregisterStreamConsumer(consumer.consumerARN()).ignore)
 
   /**
    * List all shards in a stream
@@ -52,23 +60,6 @@ class Client(val kinesisClient: KinesisAsyncClient) {
 
   def getShardIterator(request: GetShardIteratorRequest): Task[GetShardIteratorResponse] =
     asZIO(kinesisClient.getShardIterator(request))
-
-  def putRecord(request: PutRecordRequest): Task[PutRecordResponse] =
-    asZIO(kinesisClient.putRecord(request))
-
-  def putRecords(request: PutRecordsRequest): Task[PutRecordsResponse] =
-    asZIO(kinesisClient.putRecords(request))
-
-  /**
-   * Registers a stream consumer for use during the lifetime of the managed resource
-   *
-   * @param consumerName Name of the consumer
-   * @param streamARN    ARN of the stream to consume
-   * @return Managed resource that unregisters the stream consumer after use
-   */
-  def createConsumer(consumerName: String, streamARN: String): ZManaged[Any, Throwable, Consumer] =
-    registerStreamConsumer(_.consumerName(consumerName).streamARN(streamARN))
-      .toManaged(consumer => deregisterStreamConsumer(consumer.consumerARN()).ignore)
 
   /**
    * Creates a [[ZStream]] of the records in the given shard
@@ -159,12 +150,20 @@ class Client(val kinesisClient: KinesisAsyncClient) {
   /**
    * @see [[createConsumer]] for automatic deregistration of the consumer
    */
-  def deregisterStreamConsumer(consumerARN: String): ZIO[Any, Throwable, DeregisterStreamConsumerResponse] = asZIO {
-    kinesisClient.deregisterStreamConsumer(r => {
-      r.consumerARN(consumerARN);
-      ()
-    })
-  }
+  def deregisterStreamConsumer(consumerARN: String): Task[Unit] =
+    asZIO {
+      kinesisClient.deregisterStreamConsumer(r => {
+        r.consumerARN(consumerARN);
+        ()
+      })
+    }.unit
+
+  def putRecord(request: PutRecordRequest): Task[PutRecordResponse] =
+    asZIO(kinesisClient.putRecord(request))
+
+  def putRecords(request: PutRecordsRequest): Task[PutRecordsResponse] =
+    asZIO(kinesisClient.putRecords(request))
+
 }
 
 object Client {
