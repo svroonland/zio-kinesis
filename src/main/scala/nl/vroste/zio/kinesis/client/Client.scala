@@ -62,9 +62,9 @@ class Client(val kinesisClient: KinesisAsyncClient) {
     asZIO(kinesisClient.getShardIterator(request))
 
   /**
-   * Creates a [[ZStream]] of the records in the given shard
+   * Creates a `ZStream` of the records in the given shard
    *
-   * Records are deserialized to values of type [[T]]
+   * Records are deserialized to values of type `T`
    *
    * Subscriptions are valid for only 5 minutes and should be renewed by the caller with
    * an up to date starting position.
