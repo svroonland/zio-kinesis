@@ -19,15 +19,14 @@ name := "zio-kinesis"
 scalafmtOnCompile := true
 
 libraryDependencies ++= Seq(
-  "dev.zio"                 %% "zio-streams"                 % "1.0.0-RC16",
-  "dev.zio"                 %% "zio-test"                    % "1.0.0-RC16" % "test",
-  "dev.zio"                 %% "zio-test-sbt"                % "1.0.0-RC16" % "test",
-  "dev.zio"                 %% "zio-interop-java"            % "1.1.0.0-RC5",
-  "dev.zio"                 %% "zio-interop-reactivestreams" % "1.0.3.4-RC1",
-  "software.amazon.awssdk"  % "kinesis"                      % "2.10.3",
-  "software.amazon.kinesis" % "amazon-kinesis-client"        % "2.2.5",
-  "org.scalatest"           %% "scalatest"                   % "3.0.5" % "test",
-  "ch.qos.logback"          % "logback-classic"              % "1.2.3",
+  "dev.zio"                %% "zio-streams"                 % "1.0.0-RC16",
+  "dev.zio"                %% "zio-test"                    % "1.0.0-RC16" % "test",
+  "dev.zio"                %% "zio-test-sbt"                % "1.0.0-RC16" % "test",
+  "dev.zio"                %% "zio-interop-java"            % "1.1.0.0-RC5",
+  "dev.zio"                %% "zio-interop-reactivestreams" % "1.0.3.4-RC1",
+  "software.amazon.awssdk" % "kinesis"                      % "2.10.3",
+  "org.scalatest"          %% "scalatest"                   % "3.0.5" % "test",
+  "ch.qos.logback"         % "logback-classic"              % "1.2.3",
 //  "org.slf4j"               % "jul-to-slf4j"                 % "1.7.28",
   compilerPlugin("org.spire-math" %% "kind-projector" % "0.9.10")
 )
