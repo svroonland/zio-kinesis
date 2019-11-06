@@ -10,9 +10,16 @@ Currently a work in progress. The API will likely change.
 Ideally this library can offer equivalent functionality of the AWS Kinesis Client Library (checkpointing and rebalancing).
 
 
-## Usage example
+## Usage 
 
-Process all shards of a stream from the beginning, using an existing registered consumer.
+Add to your build.sbt:
+
+```scala
+libraryDependencies += "nl.vroste" %% "zio-kinesis" % "0.0.1"
+```
+
+### Consuming a stream
+Process all shards of a stream from the beginning, using an existing registered consumer. You will have to track current shard positions yourself using some external storage mechanism.
 
 ```scala
 import nl.vroste.zio.kinesis.client.Client
@@ -48,10 +55,10 @@ stream.runDrain
 }
 ```
 
-Refer to the [AWS Kinesis Streams API Reference](https://docs.aws.amazon.com/kinesis/latest/APIReference/Welcome.html) for more information.
-
-## Admin operations
+### Admin operations
 The more administrative operations like creating and deleting streams are available in the `AdminClient`.
+
+Refer to the [AWS Kinesis Streams API Reference](https://docs.aws.amazon.com/kinesis/latest/APIReference/Welcome.html) for more information.
 
 ## Credits
 
