@@ -5,37 +5,13 @@ import java.util.concurrent.CompletableFuture
 
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import software.amazon.awssdk.core.async.SdkPublisher
-import software.amazon.awssdk.services.kinesis.model.{
-  DeregisterStreamConsumerResponse,
-  EncryptionType,
-  GetShardIteratorRequest,
-  GetShardIteratorResponse,
-  ListShardsRequest,
-  ListStreamsRequest,
-  ListStreamsResponse,
-  PutRecordRequest,
-  PutRecordResponse,
-  PutRecordsRequest,
-  PutRecordsResponse,
-  Record,
-  RegisterStreamConsumerRequest,
-  ResourceInUseException,
-  Shard,
-  StartingPosition,
-  SubscribeToShardEvent,
-  SubscribeToShardEventStream,
-  SubscribeToShardRequest,
-  SubscribeToShardResponse,
-  SubscribeToShardResponseHandler,
-  Consumer => KConsumer
-}
+import software.amazon.awssdk.services.kinesis.model._
 import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyncClientBuilder }
+import zio._
 import zio.clock.Clock
-import zio.duration._
 import zio.interop.javaz._
 import zio.interop.reactiveStreams._
 import zio.stream.{ Stream, ZStream }
-import zio.{ Chunk, Promise, Task, ZIO, ZManaged, ZSchedule }
 
 import scala.collection.JavaConverters._
 
@@ -54,6 +30,8 @@ class Client(val kinesisClient: KinesisAsyncClient) {
    * @param request Request parameters
    * @param fetchSize Number of results to fetch in one request (maxResults parameter).
    *                  Overwrites the maxResults in the request
+   *
+   * @return ZStream of shards in a stream
    */
   def listShards(request: ListShardsRequest, fetchSize: Int = 10000): Stream[Throwable, Shard] =
     paginatedRequest { token =>
@@ -88,65 +66,32 @@ class Client(val kinesisClient: KinesisAsyncClient) {
    * @param streamARN    ARN of the stream to consume
    * @return Managed resource that unregisters the stream consumer after use
    */
-  def createConsumer(consumerName: String, streamARN: String): ZManaged[Any, Throwable, KConsumer] =
+  def createConsumer(consumerName: String, streamARN: String): ZManaged[Any, Throwable, Consumer] =
     registerStreamConsumer(_.consumerName(consumerName).streamARN(streamARN))
       .toManaged(consumer => deregisterStreamConsumer(consumer.consumerARN()).ignore)
 
   /**
-   * Creates a stream of streams for each shard in a stream
-   *
-   * The subscription for each shard is automatically renewed
-   *
-   * @param consumerARN
-   * @param streamName
-   * @param shardStartingPositions
-   * @param serde
-   * @tparam R
-   * @tparam T
-   * @return
-   */
-  def consumeStream[R, T](
-    consumerARN: String,
-    streamName: String,
-    shardStartingPositions: String => Task[StartingPosition],
-    serde: Deserializer[R, T]
-  ): ZStream[Clock, Throwable, ZStream[R with Clock, Throwable, ConsumerRecord[T]]] =
-    listShards(ListShardsRequest.builder().streamName(streamName).build())
-      .mapM(shard => shardStartingPositions(shard.shardId()).map((shard, _)))
-      .map {
-        case (shard, startingPosition) =>
-          consumeShard(
-            consumerARN,
-            shard.shardId(),
-            startingPosition,
-            serde
-          )
-      }
-
-  private val retryOnResourceInUseSchedule: ZSchedule[Clock, Throwable, ((Duration, Int), Throwable)] =
-    ZSchedule.exponential(1.second) &&
-      ZSchedule.recurs(3) &&
-      ZSchedule.doWhile[Throwable] {
-        case _: ResourceInUseException => true
-        case _                         => false
-      }
-
-  /**
    * Creates a [[ZStream]] of the records in the given shard
+   *
+   * Records are deserialized to values of type [[T]]
+   *
+   * Subscriptions are valid for only 5 minutes and should be renewed by the caller with
+   * an up to date starting position.
    *
    * @param consumerARN
    * @param shardID
    * @param startingPosition
-   * @param serde
-   * @tparam R
-   * @tparam T
-   * @return
+   * @param deserializer Converter of record's data bytes to a value of type T
+   * @tparam R Environment required by the deserializer
+   * @tparam T Type of values
+   * @return Stream of records. When exceptions occur in the subscription or the streaming, the
+   *         stream will fail.
    */
-  def consumeShard[R, T](
+  def subscribeToShard[R, T](
     consumerARN: String,
     shardID: String,
     startingPosition: StartingPosition,
-    serde: Deserializer[R, T]
+    deserializer: Deserializer[R, T]
   ): ZStream[R with Clock, Throwable, ConsumerRecord[T]] =
     ZStream.fromEffect {
       for {
@@ -164,25 +109,23 @@ class Client(val kinesisClient: KinesisAsyncClient) {
             ),
             subscribeToShardResponseHandler(runtime, streamP)
           )
-        }.retry(retryOnResourceInUseSchedule)
+        }
         // subscribeResponse only completes with failure, not with success. It does not contain information of value anyway
         _      <- subscribeResponse.unit race streamP.await
         stream <- streamP.await
       } yield stream
-    }.flatMap(identity)
-      .mapM { record =>
-        serde.deserialize(record.data().asByteArray()).map { data =>
-          ConsumerRecord(
-            record.sequenceNumber(),
-            record.approximateArrivalTimestamp(),
-            data,
-            record.partitionKey(),
-            record.encryptionType(),
-            shardID
-          )
-        }
+    }.flatMap(identity).mapM { record =>
+      deserializer.deserialize(record.data().asByteArray()).map { data =>
+        ConsumerRecord(
+          record.sequenceNumber(),
+          record.approximateArrivalTimestamp(),
+          data,
+          record.partitionKey(),
+          record.encryptionType(),
+          shardID
+        )
       }
-      .repeat(ZSchedule.forever) // Subscription stops after 5 minutes
+    }
 
   private def subscribeToShardResponseHandler(
     runtime: zio.Runtime[Any],
@@ -203,13 +146,19 @@ class Client(val kinesisClient: KinesisAsyncClient) {
       override def complete(): Unit = () // We only observe the subscriber's onComplete
     }
 
+  /**
+   * @see [[createConsumer]] for automatic deregistration of the consumer
+   */
   def registerStreamConsumer(
     builder: RegisterStreamConsumerRequest.Builder => RegisterStreamConsumerRequest.Builder
-  ): ZIO[Any, Throwable, KConsumer] =
+  ): ZIO[Any, Throwable, Consumer] =
     asZIO {
       kinesisClient.registerStreamConsumer(builder(RegisterStreamConsumerRequest.builder()).build())
     }.map(_.consumer())
 
+  /**
+   * @see [[createConsumer]] for automatic deregistration of the consumer
+   */
   def deregisterStreamConsumer(consumerARN: String): ZIO[Any, Throwable, DeregisterStreamConsumerResponse] = asZIO {
     kinesisClient.deregisterStreamConsumer(r => {
       r.consumerARN(consumerARN);

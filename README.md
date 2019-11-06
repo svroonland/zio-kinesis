@@ -15,38 +15,36 @@ Ideally this library can offer equivalent functionality of the AWS Kinesis Clien
 Process all shards of a stream from the beginning, using an existing registered consumer.
 
 ```scala
+import nl.vroste.zio.kinesis.client.Client
 import nl.vroste.zio.kinesis.client.serde.Serde
-
-import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
-import software.amazon.awssdk.services.kinesis.model.{ ShardIteratorType, StartingPosition }
+import software.amazon.awssdk.services.kinesis.model.{ ListShardsRequest, ShardIteratorType, StartingPosition }
 import zio.Task
-import nl.vroste.zio.kinesis.client._
 
-val streamName = "my_stream"
+val streamName  = "my_stream"
 val consumerARN = "arn:aws:etc"
 
-val client = Client.create
-
-client.use { c => 
-  c.consumeStream(
-      consumerARN = consumerARN,
-      streamName = streamName,
-      shardStartingPositions = _ =>
-        Task.succeed(
-          StartingPosition.builder().`type`(ShardIteratorType.TRIM_HORIZON).build()
-        ),
-      serde = Serde.asciiString
+Client.create.use { client =>
+val stream = client
+  .listShards(ListShardsRequest.builder().streamName("zio-test").build())
+  .map { shard =>
+    client.subscribeToShard(
+      consumerARN,
+      shard.shardId(),
+      StartingPosition.builder().`type`(ShardIteratorType.TRIM_HORIZON).build(),
+      Serde.asciiString
     )
-    .flatMapPar(Int.MaxValue) { shardStream => 
-      shardStream.mapM { record =>
-        // Do something with the record here
-        // println(record.data)
-        // and finally checkpoint the sequence number
-        // customCheckpointer.checkpoint(record.shardID, record.sequenceNumber)
-        Task.unit
-      }
+  }
+  .flatMapPar(Int.MaxValue) { shardStream =>
+    shardStream.mapM { record =>
+      // Do something with the record here
+      // println(record.data)
+      // and finally checkpoint the sequence number
+      // customCheckpointer.checkpoint(record.shardID, record.sequenceNumber)
+      Task.unit
     }
-  .runDrain
+  }
+
+stream.runDrain
 }
 ```
 
