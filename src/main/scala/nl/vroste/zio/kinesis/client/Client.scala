@@ -43,19 +43,18 @@ class Client(val kinesisClient: KinesisAsyncClient) {
    */
   def listShards(request: ListShardsRequest, fetchSize: Int = 10000): Stream[Throwable, Shard] =
     paginatedRequest { token =>
-      asZIO {
-        val requestWithToken =
-          request.copy(
-            consumer[ListShardsRequest.Builder](
-              builder =>
-                token
-                  .map(builder.nextToken(_).streamName(null))
-                  .getOrElse(builder)
-                  .maxResults(fetchSize)
-            )
+      val requestWithToken =
+        request.copy(
+          consumer[ListShardsRequest.Builder](
+            builder =>
+              token
+                .map(builder.nextToken(_).streamName(null))
+                .getOrElse(builder)
+                .maxResults(fetchSize)
           )
-        kinesisClient.listShards(requestWithToken)
-      }.map(response => (response.shards().asScala, Option(response.nextToken())))
+        )
+      asZIO(kinesisClient.listShards(requestWithToken))
+        .map(response => (response.shards().asScala, Option(response.nextToken())))
     }.mapConcatChunk(Chunk.fromIterable)
 
   def getShardIterator(request: GetShardIteratorRequest): Task[GetShardIteratorResponse] =
