@@ -174,6 +174,7 @@ class Client(val kinesisClient: KinesisAsyncClient) {
       request = PutRecordRequest
         .builder()
         .streamName(streamName)
+        .partitionKey(r.partitionKey)
         .data(SdkBytes.fromByteBuffer(dataBytes))
         .build()
       response <- putRecord(request)
