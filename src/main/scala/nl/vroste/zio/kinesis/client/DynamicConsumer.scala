@@ -1,19 +1,16 @@
 package nl.vroste.zio.kinesis.client
-import java.nio.ByteBuffer
 import java.time.Instant
-
-import software.amazon.awssdk.regions.Region
-import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
-import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
-import software.amazon.awssdk.services.kinesis.KinesisAsyncClientBuilder
-import software.amazon.kinesis.common.{ ConfigsBuilder, KinesisClientUtil }
-import software.amazon.kinesis.coordinator.Scheduler
-import software.amazon.kinesis.lifecycle.events._
-import software.amazon.kinesis.processor.{ RecordProcessorCheckpointer, ShardRecordProcessor }
 import java.util.UUID
 
 import nl.vroste.zio.kinesis.client.serde.Deserializer
+import software.amazon.awssdk.services.cloudwatch.{ CloudWatchAsyncClient, CloudWatchAsyncClientBuilder }
+import software.amazon.awssdk.services.dynamodb.{ DynamoDbAsyncClient, DynamoDbAsyncClientBuilder }
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
+import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyncClientBuilder }
+import software.amazon.kinesis.common.ConfigsBuilder
+import software.amazon.kinesis.coordinator.Scheduler
+import software.amazon.kinesis.lifecycle.events._
+import software.amazon.kinesis.processor.{ RecordProcessorCheckpointer, ShardRecordProcessor }
 import software.amazon.kinesis.retrieval.KinesisClientRecord
 import software.amazon.kinesis.retrieval.polling.PollingConfig
 import zio._
@@ -24,15 +21,35 @@ import zio.stream.{ StreamChunk, Take, ZStream, ZStreamChunk }
 import scala.collection.JavaConverters._
 
 /**
- * ZStream based interface to the Amazon Kinesis Client Library (KCL)
+ * Offers a ZStream based interface to the Amazon Kinesis Client Library (KCL)
+ *
+ * Ensures proper resource shutdown and failure handling
  */
 object DynamicConsumer {
-  def stream[R, T](
+
+  /**
+   * Create a ZStream of records on a Kinesis stream with substreams per shard
+   *
+   * Uses DynamoDB for lease coordination between different instances of consumers
+   * with the same application name and for offset checkpointing.
+   *
+   * @param streamName Name of the Kinesis stream
+   * @param applicationName Application name for coordinating shard leases
+   * @param deserializer Deserializer for record values
+   * @param kinesisClientBuilder
+   * @param cloudWatchClientBuilder
+   * @param dynamoDbClientBuilder
+   * @tparam R
+   * @tparam T Type of record values
+   * @return
+   */
+  def shardedStream[R, T](
     streamName: String,
     applicationName: String,
-    clientBuilder: KinesisAsyncClientBuilder,
-    region: Region,
-    deserializer: Deserializer[R, T]
+    deserializer: Deserializer[R, T],
+    kinesisClientBuilder: KinesisAsyncClientBuilder = KinesisAsyncClient.builder(),
+    cloudWatchClientBuilder: CloudWatchAsyncClientBuilder = CloudWatchAsyncClient.builder,
+    dynamoDbClientBuilder: DynamoDbAsyncClientBuilder = DynamoDbAsyncClient.builder()
   ): ZStream[Blocking with R, Throwable, (String, ZStreamChunk[Any, Throwable, Record[T]])] = {
 
     case class ShardQueue(runtime: zio.Runtime[R], q: Queue[Take[Throwable, Chunk[Record[T]]]]) {
@@ -117,20 +134,19 @@ object DynamicConsumer {
         } yield new Queues(runtime, q)
     }
 
-    val dynamoClient     = DynamoDbAsyncClient.builder.region(region).build
-    val cloudWatchClient = CloudWatchAsyncClient.builder.region(region).build
-    val kinesisClient    = KinesisClientUtil.createKinesisAsyncClient(clientBuilder)
-
-    // Run the scheduler
+// Run the scheduler
     val schedulerM =
       for {
-        queues <- Queues.make
+        queues           <- Queues.make
+        kinesisClient    <- ZManaged.fromAutoCloseable(ZIO(kinesisClientBuilder.build()))
+        dynamoDbClient   <- ZManaged.fromAutoCloseable(ZIO(dynamoDbClientBuilder.build()))
+        cloudWatchClient <- ZManaged.fromAutoCloseable(ZIO(cloudWatchClientBuilder.build()))
 
         configsBuilder = new ConfigsBuilder(
           streamName,
           applicationName,
           kinesisClient,
-          dynamoClient,
+          dynamoDbClient,
           cloudWatchClient,
           UUID.randomUUID.toString,
           () => new ZioShardProcessor(queues)
@@ -158,6 +174,27 @@ object DynamicConsumer {
       } yield ZStream.fromQueue(queues.shards).unTake
 
     ZStream.unwrapManaged(schedulerM)
+  }
+
+  /**
+   * Like [[shardedStream]], but merges all shards into one ZStream
+   */
+  def plainStream[R, T](
+    streamName: String,
+    applicationName: String,
+    deserializer: Deserializer[R, T],
+    kinesisClientBuilder: KinesisAsyncClientBuilder = KinesisAsyncClient.builder(),
+    cloudWatchClientBuilder: CloudWatchAsyncClientBuilder = CloudWatchAsyncClient.builder,
+    dynamoDbClientBuilder: DynamoDbAsyncClientBuilder = DynamoDbAsyncClient.builder()
+  ) = ZStreamChunk {
+    shardedStream(
+      streamName,
+      applicationName,
+      deserializer,
+      kinesisClientBuilder,
+      cloudWatchClientBuilder,
+      dynamoDbClientBuilder
+    ).flatMapPar(Int.MaxValue)(_._2.chunks)
   }
 
   case class Record[T](

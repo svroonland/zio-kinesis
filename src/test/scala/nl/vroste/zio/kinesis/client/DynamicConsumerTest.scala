@@ -1,8 +1,6 @@
 package nl.vroste.zio.kinesis.client
 
 import nl.vroste.zio.kinesis.client.serde.Serde
-import software.amazon.awssdk.regions.Region
-import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import zio.ZIO
 import zio.test._
 
@@ -12,7 +10,7 @@ object DynamicConsumerTest
         testM("basic") {
           println("Runnign test")
           val stream = DynamicConsumer
-            .stream("steven-test", "zio-test", KinesisAsyncClient.builder(), Region.EU_WEST_1, Serde.asciiString)
+            .shardedStream("steven-test", "zio-test", Serde.asciiString)
 
           stream
             .flatMapPar(Int.MaxValue)(_._2.flattenChunks)
