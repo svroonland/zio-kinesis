@@ -111,7 +111,9 @@ object DynamicConsumer {
                       configsBuilder.checkpointConfig(),
                       configsBuilder.coordinatorConfig(),
                       configsBuilder
-                        .leaseManagementConfig(), // .failoverTimeMillis(1000).maxLeasesToStealAtOneTime(10),
+                        .leaseManagementConfig()
+                        .failoverTimeMillis(1000)
+                        .maxLeasesToStealAtOneTime(10),
                       configsBuilder.lifecycleConfig(),
                       configsBuilder.metricsConfig(),
                       configsBuilder.processorConfig(),
@@ -120,12 +122,13 @@ object DynamicConsumer {
                         .retrievalSpecificConfig(new PollingConfig(streamName, kinesisClient))
                     )
                   ).toManaged_
-      stop  = (ZIO(println("Stopping scheduler from ZIO"))).unit.orDie //
-      stop2 = ZIO(zio.interop.javaz.fromFutureJava(UIO(scheduler.startGracefulShutdown())))
-      stop3 = ZIO(scheduler.startGracefulShutdown())
-      _ <- ZManaged.make {
-            zio.blocking.blocking(ZIO(scheduler.run())).forkAs("Kinesis Scheduler")
-          }(fib => (stop *> stop3 *> fib.join).unit.orDie)
+      _ <- ZManaged.fromEffect {
+            zio.blocking
+              .blocking(ZIO(scheduler.run()))
+              .fork
+              .flatMap(_.join)
+              .onInterrupt(zio.interop.javaz.fromFutureJava(UIO(scheduler.startGracefulShutdown())).unit.orDie)
+          }.fork
     } yield queues.shards
   }
 
