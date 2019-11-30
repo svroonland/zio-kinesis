@@ -50,10 +50,7 @@ object DynamicConsumer {
                       new Scheduler(
                         configsBuilder.checkpointConfig(),
                         configsBuilder.coordinatorConfig(),
-                        configsBuilder
-                          .leaseManagementConfig()
-                          .failoverTimeMillis(1000)
-                          .maxLeasesToStealAtOneTime(10),
+                        configsBuilder.leaseManagementConfig(),
                         configsBuilder.lifecycleConfig(),
                         configsBuilder.metricsConfig(),
                         configsBuilder.processorConfig(),
