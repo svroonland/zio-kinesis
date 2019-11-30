@@ -15,7 +15,7 @@ Ideally this library can offer equivalent functionality of the AWS Kinesis Clien
 Add to your build.sbt:
 
 ```scala
-libraryDependencies += "nl.vroste" %% "zio-kinesis" % "0.0.1"
+libraryDependencies += "nl.vroste" %% "zio-kinesis" % "0.1.0"
 ```
 
 ### Consuming a stream
