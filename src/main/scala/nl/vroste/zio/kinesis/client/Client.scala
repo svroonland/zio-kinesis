@@ -3,7 +3,8 @@ package nl.vroste.zio.kinesis.client
 import java.time.Instant
 import java.util.concurrent.CompletableFuture
 
-import nl.vroste.zio.kinesis.client.serde.Deserializer
+import nl.vroste.zio.kinesis.client.serde.{ Deserializer, Serializer }
+import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.core.async.SdkPublisher
 import software.amazon.awssdk.services.kinesis.model._
 import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyncClientBuilder }
@@ -43,19 +44,18 @@ class Client(val kinesisClient: KinesisAsyncClient) {
    */
   def listShards(request: ListShardsRequest, fetchSize: Int = 10000): Stream[Throwable, Shard] =
     paginatedRequest { token =>
-      asZIO {
-        val requestWithToken =
-          request.copy(
-            consumer[ListShardsRequest.Builder](
-              builder =>
-                token
-                  .map(builder.nextToken(_).streamName(null))
-                  .getOrElse(builder)
-                  .maxResults(fetchSize)
-            )
+      val requestWithToken =
+        request.copy(
+          consumer[ListShardsRequest.Builder](
+            builder =>
+              token
+                .map(builder.nextToken(_).streamName(null))
+                .getOrElse(builder)
+                .maxResults(fetchSize)
           )
-        kinesisClient.listShards(requestWithToken)
-      }.map(response => (response.shards().asScala, Option(response.nextToken())))
+        )
+      asZIO(kinesisClient.listShards(requestWithToken))
+        .map(response => (response.shards().asScala, Option(response.nextToken())))
     }.mapConcatChunk(Chunk.fromIterable)
 
   def getShardIterator(request: GetShardIteratorRequest): Task[GetShardIteratorResponse] =
@@ -106,7 +106,7 @@ class Client(val kinesisClient: KinesisAsyncClient) {
         stream <- streamP.await
       } yield stream
     }.flatMap(identity).mapM { record =>
-      deserializer.deserialize(record.data().asByteArray()).map { data =>
+      deserializer.deserialize(record.data().asByteBuffer()).map { data =>
         ConsumerRecord(
           record.sequenceNumber(),
           record.approximateArrivalTimestamp(),
@@ -164,6 +164,37 @@ class Client(val kinesisClient: KinesisAsyncClient) {
   def putRecords(request: PutRecordsRequest): Task[PutRecordsResponse] =
     asZIO(kinesisClient.putRecords(request))
 
+  def putRecord[R, T](
+    streamName: String,
+    serializer: Serializer[R, T],
+    r: ProducerRecord[T]
+  ): ZIO[R, Throwable, PutRecordResponse] =
+    for {
+      dataBytes <- serializer.serialize(r.data)
+      request = PutRecordRequest
+        .builder()
+        .streamName(streamName)
+        .partitionKey(r.partitionKey)
+        .data(SdkBytes.fromByteBuffer(dataBytes))
+        .build()
+      response <- putRecord(request)
+    } yield response
+
+  def putRecords[R, T](
+    streamName: String,
+    serializer: Serializer[R, T],
+    records: Iterable[ProducerRecord[T]]
+  ): ZIO[R, Throwable, PutRecordsResponse] =
+    for {
+      recordsAndBytes <- ZIO.traverse(records)(r => serializer.serialize(r.data).map((_, r.partitionKey)))
+      entries = recordsAndBytes.map {
+        case (data, partitionKey) =>
+          PutRecordsRequestEntry.builder().data(SdkBytes.fromByteBuffer(data)).partitionKey(partitionKey).build()
+      }
+      request  = PutRecordsRequest.builder().streamName(streamName).records(entries: _*).build()
+      response <- putRecords(request)
+    } yield response
+
 }
 
 object Client {
@@ -197,6 +228,7 @@ object Client {
     shardID: String
   )
 
+  case class ProducerRecord[T](partitionKey: String, data: T)
 }
 
 private object Util {

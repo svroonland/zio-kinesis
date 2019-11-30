@@ -13,8 +13,26 @@ class AdminClient(val kinesisClient: KinesisAsyncClient) {
   def removeTagsFromStream(request: RemoveTagsFromStreamRequest): Task[Unit] =
     asZIO(kinesisClient.removeTagsFromStream(request)).unit
 
-  def createStream(request: CreateStreamRequest): Task[Unit] =
+  def createStream(name: String, shardCount: Int): Task[Unit] = {
+    val request = CreateStreamRequest
+      .builder()
+      .streamName(name)
+      .shardCount(shardCount)
+      .build()
+
     asZIO(kinesisClient.createStream(request)).unit
+  }
+
+  def deleteStream(name: String, enforceConsumerDeletion: Boolean = false): Task[Unit] = {
+    val request =
+      DeleteStreamRequest
+        .builder()
+        .streamName(name)
+        .enforceConsumerDeletion(enforceConsumerDeletion)
+        .build()
+
+    asZIO(kinesisClient.deleteStream(request)).unit
+  }
 
   def deleteStream(request: DeleteStreamRequest): Task[Unit] =
     asZIO(kinesisClient.deleteStream(request)).unit
