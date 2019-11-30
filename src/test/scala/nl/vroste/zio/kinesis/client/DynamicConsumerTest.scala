@@ -97,7 +97,7 @@ object DynamicConsumerTest extends {
                     (id: Fiber.Id) => println(s"Consumer ${label} on fiber ${id} got record ${r} on shard ${shardID}")
                   )
               }.tap(_.checkpoint)
-                .map(r => (label, shardID))
+                .map(_ => (label, shardID))
                 .flattenChunks
                 .ensuring(ZIO(println(s"Shard ${shardID} completed for consumer ${label}")).orDie)
           }
