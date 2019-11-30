@@ -1,5 +1,7 @@
 package nl.vroste.zio.kinesis.client.serde
 
+import java.nio.ByteBuffer
+
 import zio.RIO
 
 import scala.util.{ Failure, Success, Try }
@@ -11,7 +13,7 @@ import scala.util.{ Failure, Success, Try }
  * @tparam T Value type
  */
 trait Deserializer[-R, +T] {
-  def deserialize(data: Array[Byte]): RIO[R, T]
+  def deserialize(data: ByteBuffer): RIO[R, T]
 
   /**
    * Create a deserializer for a type U based on the deserializer for type T and a mapping function
@@ -47,8 +49,8 @@ object Deserializer extends Serdes {
   /**
    * Create a deserializer from a function
    */
-  def apply[R, T](deser: Array[Byte] => RIO[R, T]): Deserializer[R, T] = new Deserializer[R, T] {
-    override def deserialize(data: Array[Byte]): RIO[R, T] =
+  def apply[R, T](deser: ByteBuffer => RIO[R, T]): Deserializer[R, T] = new Deserializer[R, T] {
+    override def deserialize(data: ByteBuffer): RIO[R, T] =
       deser(data)
   }
 }

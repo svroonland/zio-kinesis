@@ -105,7 +105,7 @@ class Client(val kinesisClient: KinesisAsyncClient) {
         stream <- streamP.await
       } yield stream
     }.flatMap(identity).mapM { record =>
-      deserializer.deserialize(record.data().asByteArray()).map { data =>
+      deserializer.deserialize(record.data().asByteBuffer()).map { data =>
         ConsumerRecord(
           record.sequenceNumber(),
           record.approximateArrivalTimestamp(),
