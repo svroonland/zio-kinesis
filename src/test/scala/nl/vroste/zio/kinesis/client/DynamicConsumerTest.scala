@@ -94,13 +94,11 @@ object DynamicConsumerTest extends {
               shardStream.tap { r =>
                 ZIO.fiberId andThen
                   ZIO.fromFunction(
-                    (id: Fiber.Id) =>
-                      s"Consumer ${label} on fiber ${id} got record ${r.partitionKey} on shard ${shardID}"
+                    (id: Fiber.Id) => println(s"Consumer ${label} on fiber ${id} got record ${r} on shard ${shardID}")
                   )
               }.tap(_.checkpoint)
                 .map(r => (label, shardID))
                 .flattenChunks
-                .tap(x => ZIO(println(x)))
                 .ensuring(ZIO(println(s"Shard ${shardID} completed for consumer ${label}")).orDie)
           }
 
@@ -111,11 +109,11 @@ object DynamicConsumerTest extends {
             (1 to nrRecords).map(i => ProducerRecord(s"key${i}", s"msg${i}"))
           for {
             _ <- ZStream
-                  .fromIterable(records)
+                  .fromIterable((1 to nrRecords))
                   .schedule(Schedule.spaced(250.millis))
-                  .mapM { r =>
+                  .mapM { _ =>
                     client
-                      .putRecord(streamName, Serde.asciiString, r)
+                      .putRecords(streamName, Serde.asciiString, records)
                       .tapError(e => ZIO(println(e)))
                       .retry(retryOnResourceNotFound)
                   }
@@ -129,7 +127,7 @@ object DynamicConsumerTest extends {
                         merge ZStream
                           .fromEffect(ZIO.sleep(5.seconds).provide(Clock.Live))
                           .flatMap(_ => streamConsumer("2")))
-                        .take(nrRecords)
+                        .take(nrRecords * nrRecords)
                         .runCollect
             _ = records.foreach(println)
             // Both consumers should have gotten some records

@@ -8,4 +8,6 @@
     <root level="INFO">
         <appender-ref ref="STDOUT" />
     </root>
+
+    <logger name="software.amazon.kinesis" level="INFO"/>
 </configuration>
