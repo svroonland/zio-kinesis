@@ -11,8 +11,8 @@ import software.amazon.kinesis.retrieval.KinesisClientRecord
 import java.util.UUID
 import software.amazon.kinesis.retrieval.polling.PollingConfig
 import zio._
-import zio.blocking.{ Blocking }
-//import zio.interop.javaz._
+import zio.blocking.Blocking
+import zio.interop.javaz._
 import zio.stream.{ StreamChunk, Take, ZStream, ZStreamChunk }
 
 import scala.collection.JavaConverters._
@@ -33,103 +33,45 @@ object DynamicConsumer {
     val kinesisClient    = KinesisClientUtil.createKinesisAsyncClient(clientBuilder)
 
     // Run the scheduler
-    val schedulerM = for {
-      queues <- Queues.make
+    val schedulerM =
+      for {
+        queues <- Queues.make
 
-      configsBuilder = new ConfigsBuilder(
-        streamName,
-        applicationName,
-        kinesisClient,
-        dynamoClient,
-        cloudWatchClient,
-        UUID.randomUUID.toString,
-        () => new ZioShardProcessor(queues)
-      )
-      scheduler <- Task(
-                    new Scheduler(
-                      configsBuilder.checkpointConfig(),
-                      configsBuilder.coordinatorConfig(),
-                      configsBuilder.leaseManagementConfig(),
-                      configsBuilder.lifecycleConfig(),
-                      configsBuilder.metricsConfig(),
-                      configsBuilder.processorConfig(),
-                      configsBuilder
-                        .retrievalConfig()
-                        .retrievalSpecificConfig(new PollingConfig(streamName, kinesisClient))
-                    )
-                  ).toManaged_
-      stop  = (ZIO(println("Stopping scheduler from ZIO"))).unit.orDie //
-      stop2 = ZIO(scheduler.startGracefulShutdown())
-      _ <- ZManaged.fromEffect {
-            zio.blocking.blocking(ZIO(scheduler.run()).ensuring((stop *> stop2).unit.orDie)).fork
-          }.tapM(f => ZIO(println(s"Created fiber ${f}")))
-            .ensuring((stop *> stop2).unit.orDie)
-//            .onExitFirst(
-//              _.foldM(
-//                _ => ZIO.dieMessage("?"), { _ =>
-//                  zio.blocking
-//                    .effectBlocking(ZIO.fromFutureJava(ZIO(scheduler.startGracefulShutdown()).orDie))
-//                    .unit
-//                    .orDie
-//                }
-//              )
-//            )
-//            .ensuringFirst(stop *> stop2)
-//      _ <- ZIO.unit.toManaged(_ => stop)
-    } yield ZStream.fromQueue(queues.shards).unTake
+        configsBuilder = new ConfigsBuilder(
+          streamName,
+          applicationName,
+          kinesisClient,
+          dynamoClient,
+          cloudWatchClient,
+          UUID.randomUUID.toString,
+          () => new ZioShardProcessor(queues)
+        )
+        scheduler <- Task(
+                      new Scheduler(
+                        configsBuilder.checkpointConfig(),
+                        configsBuilder.coordinatorConfig(),
+                        configsBuilder
+                          .leaseManagementConfig()
+                          .failoverTimeMillis(1000)
+                          .maxLeasesToStealAtOneTime(10),
+                        configsBuilder.lifecycleConfig(),
+                        configsBuilder.metricsConfig(),
+                        configsBuilder.processorConfig(),
+                        configsBuilder
+                          .retrievalConfig()
+                          .retrievalSpecificConfig(new PollingConfig(streamName, kinesisClient))
+                      )
+                    ).toManaged_
+        _ <- ZManaged.fromEffect {
+              zio.blocking
+                .blocking(ZIO(scheduler.run()))
+                .fork
+                .flatMap(_.join)
+                .onInterrupt(ZIO.fromFutureJava(UIO(scheduler.startGracefulShutdown())).unit.orDie)
+            }.fork
+      } yield ZStream.fromQueue(queues.shards).unTake
 
-//    ZStream.unwrapManaged(schedulerM)
     ZStream.unwrapManaged(schedulerM)
-  }
-
-  def streamTest(
-    streamName: String,
-    applicationName: String,
-    clientBuilder: KinesisAsyncClientBuilder,
-    region: Region
-  ) = {
-
-    val dynamoClient     = DynamoDbAsyncClient.builder.region(region).build
-    val cloudWatchClient = CloudWatchAsyncClient.builder.region(region).build
-    val kinesisClient    = KinesisClientUtil.createKinesisAsyncClient(clientBuilder)
-
-    // Run the scheduler
-    for {
-      queues <- Queues.make
-
-      configsBuilder = new ConfigsBuilder(
-        streamName,
-        applicationName,
-        kinesisClient,
-        dynamoClient,
-        cloudWatchClient,
-        UUID.randomUUID.toString,
-        () => new ZioShardProcessor(queues)
-      )
-      scheduler <- Task(
-                    new Scheduler(
-                      configsBuilder.checkpointConfig(),
-                      configsBuilder.coordinatorConfig(),
-                      configsBuilder
-                        .leaseManagementConfig()
-                        .failoverTimeMillis(1000)
-                        .maxLeasesToStealAtOneTime(10),
-                      configsBuilder.lifecycleConfig(),
-                      configsBuilder.metricsConfig(),
-                      configsBuilder.processorConfig(),
-                      configsBuilder
-                        .retrievalConfig()
-                        .retrievalSpecificConfig(new PollingConfig(streamName, kinesisClient))
-                    )
-                  ).toManaged_
-      _ <- ZManaged.fromEffect {
-            zio.blocking
-              .blocking(ZIO(scheduler.run()))
-              .fork
-              .flatMap(_.join)
-              .onInterrupt(zio.interop.javaz.fromFutureJava(UIO(scheduler.startGracefulShutdown())).unit.orDie)
-          }.fork
-    } yield queues.shards
   }
 
   class ZioShardProcessor(queues: Queues) extends ShardRecordProcessor {
