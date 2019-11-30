@@ -110,7 +110,8 @@ object DynamicConsumer {
                     new Scheduler(
                       configsBuilder.checkpointConfig(),
                       configsBuilder.coordinatorConfig(),
-                      configsBuilder.leaseManagementConfig(),
+                      configsBuilder
+                        .leaseManagementConfig(), // .failoverTimeMillis(1000).maxLeasesToStealAtOneTime(10),
                       configsBuilder.lifecycleConfig(),
                       configsBuilder.metricsConfig(),
                       configsBuilder.processorConfig(),
@@ -120,11 +121,12 @@ object DynamicConsumer {
                     )
                   ).toManaged_
       stop  = (ZIO(println("Stopping scheduler from ZIO"))).unit.orDie //
-      stop2 = ZIO(scheduler.startGracefulShutdown())
-      _ <- ZManaged.fromEffect {
-            zio.blocking.blocking(ZIO(scheduler.run())).fork
-          }.ensuring((stop *> stop2).unit.orDie)
-    } yield ()
+      stop2 = ZIO(zio.interop.javaz.fromFutureJava(UIO(scheduler.startGracefulShutdown())))
+      stop3 = ZIO(scheduler.startGracefulShutdown())
+      _ <- ZManaged.make {
+            zio.blocking.blocking(ZIO(scheduler.run())).forkAs("Kinesis Scheduler")
+          }(fib => (stop *> stop3 *> fib.join).unit.orDie)
+    } yield queues.shards
   }
 
   class ZioShardProcessor(queues: Queues) extends ShardRecordProcessor {
