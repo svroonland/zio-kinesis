@@ -3,7 +3,8 @@ package nl.vroste.zio.kinesis.client
 import java.time.Instant
 import java.util.concurrent.CompletableFuture
 
-import nl.vroste.zio.kinesis.client.serde.Deserializer
+import nl.vroste.zio.kinesis.client.serde.{ Deserializer, Serializer }
+import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.core.async.SdkPublisher
 import software.amazon.awssdk.services.kinesis.model._
 import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyncClientBuilder }
@@ -163,6 +164,36 @@ class Client(val kinesisClient: KinesisAsyncClient) {
   def putRecords(request: PutRecordsRequest): Task[PutRecordsResponse] =
     asZIO(kinesisClient.putRecords(request))
 
+  def putRecord[R, T](
+    streamName: String,
+    serializer: Serializer[R, T],
+    r: ProducerRecord[T]
+  ): ZIO[R, Throwable, PutRecordResponse] =
+    for {
+      dataBytes <- serializer.serialize(r.data)
+      request = PutRecordRequest
+        .builder()
+        .streamName(streamName)
+        .data(SdkBytes.fromByteBuffer(dataBytes))
+        .build()
+      response <- putRecord(request)
+    } yield response
+
+  def putRecords[R, T](
+    streamName: String,
+    serializer: Serializer[R, T],
+    records: Iterable[ProducerRecord[T]]
+  ): ZIO[R, Throwable, PutRecordsResponse] =
+    for {
+      recordsAndBytes <- ZIO.traverse(records)(r => serializer.serialize(r.data).map((_, r.partitionKey)))
+      entries = recordsAndBytes.map {
+        case (data, partitionKey) =>
+          PutRecordsRequestEntry.builder().data(SdkBytes.fromByteBuffer(data)).partitionKey(partitionKey).build()
+      }
+      request  = PutRecordsRequest.builder().streamName(streamName).records(entries: _*).build()
+      response <- putRecords(request)
+    } yield response
+
 }
 
 object Client {
@@ -196,6 +227,7 @@ object Client {
     shardID: String
   )
 
+  case class ProducerRecord[T](partitionKey: String, data: T)
 }
 
 private object Util {
