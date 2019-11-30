@@ -7,7 +7,7 @@ import software.amazon.awssdk.services.cloudwatch.{ CloudWatchAsyncClient, Cloud
 import software.amazon.awssdk.services.dynamodb.{ DynamoDbAsyncClient, DynamoDbAsyncClientBuilder }
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyncClientBuilder }
-import software.amazon.kinesis.common.ConfigsBuilder
+import software.amazon.kinesis.common.{ ConfigsBuilder, InitialPositionInStream, InitialPositionInStreamExtended }
 import software.amazon.kinesis.coordinator.Scheduler
 import software.amazon.kinesis.lifecycle.events._
 import software.amazon.kinesis.processor.{ RecordProcessorCheckpointer, ShardRecordProcessor }
@@ -49,7 +49,9 @@ object DynamicConsumer {
     deserializer: Deserializer[R, T],
     kinesisClientBuilder: KinesisAsyncClientBuilder = KinesisAsyncClient.builder(),
     cloudWatchClientBuilder: CloudWatchAsyncClientBuilder = CloudWatchAsyncClient.builder,
-    dynamoDbClientBuilder: DynamoDbAsyncClientBuilder = DynamoDbAsyncClient.builder()
+    dynamoDbClientBuilder: DynamoDbAsyncClientBuilder = DynamoDbAsyncClient.builder(),
+    initialPosition: InitialPositionInStreamExtended =
+      InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON)
   ): ZStream[Blocking with R, Throwable, (String, ZStreamChunk[Any, Throwable, Record[T]])] = {
 
     case class ShardQueue(runtime: zio.Runtime[R], q: Queue[Take[Throwable, Chunk[Record[T]]]]) {
@@ -95,23 +97,17 @@ object DynamicConsumer {
       override def initialize(input: InitializationInput): Unit =
         shardQueue = queues.newShard(input.shardId())
 
-      override def processRecords(processRecordsInput: ProcessRecordsInput): Unit = {
-        println("Getting records!!!!!")
+      override def processRecords(processRecordsInput: ProcessRecordsInput): Unit =
         shardQueue.offerRecords(processRecordsInput.records(), processRecordsInput.checkpointer())
-      }
 
-      override def leaseLost(leaseLostInput: LeaseLostInput): Unit = {
-        println("Lease lost")
+      override def leaseLost(leaseLostInput: LeaseLostInput): Unit =
         shardQueue.stop()
-      }
-      override def shardEnded(shardEndedInput: ShardEndedInput): Unit = {
-        println("Shard ended")
+
+      override def shardEnded(shardEndedInput: ShardEndedInput): Unit =
         shardQueue.stop()
-      }
-      override def shutdownRequested(shutdownRequestedInput: ShutdownRequestedInput): Unit = {
-        println("Shard shutdown requested")
+
+      override def shutdownRequested(shutdownRequestedInput: ShutdownRequestedInput): Unit =
         shardQueue.stop()
-      }
     }
 
     class Queues(private val runtime: zio.Runtime[R], val shards: Queue[Take[Throwable, (String, ShardStream[T])]]) {
@@ -120,7 +116,6 @@ object DynamicConsumer {
           for {
             queue  <- Queue.unbounded[Take[Throwable, Chunk[Record[T]]]].map(ShardQueue(runtime, _))
             stream = ZStreamChunk(ZStream.fromQueue(queue.q).unTake)
-            _      = println(s"Adding new shard stream: ${shard}")
             _      <- shards.offer(Take.Value(shard -> stream)).unit
           } yield queue
         }
@@ -155,12 +150,13 @@ object DynamicConsumer {
                       new Scheduler(
                         configsBuilder.checkpointConfig(),
                         configsBuilder.coordinatorConfig(),
-                        configsBuilder.leaseManagementConfig(),
+                        configsBuilder.leaseManagementConfig().initialPositionInStream(initialPosition),
                         configsBuilder.lifecycleConfig(),
                         configsBuilder.metricsConfig(),
                         configsBuilder.processorConfig(),
                         configsBuilder
                           .retrievalConfig()
+                          .initialPositionInStreamExtended(initialPosition)
                           .retrievalSpecificConfig(new PollingConfig(streamName, kinesisClient))
                       )
                     ).toManaged_
