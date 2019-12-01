@@ -76,7 +76,9 @@ object Producer {
             // Several putRecords requests in parallel
             .mapMPar(maxParallelRequests) { requests =>
               for {
-                response <- client.putRecords(streamName, serializer, requests.map(_.r))
+                response <- client
+                             .putRecords(streamName, serializer, requests.map(_.r))
+                             .retry(Schedule.exponential(1.second))
 
                 (newFailed, succeeded) = response
                   .records()
