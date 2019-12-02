@@ -53,13 +53,12 @@ object ProducerTest extends {
         println("Putting records")
         for {
           _ <- ZIO.traversePar(1 to 200) { i =>
-                val records = (1 to 100).map(j => ProducerRecord(s"key${i}", s"message${i}-${j}"))
-                producer.produceChunk(Chunk.fromIterable(records)) >>= (ZIO.traverse(_)(
-                  result => ZIO(println(s"Record ${i} produced ${result}"))
-                ))
+                val records = (1 to 1000).map(j => ProducerRecord(s"key${i}", s"message${i}-${j}"))
+                producer.produceChunk(Chunk.fromIterable(records)) *>
+                  ZIO(println(s"Chunk ${i} completed"))
               }
         } yield assertCompletes
-      }
+      }.provide(Clock.Live)
     }
-  ) @@ timeout(1.minute) @@ sequential
+  ) @@ timeout(3.minute) @@ sequential
 )
