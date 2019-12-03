@@ -5,13 +5,15 @@ import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.serde.Serializer
 import software.amazon.awssdk.core.SdkBytes
-import software.amazon.awssdk.services.kinesis.model.PutRecordsRequestEntry
+import software.amazon.awssdk.services.kinesis.model.{ KinesisException, PutRecordsRequestEntry }
 import zio._
 import zio.clock.Clock
 import zio.duration.{ Duration, _ }
 import zio.stream.{ ZSink, ZStream }
 
 import scala.collection.JavaConverters._
+import scala.reflect.ClassTag
+import scala.util.control.NonFatal
 
 /**
  * Producer for Kinesis records
@@ -49,12 +51,14 @@ trait Producer[T] {
    * Backpressures when too many requests are in flight
    *
    * @param r
-   * @return
+   * @return Task that fails if the records fail to be produced with a non-recoverable error
    */
   def produce(r: ProducerRecord[T]): Task[ProduceResponse]
 
   /**
    * Backpressures when too many requests are in flight
+   *
+   * @return Task that fails if any of the records fail to be produced with a non-recoverable error
    */
   def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[List[ProduceResponse]]
 
@@ -95,18 +99,20 @@ object Producer {
             )
             // Several putRecords requests in parallel
             .mapMPar(settings.maxParallelRequests) { batch: PutRecordsBatch =>
-              for {
+              (for {
                 response <- client
                              .putRecords(streamName, batch.entries.map(_.r))
-                             // TODO retry on recoverable errors, eg service temporarily unavailable, but not on auth failure
-                             .retry(settings.backoffRequests)
+                             .retry(scheduleCatchRecoverable && settings.backoffRequests)
 
                 maybeSucceeded = response
                   .records()
                   .asScala
                   .zip(batch.entries)
                 (newFailed, succeeded) = if (response.failedRecordCount() > 0) {
-                  maybeSucceeded.partition { case (result, _) => result.errorCode() != null }
+                  maybeSucceeded.partition {
+                    case (result, _) =>
+                      result.errorCode() != null && recoverableErrorCodes.contains(result.errorCode())
+                  }
                 } else {
                   (Seq.empty, maybeSucceeded)
                 }
@@ -120,7 +126,7 @@ object Producer {
                       case (response, request) =>
                         request.done.succeed(ProduceResponse(response.shardId(), response.sequenceNumber()))
                     }
-              } yield ()
+              } yield ()).catchAll { case NonFatal(e) => ZIO.foreach_(batch.entries.map(_.done))(_.fail(e)) }
             }
             .runDrain
             .toManaged_
@@ -158,11 +164,13 @@ object Producer {
                 } yield ProduceRequest(entry, done, now.toInstant)
               }
           }
-          .flatMap(requests => queue.offerAll(requests) *> ZIO.traverse(requests)(_.done.await))
+          .flatMap(requests => queue.offerAll(requests) *> ZIO.collectAllPar(requests.map(_.done.await)))
     }
 
   val maxRecordsPerRequest     = 500             // This is a Kinesis API limitation
   val maxPayloadSizePerRequest = 5 * 1024 * 1024 // 5 MB
+
+  val recoverableErrorCodes = Set("ProvisionedThroughputExceededException", "InternalFailure", "ServiceUnavailable");
 
   final case class ProduceResponse(shardId: String, sequenceNumber: String)
 
@@ -223,4 +231,9 @@ object Producer {
         }
       }
     }
+
+  private final def scheduleCatchRecoverable: Schedule[Any, Throwable, Throwable] = Schedule.doWhile {
+    case e: KinesisException if e.statusCode() / 100 != 4 => true
+    case _                                                => false
+  }
 }
