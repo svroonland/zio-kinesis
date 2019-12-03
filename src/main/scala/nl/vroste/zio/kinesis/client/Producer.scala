@@ -58,43 +58,52 @@ trait Producer[T] {
     ZSink.drain.contramapM(produceChunk)
 }
 
+final case class ProducerSettings(
+  bufferSize: Int = 8192, // Prefer powers of 2
+  maxBufferDuration: Duration = 500.millis,
+  maxParallelRequests: Int = 24,
+  backoffRequests: Schedule[Clock, Throwable, Any] = Schedule.exponential(500.millis) && Schedule.recurs(5),
+  failedDelay: Duration = 100.millis
+)
+
 object Producer {
   def make[R, T](
     streamName: String,
     client: Client,
     serializer: Serializer[R, T],
-    bufferSize: Int = 8192, // Prefer powers of 2
-    maxBufferDuration: Duration = 500.millis,
-    maxParallelRequests: Int = 24
+    settings: ProducerSettings = ProducerSettings()
   ): ZManaged[R with Clock, Throwable, Producer[T]] =
     for {
       env   <- ZIO.environment[R].toManaged_
-      queue <- zio.Queue.bounded[ProduceRequest](bufferSize).toManaged(_.shutdown)
+      queue <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
 
-      failedQueue <- zio.Queue.bounded[ProduceRequest](bufferSize).toManaged(_.shutdown)
+      failedQueue <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
 
       // Failed records get precedence)
       _ <- (ZStream.fromQueue(failedQueue) merge ZStream.fromQueue(queue))
           // Buffer records up to maxBufferDuration or up to the Kinesis PutRecords request limit
             .aggregateAsyncWithin(
               foldWhileCondition[ProduceRequest, PutRecordsBatch](PutRecordsBatch.empty)(_.isWithinLimits)(_.add(_)),
-              Schedule.spaced(maxBufferDuration)
+              Schedule.spaced(settings.maxBufferDuration)
             )
             // Several putRecords requests in parallel
-            .mapMPar(maxParallelRequests) { batch: PutRecordsBatch =>
+            .mapMPar(settings.maxParallelRequests) { batch: PutRecordsBatch =>
               for {
                 response <- client
                              .putRecords(streamName, batch.entries.map(_.r))
                              // TODO retry on recoverable errors, eg service temporarily unavailable, but not on auth failure
-                             .retry(Schedule.exponential(100.millis))
+                             .retry(settings.backoffRequests)
 
                 (newFailed, succeeded) = response
                   .records()
                   .asScala
-                  .zip(batch.entries.toList)
+                  .zip(batch.entries)
                   .partition { case (result, _) => result.errorCode() != null }
                 // TODO backoff for shard limit stuff
-                _ <- failedQueue.offerAll(newFailed.map(_._2)).delay(100.millis).fork // TODO should be per shard
+                _ <- failedQueue
+                      .offerAll(newFailed.map(_._2))
+                      .delay(settings.failedDelay)
+                      .fork // TODO should be per shard
                 _ <- ZIO.traverse(succeeded) {
                       case (response, request) =>
                         request.done.succeed(ProduceResponse(response.shardId(), response.sequenceNumber()))

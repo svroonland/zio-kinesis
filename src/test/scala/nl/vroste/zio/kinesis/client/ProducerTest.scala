@@ -46,22 +46,26 @@ object ProducerTest extends {
       val streamName = "zio-test-stream-" + UUID.randomUUID().toString
 
       (for {
-        _        <- createStream(streamName, 10)
-        client   <- Client.create
-        producer <- Producer.make(streamName, client, Serde.asciiString, bufferSize = 32768).provide(Clock.Live)
-      } yield producer).use { producer =>
-        (ZIO.sleep(10.seconds) *> (
-          for {
-            _ <- ZIO.sequenceParN(24)((1 to 200).map { i =>
-                  for {
-                    _       <- ZIO(println(s"Starting chunk ${i}"))
-                    records = (1 to 1000).map(j => ProducerRecord(s"key${i}", s"message${i}-${j}"))
-                    _ <- (producer
-                          .produceChunk(Chunk.fromIterable(records)) *> ZIO(println(s"Chunk ${i} completed")))
-                  } yield ()
-                })
-          } yield assertCompletes
-        )).provide(Clock.Live)
+        _      <- createStream(streamName, 10)
+        client <- Client.create
+        producer <- Producer
+                     .make(streamName, client, Serde.asciiString, ProducerSettings(bufferSize = 32768))
+                     .provide(Clock.Live)
+      } yield producer).use {
+        producer =>
+          (
+            for {
+              // Parallelism, but not infinitely (not sure if it matters)
+              _ <- ZIO.sequenceParN(24)((1 to 200).map { i =>
+                    for {
+                      _       <- ZIO(println(s"Starting chunk ${i}"))
+                      records = (1 to 1000).map(j => ProducerRecord(s"key${i}", s"message${i}-${j}"))
+                      _ <- (producer
+                            .produceChunk(Chunk.fromIterable(records)) *> ZIO(println(s"Chunk ${i} completed")))
+                    } yield ()
+                  })
+            } yield assertCompletes
+          ).provide(Clock.Live)
       }
     }
   ) @@ timeout(3.minute) @@ sequential
