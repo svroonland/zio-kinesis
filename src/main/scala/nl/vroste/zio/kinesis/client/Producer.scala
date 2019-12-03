@@ -12,7 +12,6 @@ import zio.duration.{ Duration, _ }
 import zio.stream.{ ZSink, ZStream }
 
 import scala.collection.JavaConverters._
-import scala.reflect.ClassTag
 import scala.util.control.NonFatal
 
 /**
