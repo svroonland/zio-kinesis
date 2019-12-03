@@ -16,19 +16,25 @@ import scala.collection.JavaConverters._
 /**
  * Producer for Kinesis records
  *
+ * Supports higher volume producing than making use of the [[Client]] directly.
+ *
  * Features:
  * - Batching of records into a single PutRecords calls to Kinesis for reduced IO overhead
  * - Retry requests with backoff on recoverable errors
  * - Retry individual records
  * - Rate limiting to respect shard capacity (TODO)
  *
- * Performs batching of records for efficiency, retry with back and retrying of failed put requests (eg due to Kinesis shard rate limits)
+ * Records are batched for up to `maxBufferDuration` time, or 500 records or 5MB of payload size,
+ * whichever comes first. The latter two are Kinesis API limits.
  *
- * Has an internal queue
+ * Individual records which cannot be produced due to Kinesis shard rate limits are retried.
  *
- * Inspired by https://docs.aws.amazon.com/streams/latest/dev/developing-producers-with-kpl.html
+ * Individual shard rate limiting is not yet implemented by this library.
  *
- * Rate limits for PutRecords:
+ * Inspired by https://docs.aws.amazon.com/streams/latest/dev/developing-producers-with-kpl.html and
+ * https://aws.amazon.com/blogs/big-data/implementing-efficient-and-reliable-producers-with-the-amazon-kinesis-producer-library/
+ *
+ * Rate limits for the Kinesis PutRecords API (see https://docs.aws.amazon.com/kinesis/latest/APIReference/API_PutRecords.html):
  * - 500 records per request
  * - Whole request max 5MB
  * - Each item max 1MB
@@ -38,23 +44,24 @@ import scala.collection.JavaConverters._
 trait Producer[T] {
 
   /**
-   * Put a record on
+   * Produce a single record
+   *
    * Backpressures when too many requests are in flight
    *
    * @param r
    * @return
    */
-  def produce(r: ProducerRecord[T]): ZIO[Clock, Throwable, ProduceResponse]
+  def produce(r: ProducerRecord[T]): Task[ProduceResponse]
 
   /**
    * Backpressures when too many requests are in flight
    */
-  def produceChunk(chunk: Chunk[ProducerRecord[T]]): ZIO[Clock, Throwable, List[ProduceResponse]]
+  def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[List[ProduceResponse]]
 
   /**
-   * ZSink for producing records
+   * ZSink interface to the Producer
    */
-  def sinkChunked: ZSink[Clock, Throwable, Nothing, Chunk[ProducerRecord[T]], Unit] =
+  def sinkChunked: ZSink[Any, Throwable, Nothing, Chunk[ProducerRecord[T]], Unit] =
     ZSink.drain.contramapM(produceChunk)
 }
 
@@ -74,7 +81,7 @@ object Producer {
     settings: ProducerSettings = ProducerSettings()
   ): ZManaged[R with Clock, Throwable, Producer[T]] =
     for {
-      env   <- ZIO.environment[R].toManaged_
+      env   <- ZIO.environment[R with Clock].toManaged_
       queue <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
 
       failedQueue <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
@@ -114,9 +121,9 @@ object Producer {
             .toManaged_
             .fork
     } yield new Producer[T] {
-      override def produce(r: ProducerRecord[T]): ZIO[Clock, Throwable, ProduceResponse] =
+      override def produce(r: ProducerRecord[T]): Task[ProduceResponse] =
         for {
-          now  <- zio.clock.currentDateTime
+          now  <- zio.clock.currentDateTime.provide(env)
           done <- Promise.make[Throwable, ProduceResponse]
           data <- serializer.serialize(r.data).provide(env)
           entry = PutRecordsRequestEntry
@@ -129,21 +136,24 @@ object Producer {
           response <- done.await
         } yield response
 
-      override def produceChunk(chunk: Chunk[ProducerRecord[T]]): ZIO[Clock, Throwable, List[ProduceResponse]] =
-        zio.clock.currentDateTime.flatMap { now =>
-          ZIO
-            .traverse(chunk.toList) { r =>
-              for {
-                done <- Promise.make[Throwable, ProduceResponse]
-                data <- serializer.serialize(r.data).provide(env)
-                entry = PutRecordsRequestEntry
-                  .builder()
-                  .partitionKey(r.partitionKey)
-                  .data(SdkBytes.fromByteBuffer(data))
-                  .build()
-              } yield ProduceRequest(entry, done, now.toInstant)
-            }
-        }.flatMap(requests => queue.offerAll(requests) *> ZIO.traverse(requests)(_.done.await))
+      override def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[List[ProduceResponse]] =
+        zio.clock.currentDateTime
+          .provide(env)
+          .flatMap { now =>
+            ZIO
+              .traverse(chunk.toList) { r =>
+                for {
+                  done <- Promise.make[Throwable, ProduceResponse]
+                  data <- serializer.serialize(r.data).provide(env)
+                  entry = PutRecordsRequestEntry
+                    .builder()
+                    .partitionKey(r.partitionKey)
+                    .data(SdkBytes.fromByteBuffer(data))
+                    .build()
+                } yield ProduceRequest(entry, done, now.toInstant)
+              }
+          }
+          .flatMap(requests => queue.offerAll(requests) *> ZIO.traverse(requests)(_.done.await))
     }
 
   val maxRecordsPerRequest     = 500             // This is a Kinesis API limitation
