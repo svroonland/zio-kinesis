@@ -101,11 +101,16 @@ object Producer {
                              // TODO retry on recoverable errors, eg service temporarily unavailable, but not on auth failure
                              .retry(settings.backoffRequests)
 
-                (newFailed, succeeded) = response
+                maybeSucceeded = response
                   .records()
                   .asScala
                   .zip(batch.entries)
-                  .partition { case (result, _) => result.errorCode() != null }
+                (newFailed, succeeded) = if (response.failedRecordCount() > 0) {
+                  maybeSucceeded.partition { case (result, _) => result.errorCode() != null }
+                } else {
+                  (Seq.empty, maybeSucceeded)
+                }
+
                 // TODO backoff for shard limit stuff
                 _ <- failedQueue
                       .offerAll(newFailed.map(_._2))
