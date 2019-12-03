@@ -9,13 +9,25 @@ import software.amazon.awssdk.core.async.SdkPublisher
 import software.amazon.awssdk.services.kinesis.model._
 import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyncClientBuilder }
 import zio._
-import zio.clock.Clock
 import zio.interop.javaz._
 import zio.interop.reactiveStreams._
 import zio.stream.{ Stream, ZStream }
 
 import scala.collection.JavaConverters._
 
+/**
+ * ZIO wrapper for around the KinesisAsyncClient
+ *
+ * The interface is as close as possible to the natural ZIO variant of the KinesisAsyncClient interface,
+ * with some noteable differences:
+ * - Methods working with records (consuming or producing) make use of Serdes for (de)serialization
+ * - Paginated APIs such as listShards are modeled as a Stream
+ * - AWS SDK library method responses that only indicate success and do not contain any other
+ *   data (besides SDK internals) are mapped to a ZIO of Unit
+ * - AWS SDK library method responses that contain a single field are mapped to a ZIO of that field's type
+ *
+ * @param kinesisClient
+ */
 class Client(val kinesisClient: KinesisAsyncClient) {
   import Client._
   import Util._
@@ -58,8 +70,8 @@ class Client(val kinesisClient: KinesisAsyncClient) {
         .map(response => (response.shards().asScala, Option(response.nextToken())))
     }.mapConcatChunk(Chunk.fromIterable)
 
-  def getShardIterator(request: GetShardIteratorRequest): Task[GetShardIteratorResponse] =
-    asZIO(kinesisClient.getShardIterator(request))
+  def getShardIterator(request: GetShardIteratorRequest): Task[String] =
+    asZIO(kinesisClient.getShardIterator(request)).map(_.shardIterator())
 
   /**
    * Creates a `ZStream` of the records in the given shard
@@ -83,7 +95,7 @@ class Client(val kinesisClient: KinesisAsyncClient) {
     shardID: String,
     startingPosition: StartingPosition,
     deserializer: Deserializer[R, T]
-  ): ZStream[R with Clock, Throwable, ConsumerRecord[T]] =
+  ): ZStream[R, Throwable, ConsumerRecord[T]] =
     ZStream.fromEffect {
       for {
         streamP <- Promise.make[Throwable, ZStream[Any, Throwable, Record]]
@@ -158,10 +170,10 @@ class Client(val kinesisClient: KinesisAsyncClient) {
       })
     }.unit
 
-  def putRecord(request: PutRecordRequest): Task[PutRecordResponse] =
+  private def putRecord(request: PutRecordRequest): Task[PutRecordResponse] =
     asZIO(kinesisClient.putRecord(request))
 
-  def putRecords(request: PutRecordsRequest): Task[PutRecordsResponse] =
+  private def putRecords(request: PutRecordsRequest): Task[PutRecordsResponse] =
     asZIO(kinesisClient.putRecords(request))
 
   def putRecord[R, T](
@@ -191,9 +203,11 @@ class Client(val kinesisClient: KinesisAsyncClient) {
         case (data, partitionKey) =>
           PutRecordsRequestEntry.builder().data(SdkBytes.fromByteBuffer(data)).partitionKey(partitionKey).build()
       }
-      request  = PutRecordsRequest.builder().streamName(streamName).records(entries: _*).build()
-      response <- putRecords(request)
+      response <- putRecords(streamName, entries)
     } yield response
+
+  def putRecords(streamName: String, entries: List[PutRecordsRequestEntry]): Task[PutRecordsResponse] =
+    putRecords(PutRecordsRequest.builder().streamName(streamName).records(entries: _*).build())
 
 }
 
