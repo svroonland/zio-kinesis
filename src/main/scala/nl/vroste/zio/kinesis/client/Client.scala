@@ -203,9 +203,11 @@ class Client(val kinesisClient: KinesisAsyncClient) {
         case (data, partitionKey) =>
           PutRecordsRequestEntry.builder().data(SdkBytes.fromByteBuffer(data)).partitionKey(partitionKey).build()
       }
-      request  = PutRecordsRequest.builder().streamName(streamName).records(entries: _*).build()
-      response <- putRecords(request)
+      response <- putRecords(streamName, entries)
     } yield response
+
+  def putRecords(streamName: String, entries: List[PutRecordsRequestEntry]): Task[PutRecordsResponse] =
+    putRecords(PutRecordsRequest.builder().streamName(streamName).records(entries: _*).build())
 
 }
 

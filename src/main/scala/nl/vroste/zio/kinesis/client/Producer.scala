@@ -4,10 +4,12 @@ import java.time.Instant
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.serde.Serializer
+import software.amazon.awssdk.core.SdkBytes
+import software.amazon.awssdk.services.kinesis.model.PutRecordsRequestEntry
 import zio._
 import zio.clock.Clock
 import zio.duration.{ Duration, _ }
-import zio.stream.{ Sink, ZSink, ZStream }
+import zio.stream.{ ZSink, ZStream }
 
 import scala.collection.JavaConverters._
 
@@ -57,54 +59,42 @@ trait Producer[T] {
 }
 
 object Producer {
-  final case class ProduceResponse(shardId: String, sequenceNumber: String)
-
-  private case class ProduceRequest[T](
-    r: ProducerRecord[T],
-    done: Promise[Throwable, ProduceResponse],
-    timestamp: Instant
-  )
-
   def make[R, T](
     streamName: String,
     client: Client,
     serializer: Serializer[R, T],
-    bufferSize: Int = 1024, // Prefer powers of 2
-    maxBufferDuration: Duration = 100.millis,
+    bufferSize: Int = 8192, // Prefer powers of 2
+    maxBufferDuration: Duration = 500.millis,
     maxParallelRequests: Int = 24
   ): ZManaged[R with Clock, Throwable, Producer[T]] =
     for {
-      queue <- zio.Queue.bounded[ProduceRequest[T]](bufferSize).toManaged(_.shutdown)
+      env   <- ZIO.environment[R].toManaged_
+      queue <- zio.Queue.bounded[ProduceRequest](bufferSize).toManaged(_.shutdown)
 
-      failedQueue <- zio.Queue.bounded[ProduceRequest[T]](bufferSize).toManaged(_.shutdown)
+      failedQueue <- zio.Queue.bounded[ProduceRequest](bufferSize).toManaged(_.shutdown)
 
       // Failed records get precedence)
       _ <- (ZStream.fromQueue(failedQueue) merge ZStream.fromQueue(queue))
           // Buffer records up to maxBufferDuration or up to the Kinesis PutRecords request limit
             .aggregateAsyncWithin(
-              Sink.collectAllN[ProduceRequest[T]](maxRecordsPerRequest.toLong),
+              foldWhileCondition[ProduceRequest, PutRecordsBatch](PutRecordsBatch.empty)(_.isWithinLimits)(_.add(_)),
               Schedule.spaced(maxBufferDuration)
             )
             // Several putRecords requests in parallel
-            .mapMPar(maxParallelRequests) { requests =>
+            .mapMPar(maxParallelRequests) { batch: PutRecordsBatch =>
               for {
                 response <- client
-                             .putRecords(streamName, serializer, requests.map(_.r))
+                             .putRecords(streamName, batch.entries.map(_.r))
                              // TODO retry on recoverable errors, eg service temporarily unavailable, but not on auth failure
-                             .retry(Schedule.exponential(1.second))
+                             .retry(Schedule.exponential(100.millis))
 
                 (newFailed, succeeded) = response
                   .records()
                   .asScala
-                  .zip(requests)
+                  .zip(batch.entries.toList)
                   .partition { case (result, _) => result.errorCode() != null }
-                _ = println(s"Success: ${succeeded.size}")
-                _ = println(
-                  s"Success: ${succeeded.size} (oldest: ${succeeded.headOption.map(_._2.timestamp)}), " +
-                    s"failures: ${newFailed.size} (oldest ${newFailed.headOption.map(_._2.timestamp)})"
-                )
                 // TODO backoff for shard limit stuff
-                _ <- failedQueue.offerAll(newFailed.map(_._2)).delay(1.second).fork // TODO should be per shard
+                _ <- failedQueue.offerAll(newFailed.map(_._2)).delay(100.millis).fork // TODO should be per shard
                 _ <- ZIO.traverse(succeeded) {
                       case (response, request) =>
                         request.done.succeed(ProduceResponse(response.shardId(), response.sequenceNumber()))
@@ -117,9 +107,15 @@ object Producer {
     } yield new Producer[T] {
       override def produce(r: ProducerRecord[T]): ZIO[Clock, Throwable, ProduceResponse] =
         for {
-          done     <- Promise.make[Throwable, ProduceResponse]
-          now      <- zio.clock.currentDateTime
-          request  = ProduceRequest(r, done, now.toInstant)
+          now  <- zio.clock.currentDateTime
+          done <- Promise.make[Throwable, ProduceResponse]
+          data <- serializer.serialize(r.data).provide(env)
+          entry = PutRecordsRequestEntry
+            .builder()
+            .partitionKey(r.partitionKey)
+            .data(SdkBytes.fromByteBuffer(data))
+            .build()
+          request  = ProduceRequest(entry, done, now.toInstant)
           _        <- queue.offer(request)
           response <- done.await
         } yield response
@@ -127,11 +123,80 @@ object Producer {
       override def produceChunk(chunk: Chunk[ProducerRecord[T]]): ZIO[Clock, Throwable, List[ProduceResponse]] =
         zio.clock.currentDateTime.flatMap { now =>
           ZIO
-            .traverse(chunk.toVector) { r =>
-              Promise.make[Throwable, ProduceResponse].map(ProduceRequest(r, _, now.toInstant))
+            .traverse(chunk.toList) { r =>
+              for {
+                done <- Promise.make[Throwable, ProduceResponse]
+                data <- serializer.serialize(r.data).provide(env)
+                entry = PutRecordsRequestEntry
+                  .builder()
+                  .partitionKey(r.partitionKey)
+                  .data(SdkBytes.fromByteBuffer(data))
+                  .build()
+              } yield ProduceRequest(entry, done, now.toInstant)
             }
         }.flatMap(requests => queue.offerAll(requests) *> ZIO.traverse(requests)(_.done.await))
     }
 
-  val maxRecordsPerRequest = 500 // This is a Kinesis API limitation
+  val maxRecordsPerRequest     = 500             // This is a Kinesis API limitation
+  val maxPayloadSizePerRequest = 5 * 1024 * 1024 // 5 MB
+
+  final case class ProduceResponse(shardId: String, sequenceNumber: String)
+
+  private final case class ProduceRequest(
+    r: PutRecordsRequestEntry,
+    done: Promise[Throwable, ProduceResponse],
+    timestamp: Instant
+  )
+
+  private final case class PutRecordsBatch(entries: List[ProduceRequest], nrRecords: Int, payloadSize: Long) {
+    def add(entry: ProduceRequest): PutRecordsBatch =
+      copy(
+        entries = entry +: entries,
+        nrRecords = nrRecords + 1,
+        payloadSize = payloadSize + entry.r.partitionKey().length + entry.r.data().asByteArray().size
+      )
+
+    def isWithinLimits =
+      nrRecords <= maxRecordsPerRequest &&
+        payloadSize < maxPayloadSizePerRequest
+  }
+
+  private object PutRecordsBatch {
+    val empty = PutRecordsBatch(List.empty, 0, 0)
+  }
+
+  /**
+   * Sink that aggregates while the aggregate meets the condition
+   *
+   * @param z Initial aggregate
+   * @param condition Predicate to check on the aggregate to decide whether to include a new element
+   * @param f Aggregation function
+   * @tparam A Type of element
+   * @tparam S Type of aggregate
+   * @return
+   */
+  private final def foldWhileCondition[A, S](
+    z: S
+  )(condition: S => Boolean)(f: (S, A) => S): ZSink[Any, Nothing, A, A, S] =
+    new ZSink[Any, Nothing, A, A, S] {
+      type State = (S, Option[A])
+
+      override def cont(state: (S, Option[A])): Boolean = state._2.isEmpty
+      override def extract(state: (S, Option[A])): ZIO[Any, Nothing, (S, Chunk[A])] = {
+        val (s, maybeLeftover) = state
+        ZIO.succeed((s, maybeLeftover.map(Chunk.single).getOrElse(Chunk.empty)))
+      }
+
+      override def initial: ZIO[Any, Nothing, (S, Option[A])] = ZIO.succeed((z, None))
+
+      override def step(state: (S, Option[A]), a: A): ZIO[Any, Nothing, (S, Option[A])] = ZIO.succeed {
+        val (s, _)   = state
+        val newState = f(s, a)
+        if (condition(newState)) {
+          (newState, None)
+        } else {
+          (s, Some(a))
+        }
+      }
+    }
 }
