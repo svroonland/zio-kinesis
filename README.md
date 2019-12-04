@@ -7,7 +7,7 @@ ZIO Kinesis is a ZIO-based wrapper around the AWS Kinesis SDK. All operations ar
 
 The library consists of 3 major components:
 
-* `Client` and `AdminClient`: ZIO wrappers around the low level AWS Kinesis SDK methods. Methods offer a ZIO-native interface with ZStream where applicable.
+* `Client` and `AdminClient`: ZIO wrappers around the low level AWS Kinesis SDK methods. Methods offer a ZIO-native interface with ZStream where applicable, taking care of paginated request and AWS rate limits.
 * `DynamicConsumer`: a ZStream-based interface to the Kinesis Client Library; an auto-rebalancing and checkpointing consumer.
 * `Producer`: used to produce efficiently and reliably to Kinesis while respecting Kinesis limits. Features batching and failure handling.
 
@@ -17,7 +17,7 @@ The library consists of 3 major components:
 Add to your build.sbt:
 
 ```scala
-libraryDependencies += "nl.vroste" %% "zio-kinesis" % "0.2.0"
+libraryDependencies += "nl.vroste" %% "zio-kinesis" % "0.3.0"
 ```
 
 ## DynamicConsumer
@@ -48,6 +48,7 @@ DynamicConsumer
       .tap { r: DynamicConsumer.Record[String] =>
           ZIO(println(s"Got record ${r} on shard ${shardId}")) *> r.checkpoint
         }
+      .flattenChunks
   }
   .runDrain
 ```
@@ -92,35 +93,35 @@ Process all shards of a stream from the beginning, using an existing registered 
 
 ```scala
 import nl.vroste.zio.kinesis.client.Client
+import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
 import nl.vroste.zio.kinesis.client.serde.Serde
-import software.amazon.awssdk.services.kinesis.model.{ ListShardsRequest, ShardIteratorType, StartingPosition }
 import zio.Task
 
 val streamName  = "my_stream"
 val consumerARN = "arn:aws:etc"
 
 Client.create.use { client =>
-val stream = client
-  .listShards(ListShardsRequest.builder().streamName("zio-test").build())
-  .map { shard =>
-    client.subscribeToShard(
-      consumerARN,
-      shard.shardId(),
-      StartingPosition.builder().`type`(ShardIteratorType.TRIM_HORIZON).build(),
-      Serde.asciiString
-    )
-  }
-  .flatMapPar(Int.MaxValue) { shardStream =>
-    shardStream.mapM { record =>
-      // Do something with the record here
-      // println(record.data)
-      // and finally checkpoint the sequence number
-      // customCheckpointer.checkpoint(record.shardID, record.sequenceNumber)
-      Task.unit
-    }
-  }
+    val stream = client
+      .listShards("zio-test")
+      .map { shard =>
+        client.subscribeToShard(
+          consumerARN,
+          shard.shardId(),
+          ShardIteratorType.TrimHorizon,
+          Serde.asciiString
+        )
+      }
+      .flatMapPar(Int.MaxValue) { shardStream =>
+        shardStream.mapM { record =>
+          // Do something with the record here
+          // println(record.data)
+          // and finally checkpoint the sequence number
+          // customCheckpointer.checkpoint(record.shardID, record.sequenceNumber)
+          Task.unit
+        }
+      }
 
-stream.runDrain
+    stream.runDrain
 }
 ```
 
@@ -131,6 +132,10 @@ Refer to the [AWS Kinesis Streams API Reference](https://docs.aws.amazon.com/kin
 
 ### Configuration
 By default `Client`, `AdminClient`, `DynamicConsumer` and `Producer` will load AWS credentials and regions via the [Default Credential/Region Provider](https://docs.aws.amazon.com/sdk-for-java/v1/developer-guide/credentials.html). Using the client builders, many parameters can be customized. Refer to the AWS documentation for more information.
+
+### More usage examples
+
+Refer to the [unit tests](src/test/scala/nl/vroste/zio/kinesis/client).
 
 ## Credits
 

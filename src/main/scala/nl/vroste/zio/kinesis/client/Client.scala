@@ -7,16 +7,19 @@ import nl.vroste.zio.kinesis.client.serde.{ Deserializer, Serializer }
 import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.core.async.SdkPublisher
 import software.amazon.awssdk.services.kinesis.model._
+import software.amazon.awssdk.services.kinesis.model.{ ShardIteratorType => JIteratorType }
 import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyncClientBuilder }
 import zio._
+import zio.clock.Clock
+import zio.duration._
 import zio.interop.javaz._
 import zio.interop.reactiveStreams._
-import zio.stream.{ Stream, ZStream }
+import zio.stream.ZStream
 
 import scala.collection.JavaConverters._
 
 /**
- * ZIO wrapper for around the KinesisAsyncClient
+ * Client for consumer and producer operations
  *
  * The interface is as close as possible to the natural ZIO variant of the KinesisAsyncClient interface,
  * with some noteable differences:
@@ -35,12 +38,12 @@ class Client(val kinesisClient: KinesisAsyncClient) {
   /**
    * Registers a stream consumer for use during the lifetime of the managed resource
    *
-   * @param consumerName Name of the consumer
    * @param streamARN    ARN of the stream to consume
+   * @param consumerName Name of the consumer
    * @return Managed resource that unregisters the stream consumer after use
    */
-  def createConsumer(consumerName: String, streamARN: String): ZManaged[Any, Throwable, Consumer] =
-    registerStreamConsumer(_.consumerName(consumerName).streamARN(streamARN))
+  def createConsumer(streamARN: String, consumerName: String): ZManaged[Any, Throwable, Consumer] =
+    registerStreamConsumer(streamARN, consumerName)
       .toManaged(consumer => deregisterStreamConsumer(consumer.consumerARN()).ignore)
 
   /**
@@ -48,30 +51,52 @@ class Client(val kinesisClient: KinesisAsyncClient) {
    *
    * Handles paginated responses from the AWS API in a streaming manner
    *
-   * @param request Request parameters
-   * @param fetchSize Number of results to fetch in one request (maxResults parameter).
+   * @param chunkSize Number of results to fetch in one request (maxResults parameter).
    *                  Overwrites the maxResults in the request
    *
    * @return ZStream of shards in a stream
    */
-  def listShards(request: ListShardsRequest, fetchSize: Int = 10000): Stream[Throwable, Shard] =
+  def listShards(
+    streamName: String,
+    streamCreationTimestamp: Option[Instant] = None,
+    chunkSize: Int = 10000
+  ): ZStream[Clock, Throwable, Shard] =
     paginatedRequest { token =>
-      val requestWithToken =
-        request.copy(
-          consumer[ListShardsRequest.Builder](
-            builder =>
-              token
-                .map(builder.nextToken(_).streamName(null))
-                .getOrElse(builder)
-                .maxResults(fetchSize)
-          )
-        )
-      asZIO(kinesisClient.listShards(requestWithToken))
-        .map(response => (response.shards().asScala, Option(response.nextToken())))
-    }.mapConcatChunk(Chunk.fromIterable)
+      val request = ListShardsRequest
+        .builder()
+        .maxResults(chunkSize)
+        .streamName(streamName)
+        .streamCreationTimestamp(streamCreationTimestamp.orNull)
+        .nextToken(token.orNull)
 
-  def getShardIterator(request: GetShardIteratorRequest): Task[String] =
-    asZIO(kinesisClient.getShardIterator(request)).map(_.shardIterator())
+      asZIO(kinesisClient.listShards(request.build()))
+        .map(response => (response.shards().asScala, Option(response.nextToken())))
+    }(Schedule.fixed(10.millis)).mapConcatChunk(Chunk.fromIterable)
+
+  def getShardIterator(
+    streamName: String,
+    shardId: String,
+    iteratorType: ShardIteratorType
+  ): Task[String] = {
+    val b = GetShardIteratorRequest
+      .builder()
+      .streamName(streamName)
+      .shardId(shardId)
+
+    val request = iteratorType match {
+      case ShardIteratorType.Latest      => b.shardIteratorType(JIteratorType.LATEST)
+      case ShardIteratorType.TrimHorizon => b.shardIteratorType(JIteratorType.TRIM_HORIZON)
+      case ShardIteratorType.AtSequenceNumber(sequenceNumber) =>
+        b.shardIteratorType(JIteratorType.AT_SEQUENCE_NUMBER).startingSequenceNumber(sequenceNumber)
+      case ShardIteratorType.AfterSequenceNumber(sequenceNumber) =>
+        b.shardIteratorType(JIteratorType.AFTER_SEQUENCE_NUMBER).startingSequenceNumber(sequenceNumber)
+      case ShardIteratorType.AtTimestamp(timestamp) =>
+        b.shardIteratorType(JIteratorType.AT_TIMESTAMP).timestamp(timestamp)
+    }
+
+    asZIO(kinesisClient.getShardIterator(request.build()))
+      .map(_.shardIterator())
+  }
 
   /**
    * Creates a `ZStream` of the records in the given shard
@@ -93,9 +118,23 @@ class Client(val kinesisClient: KinesisAsyncClient) {
   def subscribeToShard[R, T](
     consumerARN: String,
     shardID: String,
-    startingPosition: StartingPosition,
+    startingPosition: ShardIteratorType,
     deserializer: Deserializer[R, T]
-  ): ZStream[R, Throwable, ConsumerRecord[T]] =
+  ): ZStream[R, Throwable, ConsumerRecord[T]] = {
+
+    val b = StartingPosition.builder()
+
+    val jStartingPosition = startingPosition match {
+      case ShardIteratorType.Latest      => b.`type`(JIteratorType.LATEST)
+      case ShardIteratorType.TrimHorizon => b.`type`(JIteratorType.TRIM_HORIZON)
+      case ShardIteratorType.AtSequenceNumber(sequenceNumber) =>
+        b.`type`(JIteratorType.AT_SEQUENCE_NUMBER).sequenceNumber(sequenceNumber)
+      case ShardIteratorType.AfterSequenceNumber(sequenceNumber) =>
+        b.`type`(JIteratorType.AFTER_SEQUENCE_NUMBER).sequenceNumber(sequenceNumber)
+      case ShardIteratorType.AtTimestamp(timestamp) =>
+        b.`type`(JIteratorType.AT_TIMESTAMP).timestamp(timestamp)
+    }
+
     ZStream.fromEffect {
       for {
         streamP <- Promise.make[Throwable, ZStream[Any, Throwable, Record]]
@@ -103,13 +142,12 @@ class Client(val kinesisClient: KinesisAsyncClient) {
 
         subscribeResponse = asZIO {
           kinesisClient.subscribeToShard(
-            consumer[SubscribeToShardRequest.Builder](
-              builder =>
-                builder
-                  .consumerARN(consumerARN)
-                  .shardId(shardID)
-                  .startingPosition(startingPosition)
-            ),
+            SubscribeToShardRequest
+              .builder()
+              .consumerARN(consumerARN)
+              .shardId(shardID)
+              .startingPosition(jStartingPosition.build())
+              .build(),
             subscribeToShardResponseHandler(runtime, streamP)
           )
         }
@@ -129,6 +167,7 @@ class Client(val kinesisClient: KinesisAsyncClient) {
         )
       }
     }
+  }
 
   private def subscribeToShardResponseHandler(
     runtime: zio.Runtime[Any],
@@ -153,22 +192,20 @@ class Client(val kinesisClient: KinesisAsyncClient) {
    * @see [[createConsumer]] for automatic deregistration of the consumer
    */
   def registerStreamConsumer(
-    builder: RegisterStreamConsumerRequest.Builder => RegisterStreamConsumerRequest.Builder
-  ): ZIO[Any, Throwable, Consumer] =
-    asZIO {
-      kinesisClient.registerStreamConsumer(builder(RegisterStreamConsumerRequest.builder()).build())
-    }.map(_.consumer())
+    streamARN: String,
+    consumerName: String
+  ): ZIO[Any, Throwable, Consumer] = {
+    val request = RegisterStreamConsumerRequest.builder().streamARN(streamARN).consumerName(consumerName).build()
+    asZIO(kinesisClient.registerStreamConsumer(request)).map(_.consumer())
+  }
 
   /**
    * @see [[createConsumer]] for automatic deregistration of the consumer
    */
-  def deregisterStreamConsumer(consumerARN: String): Task[Unit] =
-    asZIO {
-      kinesisClient.deregisterStreamConsumer(r => {
-        r.consumerARN(consumerARN);
-        ()
-      })
-    }.unit
+  def deregisterStreamConsumer(consumerARN: String): Task[Unit] = {
+    val request = DeregisterStreamConsumerRequest.builder().consumerARN(consumerARN).build()
+    asZIO(kinesisClient.deregisterStreamConsumer(request)).unit
+  }
 
   private def putRecord(request: PutRecordRequest): Task[PutRecordResponse] =
     asZIO(kinesisClient.putRecord(request))
@@ -243,25 +280,31 @@ object Client {
   )
 
   case class ProducerRecord[T](partitionKey: String, data: T)
+
+  sealed trait ShardIteratorType
+  object ShardIteratorType {
+    case object Latest                                     extends ShardIteratorType
+    case object TrimHorizon                                extends ShardIteratorType
+    case class AtSequenceNumber(sequenceNumber: String)    extends ShardIteratorType
+    case class AfterSequenceNumber(sequenceNumber: String) extends ShardIteratorType
+    case class AtTimestamp(timestamp: Instant)             extends ShardIteratorType
+  }
 }
 
 private object Util {
   def asZIO[T](f: => CompletableFuture[T]): Task[T] = ZIO.fromCompletionStage(ZIO(f).orDie)
 
-  // To avoid 'Discarded non-Unit value' warnings
-  def consumer[T](f: T => T): java.util.function.Consumer[T] = x => {
-    f(x)
-    ()
-  }
-
   type Token = String
-  def paginatedRequest[R, E, A](fetch: Option[Token] => ZIO[R, E, (A, Option[Token])]): ZStream[R, E, A] =
+
+  def paginatedRequest[R, E, A](fetch: Option[Token] => ZIO[R, E, (A, Option[Token])])(
+    throttling: Schedule[Clock, Any, Int] = Schedule.forever
+  ): ZStream[Clock with R, E, A] =
     ZStream.fromEffect(fetch(None)).flatMap {
       case (results, nextTokenOpt) =>
         ZStream.succeed(results) ++ (nextTokenOpt match {
           case None => ZStream.empty
           case Some(nextToken) =>
-            ZStream.paginate[R, E, A, Token](nextToken)(token => fetch(Some(token)))
+            ZStream.paginate[R, E, A, Token](nextToken)(token => fetch(Some(token))).scheduleElements(throttling)
         })
     }
 }

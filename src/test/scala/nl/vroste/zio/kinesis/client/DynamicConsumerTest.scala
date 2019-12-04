@@ -70,7 +70,7 @@ object DynamicConsumerTest extends {
                   )
                   .flatMapPar(Int.MaxValue)(_._2.flattenChunks)
                   .take(2)
-                  .tap(r => ZIO(println(s"Got record ${r}")) *> r.checkpoint)
+                  .tap(r => ZIO(println(s"Got record ${r}")) *> r.checkpoint.retry(Schedule.exponential(100.millis)))
                   .runCollect
           } yield assertCompletes
       }
@@ -96,7 +96,7 @@ object DynamicConsumerTest extends {
                   ZIO.fromFunction(
                     (id: Fiber.Id) => println(s"Consumer ${label} on fiber ${id} got record ${r} on shard ${shardID}")
                   )
-              }.tap(_.checkpoint)
+              }.tap(_.checkpoint.retry(Schedule.exponential(100.millis)))
                 .map(_ => (label, shardID))
                 .flattenChunks
                 .ensuring(ZIO(println(s"Shard ${shardID} completed for consumer ${label}")).orDie)
