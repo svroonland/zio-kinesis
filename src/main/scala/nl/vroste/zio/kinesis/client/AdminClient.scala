@@ -110,7 +110,7 @@ class AdminClient(val kinesisClient: KinesisAsyncClient) {
         d.streamStatus(),
         d.retentionPeriodHours(),
         d.streamCreationTimestamp(),
-        d.enhancedMonitoring(),
+        d.enhancedMonitoring().asScala.toList,
         d.encryptionType(),
         d.keyId(),
         d.openShardCount(),
@@ -270,7 +270,7 @@ class AdminClient(val kinesisClient: KinesisAsyncClient) {
       .builder()
       .streamName(streamName)
       .targetShardCount(targetShardCount)
-      .scalingType(ScalingType)
+      .scalingType(scalingType)
       .build()
     asZIO(kinesisClient.updateShardCount(request)).map { r =>
       UpdateShardCountResponse(r.streamName(), r.currentShardCount(), r.targetShardCount())

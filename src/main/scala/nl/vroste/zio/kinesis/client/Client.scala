@@ -37,12 +37,12 @@ class Client(val kinesisClient: KinesisAsyncClient) {
   /**
    * Registers a stream consumer for use during the lifetime of the managed resource
    *
-   * @param consumerName Name of the consumer
    * @param streamARN    ARN of the stream to consume
+   * @param consumerName Name of the consumer
    * @return Managed resource that unregisters the stream consumer after use
    */
-  def createConsumer(consumerName: String, streamARN: String): ZManaged[Any, Throwable, Consumer] =
-    registerStreamConsumer(_.consumerName(consumerName).streamARN(streamARN))
+  def createConsumer(streamARN: String, consumerName: String): ZManaged[Any, Throwable, Consumer] =
+    registerStreamConsumer(streamARN, consumerName)
       .toManaged(consumer => deregisterStreamConsumer(consumer.consumerARN()).ignore)
 
   /**
@@ -72,9 +72,78 @@ class Client(val kinesisClient: KinesisAsyncClient) {
         .map(response => (response.shards().asScala, Option(response.nextToken())))
     }(Schedule.fixed(10.millis)).mapConcatChunk(Chunk.fromIterable)
 
-  // TODO proper parameters
-  def getShardIterator(request: GetShardIteratorRequest): Task[String] =
+  /**
+   * Get a shard iterator at or after a sequence number
+   *
+   * @param streamName
+   * @param shardId
+   * @param iteratorType Must be AT_SEQUENCE_NUMBER or AFTER_SEQUENCE_NUMBER
+   * @param startingSequenceNumber
+   * @return
+   */
+  def getShardIterator(
+    streamName: String,
+    shardId: String,
+    iteratorType: ShardIteratorType,
+    startingSequenceNumber: String
+  ): Task[String] = {
+    val request = GetShardIteratorRequest
+      .builder()
+      .streamName(streamName)
+      .shardId(shardId)
+      .shardIteratorType(iteratorType)
+      .startingSequenceNumber(startingSequenceNumber)
+      .build()
+
     asZIO(kinesisClient.getShardIterator(request)).map(_.shardIterator())
+  }
+
+  /**
+   * Get a shard iterator of type LATEST or TRIM_HORIZON
+   *
+   * @param streamName
+   * @param shardId
+   * @param iteratorType Must be LATEST or TRIM_HORIZON
+   * @return
+   */
+  def getShardIterator(
+    streamName: String,
+    shardId: String,
+    iteratorType: ShardIteratorType
+  ): Task[String] = {
+    val request = GetShardIteratorRequest
+      .builder()
+      .streamName(streamName)
+      .shardId(shardId)
+      .shardIteratorType(iteratorType)
+      .build()
+
+    asZIO(kinesisClient.getShardIterator(request)).map(_.shardIterator())
+  }
+
+  /**
+   * Get a shard iterator of type AT_TIMESTAMP
+   *
+   * @param streamName
+   * @param shardId
+   * @param timestamp
+   * @return
+   */
+  def getShardIterator(
+    streamName: String,
+    shardId: String,
+    timestamp: Instant
+  ): Task[String] = {
+    val request = GetShardIteratorRequest
+      .builder()
+      .streamName(streamName)
+      .shardId(shardId)
+      .shardIteratorType(ShardIteratorType.AT_TIMESTAMP)
+      .timestamp(timestamp)
+      .build()
+
+    asZIO(kinesisClient.getShardIterator(request)).map(_.shardIterator())
+  }
 
   /**
    * Creates a `ZStream` of the records in the given shard
