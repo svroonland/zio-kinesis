@@ -132,6 +132,10 @@ Refer to the [AWS Kinesis Streams API Reference](https://docs.aws.amazon.com/kin
 ### Configuration
 By default `Client`, `AdminClient`, `DynamicConsumer` and `Producer` will load AWS credentials and regions via the [Default Credential/Region Provider](https://docs.aws.amazon.com/sdk-for-java/v1/developer-guide/credentials.html). Using the client builders, many parameters can be customized. Refer to the AWS documentation for more information.
 
+### More usage examples
+
+Refer to the [unit tests](src/test/scala/nl/vroste/zio/kinesis/client).
+
 ## Credits
 
 The Serde construct in this library is inspired by [zio-kafka](https://github.com/zio/zio-kafka), the producer by [this AWS blog post](https://aws.amazon.com/blogs/big-data/implementing-efficient-and-reliable-producers-with-the-amazon-kinesis-producer-library/)
