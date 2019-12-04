@@ -86,17 +86,16 @@ class Client(val kinesisClient: KinesisAsyncClient) {
     shardId: String,
     iteratorType: ShardIteratorType,
     startingSequenceNumber: String
-  ): Task[String] = {
-    val request = GetShardIteratorRequest
-      .builder()
-      .streamName(streamName)
-      .shardId(shardId)
-      .shardIteratorType(iteratorType)
-      .startingSequenceNumber(startingSequenceNumber)
-      .build()
-
-    asZIO(kinesisClient.getShardIterator(request)).map(_.shardIterator())
-  }
+  ): Task[String] =
+    getShardIterator(
+      GetShardIteratorRequest
+        .builder()
+        .streamName(streamName)
+        .shardId(shardId)
+        .shardIteratorType(iteratorType)
+        .startingSequenceNumber(startingSequenceNumber)
+        .build()
+    )
 
   /**
    * Get a shard iterator of type LATEST or TRIM_HORIZON
@@ -110,16 +109,14 @@ class Client(val kinesisClient: KinesisAsyncClient) {
     streamName: String,
     shardId: String,
     iteratorType: ShardIteratorType
-  ): Task[String] = {
-    val request = GetShardIteratorRequest
+  ): Task[String] = getShardIterator(
+    GetShardIteratorRequest
       .builder()
       .streamName(streamName)
       .shardId(shardId)
       .shardIteratorType(iteratorType)
       .build()
-
-    asZIO(kinesisClient.getShardIterator(request)).map(_.shardIterator())
-  }
+  )
 
   /**
    * Get a shard iterator of type AT_TIMESTAMP
@@ -133,17 +130,19 @@ class Client(val kinesisClient: KinesisAsyncClient) {
     streamName: String,
     shardId: String,
     timestamp: Instant
-  ): Task[String] = {
-    val request = GetShardIteratorRequest
-      .builder()
-      .streamName(streamName)
-      .shardId(shardId)
-      .shardIteratorType(ShardIteratorType.AT_TIMESTAMP)
-      .timestamp(timestamp)
-      .build()
+  ): Task[String] =
+    getShardIterator(
+      GetShardIteratorRequest
+        .builder()
+        .streamName(streamName)
+        .shardId(shardId)
+        .shardIteratorType(ShardIteratorType.AT_TIMESTAMP)
+        .timestamp(timestamp)
+        .build()
+    )
 
+  private def getShardIterator(request: GetShardIteratorRequest) =
     asZIO(kinesisClient.getShardIterator(request)).map(_.shardIterator())
-  }
 
   /**
    * Creates a `ZStream` of the records in the given shard
