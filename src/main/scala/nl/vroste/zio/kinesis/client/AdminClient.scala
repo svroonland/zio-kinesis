@@ -1,7 +1,14 @@
 package nl.vroste.zio.kinesis.client
 import java.time.Instant
 
-import nl.vroste.zio.kinesis.client.AdminClient.{ DescribeLimitsResponse, StreamDescription }
+import nl.vroste.zio.kinesis.client.AdminClient.{
+  ConsumerDescription,
+  DescribeLimitsResponse,
+  EnhancedMonitoringStatus,
+  StreamDescription,
+  StreamDescriptionSummary,
+  UpdateShardCountResponse
+}
 import nl.vroste.zio.kinesis.client.Util.asZIO
 import software.amazon.awssdk.services.kinesis.model._
 import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyncClientBuilder }
@@ -76,17 +83,72 @@ class AdminClient(val kinesisClient: KinesisAsyncClient) {
     }
   }
 
-  def describeStreamConsumer(request: DescribeStreamConsumerRequest): Task[DescribeStreamConsumerResponse] =
-    asZIO(kinesisClient.describeStreamConsumer(request))
+  def describeStreamConsumer(consumerARN: String): Task[ConsumerDescription] =
+    describeStreamConsumer(DescribeStreamConsumerRequest.builder().consumerARN(consumerARN).build())
 
-  def describeStreamSummary(request: DescribeStreamSummaryRequest): Task[DescribeStreamSummaryResponse] =
-    asZIO(kinesisClient.describeStreamSummary(request))
+  def describeStreamConsumer(streamARN: String, consumerName: String): Task[ConsumerDescription] =
+    describeStreamConsumer(
+      DescribeStreamConsumerRequest.builder().streamARN(streamARN).consumerName(consumerName).build()
+    )
 
-  def enableEnhancedMonitoring(request: EnableEnhancedMonitoringRequest): Task[EnableEnhancedMonitoringResponse] =
-    asZIO(kinesisClient.enableEnhancedMonitoring(request))
+  private def describeStreamConsumer(request: DescribeStreamConsumerRequest) =
+    asZIO(kinesisClient.describeStreamConsumer(request)).map { r =>
+      val d = r.consumerDescription()
 
-  def disableEnhancedMonitoring(request: DisableEnhancedMonitoringRequest): Task[DisableEnhancedMonitoringResponse] =
-    asZIO(kinesisClient.disableEnhancedMonitoring(request))
+      ConsumerDescription(
+        d.consumerName(),
+        d.consumerARN(),
+        d.consumerStatus(),
+        d.consumerCreationTimestamp(),
+        d.streamARN()
+      )
+    }
+
+  def describeStreamSummary(streamName: String): Task[StreamDescriptionSummary] = {
+    val request = DescribeStreamSummaryRequest.builder().streamName(streamName).build()
+    asZIO(kinesisClient.describeStreamSummary(request)).map { r =>
+      val d = r.streamDescriptionSummary()
+
+      StreamDescriptionSummary(
+        d.streamName(),
+        d.streamARN(),
+        d.streamStatus(),
+        d.retentionPeriodHours(),
+        d.streamCreationTimestamp(),
+        d.enhancedMonitoring(),
+        d.encryptionType(),
+        d.keyId(),
+        d.openShardCount(),
+        d.consumerCount()
+      )
+    }
+  }
+
+  def enableEnhancedMonitoring(streamName: String, metrics: List[MetricsName]): Task[EnhancedMonitoringStatus] = {
+    val request =
+      EnableEnhancedMonitoringRequest.builder().streamName(streamName).shardLevelMetrics(metrics: _*).build()
+
+    asZIO(kinesisClient.enableEnhancedMonitoring(request)).map { r =>
+      EnhancedMonitoringStatus(
+        r.streamName(),
+        r.currentShardLevelMetrics().asScala.toList,
+        r.desiredShardLevelMetrics().asScala.toList
+      )
+    }
+  }
+
+  def disableEnhancedMonitoring(streamName: String, metrics: List[MetricsName]): Task[EnhancedMonitoringStatus] = {
+    val request =
+      DisableEnhancedMonitoringRequest.builder().streamName(streamName).shardLevelMetrics(metrics: _*).build()
+
+    asZIO(kinesisClient.disableEnhancedMonitoring(request)).map { r =>
+      EnhancedMonitoringStatus(
+        r.streamName(),
+        r.currentShardLevelMetrics().asScala.toList,
+        r.desiredShardLevelMetrics().asScala.toList
+      )
+    }
+  }
 
   def listStreamConsumers(
     request: ListStreamConsumersRequest
@@ -109,20 +171,53 @@ class AdminClient(val kinesisClient: KinesisAsyncClient) {
   def listTagsForStream(request: ListTagsForStreamRequest): Task[ListTagsForStreamResponse] =
     asZIO(kinesisClient.listTagsForStream(request))
 
-  def mergeShards(request: MergeShardsRequest): Task[Unit] =
+  def mergeShards(streamName: String, shardToMerge: String, adjacentShardToMerge: String): Task[Unit] = {
+    val request = MergeShardsRequest
+      .builder()
+      .streamName(streamName)
+      .shardToMerge(shardToMerge)
+      .adjacentShardToMerge(adjacentShardToMerge)
+      .build()
     asZIO(kinesisClient.mergeShards(request)).unit
+  }
 
-  def splitShards(request: SplitShardRequest): Task[Unit] =
+  def splitShards(streamName: String, shardToSplit: String, newStartingHashKey: String): Task[Unit] = {
+    val request = SplitShardRequest
+      .builder()
+      .streamName(streamName)
+      .shardToSplit(shardToSplit)
+      .newStartingHashKey(newStartingHashKey)
+      .build()
     asZIO(kinesisClient.splitShard(request)).unit
+  }
 
-  def startStreamEncryption(request: StartStreamEncryptionRequest): Task[Unit] =
+  def startStreamEncryption(streamName: String, encryptionType: EncryptionType, keyId: String): Task[Unit] = {
+    val request =
+      StartStreamEncryptionRequest.builder().streamName(streamName).encryptionType(encryptionType).keyId(keyId).build()
     asZIO(kinesisClient.startStreamEncryption(request)).unit
+  }
 
-  def stopStreamEncryption(request: StopStreamEncryptionRequest): Task[Unit] =
+  def stopStreamEncryption(streamName: String, encryptionType: EncryptionType, keyId: String): Task[Unit] = {
+    val request =
+      StopStreamEncryptionRequest.builder().streamName(streamName).encryptionType(encryptionType).keyId(keyId).build()
     asZIO(kinesisClient.stopStreamEncryption(request)).unit
+  }
 
-  def updateShardCount(request: UpdateShardCountRequest): Task[UpdateShardCountResponse] =
-    asZIO(kinesisClient.updateShardCount(request))
+  def updateShardCount(
+    streamName: String,
+    targetShardCount: Int,
+    scalingType: ScalingType = ScalingType.UNIFORM_SCALING
+  ): Task[UpdateShardCountResponse] = {
+    val request = UpdateShardCountRequest
+      .builder()
+      .streamName(streamName)
+      .targetShardCount(targetShardCount)
+      .scalingType(ScalingType)
+      .build()
+    asZIO(kinesisClient.updateShardCount(request)).map { r =>
+      UpdateShardCountResponse(r.streamName(), r.currentShardCount(), r.targetShardCount())
+    }
+  }
 }
 
 object AdminClient {
@@ -132,17 +227,15 @@ object AdminClient {
    *
    * @return Managed resource that is closed after use
    */
-  def create: ZManaged[Any, Throwable, AdminClient] =
-    ZManaged.fromAutoCloseable {
-      ZIO.effect(KinesisAsyncClient.create())
-    }.map(new AdminClient(_))
+  def create: ZManaged[Any, Throwable, AdminClient] = build()
 
   /**
    * Create a custom client
    *
+   * @param builder Client builder
    * @return Managed resource that is closed after use
    */
-  def build(builder: KinesisAsyncClientBuilder): ZManaged[Any, Throwable, AdminClient] =
+  def build(builder: KinesisAsyncClientBuilder = KinesisAsyncClient.builder()): ZManaged[Any, Throwable, AdminClient] =
     ZManaged.fromAutoCloseable {
       ZIO.effect(builder.build())
     }.map(new AdminClient(_))
@@ -161,4 +254,33 @@ object AdminClient {
     encryptionType: EncryptionType,
     keyId: String
   )
+
+  case class StreamDescriptionSummary(
+    streamName: String,
+    streamARN: String,
+    streamStatus: StreamStatus,
+    retentionPeriodHours: Int,
+    streamCreationTimestamp: Instant,
+    enhancedMonitoring: List[EnhancedMetrics],
+    encryptionType: EncryptionType,
+    keyId: String,
+    openShardCount: Int,
+    consumerCount: Int
+  )
+
+  case class ConsumerDescription(
+    consumerName: String,
+    consumerARN: String,
+    consumerStatus: ConsumerStatus,
+    consumerCreationTimestamp: Instant,
+    streamARN: String
+  )
+
+  case class EnhancedMonitoringStatus(
+    streamName: String,
+    currentShardLevelMetrics: List[MetricsName],
+    desiredShardLevelMetrics: List[MetricsName]
+  )
+
+  case class UpdateShardCountResponse(streamName: String, currentShardCount: Int, targetShardCount: Int)
 }
