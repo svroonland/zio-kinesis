@@ -48,6 +48,7 @@ DynamicConsumer
       .tap { r: DynamicConsumer.Record[String] =>
           ZIO(println(s"Got record ${r} on shard ${shardId}")) *> r.checkpoint
         }
+      .flattenChunks
   }
   .runDrain
 ```
@@ -92,35 +93,35 @@ Process all shards of a stream from the beginning, using an existing registered 
 
 ```scala
 import nl.vroste.zio.kinesis.client.Client
+import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
 import nl.vroste.zio.kinesis.client.serde.Serde
-import software.amazon.awssdk.services.kinesis.model.{ ListShardsRequest, ShardIteratorType, StartingPosition }
 import zio.Task
 
 val streamName  = "my_stream"
 val consumerARN = "arn:aws:etc"
 
 Client.create.use { client =>
-val stream = client
-  .listShards(ListShardsRequest.builder().streamName("zio-test").build())
-  .map { shard =>
-    client.subscribeToShard(
-      consumerARN,
-      shard.shardId(),
-      StartingPosition.builder().`type`(ShardIteratorType.TRIM_HORIZON).build(),
-      Serde.asciiString
-    )
-  }
-  .flatMapPar(Int.MaxValue) { shardStream =>
-    shardStream.mapM { record =>
-      // Do something with the record here
-      // println(record.data)
-      // and finally checkpoint the sequence number
-      // customCheckpointer.checkpoint(record.shardID, record.sequenceNumber)
-      Task.unit
-    }
-  }
+    val stream = client
+      .listShards("zio-test")
+      .map { shard =>
+        client.subscribeToShard(
+          consumerARN,
+          shard.shardId(),
+          ShardIteratorType.TrimHorizon,
+          Serde.asciiString
+        )
+      }
+      .flatMapPar(Int.MaxValue) { shardStream =>
+        shardStream.mapM { record =>
+          // Do something with the record here
+          // println(record.data)
+          // and finally checkpoint the sequence number
+          // customCheckpointer.checkpoint(record.shardID, record.sequenceNumber)
+          Task.unit
+        }
+      }
 
-stream.runDrain
+    stream.runDrain
 }
 ```
 
