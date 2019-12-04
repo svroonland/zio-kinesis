@@ -146,21 +146,39 @@ class AdminClient(val kinesisClient: KinesisAsyncClient) {
   }
 
   def listStreamConsumers(
-    request: ListStreamConsumersRequest
-  ): ZStream[Any, Throwable, Consumer] =
+    streamARN: String,
+    streamCreationTimestamp: Option[Instant] = None,
+    chunkSize: Int = 10
+  ): ZStream[Any, Throwable, Consumer] = {
+    val request = ListStreamConsumersRequest
+      .builder()
+      .maxResults(chunkSize)
+      .streamARN(streamARN)
+      .streamCreationTimestamp(streamCreationTimestamp.orNull)
+      .build()
+
     ZStream.fromEffect {
-      Task(kinesisClient.listStreamConsumersPaginator(request)).map(_.toStream())
-    }.flatMap(_.flatMap(r => ZStream.fromIterable(r.consumers().asScala)))
+      Task(kinesisClient.listStreamConsumersPaginator(request))
+    }.flatMap(_.toStream().flatMap(r => ZStream.fromIterable(r.consumers().asScala)))
+  }
 
-  def decreaseStreamRetentionPeriod(
-    request: DecreaseStreamRetentionPeriodRequest
-  ): Task[Unit] =
+  def decreaseStreamRetentionPeriod(streamName: String, retentionPeriodHours: Int): Task[Unit] = {
+    val request = DecreaseStreamRetentionPeriodRequest
+      .builder()
+      .streamName(streamName)
+      .retentionPeriodHours(retentionPeriodHours)
+      .build()
     asZIO(kinesisClient.decreaseStreamRetentionPeriod(request)).unit
+  }
 
-  def increaseStreamRetentionPeriod(
-    request: IncreaseStreamRetentionPeriodRequest
-  ): Task[Unit] =
+  def increaseStreamRetentionPeriod(streamName: String, retentionPeriodHours: Int): Task[Unit] = {
+    val request = IncreaseStreamRetentionPeriodRequest
+      .builder()
+      .streamName(streamName)
+      .retentionPeriodHours(retentionPeriodHours)
+      .build()
     asZIO(kinesisClient.increaseStreamRetentionPeriod(request)).unit
+  }
 
   /**
    * Lists all streams
