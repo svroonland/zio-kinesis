@@ -7,7 +7,7 @@ ZIO Kinesis is a ZIO-based wrapper around the AWS Kinesis SDK. All operations ar
 
 The library consists of 3 major components:
 
-* `Client` and `AdminClient`: ZIO wrappers around the low level AWS Kinesis SDK methods. Methods offer a ZIO-native interface with ZStream where applicable.
+* `Client` and `AdminClient`: ZIO wrappers around the low level AWS Kinesis SDK methods. Methods offer a ZIO-native interface with ZStream where applicable, taking care of paginated request and AWS rate limits.
 * `DynamicConsumer`: a ZStream-based interface to the Kinesis Client Library; an auto-rebalancing and checkpointing consumer.
 * `Producer`: used to produce efficiently and reliably to Kinesis while respecting Kinesis limits. Features batching and failure handling.
 

@@ -1,24 +1,19 @@
 package nl.vroste.zio.kinesis.client
 import java.time.Instant
 
-import nl.vroste.zio.kinesis.client.AdminClient.{
-  ConsumerDescription,
-  DescribeLimitsResponse,
-  EnhancedMonitoringStatus,
-  StreamDescription,
-  StreamDescriptionSummary,
-  UpdateShardCountResponse
-}
-import nl.vroste.zio.kinesis.client.Util.asZIO
+import nl.vroste.zio.kinesis.client.Util.{ asZIO, paginatedRequest }
 import software.amazon.awssdk.services.kinesis.model._
 import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyncClientBuilder }
+import zio._
+import zio.clock.Clock
+import zio.duration._
 import zio.interop.reactiveStreams._
 import zio.stream.ZStream
-import zio.{ Task, ZIO, ZManaged }
 
 import scala.collection.JavaConverters._
 
 class AdminClient(val kinesisClient: KinesisAsyncClient) {
+  import AdminClient._
   def addTagsToStream(streamName: String, tags: Map[String, String]): Task[Unit] = {
     val request = AddTagsToStreamRequest.builder().streamName(streamName).tags(tags.asJava).build()
     asZIO(kinesisClient.addTagsToStream(request)).unit
@@ -152,8 +147,10 @@ class AdminClient(val kinesisClient: KinesisAsyncClient) {
 
   def listStreamConsumers(
     request: ListStreamConsumersRequest
-  ): ZIO[Any, Throwable, ZStream[Any, Throwable, ListStreamConsumersResponse]] =
-    Task(kinesisClient.listStreamConsumersPaginator(request)).map(_.toStream())
+  ): ZStream[Any, Throwable, Consumer] =
+    ZStream.fromEffect {
+      Task(kinesisClient.listStreamConsumersPaginator(request)).map(_.toStream())
+    }.flatMap(_.flatMap(r => ZStream.fromIterable(r.consumers().asScala)))
 
   def decreaseStreamRetentionPeriod(
     request: DecreaseStreamRetentionPeriodRequest
@@ -165,11 +162,54 @@ class AdminClient(val kinesisClient: KinesisAsyncClient) {
   ): Task[Unit] =
     asZIO(kinesisClient.increaseStreamRetentionPeriod(request)).unit
 
-  def listStreams(request: ListStreamsRequest): Task[ListStreamsResponse] =
-    asZIO(kinesisClient.listStreams(request))
+  /**
+   * Lists all streams
+   *
+   * SDK requests are executed per chunk of `chunkSize` streams. When the response
+   * indicates more streams are available, a subsequent request is made, and so on.
+   *
+   * @param chunkSize The maximum number of streams to retrieve in one request.
+   * @param backoffSchedule When requests exceed the rate limit,
+   */
+  def listStreams(
+    chunkSize: Int = 10,
+    backoffSchedule: Schedule[Clock, Throwable, Any] = defaultBackoffSchedule
+  ): ZStream[Clock, Throwable, String] =
+    paginatedRequest { token =>
+      val requestBuilder = ListStreamsRequest.builder().limit(chunkSize)
 
-  def listTagsForStream(request: ListTagsForStreamRequest): Task[ListTagsForStreamResponse] =
-    asZIO(kinesisClient.listTagsForStream(request))
+      val requestWithToken =
+        token
+          .fold(requestBuilder)(requestBuilder.exclusiveStartStreamName)
+          .build()
+
+      asZIO(kinesisClient.listStreams(requestWithToken)).map { response =>
+        val streamNames = response.streamNames().asScala
+        (streamNames, streamNames.lastOption.filter(_ => response.hasMoreStreams))
+      }.retry(retryOnLimitExceeded && backoffSchedule)
+
+    }(throttling = Schedule.fixed(200.millis))
+      .mapConcatChunk(Chunk.fromIterable)
+
+  def listTagsForStream(
+    streamName: String,
+    chunkSize: Int = 50,
+    backoffSchedule: Schedule[Clock, Throwable, Any] = defaultBackoffSchedule
+  ): ZStream[Clock, Throwable, Tag] =
+    paginatedRequest { token =>
+      val requestBuilder = ListTagsForStreamRequest.builder().streamName(streamName).limit(chunkSize)
+
+      val requestWithToken =
+        token
+          .fold(requestBuilder)(requestBuilder.exclusiveStartTagKey)
+          .build()
+
+      asZIO(kinesisClient.listTagsForStream(requestWithToken)).map { response =>
+        val tags = response.tags().asScala
+        (tags, tags.lastOption.map(_.key()).filter(_ => response.hasMoreTags))
+      }.retry(retryOnLimitExceeded && backoffSchedule)
+    }(throttling = Schedule.fixed(200.millis))
+      .mapConcatChunk(Chunk.fromIterable)
 
   def mergeShards(streamName: String, shardToMerge: String, adjacentShardToMerge: String): Task[Unit] = {
     val request = MergeShardsRequest
@@ -283,4 +323,11 @@ object AdminClient {
   )
 
   case class UpdateShardCountResponse(streamName: String, currentShardCount: Int, targetShardCount: Int)
+
+  private[client] val retryOnLimitExceeded = Schedule.doWhile[Throwable] {
+    case _: LimitExceededException => true; case _ => false
+  }
+
+  private[client] val defaultBackoffSchedule: Schedule[Clock, Any, Any] = Schedule.exponential(200.millis) && Schedule
+    .recurs(5)
 }

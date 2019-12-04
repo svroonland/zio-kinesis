@@ -9,9 +9,11 @@ import software.amazon.awssdk.core.async.SdkPublisher
 import software.amazon.awssdk.services.kinesis.model._
 import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyncClientBuilder }
 import zio._
+import zio.clock.Clock
+import zio.duration._
 import zio.interop.javaz._
 import zio.interop.reactiveStreams._
-import zio.stream.{ Stream, ZStream }
+import zio.stream.ZStream
 
 import scala.collection.JavaConverters._
 
@@ -54,7 +56,7 @@ class Client(val kinesisClient: KinesisAsyncClient) {
    *
    * @return ZStream of shards in a stream
    */
-  def listShards(request: ListShardsRequest, fetchSize: Int = 10000): Stream[Throwable, Shard] =
+  def listShards(request: ListShardsRequest, fetchSize: Int = 10000): ZStream[Clock, Throwable, Shard] =
     paginatedRequest { token =>
       val requestWithToken =
         request.copy(
@@ -68,7 +70,7 @@ class Client(val kinesisClient: KinesisAsyncClient) {
         )
       asZIO(kinesisClient.listShards(requestWithToken))
         .map(response => (response.shards().asScala, Option(response.nextToken())))
-    }.mapConcatChunk(Chunk.fromIterable)
+    }(Schedule.fixed(10.millis)).mapConcatChunk(Chunk.fromIterable)
 
   def getShardIterator(request: GetShardIteratorRequest): Task[String] =
     asZIO(kinesisClient.getShardIterator(request)).map(_.shardIterator())
@@ -255,13 +257,15 @@ private object Util {
   }
 
   type Token = String
-  def paginatedRequest[R, E, A](fetch: Option[Token] => ZIO[R, E, (A, Option[Token])]): ZStream[R, E, A] =
+  def paginatedRequest[R, E, A](fetch: Option[Token] => ZIO[R, E, (A, Option[Token])])(
+    throttling: Schedule[Clock, Any, Int] = Schedule.forever
+  ): ZStream[Clock with R, E, A] =
     ZStream.fromEffect(fetch(None)).flatMap {
       case (results, nextTokenOpt) =>
         ZStream.succeed(results) ++ (nextTokenOpt match {
           case None => ZStream.empty
           case Some(nextToken) =>
-            ZStream.paginate[R, E, A, Token](nextToken)(token => fetch(Some(token)))
+            ZStream.paginate[R, E, A, Token](nextToken)(token => fetch(Some(token))).scheduleElements(throttling)
         })
     }
 }
