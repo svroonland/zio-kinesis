@@ -17,7 +17,7 @@ The library consists of 3 major components:
 Add to your build.sbt:
 
 ```scala
-libraryDependencies += "nl.vroste" %% "zio-kinesis" % "0.2.0"
+libraryDependencies += "nl.vroste" %% "zio-kinesis" % "0.3.0"
 ```
 
 ## DynamicConsumer
