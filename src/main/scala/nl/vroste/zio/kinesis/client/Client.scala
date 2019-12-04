@@ -72,6 +72,7 @@ class Client(val kinesisClient: KinesisAsyncClient) {
         .map(response => (response.shards().asScala, Option(response.nextToken())))
     }(Schedule.fixed(10.millis)).mapConcatChunk(Chunk.fromIterable)
 
+  // TODO proper parameters
   def getShardIterator(request: GetShardIteratorRequest): Task[String] =
     asZIO(kinesisClient.getShardIterator(request)).map(_.shardIterator())
 
@@ -155,22 +156,20 @@ class Client(val kinesisClient: KinesisAsyncClient) {
    * @see [[createConsumer]] for automatic deregistration of the consumer
    */
   def registerStreamConsumer(
-    builder: RegisterStreamConsumerRequest.Builder => RegisterStreamConsumerRequest.Builder
-  ): ZIO[Any, Throwable, Consumer] =
-    asZIO {
-      kinesisClient.registerStreamConsumer(builder(RegisterStreamConsumerRequest.builder()).build())
-    }.map(_.consumer())
+    streamARN: String,
+    consumerName: String
+  ): ZIO[Any, Throwable, Consumer] = {
+    val request = RegisterStreamConsumerRequest.builder().streamARN(streamARN).consumerName(consumerName).build()
+    asZIO(kinesisClient.registerStreamConsumer(request)).map(_.consumer())
+  }
 
   /**
    * @see [[createConsumer]] for automatic deregistration of the consumer
    */
-  def deregisterStreamConsumer(consumerARN: String): Task[Unit] =
-    asZIO {
-      kinesisClient.deregisterStreamConsumer(r => {
-        r.consumerARN(consumerARN);
-        ()
-      })
-    }.unit
+  def deregisterStreamConsumer(consumerARN: String): Task[Unit] = {
+    val request = DeregisterStreamConsumerRequest.builder().consumerARN(consumerARN).build()
+    asZIO(kinesisClient.deregisterStreamConsumer(request)).unit
+  }
 
   private def putRecord(request: PutRecordRequest): Task[PutRecordResponse] =
     asZIO(kinesisClient.putRecord(request))
