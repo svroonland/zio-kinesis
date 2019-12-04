@@ -18,7 +18,7 @@ import zio.stream.ZStream
 import scala.collection.JavaConverters._
 
 /**
- * ZIO wrapper for around the KinesisAsyncClient
+ * Client for consumer and producer operations
  *
  * The interface is as close as possible to the natural ZIO variant of the KinesisAsyncClient interface,
  * with some noteable differences:
