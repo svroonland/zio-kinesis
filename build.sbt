@@ -39,7 +39,7 @@ libraryDependencies ++= Seq(
   "dev.zio"                 %% "zio-interop-reactivestreams" % "1.0.3.5-RC2",
   "software.amazon.awssdk"  % "kinesis"                      % "2.10.3",
   "ch.qos.logback"          % "logback-classic"              % "1.2.3",
-  "software.amazon.kinesis" % "amazon-kinesis-client"        % "2.2.5"
+  "software.amazon.kinesis" % "amazon-kinesis-client"        % "2.2.8"
 )
 
 testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework")
