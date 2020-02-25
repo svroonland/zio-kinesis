@@ -37,7 +37,7 @@ libraryDependencies ++= Seq(
   "dev.zio"                 %% "zio-test-sbt"                % "1.0.0-RC17" % "test",
   "dev.zio"                 %% "zio-interop-java"            % "1.1.0.0-RC6",
   "dev.zio"                 %% "zio-interop-reactivestreams" % "1.0.3.5-RC3",
-  "software.amazon.awssdk"  % "kinesis"                      % "2.10.3",
+  "software.amazon.awssdk"  % "kinesis"                      % "2.10.72",
   "ch.qos.logback"          % "logback-classic"              % "1.2.3",
   "software.amazon.kinesis" % "amazon-kinesis-client"        % "2.2.5"
 )
