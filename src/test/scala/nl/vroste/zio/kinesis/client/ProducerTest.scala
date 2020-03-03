@@ -87,9 +87,7 @@ object ProducerTest extends {
         val records = (1 to 1000).map(j => ProducerRecord(s"key${j}", s"message${j}-${j}"))
         producer
           .produceChunk(Chunk.fromIterable(records)) *> ZIO(println(s"Chunk completed"))
-      }.run.map { r =>
-        assert(r, fails(isSubtype[KinesisException](anything)))
-      }
+      }.run.map(r => assert(r)(fails(isSubtype[KinesisException](anything))))
     } @@ timeout(1.minute)
   ) @@ sequential
 )

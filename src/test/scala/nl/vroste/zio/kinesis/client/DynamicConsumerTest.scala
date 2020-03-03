@@ -93,8 +93,8 @@ object DynamicConsumerTest extends {
             case (shardID, shardStream) =>
               shardStream.tap { r =>
                 ZIO.fiberId andThen
-                  ZIO.fromFunction(
-                    (id: Fiber.Id) => println(s"Consumer ${label} on fiber ${id} got record ${r} on shard ${shardID}")
+                  ZIO.fromFunction((id: Fiber.Id) =>
+                    println(s"Consumer ${label} on fiber ${id} got record ${r} on shard ${shardID}")
                   )
               }.tap(_.checkpoint.retry(Schedule.exponential(100.millis)))
                 .map(_ => (label, shardID))
@@ -131,7 +131,7 @@ object DynamicConsumerTest extends {
                         .runCollect
             _ = records.foreach(println)
             // Both consumers should have gotten some records
-          } yield assert(records.map(_._1).toSet, equalTo(Set("1", "2")))
+          } yield assert(records.map(_._1).toSet)(equalTo(Set("1", "2")))
       }
     }
   ) @@ timeout(5.minute) @@ sequential
