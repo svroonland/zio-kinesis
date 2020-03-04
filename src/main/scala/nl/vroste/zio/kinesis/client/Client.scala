@@ -15,7 +15,8 @@ import zio.duration._
 import zio.interop.reactiveStreams._
 import zio.stream.ZStream
 
-import scala.collection.JavaConverters._
+import scala.jdk.CollectionConverters._
+import scala.collection.compat._
 
 /**
  * Client for consumer and producer operations
