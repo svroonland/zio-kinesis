@@ -11,7 +11,7 @@ import zio.clock.Clock
 import zio.duration.{ Duration, _ }
 import zio.stream.{ ZSink, ZStream }
 
-import scala.collection.JavaConverters._
+import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
 /**
