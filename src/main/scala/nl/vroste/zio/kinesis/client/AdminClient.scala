@@ -11,7 +11,6 @@ import zio.interop.reactiveStreams._
 import zio.stream.ZStream
 
 import scala.jdk.CollectionConverters._
-import scala.collection.compat._
 
 /**
  * Client for administrative operations

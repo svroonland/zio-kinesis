@@ -18,7 +18,6 @@ import zio.blocking.Blocking
 import zio.stream.{ StreamChunk, Take, ZStream, ZStreamChunk }
 
 import scala.jdk.CollectionConverters._
-import scala.collection.compat._
 
 /**
  * Offers a ZStream based interface to the Amazon Kinesis Client Library (KCL)
