@@ -15,7 +15,6 @@ import software.amazon.kinesis.retrieval.KinesisClientRecord
 import software.amazon.kinesis.retrieval.polling.PollingConfig
 import zio._
 import zio.blocking.Blocking
-import zio.interop.javaz._
 import zio.stream.{ StreamChunk, Take, ZStream, ZStreamChunk }
 
 import scala.collection.JavaConverters._
@@ -58,7 +57,7 @@ object DynamicConsumer {
       def offerRecords(r: java.util.List[KinesisClientRecord], checkpointer: RecordProcessorCheckpointer): Unit = {
         runtime.unsafeRun {
           ZIO
-            .traverse(r.asScala)(r => deserializer.deserialize(r.data()).map((r, _)))
+            .foreach(r.asScala)(r => deserializer.deserialize(r.data()).map((r, _)))
             .map { records =>
               Chunk.fromIterable(records.map {
                 case (r, data) =>
@@ -165,7 +164,7 @@ object DynamicConsumer {
                 .blocking(ZIO(scheduler.run()))
                 .fork
                 .flatMap(_.join)
-                .onInterrupt(ZIO.fromFutureJava(UIO(scheduler.startGracefulShutdown())).unit.orDie)
+                .onInterrupt(ZIO.fromFutureJava(scheduler.startGracefulShutdown()).unit.orDie)
             }.fork
       } yield ZStream.fromQueue(queues.shards).unTake
 

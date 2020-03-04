@@ -121,7 +121,7 @@ object Producer {
                       .offerAll(newFailed.map(_._2))
                       .delay(settings.failedDelay)
                       .fork // TODO should be per shard
-                _ <- ZIO.traverse(succeeded) {
+                _ <- ZIO.foreach(succeeded) {
                       case (response, request) =>
                         request.done.succeed(ProduceResponse(response.shardId(), response.sequenceNumber()))
                     }
@@ -151,7 +151,7 @@ object Producer {
           .provide(env)
           .flatMap { now =>
             ZIO
-              .traverse(chunk.toList) { r =>
+              .foreach(chunk.toList) { r =>
                 for {
                   done <- Promise.make[Throwable, ProduceResponse]
                   data <- serializer.serialize(r.data).provide(env)

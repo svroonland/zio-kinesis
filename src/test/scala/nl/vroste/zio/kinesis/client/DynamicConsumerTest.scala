@@ -13,7 +13,7 @@ import zio.test.TestAspect._
 import zio.test.Assertion._
 import zio.{ Fiber, Schedule, ZIO }
 
-object DynamicConsumerTest extends {
+object DynamicConsumerTest extends DefaultRunnableSpec {
   private val retryOnResourceNotFound = Schedule.doWhile[Throwable] {
     case _: ResourceNotFoundException => true
     case _                            => false
@@ -41,98 +41,98 @@ object DynamicConsumerTest extends {
             }
     } yield ()
 
-} with DefaultRunnableSpec(
-  suite("DynamicConsumer")(
-    testM("consume records produced on all shards produced on the stream") {
+  def spec =
+    suite("DynamicConsumer")(
+      testM("consume records produced on all shards produced on the stream") {
 
-      val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
-      val applicationName = "zio-test-" + UUID.randomUUID().toString
+        val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
+        val applicationName = "zio-test-" + UUID.randomUUID().toString
 
-      (Client.create <* createStream(streamName, 2)).use {
-        client =>
-          println("Putting records")
-          for {
-            _ <- client
-                  .putRecords(
-                    streamName,
-                    Serde.asciiString,
-                    Seq(ProducerRecord("key1", "msg1"), ProducerRecord("key2", "msg2"))
-                  )
-                  .retry(retryOnResourceNotFound)
-                  .provide(Clock.Live)
+        (Client.create <* createStream(streamName, 2)).use {
+          client =>
+            println("Putting records")
+            for {
+              _ <- client
+                    .putRecords(
+                      streamName,
+                      Serde.asciiString,
+                      Seq(ProducerRecord("key1", "msg1"), ProducerRecord("key2", "msg2"))
+                    )
+                    .retry(retryOnResourceNotFound)
+                    .provideLayer(Clock.live)
 
-            _ = println("Starting dynamic consumer")
-            _ <- DynamicConsumer
-                  .shardedStream(
-                    streamName,
-                    applicationName = applicationName,
-                    deserializer = Serde.asciiString
-                  )
-                  .flatMapPar(Int.MaxValue)(_._2.flattenChunks)
-                  .take(2)
-                  .tap(r => ZIO(println(s"Got record ${r}")) *> r.checkpoint.retry(Schedule.exponential(100.millis)))
-                  .runCollect
-          } yield assertCompletes
+              _ = println("Starting dynamic consumer")
+              _ <- DynamicConsumer
+                    .shardedStream(
+                      streamName,
+                      applicationName = applicationName,
+                      deserializer = Serde.asciiString
+                    )
+                    .flatMapPar(Int.MaxValue)(_._2.flattenChunks)
+                    .take(2)
+                    .tap(r => ZIO(println(s"Got record ${r}")) *> r.checkpoint.retry(Schedule.exponential(100.millis)))
+                    .runCollect
+            } yield assertCompletes
+        }
+      },
+      testM("support multiple parallel streams") {
+
+        val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
+        val applicationName = "zio-test-" + UUID.randomUUID().toString
+
+        val nrRecords = 100
+
+        def streamConsumer(label: String) =
+          DynamicConsumer
+            .shardedStream(
+              streamName,
+              applicationName = applicationName,
+              deserializer = Serde.asciiString
+            )
+            .flatMapPar(Int.MaxValue) {
+              case (shardID, shardStream) =>
+                shardStream.tap { r =>
+                  ZIO.fiberId andThen
+                    ZIO.fromFunction((id: Fiber.Id) =>
+                      println(s"Consumer ${label} on fiber ${id} got record ${r} on shard ${shardID}")
+                    )
+                }.tap(_.checkpoint.retry(Schedule.exponential(100.millis)))
+                  .map(_ => (label, shardID))
+                  .flattenChunks
+                  .ensuring(ZIO(println(s"Shard ${shardID} completed for consumer ${label}")).orDie)
+            }
+
+        (Client.create <* createStream(streamName, 10)).use {
+          client =>
+            println("Putting records")
+            val records =
+              (1 to nrRecords).map(i => ProducerRecord(s"key${i}", s"msg${i}"))
+            for {
+              _ <- ZStream
+                    .fromIterable((1 to nrRecords))
+                    .schedule(Schedule.spaced(250.millis))
+                    .mapM { _ =>
+                      client
+                        .putRecords(streamName, Serde.asciiString, records)
+                        .tapError(e => ZIO(println(e)))
+                        .retry(retryOnResourceNotFound)
+                    }
+                    .provideLayer(Clock.live)
+                    .runDrain
+                    .fork
+
+              _ = println("Starting dynamic consumer")
+
+              records <- (streamConsumer("1")
+                          merge ZStream
+                            .fromEffect(ZIO.sleep(5.seconds).provideLayer(Clock.live))
+                            .flatMap(_ => streamConsumer("2")))
+                          .take(nrRecords * nrRecords.toLong)
+                          .runCollect
+              _ = records.foreach(println)
+              // Both consumers should have gotten some records
+            } yield assert(records.map(_._1).toSet)(equalTo(Set("1", "2")))
+        }
       }
-    },
-    testM("support multiple parallel streams") {
-
-      val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
-      val applicationName = "zio-test-" + UUID.randomUUID().toString
-
-      val nrRecords = 100
-
-      def streamConsumer(label: String) =
-        DynamicConsumer
-          .shardedStream(
-            streamName,
-            applicationName = applicationName,
-            deserializer = Serde.asciiString
-          )
-          .flatMapPar(Int.MaxValue) {
-            case (shardID, shardStream) =>
-              shardStream.tap { r =>
-                ZIO.fiberId andThen
-                  ZIO.fromFunction(
-                    (id: Fiber.Id) => println(s"Consumer ${label} on fiber ${id} got record ${r} on shard ${shardID}")
-                  )
-              }.tap(_.checkpoint.retry(Schedule.exponential(100.millis)))
-                .map(_ => (label, shardID))
-                .flattenChunks
-                .ensuring(ZIO(println(s"Shard ${shardID} completed for consumer ${label}")).orDie)
-          }
-
-      (Client.create <* createStream(streamName, 10)).use {
-        client =>
-          println("Putting records")
-          val records =
-            (1 to nrRecords).map(i => ProducerRecord(s"key${i}", s"msg${i}"))
-          for {
-            _ <- ZStream
-                  .fromIterable((1 to nrRecords))
-                  .schedule(Schedule.spaced(250.millis))
-                  .mapM { _ =>
-                    client
-                      .putRecords(streamName, Serde.asciiString, records)
-                      .tapError(e => ZIO(println(e)))
-                      .retry(retryOnResourceNotFound)
-                  }
-                  .provide(Clock.Live)
-                  .runDrain
-                  .fork
-
-            _ = println("Starting dynamic consumer")
-
-            records <- (streamConsumer("1")
-                        merge ZStream
-                          .fromEffect(ZIO.sleep(5.seconds).provide(Clock.Live))
-                          .flatMap(_ => streamConsumer("2")))
-                        .take(nrRecords * nrRecords)
-                        .runCollect
-            _ = records.foreach(println)
-            // Both consumers should have gotten some records
-          } yield assert(records.map(_._1).toSet, equalTo(Set("1", "2")))
-      }
-    }
-  ) @@ timeout(5.minute) @@ sequential
-)
+    ) @@ timeout(5.minute) @@ sequential
+}
