@@ -12,7 +12,6 @@ import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyn
 import zio._
 import zio.clock.Clock
 import zio.duration._
-import zio.interop.javaz._
 import zio.interop.reactiveStreams._
 import zio.stream.ZStream
 
@@ -235,7 +234,7 @@ class Client(val kinesisClient: KinesisAsyncClient) {
     records: Iterable[ProducerRecord[T]]
   ): ZIO[R, Throwable, PutRecordsResponse] =
     for {
-      recordsAndBytes <- ZIO.traverse(records)(r => serializer.serialize(r.data).map((_, r.partitionKey)))
+      recordsAndBytes <- ZIO.foreach(records)(r => serializer.serialize(r.data).map((_, r.partitionKey)))
       entries = recordsAndBytes.map {
         case (data, partitionKey) =>
           PutRecordsRequestEntry.builder().data(SdkBytes.fromByteBuffer(data)).partitionKey(partitionKey).build()
@@ -292,7 +291,7 @@ object Client {
 }
 
 private object Util {
-  def asZIO[T](f: => CompletableFuture[T]): Task[T] = ZIO.fromCompletionStage(ZIO(f).orDie)
+  def asZIO[T](f: => CompletableFuture[T]): Task[T] = ZIO.fromCompletionStage(f)
 
   type Token = String
 
@@ -304,7 +303,7 @@ private object Util {
         ZStream.succeed(results) ++ (nextTokenOpt match {
           case None => ZStream.empty
           case Some(nextToken) =>
-            ZStream.paginate[R, E, A, Token](nextToken)(token => fetch(Some(token))).scheduleElements(throttling)
+            ZStream.paginateM[R, E, A, Token](nextToken)(token => fetch(Some(token))).scheduleElements(throttling)
         })
     }
 }
