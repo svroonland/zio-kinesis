@@ -31,9 +31,7 @@ trait Deserializer[-R, +T] {
    * If both deserializers fail, the error will be the last deserializer's exception.
    */
   def orElse[R1 <: R, U >: T](alternative: Deserializer[R1, U]): Deserializer[R1, U] =
-    Deserializer { data =>
-      deserialize(data) orElse alternative.deserialize(data)
-    }
+    Deserializer(data => deserialize(data) orElse alternative.deserialize(data))
 
   /**
    * Serde that handles deserialization failures by returning a Task
