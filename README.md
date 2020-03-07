@@ -1,3 +1,4 @@
+[![Bintray](https://img.shields.io/bintray/v/vroste/maven/zio-kinesis?label=latest)](https://bintray.com/vroste/maven/zio-kinesis/_latestVersion)
 
 # ZIO Kinesis
 
