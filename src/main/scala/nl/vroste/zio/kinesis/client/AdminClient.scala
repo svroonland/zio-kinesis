@@ -7,7 +7,7 @@ import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyn
 import zio._
 import zio.clock.Clock
 import zio.duration._
-import zio.interop.reactiveStreams._
+import zio.interop.reactivestreams._
 import zio.stream.ZStream
 
 import scala.jdk.CollectionConverters._
