@@ -24,7 +24,8 @@ inThisBuild(
     fork in Test := true,
     fork in run := true,
     publishMavenStyle := true,
-    publishArtifact in Test := false,
+    publishArtifact in Test :=
+      false,
     assemblyJarName in assembly := "zio-kinesis-" + version.value + ".jar",
     test in assembly := {},
     target in assembly := file(baseDirectory.value + "/../bin/"),
@@ -49,7 +50,8 @@ libraryDependencies ++= Seq(
   "dev.zio"                 %% "zio-interop-reactivestreams" % "1.0.3.5-RC6",
   "software.amazon.awssdk"  % "kinesis"                      % "2.10.82",
   "ch.qos.logback"          % "logback-classic"              % "1.2.3",
-  "software.amazon.kinesis" % "amazon-kinesis-client"        % "2.2.9"
+  "software.amazon.kinesis" % "amazon-kinesis-client"        % "2.2.9",
+  "org.scala-lang.modules"  %% "scala-collection-compat"     % "2.1.4"
 ) ++ {
   if (scalaBinaryVersion.value == "2.13") silencer else Seq.empty
 }
