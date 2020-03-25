@@ -4,6 +4,9 @@
 
 ZIO Kinesis is a ZIO-based wrapper around the AWS Kinesis SDK. All operations are non-blocking. It provides a streaming interface to Kinesis streams.
 
+I wrote the library to learn more about Kinesis and ZIO, i'm not using it in a production project myself.
+However, this open-source library is already being successfully used in production in one or two organisations.
+More beta customers are welcome.
 
 ## Features
 
@@ -20,6 +23,12 @@ Add to your build.sbt:
 
 ```scala
 libraryDependencies += "nl.vroste" %% "zio-kinesis" % "0.4.0"
+```
+
+Your SBT settings must specify the resolver for JCenter.  
+
+```scala
+  resolvers += Resolver.jcenterRepo
 ```
 
 ## DynamicConsumer
@@ -55,7 +64,27 @@ DynamicConsumer
   .runDrain
 ```
 
-DynamicConsumer is built on `ZManaged` and therefore resource-safe: after stream completion all resources acquired will be shutdown.
+
+#### Notes
+
+- DynamicConsumer is built on `ZManaged` and therefore resource-safe: after stream completion all resources acquired will be shutdown.
+
+- DynamicConsumer.shardedStream takes default value for initialPosition in the stream that the application should 
+  start at = `TRIM_HORIZON`, which is from the oldest messages in Kinesis.
+  However, from the KCL documentation, the initial position is only used during initial lease creation.
+  When an application restarts, it will resume from the previous checkpoint,
+  and so will continue from where it left off in the Kinesis stream.
+
+#### Checkpoint coordination schemes
+
+The handler for messages in the example above calls `r.checkpoint`. This checkpoints every message.
+It is [recommended](https://github.com/awslabs/amazon-kinesis-client/blob/master/amazon-kinesis-client/src/main/java/software/amazon/kinesis/processor/RecordProcessorCheckpointer.java#L35)
+to not checkpoint not too frequently.
+Instead, a count-based or period-based checkpointing scheme should be used as shown as follows.
+
+```scala
+// TODO - work in progress
+```
 
 ## Producer
 The low-level `Client` offers a `putRecords` method to put records on Kinesis. Although simple to use for a small number of records, there are many catches when it comes to efficiently and reliably producing a high volume of records. 
@@ -142,5 +171,3 @@ Refer to the [unit tests](src/test/scala/nl/vroste/zio/kinesis/client).
 ## Credits
 
 The Serde construct in this library is inspired by [zio-kafka](https://github.com/zio/zio-kafka), the producer by [this AWS blog post](https://aws.amazon.com/blogs/big-data/implementing-efficient-and-reliable-producers-with-the-amazon-kinesis-producer-library/)
-
-
