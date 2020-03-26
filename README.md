@@ -4,8 +4,7 @@
 
 ZIO Kinesis is a ZIO-based wrapper around the AWS Kinesis SDK. All operations are non-blocking. It provides a streaming interface to Kinesis streams.
 
-I wrote the library to learn more about Kinesis and ZIO, i'm not using it in a production project myself.
-However, this open-source library is already being successfully used in production in one or two organisations.
+The project is in beta stage. Although already being used in production by a small number of organisations, expect some issues to pop up.
 More beta customers are welcome.
 
 ## Features
