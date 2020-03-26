@@ -65,7 +65,7 @@ DynamicConsumer
 ```
 
 
-#### Notes
+### Notes
 
 - DynamicConsumer is built on `ZManaged` and therefore resource-safe: after stream completion all resources acquired will be shutdown.
 
@@ -83,7 +83,69 @@ to not checkpoint not too frequently.
 Instead, a count-based or period-based checkpointing scheme should be used as shown as follows.
 
 ```scala
-// TODO - work in progress
+DynamicConsumer
+  .shardedStream(
+    streamName,
+    applicationName = applicationName,
+    deserializer = Serde.byteBuffer
+  )
+  .flatMapPar(maxParallel) {
+    case (shardId: String, shardStream: ZStreamChunk[Any, Throwable, DynamicConsumer.Record[ByteBuffer]]) =>
+      shardStream
+        .zipWithIndex
+        .tap {
+          case (r: DynamicConsumer.Record[ByteBuffer], sequenceNumberForShard: Long) =>
+            handler(shardId, r) *> (
+              if (sequenceNumberForShard % checkpointDivisor == checkpointDivisor - 1) r.checkpoint
+              else UIO.succeed(())
+            )
+        }
+        .map(_._1) // remove sequence numbering
+        .flattenChunks
+  }
+```
+
+In this example, checkpointing is done once per batch of `checkpointDivisor` records. This batch counting is per-shard. 
+
+#### Authentication with AWS
+
+The following snippet shows the full range of parameters to `DynamicConsumer.shardedStream`, most of which relate
+to authentication of the AWS resources.
+
+```scala
+val credentials = StaticCredentialsProvider.create(AwsBasicCredentials.create(awsKey, awsSecret))
+
+val kinesisClientBuilder =
+  KinesisAsyncClient
+    .builder
+    .credentialsProvider(credentials)
+    .region(region)
+
+val cloudWatchClientBuilder: CloudWatchAsyncClientBuilder =
+  CloudWatchAsyncClient
+    .builder
+    .credentialsProvider(credentials)
+    .region(region)
+
+val dynamoDbClientBuilder =
+  DynamoDbAsyncClient
+    .builder
+    .credentialsProvider(credentials)
+    .region(region)
+
+val initialPosition = InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON)
+
+DynamicConsumer
+  .shardedStream(
+    streamName,
+    applicationName = applicationName,
+    deserializer = Serde.byteBuffer,
+    kinesisClientBuilder = kinesisClientBuilder,
+    cloudWatchClientBuilder = cloudWatchClientBuilder,
+    dynamoDbClientBuilder = dynamoDbClientBuilder,
+    initialPosition = initialPosition
+  )
+
 ```
 
 ## Producer
