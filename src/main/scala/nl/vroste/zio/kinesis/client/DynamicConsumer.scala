@@ -12,6 +12,7 @@ import software.amazon.kinesis.coordinator.Scheduler
 import software.amazon.kinesis.lifecycle.events._
 import software.amazon.kinesis.processor.{ RecordProcessorCheckpointer, ShardRecordProcessor }
 import software.amazon.kinesis.retrieval.KinesisClientRecord
+import software.amazon.kinesis.retrieval.fanout.FanOutConfig
 import software.amazon.kinesis.retrieval.polling.PollingConfig
 import zio._
 import zio.blocking.Blocking
@@ -50,7 +51,8 @@ object DynamicConsumer {
     cloudWatchClientBuilder: CloudWatchAsyncClientBuilder = CloudWatchAsyncClient.builder,
     dynamoDbClientBuilder: DynamoDbAsyncClientBuilder = DynamoDbAsyncClient.builder(),
     initialPosition: InitialPositionInStreamExtended =
-      InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON)
+      InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON),
+    isEnhancedFanOut: Boolean = false
   ): ZStream[Blocking with R, Throwable, (String, ZStreamChunk[Any, Throwable, Record[T]])] = {
 
     case class ShardQueue(runtime: zio.Runtime[R], q: Queue[Take[Throwable, Chunk[Record[T]]]]) {
@@ -128,6 +130,13 @@ object DynamicConsumer {
         } yield new Queues(runtime, q)
     }
 
+    def retrievalConfig(kinesisClient: KinesisAsyncClient) =
+      if (isEnhancedFanOut) {
+        new FanOutConfig(kinesisClient).streamName(streamName).applicationName(applicationName)
+      } else {
+        new PollingConfig(streamName, kinesisClient)
+      }
+
 // Run the scheduler
     val schedulerM =
       for {
@@ -156,7 +165,7 @@ object DynamicConsumer {
                         configsBuilder
                           .retrievalConfig()
                           .initialPositionInStreamExtended(initialPosition)
-                          .retrievalSpecificConfig(new PollingConfig(streamName, kinesisClient))
+                          .retrievalSpecificConfig(retrievalConfig(kinesisClient))
                       )
                     ).toManaged_
         _ <- ZManaged.fromEffect {
