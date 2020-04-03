@@ -73,6 +73,9 @@ DynamicConsumer
   However, from the KCL documentation, the initial position is only used during initial lease creation.
   When an application restarts, it will resume from the previous checkpoint,
   and so will continue from where it left off in the Kinesis stream.
+  
+- [Enhanced Fan Out capability](https://docs.aws.amazon.com/streams/latest/dev/enhanced-consumers.html) is set by the
+ `isEnhancedFanOut` flag, which defaults to `true`.   
 
 #### Checkpoint coordination schemes
 

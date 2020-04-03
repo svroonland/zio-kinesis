@@ -39,6 +39,7 @@ object DynamicConsumer {
    * @param kinesisClientBuilder
    * @param cloudWatchClientBuilder
    * @param dynamoDbClientBuilder
+   * @param isEnhancedFanOut Flag for setting retrieval config - defaults to `true`. If `false` polling config is set.
    * @tparam R
    * @tparam T Type of record values
    * @return
@@ -52,7 +53,7 @@ object DynamicConsumer {
     dynamoDbClientBuilder: DynamoDbAsyncClientBuilder = DynamoDbAsyncClient.builder(),
     initialPosition: InitialPositionInStreamExtended =
       InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON),
-    isEnhancedFanOut: Boolean = false
+    isEnhancedFanOut: Boolean = true
   ): ZStream[Blocking with R, Throwable, (String, ZStreamChunk[Any, Throwable, Record[T]])] = {
 
     case class ShardQueue(runtime: zio.Runtime[R], q: Queue[Take[Throwable, Chunk[Record[T]]]]) {
