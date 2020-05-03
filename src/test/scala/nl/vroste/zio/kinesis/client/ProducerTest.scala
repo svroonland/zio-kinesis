@@ -19,7 +19,7 @@ import zio.{ Chunk, ZIO }
 object ProducerTest extends DefaultRunnableSpec {
   val createStream = (streamName: String, nrShards: Int) =>
     for {
-      adminClient <- AdminClient.create
+      adminClient <- AdminClient.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
       _ <- adminClient
             .createStream(streamName, nrShards)
             .catchSome {
@@ -46,7 +46,7 @@ object ProducerTest extends DefaultRunnableSpec {
 
         (for {
           _      <- createStream(streamName, 10)
-          client <- Client.create
+          client <- Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
           producer <- Producer
                        .make(streamName, client, Serde.asciiString, ProducerSettings(bufferSize = 32768))
                        .provideLayer(Clock.live)
@@ -56,10 +56,10 @@ object ProducerTest extends DefaultRunnableSpec {
               for {
                 _ <- ZIO.sleep(5.second)
                 // Parallelism, but not infinitely (not sure if it matters)
-                _ <- ZIO.collectAllParN(24)((1 to 200).map { i =>
+                _ <- ZIO.collectAllParN(2)((1 to 20).map { i =>
                       for {
                         _       <- ZIO(println(s"Starting chunk ${i}"))
-                        records = (1 to 1000).map(j => ProducerRecord(s"key${i}", s"message${i}-${j}"))
+                        records = (1 to 10).map(j => ProducerRecord(s"key${i}", s"message${i}-${j}"))
                         _ <- (producer
                               .produceChunk(Chunk.fromIterable(records)) *> ZIO(println(s"Chunk ${i} completed")))
                       } yield ()
@@ -72,12 +72,12 @@ object ProducerTest extends DefaultRunnableSpec {
         val streamName = "zio-test-stream-not-existing"
 
         (for {
-          client <- Client.create
+          client <- Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
           producer <- Producer
                        .make(streamName, client, Serde.asciiString, ProducerSettings(bufferSize = 32768))
                        .provideLayer(Clock.live)
         } yield producer).use { producer =>
-          val records = (1 to 1000).map(j => ProducerRecord(s"key${j}", s"message${j}-${j}"))
+          val records = (1 to 10).map(j => ProducerRecord(s"key${j}", s"message${j}-${j}"))
           producer
             .produceChunk(Chunk.fromIterable(records)) *> ZIO(println(s"Chunk completed"))
         }.run.map(r => assert(r)(fails(isSubtype[KinesisException](anything))))

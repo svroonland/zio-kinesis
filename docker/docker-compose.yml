@@ -1,0 +1,28 @@
+---
+
+version: '3'
+
+services:
+  localstack:
+#    build:
+#      context: .
+#      dockerfile: localstack/Dockerfile
+    image: localstack/localstack
+    healthcheck:
+      test: ["CMD-SHELL", "awslocal kinesis list-streams"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+    environment:
+      LOCALSTACK_HOST: localstack
+      SERVICES: 'kinesis,cloudwatch,dynamodb'
+      USE_SSL: "false"
+      DEFAULT_REGION: 'us-east-1'
+      AWS_DEFAULT_REGION: "us-east-1"
+      AWS_ACCESS_KEY_ID: dummy-key
+      AWS_SECRET_ACCESS_KEY: dummy-key
+      DEBUG: "1"
+    ports:
+      - "4582:4582"   # cloudwatch
+      - "4568:4568"   # kinesis
+      - "4569:4569"   # dynamodb

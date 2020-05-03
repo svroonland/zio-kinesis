@@ -5,15 +5,16 @@ import java.util.UUID
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException }
-import zio.clock.Clock
+import zio.blocking.Blocking
+import zio.clock.{ sleep, Clock }
 import zio.duration._
 import zio.stream.ZStream
-import zio.test._
-import zio.test.TestAspect._
 import zio.test.Assertion._
+import zio.test.TestAspect._
+import zio.test._
 import zio.{ Fiber, Schedule, ZIO }
 
-object DynamicConsumerTest extends DefaultRunnableSpec {
+object DynamicConsumerTest2 extends DefaultRunnableSpec {
   private val retryOnResourceNotFound = Schedule.doWhile[Throwable] {
     case _: ResourceNotFoundException => true
     case _                            => false
@@ -80,9 +81,9 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
         val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
         val applicationName = "zio-test-" + UUID.randomUUID().toString
 
-        val nrRecords = 40
+//        val nrRecords = 40
 
-        def streamConsumer(label: String) =
+        def streamConsumer(label: String): ZStream[Clock with Blocking, Throwable, (String, String)] =
           LocalStackDynamicConsumer
             .shardedStream(
               streamName,
@@ -96,42 +97,77 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                     ZIO.fromFunction((id: Fiber.Id) =>
                       println(s"Consumer ${label} on fiber ${id} got record ${r} on shard ${shardID}")
                     )
-                } //.tap(_.checkpoint.retry(Schedule.exponential(100.millis)))
+                }.tap(_.checkpoint.retry(Schedule.exponential(100.millis)))
                   .map(_ => (label, shardID))
                   .ensuring(ZIO(println(s"Shard ${shardID} completed for consumer ${label}")).orDie)
             }
 
+//        val x: ZStream[Clock with Blocking, Throwable, (String, String)] = streamConsumer("1") merge streamConsumer("1")
+
+        val maxRecords   = 800
+        val maxBatchSize = 200
+
+        def putRecordsEmitter(
+          streamName: String,
+          batchSize: Int,
+          max: Int,
+          client: Client
+        ): ZStream[Clock, Throwable, Int] =
+          ZStream.unfoldM(1) { i =>
+            if (i < max) {
+              val recordsBatch = (i until i + batchSize).map(i => ProducerRecord(s"key${i}", s"msg${i}"))
+              val putRecordsM = client
+                .putRecords(
+                  streamName,
+                  Serde.asciiString,
+                  recordsBatch
+                )
+                .retry(retryOnResourceNotFound)
+              for {
+                _ <- sleep(250.milliseconds)
+                _ <- putRecordsM
+              } yield Some((i, i + batchSize))
+            } else {
+              ZIO.succeed(None)
+            }
+          }
+
         (Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder) <* createStream(streamName, 10)).use {
           client =>
             println("Putting records")
-            val records =
-              (1 to nrRecords).map(i => ProducerRecord(s"key${i}", s"msg${i}"))
+//            val records =
+//              (1 to nrRecords).map(i => ProducerRecord(s"key${i}", s"msg${i}"))
             for {
-              _ <- ZStream
-                    .fromIterable((1 to nrRecords))
-                    .schedule(Schedule.spaced(250.millis))
-                    .mapM { _ =>
-                      client
-                        .putRecords(streamName, Serde.asciiString, records)
-                        .tapError(e => ZIO(println(e)))
-                        .retry(retryOnResourceNotFound)
-                    }
-                    .provideLayer(Clock.live)
-                    .runDrain
-                    .fork
-
+//              _ <- ZStream
+//                    .fromIterable((1 to nrRecords))
+//                    .schedule(Schedule.spaced(250.millis))
+//                    .mapM { _ =>
+//                      client
+//                        .putRecords(streamName, Serde.asciiString, records)
+//                        .tapError(e => ZIO(println(e)))
+//                        .retry(retryOnResourceNotFound)
+//                    }
+//                    .provideLayer(Clock.live)
+//                    .runDrain
+//                    .fork
+              _ <- putRecordsEmitter(
+                    streamName,
+                    batchSize = maxBatchSize,
+                    max = maxRecords,
+                    client
+                  ).provideLayer(Clock.live).runDrain
               _ = println("Starting dynamic consumer")
 
               records <- (streamConsumer("1")
                           merge ZStream
                             .fromEffect(ZIO.sleep(5.seconds).provideLayer(Clock.live))
                             .flatMap(_ => streamConsumer("2")))
-                          .take(nrRecords * nrRecords.toLong)
+                          .take(maxRecords.toLong - 100L)
                           .runCollect
               _ = records.foreach(println)
               // Both consumers should have gotten some records
             } yield assert(records.map(_._1).toSet)(equalTo(Set("1", "2")))
         }
       }
-    ) @@ timeout(5.minute) @@ sequential
+    ) @@ timeout(3.minute) @@ sequential
 }
