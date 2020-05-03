@@ -40,7 +40,7 @@ object DynamicConsumer {
    * @param cloudWatchClientBuilder
    * @param dynamoDbClientBuilder
    * @param isEnhancedFanOut Flag for setting retrieval config - defaults to `true`. If `false` polling config is set.
-   * @param maybeTableName Optionally set the lease table name - defaults to None. If not specified the `applicationName` will be used.
+   * @param leaseTableName Optionally set the lease table name - defaults to None. If not specified the `applicationName` will be used.
    * @tparam R ZIO environment type required by the `deserializer`
    * @tparam T Type of record values
    * @return
@@ -55,7 +55,7 @@ object DynamicConsumer {
     initialPosition: InitialPositionInStreamExtended =
       InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON),
     isEnhancedFanOut: Boolean = true,
-    maybeTableName: Option[String] = None
+    leaseTableName: Option[String] = None
   ): ZStream[Blocking with R, Throwable, (String, ZStreamChunk[Any, Throwable, Record[T]])] = {
 
     case class ShardQueue(runtime: zio.Runtime[R], q: Queue[Take[Throwable, Chunk[Record[T]]]]) {
@@ -158,7 +158,7 @@ object DynamicConsumer {
             UUID.randomUUID.toString,
             () => new ZioShardProcessor(queues)
           )
-          maybeTableName.fold(configsBuilder)(configsBuilder.tableName)
+          leaseTableName.fold(configsBuilder)(configsBuilder.tableName)
         }
 
         scheduler <- Task(
