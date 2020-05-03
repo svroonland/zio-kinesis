@@ -40,7 +40,8 @@ object DynamicConsumer {
    * @param cloudWatchClientBuilder
    * @param dynamoDbClientBuilder
    * @param isEnhancedFanOut Flag for setting retrieval config - defaults to `true`. If `false` polling config is set.
-   * @tparam R
+   * @param leaseTableName Optionally set the lease table name - defaults to None. If not specified the `applicationName` will be used.
+   * @tparam R ZIO environment type required by the `deserializer`
    * @tparam T Type of record values
    * @return
    */
@@ -53,7 +54,8 @@ object DynamicConsumer {
     dynamoDbClientBuilder: DynamoDbAsyncClientBuilder = DynamoDbAsyncClient.builder(),
     initialPosition: InitialPositionInStreamExtended =
       InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON),
-    isEnhancedFanOut: Boolean = true
+    isEnhancedFanOut: Boolean = true,
+    leaseTableName: Option[String] = None
   ): ZStream[Blocking with R, Throwable, (String, ZStreamChunk[Any, Throwable, Record[T]])] = {
 
     case class ShardQueue(runtime: zio.Runtime[R], q: Queue[Take[Throwable, Chunk[Record[T]]]]) {
@@ -94,7 +96,7 @@ object DynamicConsumer {
     }
 
     class ZioShardProcessor(queues: Queues) extends ShardRecordProcessor {
-      var shardQueue: ShardQueue = null
+      var shardQueue: ShardQueue = _
 
       override def initialize(input: InitializationInput): Unit =
         shardQueue = queues.newShard(input.shardId())
@@ -138,7 +140,7 @@ object DynamicConsumer {
         new PollingConfig(streamName, kinesisClient)
       }
 
-// Run the scheduler
+    // Run the scheduler
     val schedulerM =
       for {
         queues           <- Queues.make
@@ -146,15 +148,19 @@ object DynamicConsumer {
         dynamoDbClient   <- ZManaged.fromAutoCloseable(ZIO(dynamoDbClientBuilder.build()))
         cloudWatchClient <- ZManaged.fromAutoCloseable(ZIO(cloudWatchClientBuilder.build()))
 
-        configsBuilder = new ConfigsBuilder(
-          streamName,
-          applicationName,
-          kinesisClient,
-          dynamoDbClient,
-          cloudWatchClient,
-          UUID.randomUUID.toString,
-          () => new ZioShardProcessor(queues)
-        )
+        configsBuilder = {
+          val configsBuilder = new ConfigsBuilder(
+            streamName,
+            applicationName,
+            kinesisClient,
+            dynamoDbClient,
+            cloudWatchClient,
+            UUID.randomUUID.toString,
+            () => new ZioShardProcessor(queues)
+          )
+          leaseTableName.fold(configsBuilder)(configsBuilder.tableName)
+        }
+
         scheduler <- Task(
                       new Scheduler(
                         configsBuilder.checkpointConfig(),
@@ -191,7 +197,7 @@ object DynamicConsumer {
     kinesisClientBuilder: KinesisAsyncClientBuilder = KinesisAsyncClient.builder(),
     cloudWatchClientBuilder: CloudWatchAsyncClientBuilder = CloudWatchAsyncClient.builder,
     dynamoDbClientBuilder: DynamoDbAsyncClientBuilder = DynamoDbAsyncClient.builder()
-  ) = ZStreamChunk {
+  ): ZStreamChunk[Blocking with R, Throwable, Record[T]] = ZStreamChunk {
     shardedStream(
       streamName,
       applicationName,
