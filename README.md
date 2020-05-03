@@ -228,9 +228,25 @@ Refer to the [AWS Kinesis Streams API Reference](https://docs.aws.amazon.com/kin
 ### Configuration
 By default `Client`, `AdminClient`, `DynamicConsumer` and `Producer` will load AWS credentials and regions via the [Default Credential/Region Provider](https://docs.aws.amazon.com/sdk-for-java/v1/developer-guide/credentials.html). Using the client builders, many parameters can be customized. Refer to the AWS documentation for more information.
 
-### More usage examples
+### Running tests and usage examples 
 
-Refer to the [unit tests](src/test/scala/nl/vroste/zio/kinesis/client).
+[Note the tests are also good usage examples](src/test/scala/nl/vroste/zio/kinesis/client)
+
+The tests run against a [`localstack`](https://github.com/localstack/localstack) docker image to access 
+`kinesis`, `dynamoDb` and `cloudwatch` locally. In order to run the tests you need to have `docker` and `docker-compose` 
+installed on your machine. Then on your machine open a terminal window and make navigate to the root of this project. 
+Then type: 
+
+    > cd docker
+    > sbt docker-compose up -d
+    
+To run the tests
+
+    > sbt test   
+    
+Don't forget to shutdown the docker container after you have finished     
+
+    > sbt docker-compose down
 
 ## Credits
 

@@ -23,7 +23,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
   val createStream = (streamName: String, nrShards: Int) =>
     for {
-      adminClient <- AdminClient.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
+      adminClient <- AdminClient.build(LocalStack.kinesisAsyncClientBuilder)
       _ <- adminClient
             .createStream(streamName, nrShards)
             .catchSome {
@@ -48,7 +48,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
         val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
         val applicationName = "zio-test-" + UUID.randomUUID().toString
 
-        (Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder) <* createStream(streamName, 2)).use {
+        (Client.build(LocalStack.kinesisAsyncClientBuilder) <* createStream(streamName, 2)).use {
           client =>
             println("Putting records")
             for {
@@ -62,7 +62,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                     .provideLayer(Clock.live)
 
               _ = println("Starting dynamic consumer")
-              _ <- LocalStackDynamicConsumer
+              _ <- LocalStack
                     .shardedStream(
                       streamName,
                       applicationName = applicationName,
@@ -74,7 +74,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                     .runCollect
             } yield assertCompletes
         }
-      } @@ ignore,
+      },
       testM("support multiple parallel streams") {
 
         val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
@@ -83,7 +83,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
         val nrRecords = 40
 
         def streamConsumer(label: String) =
-          LocalStackDynamicConsumer
+          LocalStack
             .shardedStream(
               streamName,
               applicationName = applicationName,
@@ -96,12 +96,12 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                     ZIO.fromFunction((id: Fiber.Id) =>
                       println(s"Consumer ${label} on fiber ${id} got record ${r} on shard ${shardID}")
                     )
-                } //.tap(_.checkpoint.retry(Schedule.exponential(100.millis)))
+                } //.tap(_.checkpoint.retry(Schedule.exponential(100.millis))) // TODO:
                   .map(_ => (label, shardID))
                   .ensuring(ZIO(println(s"Shard ${shardID} completed for consumer ${label}")).orDie)
             }
 
-        (Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder) <* createStream(streamName, 10)).use {
+        (Client.build(LocalStack.kinesisAsyncClientBuilder) <* createStream(streamName, 10)).use {
           client =>
             println("Putting records")
             val records =

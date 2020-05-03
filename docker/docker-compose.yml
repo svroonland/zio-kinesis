@@ -4,9 +4,6 @@ version: '3'
 
 services:
   localstack:
-#    build:
-#      context: .
-#      dockerfile: localstack/Dockerfile
     image: localstack/localstack
     healthcheck:
       test: ["CMD-SHELL", "awslocal kinesis list-streams"]

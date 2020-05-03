@@ -19,7 +19,7 @@ import software.amazon.awssdk.utils.AttributeMap
 import zio.blocking.Blocking
 import zio.stream.{ ZStream, ZStreamChunk }
 
-object LocalStackDynamicConsumer {
+object LocalStack {
 
   private val region: Region          = Region.of("us-east-1")
   private val kinesisUri: URI         = new URI("http://localhost:4568")
@@ -31,7 +31,6 @@ object LocalStackDynamicConsumer {
   val credsProvider: AwsCredentialsProvider =
     StaticCredentialsProvider.create(AwsBasicCredentials.create(accessKey, secretAccessKey))
 
-  // https://github.com/localstack/localstack/issues/893#issuecomment-486852654
   val localHttpClient: SdkAsyncHttpClient = {
     import software.amazon.awssdk.http.Protocol
     import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient
