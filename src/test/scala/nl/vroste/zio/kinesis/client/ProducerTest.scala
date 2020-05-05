@@ -19,7 +19,7 @@ import zio.{ Chunk, ZIO }
 object ProducerTest extends DefaultRunnableSpec {
   val createStream = (streamName: String, nrShards: Int) =>
     for {
-      adminClient <- AdminClient.build(LocalStack.kinesisAsyncClientBuilder)
+      adminClient <- AdminClient.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
       _ <- adminClient
             .createStream(streamName, nrShards)
             .catchSome {
@@ -46,7 +46,7 @@ object ProducerTest extends DefaultRunnableSpec {
 
         (for {
           _      <- createStream(streamName, 10)
-          client <- Client.build(LocalStack.kinesisAsyncClientBuilder)
+          client <- Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
           producer <- Producer
                        .make(streamName, client, Serde.asciiString, ProducerSettings(bufferSize = 32768))
                        .provideLayer(Clock.live)
@@ -72,7 +72,7 @@ object ProducerTest extends DefaultRunnableSpec {
         val streamName = "zio-test-stream-not-existing"
 
         (for {
-          client <- Client.build(LocalStack.kinesisAsyncClientBuilder)
+          client <- Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
           producer <- Producer
                        .make(streamName, client, Serde.asciiString, ProducerSettings(bufferSize = 32768))
                        .provideLayer(Clock.live)

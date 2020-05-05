@@ -23,7 +23,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
   val createStream = (streamName: String, nrShards: Int) =>
     for {
-      adminClient <- AdminClient.build(LocalStack.kinesisAsyncClientBuilder)
+      adminClient <- AdminClient.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
       _ <- adminClient
             .createStream(streamName, nrShards)
             .catchSome {
@@ -48,7 +48,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
         val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
         val applicationName = "zio-test-" + UUID.randomUUID().toString
 
-        (Client.build(LocalStack.kinesisAsyncClientBuilder) <* createStream(streamName, 2)).use {
+        (Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder) <* createStream(streamName, 2)).use {
           client =>
             println("Putting records")
             for {
@@ -62,7 +62,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                     .provideLayer(Clock.live)
 
               _ = println("Starting dynamic consumer")
-              _ <- LocalStack
+              _ <- LocalStackDynamicConsumer
                     .shardedStream(
                       streamName,
                       applicationName = applicationName,
@@ -83,7 +83,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
         val nrRecords = 40
 
         def streamConsumer(label: String) =
-          LocalStack
+          LocalStackDynamicConsumer
             .shardedStream(
               streamName,
               applicationName = applicationName,
@@ -101,7 +101,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                   .ensuring(ZIO(println(s"Shard ${shardID} completed for consumer ${label}")).orDie)
             }
 
-        (Client.build(LocalStack.kinesisAsyncClientBuilder) <* createStream(streamName, 10)).use {
+        (Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder) <* createStream(streamName, 10)).use {
           client =>
             println("Putting records")
             val records =
