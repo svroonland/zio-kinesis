@@ -108,30 +108,30 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                 }.map(_._1) // remove sequence numbering
                   .flattenChunks
                   .map(_ => (label, shardId))
-                  .ensuring(ZIO(println(s"Shard $shardId completed for consumer $label")).orDie)
+                  .ensuring(putStrLn(s"Shard $shardId completed for consumer $label"))
             }
         }
 
         (Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder) <* createStream(streamName, 10)).use {
           client =>
-            println("Putting records")
             val records =
               (1 to nrRecords).map(i => ProducerRecord(s"key$i", s"msg$i"))
             for {
+              _ <- putStrLn("Putting records")
               _ <- ZStream
                     .fromIterable(1 to nrRecords)
                     .schedule(Schedule.spaced(250.millis))
                     .mapM { _ =>
                       client
                         .putRecords(streamName, Serde.asciiString, records)
-                        .tapError(e => ZIO(println(e)))
+                        .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
                         .retry(retryOnResourceNotFound)
                     }
-                    .provideLayer(Clock.live)
+                    .provideSomeLayer(Clock.live)
                     .runDrain
                     .fork
 
-              _ = println("Starting dynamic consumer")
+              _ <- putStrLn("Starting dynamic consumer")
 
               records <- (streamConsumer("1")
                           merge ZStream
@@ -139,7 +139,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                             .flatMap(_ => streamConsumer("2")))
                           .take(nrRecords * nrRecords.toLong)
                           .runCollect
-              _ = records.foreach(println)
+              _ <- ZIO.foreach_(records.map(_.toString))(s => putStrLn(s).provideLayer(Console.live))
               // Both consumers should have gotten some records
             } yield assert(records.map(_._1).toSet)(equalTo(Set("1", "2")))
         }
