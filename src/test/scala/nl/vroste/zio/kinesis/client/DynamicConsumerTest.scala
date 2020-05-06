@@ -5,13 +5,14 @@ import java.util.UUID
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException }
+import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.duration._
 import zio.stream.ZStream
-import zio.test._
-import zio.test.TestAspect._
 import zio.test.Assertion._
-import zio.{ Fiber, Schedule, ZIO }
+import zio.test.TestAspect._
+import zio.test._
+import zio.{ Schedule, UIO, ZIO }
 
 object DynamicConsumerTest extends DefaultRunnableSpec {
   private val retryOnResourceNotFound = Schedule.doWhile[Throwable] {
@@ -82,7 +83,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
         val nrRecords = 40
 
-        def streamConsumer(label: String) =
+        def streamConsumer(label: String): ZStream[Blocking, Throwable, (String, String)] =
           LocalStackDynamicConsumer
             .shardedStream(
               streamName,
@@ -91,14 +92,32 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
             )
             .flatMapPar(Int.MaxValue) {
               case (shardID, shardStream) =>
-                shardStream.flattenChunks.tap { r =>
-                  ZIO.fiberId andThen
-                    ZIO.fromFunction((id: Fiber.Id) =>
-                      println(s"Consumer ${label} on fiber ${id} got record ${r} on shard ${shardID}")
+                shardStream.zipWithIndex.tap {
+                  case (r: DynamicConsumer.Record[String], sequenceNumberForShard: Long) =>
+                    ZIO.effectTotal(
+                      println(s"Consumer ${label} on fiber {id} got record ${r} on shard ${shardID}")
+                    ) *> (
+                      if (sequenceNumberForShard % 500 == 500 - 1) r.checkpoint
+                      else UIO.succeed(())
                     )
-                } //.tap(_.checkpoint.retry(Schedule.exponential(100.millis))) // TODO:
+                }.map(_._1) // remove sequence numbering
+                  .flattenChunks
                   .map(_ => (label, shardID))
                   .ensuring(ZIO(println(s"Shard ${shardID} completed for consumer ${label}")).orDie)
+
+//                                ZIO.fiberId andThen
+//                                  ZIO.fromFunction((id: Fiber.Id) =>
+//                                    println(s"Consumer ${label} on fiber ${id} got record ${r} on shard ${shardID}")
+//                                  )
+
+//                shardStream.flattenChunks.tap { r =>
+//                  ZIO.fiberId andThen
+//                    ZIO.fromFunction((id: Fiber.Id) =>
+//                      println(s"Consumer ${label} on fiber ${id} got record ${r} on shard ${shardID}")
+//                    )
+//                } //.tap(_.checkpoint.retry(Schedule.exponential(100.millis))) // TODO:
+//                  .map(_ => (label, shardID))
+//                  .ensuring(ZIO(println(s"Shard ${shardID} completed for consumer ${label}")).orDie)
             }
 
         (Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder) <* createStream(streamName, 10)).use {
