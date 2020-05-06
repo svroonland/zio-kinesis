@@ -5,8 +5,8 @@ import java.util.UUID
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException }
-import zio.blocking.Blocking
 import zio.clock.Clock
+import zio.console._
 import zio.duration._
 import zio.stream.ZStream
 import zio.test.Assertion._
@@ -22,15 +22,14 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
     Schedule.recurs(5) &&
     Schedule.exponential(2.second)
 
-  val createStream = (streamName: String, nrShards: Int) =>
+  private val createStream = (streamName: String, nrShards: Int) =>
     for {
       adminClient <- AdminClient.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
       _ <- adminClient
             .createStream(streamName, nrShards)
             .catchSome {
               case _: ResourceInUseException =>
-                println("Stream already exists")
-                ZIO.unit
+                putStrLn("Stream already exists")
             }
             .toManaged { _ =>
               adminClient
@@ -42,7 +41,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
             }
     } yield ()
 
-  def spec =
+  override def spec =
     suite("DynamicConsumer")(
       testM("consume records produced on all shards produced on the stream") {
 
@@ -51,8 +50,8 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
         (Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder) <* createStream(streamName, 2)).use {
           client =>
-            println("Putting records")
             for {
+              _ <- putStrLn("Putting records")
               _ <- client
                     .putRecords(
                       streamName,
@@ -62,7 +61,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                     .retry(retryOnResourceNotFound)
                     .provideLayer(Clock.live)
 
-              _ = println("Starting dynamic consumer")
+              _ <- putStrLn("Starting dynamic consumer")
               _ <- LocalStackDynamicConsumer
                     .shardedStream(
                       streamName,
@@ -71,7 +70,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                     )
                     .flatMapPar(Int.MaxValue)(_._2.flattenChunks)
                     .take(2)
-                    .tap(r => ZIO(println(s"Got record ${r}")) *> r.checkpoint.retry(Schedule.exponential(100.millis)))
+                    .tap(r => putStrLn(s"Got record $r") *> r.checkpoint.retry(Schedule.exponential(100.millis)))
                     .runCollect
             } yield assertCompletes
         }
@@ -83,7 +82,15 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
         val nrRecords = 40
 
-        def streamConsumer(label: String): ZStream[Blocking, Throwable, (String, String)] =
+        def streamConsumer(label: String) = {
+          val checkpointDivisor = 500
+
+          def handler(shardId: String, r: DynamicConsumer.Record[String]) =
+            for {
+              id <- ZIO.fiberId
+              _  <- putStrLn(s"Consumer $label on fiber $id got record $r on shard $shardId")
+            } yield ()
+
           LocalStackDynamicConsumer
             .shardedStream(
               streamName,
@@ -91,43 +98,28 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
               deserializer = Serde.asciiString
             )
             .flatMapPar(Int.MaxValue) {
-              case (shardID, shardStream) =>
+              case (shardId, shardStream) =>
                 shardStream.zipWithIndex.tap {
                   case (r: DynamicConsumer.Record[String], sequenceNumberForShard: Long) =>
-                    ZIO.effectTotal(
-                      println(s"Consumer ${label} on fiber {id} got record ${r} on shard ${shardID}")
-                    ) *> (
-                      if (sequenceNumberForShard % 500 == 500 - 1) r.checkpoint
+                    handler(shardId, r) *> (
+                      if (sequenceNumberForShard % checkpointDivisor == checkpointDivisor - 1) r.checkpoint
                       else UIO.succeed(())
                     )
                 }.map(_._1) // remove sequence numbering
                   .flattenChunks
-                  .map(_ => (label, shardID))
-                  .ensuring(ZIO(println(s"Shard ${shardID} completed for consumer ${label}")).orDie)
-
-//                                ZIO.fiberId andThen
-//                                  ZIO.fromFunction((id: Fiber.Id) =>
-//                                    println(s"Consumer ${label} on fiber ${id} got record ${r} on shard ${shardID}")
-//                                  )
-
-//                shardStream.flattenChunks.tap { r =>
-//                  ZIO.fiberId andThen
-//                    ZIO.fromFunction((id: Fiber.Id) =>
-//                      println(s"Consumer ${label} on fiber ${id} got record ${r} on shard ${shardID}")
-//                    )
-//                } //.tap(_.checkpoint.retry(Schedule.exponential(100.millis))) // TODO:
-//                  .map(_ => (label, shardID))
-//                  .ensuring(ZIO(println(s"Shard ${shardID} completed for consumer ${label}")).orDie)
+                  .map(_ => (label, shardId))
+                  .ensuring(ZIO(println(s"Shard $shardId completed for consumer $label")).orDie)
             }
+        }
 
         (Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder) <* createStream(streamName, 10)).use {
           client =>
             println("Putting records")
             val records =
-              (1 to nrRecords).map(i => ProducerRecord(s"key${i}", s"msg${i}"))
+              (1 to nrRecords).map(i => ProducerRecord(s"key$i", s"msg$i"))
             for {
               _ <- ZStream
-                    .fromIterable((1 to nrRecords))
+                    .fromIterable(1 to nrRecords)
                     .schedule(Schedule.spaced(250.millis))
                     .mapM { _ =>
                       client
