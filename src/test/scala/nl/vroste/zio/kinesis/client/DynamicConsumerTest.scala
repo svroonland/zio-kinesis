@@ -12,7 +12,7 @@ import zio.stream.ZStream
 import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test._
-import zio.{ Schedule, UIO, ZIO }
+import zio.{ Schedule, ZIO }
 
 object DynamicConsumerTest extends DefaultRunnableSpec {
   private val retryOnResourceNotFound = Schedule.doWhile[Throwable] {
@@ -101,10 +101,8 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
               case (shardId, shardStream) =>
                 shardStream.zipWithIndex.tap {
                   case (r: DynamicConsumer.Record[String], sequenceNumberForShard: Long) =>
-                    handler(shardId, r) *> (
-                      if (sequenceNumberForShard % checkpointDivisor == checkpointDivisor - 1) r.checkpoint
-                      else UIO.succeed(())
-                    )
+                    handler(shardId, r) *>
+                      ZIO.when(sequenceNumberForShard % checkpointDivisor == checkpointDivisor - 1)(r.checkpoint)
                 }.map(_._1) // remove sequence numbering
                   .flattenChunks
                   .map(_ => (label, shardId))

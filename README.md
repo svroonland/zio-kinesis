@@ -97,10 +97,8 @@ DynamicConsumer
         .zipWithIndex
         .tap {
           case (r: DynamicConsumer.Record[ByteBuffer], sequenceNumberForShard: Long) =>
-            handler(shardId, r) *> (
-              if (sequenceNumberForShard % checkpointDivisor == checkpointDivisor - 1) r.checkpoint
-              else UIO.succeed(())
-            )
+            handler(shardId, r) *>
+              ZIO.when(sequenceNumberForShard % checkpointDivisor == checkpointDivisor - 1)(r.checkpoint)
         }
         .map(_._1) // remove sequence numbering
         .flattenChunks
@@ -233,7 +231,7 @@ By default `Client`, `AdminClient`, `DynamicConsumer` and `Producer` will load A
 [Note the tests are also good usage examples](src/test/scala/nl/vroste/zio/kinesis/client)
 
 The tests run against a [`localstack`](https://github.com/localstack/localstack) docker image to access 
-`kinesis`, `dynamoDb` and `cloudwatch` locally. In order to run the tests you need to have `docker` and `docker-compose` 
+`kinesis`, `dynamoDb` and `cloudwatch` endpoints locally. In order to run the tests you need to have `docker` and `docker-compose` 
 installed on your machine. Then on your machine open a terminal window and make navigate to the root of this project. 
 Then type: 
 
@@ -244,7 +242,7 @@ To run the tests
 
     > sbt test   
     
-Don't forget to shutdown the docker container after you have finished     
+Don't forget to shut down the docker container after you have finished     
 
     > sbt docker-compose down
 
