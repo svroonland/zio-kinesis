@@ -232,17 +232,16 @@ By default `Client`, `AdminClient`, `DynamicConsumer` and `Producer` will load A
 
 The tests run against a [`localstack`](https://github.com/localstack/localstack) docker image to access 
 `kinesis`, `dynamoDb` and `cloudwatch` endpoints locally. In order to run the tests you need to have `docker` and `docker-compose` 
-installed on your machine. Then on your machine open a terminal window and make navigate to the root of this project. 
-Then type: 
+installed on your machine. Then on your machine open a terminal window and make navigate to the root of this project and type: 
 
     > cd docker
     > sbt docker-compose up -d
     
-To run the tests
+To run the tests, open another terminal window, cd to the root of the project and type:
 
     > sbt test   
     
-Don't forget to shut down the docker container after you have finished     
+Don't forget to shut down the docker container after you have finished. In the first terminal type:     
 
     > sbt docker-compose down
 
