@@ -19,6 +19,7 @@ jobs:
       - image: hseeberger/scala-sbt:8u222_1.3.4_2.13.1
     steps:
       - checkout
+      - setup_remote_docker
       - restore_cache:
           key: sbt-cache
       - run:
