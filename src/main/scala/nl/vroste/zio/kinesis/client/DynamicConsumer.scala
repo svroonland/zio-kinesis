@@ -118,9 +118,9 @@ object DynamicConsumer {
       def newShard(shard: String): ShardQueue =
         runtime.unsafeRun {
           for {
-            queue  <- Queue.unbounded[Take[Throwable, Chunk[Record[T]]]].map(ShardQueue(runtime, _))
+            queue <- Queue.unbounded[Take[Throwable, Chunk[Record[T]]]].map(ShardQueue(runtime, _))
             stream = ZStreamChunk(ZStream.fromQueue(queue.q).unTake)
-            _      <- shards.offer(Take.Value(shard -> stream)).unit
+            _     <- shards.offer(Take.Value(shard -> stream)).unit
           } yield queue
         }
     }
@@ -134,14 +134,13 @@ object DynamicConsumer {
     }
 
     def retrievalConfig(kinesisClient: KinesisAsyncClient) =
-      if (isEnhancedFanOut) {
+      if (isEnhancedFanOut)
         new FanOutConfig(kinesisClient).streamName(streamName).applicationName(applicationName)
-      } else {
+      else
         new PollingConfig(streamName, kinesisClient)
-      }
 
     // Run the scheduler
-    val schedulerM =
+    val schedulerM                                         =
       for {
         queues           <- Queues.make
         kinesisClient    <- ZManaged.fromAutoCloseable(ZIO(kinesisClientBuilder.build()))
@@ -161,27 +160,27 @@ object DynamicConsumer {
           leaseTableName.fold(configsBuilder)(configsBuilder.tableName)
         }
 
-        scheduler <- Task(
-                      new Scheduler(
-                        configsBuilder.checkpointConfig(),
-                        configsBuilder.coordinatorConfig(),
-                        configsBuilder.leaseManagementConfig().initialPositionInStream(initialPosition),
-                        configsBuilder.lifecycleConfig(),
-                        configsBuilder.metricsConfig(),
-                        configsBuilder.processorConfig(),
-                        configsBuilder
-                          .retrievalConfig()
-                          .initialPositionInStreamExtended(initialPosition)
-                          .retrievalSpecificConfig(retrievalConfig(kinesisClient))
-                      )
-                    ).toManaged_
-        _ <- ZManaged.fromEffect {
-              zio.blocking
-                .blocking(ZIO(scheduler.run()))
-                .fork
-                .flatMap(_.join)
-                .onInterrupt(ZIO.fromFutureJava(scheduler.startGracefulShutdown()).unit.orDie)
-            }.fork
+        scheduler     <- Task(
+                       new Scheduler(
+                         configsBuilder.checkpointConfig(),
+                         configsBuilder.coordinatorConfig(),
+                         configsBuilder.leaseManagementConfig().initialPositionInStream(initialPosition),
+                         configsBuilder.lifecycleConfig(),
+                         configsBuilder.metricsConfig(),
+                         configsBuilder.processorConfig(),
+                         configsBuilder
+                           .retrievalConfig()
+                           .initialPositionInStreamExtended(initialPosition)
+                           .retrievalSpecificConfig(retrievalConfig(kinesisClient))
+                       )
+                     ).toManaged_
+        _             <- ZManaged.fromEffect {
+               zio.blocking
+                 .blocking(ZIO(scheduler.run()))
+                 .fork
+                 .flatMap(_.join)
+                 .onInterrupt(ZIO.fromFutureJava(scheduler.startGracefulShutdown()).unit.orDie)
+             }.fork
       } yield ZStream.fromQueue(queues.shards).unTake
 
     ZStream.unwrapManaged(schedulerM)
@@ -197,16 +196,17 @@ object DynamicConsumer {
     kinesisClientBuilder: KinesisAsyncClientBuilder = KinesisAsyncClient.builder(),
     cloudWatchClientBuilder: CloudWatchAsyncClientBuilder = CloudWatchAsyncClient.builder,
     dynamoDbClientBuilder: DynamoDbAsyncClientBuilder = DynamoDbAsyncClient.builder()
-  ): ZStreamChunk[Blocking with R, Throwable, Record[T]] = ZStreamChunk {
-    shardedStream(
-      streamName,
-      applicationName,
-      deserializer,
-      kinesisClientBuilder,
-      cloudWatchClientBuilder,
-      dynamoDbClientBuilder
-    ).flatMapPar(Int.MaxValue)(_._2.chunks)
-  }
+  ): ZStreamChunk[Blocking with R, Throwable, Record[T]] =
+    ZStreamChunk {
+      shardedStream(
+        streamName,
+        applicationName,
+        deserializer,
+        kinesisClientBuilder,
+        cloudWatchClientBuilder,
+        dynamoDbClientBuilder
+      ).flatMapPar(Int.MaxValue)(_._2.chunks)
+    }
 
   case class Record[T](
     sequenceNumber: String,

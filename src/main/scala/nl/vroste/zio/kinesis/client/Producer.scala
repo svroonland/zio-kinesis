@@ -91,57 +91,58 @@ object Producer {
 
       // Failed records get precedence)
       _ <- (ZStream.fromQueue(failedQueue) merge ZStream.fromQueue(queue))
-          // Buffer records up to maxBufferDuration or up to the Kinesis PutRecords request limit
-            .aggregateAsyncWithin(
-              foldWhileCondition[ProduceRequest, PutRecordsBatch](PutRecordsBatch.empty)(_.isWithinLimits)(_.add(_)),
-              Schedule.spaced(settings.maxBufferDuration)
-            )
-            // Several putRecords requests in parallel
-            .mapMPar(settings.maxParallelRequests) { batch: PutRecordsBatch =>
-              (for {
-                response <- client
-                             .putRecords(streamName, batch.entries.map(_.r))
-                             .retry(scheduleCatchRecoverable && settings.backoffRequests)
+           // Buffer records up to maxBufferDuration or up to the Kinesis PutRecords request limit
+             .aggregateAsyncWithin(
+               foldWhileCondition[ProduceRequest, PutRecordsBatch](PutRecordsBatch.empty)(_.isWithinLimits)(_.add(_)),
+               Schedule.spaced(settings.maxBufferDuration)
+             )
+             // Several putRecords requests in parallel
+             .mapMPar(settings.maxParallelRequests) { batch: PutRecordsBatch =>
+               (for {
+                 response              <- client
+                               .putRecords(streamName, batch.entries.map(_.r))
+                               .retry(scheduleCatchRecoverable && settings.backoffRequests)
 
-                maybeSucceeded = response
-                  .records()
-                  .asScala
-                  .zip(batch.entries)
-                (newFailed, succeeded) = if (response.failedRecordCount() > 0) {
-                  maybeSucceeded.partition {
-                    case (result, _) =>
-                      result.errorCode() != null && recoverableErrorCodes.contains(result.errorCode())
-                  }
-                } else {
-                  (Seq.empty, maybeSucceeded)
-                }
+                 maybeSucceeded         = response
+                                    .records()
+                                    .asScala
+                                    .zip(batch.entries)
+                 (newFailed, succeeded) = if (response.failedRecordCount() > 0)
+                                            maybeSucceeded.partition {
+                                              case (result, _) =>
+                                                result.errorCode() != null && recoverableErrorCodes.contains(
+                                                  result.errorCode()
+                                                )
+                                            }
+                                          else
+                                            (Seq.empty, maybeSucceeded)
 
-                // TODO backoff for shard limit stuff
-                _ <- failedQueue
-                      .offerAll(newFailed.map(_._2))
-                      .delay(settings.failedDelay)
-                      .fork // TODO should be per shard
-                _ <- ZIO.foreach(succeeded) {
-                      case (response, request) =>
-                        request.done.succeed(ProduceResponse(response.shardId(), response.sequenceNumber()))
-                    }
-              } yield ()).catchAll { case NonFatal(e) => ZIO.foreach_(batch.entries.map(_.done))(_.fail(e)) }
-            }
-            .runDrain
-            .toManaged_
-            .fork
+                 // TODO backoff for shard limit stuff
+                 _                     <- failedQueue
+                        .offerAll(newFailed.map(_._2))
+                        .delay(settings.failedDelay)
+                        .fork // TODO should be per shard
+                 _                     <- ZIO.foreach(succeeded) {
+                        case (response, request) =>
+                          request.done.succeed(ProduceResponse(response.shardId(), response.sequenceNumber()))
+                      }
+               } yield ()).catchAll { case NonFatal(e) => ZIO.foreach_(batch.entries.map(_.done))(_.fail(e)) }
+             }
+             .runDrain
+             .toManaged_
+             .fork
     } yield new Producer[T] {
       override def produce(r: ProducerRecord[T]): Task[ProduceResponse] =
         for {
-          now  <- zio.clock.currentDateTime.provide(env)
-          done <- Promise.make[Throwable, ProduceResponse]
-          data <- serializer.serialize(r.data).provide(env)
-          entry = PutRecordsRequestEntry
-            .builder()
-            .partitionKey(r.partitionKey)
-            .data(SdkBytes.fromByteBuffer(data))
-            .build()
-          request  = ProduceRequest(entry, done, now.toInstant)
+          now      <- zio.clock.currentDateTime.provide(env)
+          done     <- Promise.make[Throwable, ProduceResponse]
+          data     <- serializer.serialize(r.data).provide(env)
+          entry     = PutRecordsRequestEntry
+                    .builder()
+                    .partitionKey(r.partitionKey)
+                    .data(SdkBytes.fromByteBuffer(data))
+                    .build()
+          request   = ProduceRequest(entry, done, now.toInstant)
           _        <- queue.offer(request)
           response <- done.await
         } yield response
@@ -156,10 +157,10 @@ object Producer {
                   done <- Promise.make[Throwable, ProduceResponse]
                   data <- serializer.serialize(r.data).provide(env)
                   entry = PutRecordsRequestEntry
-                    .builder()
-                    .partitionKey(r.partitionKey)
-                    .data(SdkBytes.fromByteBuffer(data))
-                    .build()
+                            .builder()
+                            .partitionKey(r.partitionKey)
+                            .data(SdkBytes.fromByteBuffer(data))
+                            .build()
                 } yield ProduceRequest(entry, done, now.toInstant)
               }
           }
@@ -212,7 +213,7 @@ object Producer {
     new ZSink[Any, Nothing, A, A, S] {
       type State = (S, Option[A])
 
-      override def cont(state: (S, Option[A])): Boolean = state._2.isEmpty
+      override def cont(state: (S, Option[A])): Boolean                             = state._2.isEmpty
       override def extract(state: (S, Option[A])): ZIO[Any, Nothing, (S, Chunk[A])] = {
         val (s, maybeLeftover) = state
         ZIO.succeed((s, maybeLeftover.map(Chunk.single).getOrElse(Chunk.empty)))
@@ -220,19 +221,20 @@ object Producer {
 
       override def initial: ZIO[Any, Nothing, (S, Option[A])] = ZIO.succeed((z, None))
 
-      override def step(state: (S, Option[A]), a: A): ZIO[Any, Nothing, (S, Option[A])] = ZIO.succeed {
-        val (s, _)   = state
-        val newState = f(s, a)
-        if (condition(newState)) {
-          (newState, None)
-        } else {
-          (s, Some(a))
+      override def step(state: (S, Option[A]), a: A): ZIO[Any, Nothing, (S, Option[A])] =
+        ZIO.succeed {
+          val (s, _)   = state
+          val newState = f(s, a)
+          if (condition(newState))
+            (newState, None)
+          else
+            (s, Some(a))
         }
-      }
     }
 
-  private final def scheduleCatchRecoverable: Schedule[Any, Throwable, Throwable] = Schedule.doWhile {
-    case e: KinesisException if e.statusCode() / 100 != 4 => true
-    case _                                                => false
-  }
+  private final def scheduleCatchRecoverable: Schedule[Any, Throwable, Throwable] =
+    Schedule.doWhile {
+      case e: KinesisException if e.statusCode() / 100 != 4 => true
+      case _                                                => false
+    }
 }
