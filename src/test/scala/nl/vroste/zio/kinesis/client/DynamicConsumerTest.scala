@@ -25,20 +25,20 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
   private val createStream = (streamName: String, nrShards: Int) =>
     for {
       adminClient <- AdminClient.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
-      _ <- adminClient
-            .createStream(streamName, nrShards)
-            .catchSome {
-              case _: ResourceInUseException =>
-                putStrLn("Stream already exists")
-            }
-            .toManaged { _ =>
-              adminClient
-                .deleteStream(streamName, enforceConsumerDeletion = true)
-                .catchSome {
-                  case _: ResourceNotFoundException => ZIO.unit
-                }
-                .orDie
-            }
+      _           <- adminClient
+             .createStream(streamName, nrShards)
+             .catchSome {
+               case _: ResourceInUseException =>
+                 putStrLn("Stream already exists")
+             }
+             .toManaged { _ =>
+               adminClient
+                 .deleteStream(streamName, enforceConsumerDeletion = true)
+                 .catchSome {
+                   case _: ResourceNotFoundException => ZIO.unit
+                 }
+                 .orDie
+             }
     } yield ()
 
   override def spec =
@@ -53,25 +53,25 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
             for {
               _ <- putStrLn("Putting records")
               _ <- client
-                    .putRecords(
-                      streamName,
-                      Serde.asciiString,
-                      Seq(ProducerRecord("key1", "msg1"), ProducerRecord("key2", "msg2"))
-                    )
-                    .retry(retryOnResourceNotFound)
-                    .provideLayer(Clock.live)
+                     .putRecords(
+                       streamName,
+                       Serde.asciiString,
+                       Seq(ProducerRecord("key1", "msg1"), ProducerRecord("key2", "msg2"))
+                     )
+                     .retry(retryOnResourceNotFound)
+                     .provideLayer(Clock.live)
 
               _ <- putStrLn("Starting dynamic consumer")
               _ <- LocalStackDynamicConsumer
-                    .shardedStream(
-                      streamName,
-                      applicationName = applicationName,
-                      deserializer = Serde.asciiString
-                    )
-                    .flatMapPar(Int.MaxValue)(_._2.flattenChunks)
-                    .take(2)
-                    .tap(r => putStrLn(s"Got record $r") *> r.checkpoint.retry(Schedule.exponential(100.millis)))
-                    .runCollect
+                     .shardedStream(
+                       streamName,
+                       applicationName = applicationName,
+                       deserializer = Serde.asciiString
+                     )
+                     .flatMapPar(Int.MaxValue)(_._2.flattenChunks)
+                     .take(2)
+                     .tap(r => putStrLn(s"Got record $r") *> r.checkpoint.retry(Schedule.exponential(100.millis)))
+                     .runCollect
             } yield assertCompletes
         }
       },
@@ -117,27 +117,27 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
             for {
               _ <- putStrLn("Putting records")
               _ <- ZStream
-                    .fromIterable(1 to nrRecords)
-                    .schedule(Schedule.spaced(250.millis))
-                    .mapM { _ =>
-                      client
-                        .putRecords(streamName, Serde.asciiString, records)
-                        .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
-                        .retry(retryOnResourceNotFound)
-                    }
-                    .provideSomeLayer(Clock.live)
-                    .runDrain
-                    .fork
+                     .fromIterable(1 to nrRecords)
+                     .schedule(Schedule.spaced(250.millis))
+                     .mapM { _ =>
+                       client
+                         .putRecords(streamName, Serde.asciiString, records)
+                         .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
+                         .retry(retryOnResourceNotFound)
+                     }
+                     .provideSomeLayer(Clock.live)
+                     .runDrain
+                     .fork
 
               _ <- putStrLn("Starting dynamic consumer")
 
               records <- (streamConsumer("1")
-                          merge ZStream
-                            .fromEffect(ZIO.sleep(5.seconds).provideLayer(Clock.live))
-                            .flatMap(_ => streamConsumer("2")))
-                          .take(nrRecords * nrRecords.toLong)
-                          .runCollect
-              _ <- ZIO.foreach_(records.map(_.toString))(s => putStrLn(s).provideLayer(Console.live))
+                             merge ZStream
+                               .fromEffect(ZIO.sleep(5.seconds).provideLayer(Clock.live))
+                               .flatMap(_ => streamConsumer("2")))
+                           .take(nrRecords * nrRecords.toLong)
+                           .runCollect
+              _       <- ZIO.foreach_(records.map(_.toString))(s => putStrLn(s).provideLayer(Console.live))
               // Both consumers should have gotten some records
             } yield assert(records.map(_._1).toSet)(equalTo(Set("1", "2")))
         }

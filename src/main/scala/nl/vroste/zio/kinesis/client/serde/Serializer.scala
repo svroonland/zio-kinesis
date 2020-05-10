@@ -16,7 +16,7 @@ trait Serializer[-R, -T] {
   /**
    * Create a serializer for a type U based on the serializer for type T and a mapping function
    */
-  def contramap[U](f: U => T): Serializer[R, U] =
+  def contramap[U](f: U => T): Serializer[R, U]                     =
     Serializer(u => serialize(f(u)))
 
   /**

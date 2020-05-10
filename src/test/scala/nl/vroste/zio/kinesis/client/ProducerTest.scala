@@ -21,20 +21,20 @@ object ProducerTest extends DefaultRunnableSpec {
   val createStream = (streamName: String, nrShards: Int) =>
     for {
       adminClient <- AdminClient.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
-      _ <- adminClient
-            .createStream(streamName, nrShards)
-            .catchSome {
-              case _: ResourceInUseException =>
-                putStrLn("Stream already exists")
-            }
-            .toManaged { _ =>
-              adminClient
-                .deleteStream(streamName, enforceConsumerDeletion = true)
-                .catchSome {
-                  case _: ResourceNotFoundException => ZIO.unit
-                }
-                .orDie
-            }
+      _           <- adminClient
+             .createStream(streamName, nrShards)
+             .catchSome {
+               case _: ResourceInUseException =>
+                 putStrLn("Stream already exists")
+             }
+             .toManaged { _ =>
+               adminClient
+                 .deleteStream(streamName, enforceConsumerDeletion = true)
+                 .catchSome {
+                   case _: ResourceNotFoundException => ZIO.unit
+                 }
+                 .orDie
+             }
     } yield ()
 
   def spec =
@@ -45,24 +45,24 @@ object ProducerTest extends DefaultRunnableSpec {
         val streamName = "zio-test-stream-" + UUID.randomUUID().toString
 
         (for {
-          _      <- createStream(streamName, 10)
-          client <- Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
+          _        <- createStream(streamName, 10)
+          client   <- Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
           producer <- Producer
-                       .make(streamName, client, Serde.asciiString, ProducerSettings(bufferSize = 32768))
-                       .provideLayer(Clock.live)
+                        .make(streamName, client, Serde.asciiString, ProducerSettings(bufferSize = 32768))
+                        .provideLayer(Clock.live)
         } yield producer).use { producer =>
           (
             for {
               _ <- ZIO.sleep(5.second)
               // Parallelism, but not infinitely (not sure if it matters)
               _ <- ZIO.collectAllParN(2)((1 to 20).map { i =>
-                    for {
-                      _       <- putStrLn(s"Starting chunk $i")
-                      records = (1 to 10).map(j => ProducerRecord(s"key$i", s"message$i-$j"))
-                      _ <- (producer
-                            .produceChunk(Chunk.fromIterable(records)) *> putStrLn(s"Chunk $i completed"))
-                    } yield ()
-                  })
+                     for {
+                       _      <- putStrLn(s"Starting chunk $i")
+                       records = (1 to 10).map(j => ProducerRecord(s"key$i", s"message$i-$j"))
+                       _      <- (producer
+                                .produceChunk(Chunk.fromIterable(records)) *> putStrLn(s"Chunk $i completed"))
+                     } yield ()
+                   })
             } yield assertCompletes
           )
         }.untraced.provideLayer(Clock.live ++ Console.live)
@@ -71,10 +71,10 @@ object ProducerTest extends DefaultRunnableSpec {
         val streamName = "zio-test-stream-not-existing"
 
         (for {
-          client <- Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
+          client   <- Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
           producer <- Producer
-                       .make(streamName, client, Serde.asciiString, ProducerSettings(bufferSize = 32768))
-                       .provideLayer(Clock.live)
+                        .make(streamName, client, Serde.asciiString, ProducerSettings(bufferSize = 32768))
+                        .provideLayer(Clock.live)
         } yield producer).use { producer =>
           val records = (1 to 10).map(j => ProducerRecord(s"key$j", s"message$j-$j"))
           producer
