@@ -17,27 +17,21 @@ jobs:
   test213_jdk8:
     docker:
       - image: hseeberger/scala-sbt:8u222_1.3.4_2.13.1
-    machine: true
+      - image: localstack/localstack
+        environment:
+          LOCALSTACK_HOST: localstack
+          SERVICES: 'kinesis,cloudwatch,dynamodb'
+          USE_SSL: "false"
+          DEFAULT_REGION: 'us-east-1'
+          AWS_DEFAULT_REGION: "us-east-1"
+          AWS_ACCESS_KEY_ID: dummy-key
+          AWS_SECRET_ACCESS_KEY: dummy-key
+          DEBUG: "1"
+
     steps:
       - checkout
-      - setup_remote_docker
       - restore_cache:
           key: sbt-cache
-      - run:
-          name: Install Docker client
-          command: |
-            set -x
-            VER="17.03.0-ce"
-            curl -L -o /tmp/docker-$VER.tgz https://get.docker.com/builds/Linux/x86_64/docker-$VER.tgz
-            tar -xz -C /tmp -f /tmp/docker-$VER.tgz
-            mv /tmp/docker/* /usr/bin
-      - run:
-          name: Install Docker Compose
-          command: |
-            set -x
-            curl -L https://github.com/docker/compose/releases/download/1.11.2/docker-compose-`uname -s`-`uname -m` > /usr/local/bin/docker-compose
-            chmod +x /usr/local/bin/docker-compose
-      - run: docker-compose up -d
       - run: sbt ++2.13.1! test packageDoc
       - save_cache:
           key: sbt-cache
