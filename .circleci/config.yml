@@ -21,6 +21,7 @@ jobs:
       - checkout
       - restore_cache:
           key: sbt-cache
+      - run: docker-compose up -d
       - run: sbt ++2.13.1! test packageDoc
       - save_cache:
           key: sbt-cache
