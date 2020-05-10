@@ -17,6 +17,7 @@ jobs:
   test213_jdk8:
     docker:
       - image: hseeberger/scala-sbt:8u222_1.3.4_2.13.1
+    machine: true
     steps:
       - checkout
       - setup_remote_docker
