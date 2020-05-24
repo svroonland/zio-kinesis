@@ -59,7 +59,7 @@ class Client(val kinesisClient: KinesisAsyncClient) {
     streamName: String,
     streamCreationTimestamp: Option[Instant] = None,
     chunkSize: Int = 10000
-  ): ZStream[Clock, Throwable, Shard]                                                             =
+  ): ZStream[Clock, Throwable, Shard] =
     paginatedRequest { token =>
       val request = ListShardsRequest
         .builder()
@@ -76,7 +76,7 @@ class Client(val kinesisClient: KinesisAsyncClient) {
     streamName: String,
     shardId: String,
     iteratorType: ShardIteratorType
-  ): Task[String]                             = {
+  ): Task[String] = {
     val b = GetShardIteratorRequest
       .builder()
       .streamName(streamName)
@@ -171,7 +171,7 @@ class Client(val kinesisClient: KinesisAsyncClient) {
   private def subscribeToShardResponseHandler(
     runtime: zio.Runtime[Any],
     streamP: Promise[Throwable, ZStream[Any, Throwable, Record]]
-  )                                                             =
+  ) =
     new SubscribeToShardResponseHandler {
       override def responseReceived(response: SubscribeToShardResponse): Unit =
         ()
@@ -193,7 +193,7 @@ class Client(val kinesisClient: KinesisAsyncClient) {
   def registerStreamConsumer(
     streamARN: String,
     consumerName: String
-  ): ZIO[Any, Throwable, Consumer]                              = {
+  ): ZIO[Any, Throwable, Consumer] = {
     val request = RegisterStreamConsumerRequest.builder().streamARN(streamARN).consumerName(consumerName).build()
     asZIO(kinesisClient.registerStreamConsumer(request)).map(_.consumer())
   }
@@ -258,7 +258,7 @@ object Client {
    *
    * @return Managed resource that is closed after use
    */
-  def create: ZManaged[Any, Throwable, Client]                                    =
+  def create: ZManaged[Any, Throwable, Client] =
     ZManaged.fromAutoCloseable {
       ZIO.effect(KinesisAsyncClient.create())
     }.map(new Client(_))

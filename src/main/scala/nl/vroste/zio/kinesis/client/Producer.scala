@@ -9,7 +9,7 @@ import software.amazon.awssdk.services.kinesis.model.{ KinesisException, PutReco
 import zio._
 import zio.clock.Clock
 import zio.duration.{ Duration, _ }
-import zio.stream.{ ZSink, ZStream }
+import zio.stream.{ ZSink, ZStream, ZTransducer }
 
 import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
@@ -64,7 +64,7 @@ trait Producer[T] {
   /**
    * ZSink interface to the Producer
    */
-  def sinkChunked: ZSink[Any, Throwable, Nothing, Chunk[ProducerRecord[T]], Unit] =
+  def sinkChunked: ZSink[Any, Throwable, Chunk[ProducerRecord[T]], Unit] =
     ZSink.drain.contramapM(produceChunk)
 }
 
@@ -93,7 +93,7 @@ object Producer {
       _ <- (ZStream.fromQueue(failedQueue) merge ZStream.fromQueue(queue))
            // Buffer records up to maxBufferDuration or up to the Kinesis PutRecords request limit
              .aggregateAsyncWithin(
-               foldWhileCondition[ProduceRequest, PutRecordsBatch](PutRecordsBatch.empty)(_.isWithinLimits)(_.add(_)),
+               ZTransducer.fold(PutRecordsBatch.empty)(_.isWithinLimits)(_.add(_)),
                Schedule.spaced(settings.maxBufferDuration)
              )
              // Several putRecords requests in parallel
@@ -164,7 +164,7 @@ object Producer {
                 } yield ProduceRequest(entry, done, now.toInstant)
               }
           }
-          .flatMap(requests => queue.offerAll(requests) *> ZIO.collectAllPar(requests.map(_.done.await)))
+          .flatMap(requests => queue.offerAll(requests) *> ZIO.foreachPar(requests)(_.done.await))
     }
 
   val maxRecordsPerRequest     = 500             // This is a Kinesis API limitation
@@ -185,7 +185,7 @@ object Producer {
       copy(
         entries = entry +: entries,
         nrRecords = nrRecords + 1,
-        payloadSize = payloadSize + entry.r.partitionKey().length + entry.r.data().asByteArray().size
+        payloadSize = payloadSize + entry.r.partitionKey().length + entry.r.data().asByteArray().length
       )
 
     def isWithinLimits =
@@ -196,41 +196,6 @@ object Producer {
   private object PutRecordsBatch {
     val empty = PutRecordsBatch(List.empty, 0, 0)
   }
-
-  /**
-   * Sink that aggregates while the aggregate meets the condition
-   *
-   * @param z Initial aggregate
-   * @param condition Predicate to check on the aggregate to decide whether to include a new element
-   * @param f Aggregation function
-   * @tparam A Type of element
-   * @tparam S Type of aggregate
-   * @return
-   */
-  private final def foldWhileCondition[A, S](
-    z: S
-  )(condition: S => Boolean)(f: (S, A) => S): ZSink[Any, Nothing, A, A, S] =
-    new ZSink[Any, Nothing, A, A, S] {
-      type State = (S, Option[A])
-
-      override def cont(state: (S, Option[A])): Boolean                             = state._2.isEmpty
-      override def extract(state: (S, Option[A])): ZIO[Any, Nothing, (S, Chunk[A])] = {
-        val (s, maybeLeftover) = state
-        ZIO.succeed((s, maybeLeftover.map(Chunk.single).getOrElse(Chunk.empty)))
-      }
-
-      override def initial: ZIO[Any, Nothing, (S, Option[A])] = ZIO.succeed((z, None))
-
-      override def step(state: (S, Option[A]), a: A): ZIO[Any, Nothing, (S, Option[A])] =
-        ZIO.succeed {
-          val (s, _)   = state
-          val newState = f(s, a)
-          if (condition(newState))
-            (newState, None)
-          else
-            (s, Some(a))
-        }
-    }
 
   private final def scheduleCatchRecoverable: Schedule[Any, Throwable, Throwable] =
     Schedule.doWhile {

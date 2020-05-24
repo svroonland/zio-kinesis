@@ -38,7 +38,7 @@ trait Deserializer[-R, +T] {
    *
    * This is useful for explicitly handling deserialization failures.
    */
-  def asTry: Deserializer[R, Try[T]]                                                 =
+  def asTry: Deserializer[R, Try[T]] =
     Deserializer(deserialize(_).fold(e => Failure(e), v => Success(v)))
 }
 
