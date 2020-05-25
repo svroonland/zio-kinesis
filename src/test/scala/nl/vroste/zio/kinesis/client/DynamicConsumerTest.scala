@@ -81,7 +81,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
         val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
         val applicationName = "zio-test-" + UUID.randomUUID().toString
 
-        val nrRecords = 40
+        val nrRecords = 80
 
         def streamConsumer(label: String) = {
           val checkpointDivisor = 500

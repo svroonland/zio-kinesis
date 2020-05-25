@@ -234,11 +234,11 @@ installed on your machine. Then on your machine open a terminal window and navig
 
     > docker-compose -f docker/docker-compose.yml up -d
     
-To run the tests, open another terminal window, cd to the root of the project and type:
+To run the tests, enter the following in the terminal:
 
     > sbt test   
     
-Don't forget to shut down the docker container after you have finished. In the first terminal type:     
+Don't forget to shut down the docker container after you have finished. In the terminal type:     
 
     > docker-compose -f docker/docker-compose.yml down
 
