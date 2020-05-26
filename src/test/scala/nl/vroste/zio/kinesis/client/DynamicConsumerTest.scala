@@ -103,7 +103,9 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                 shardStream.zipWithIndex.tap {
                   case (r: DynamicConsumer.Record[String], sequenceNumberForShard: Long) =>
                     handler(shardId, r) *>
-                      ZIO.when(sequenceNumberForShard % checkpointDivisor == checkpointDivisor - 1)(r.checkpoint)
+                      (putStrLn(
+                        s"Checkpointing at offset ${sequenceNumberForShard} in consumer ${label}"
+                      ) *> r.checkpoint).when(sequenceNumberForShard % checkpointDivisor == checkpointDivisor - 1)
                 }.map(_._1)
                   .as((label, shardId))
                   .ensuring(putStrLn(s"Shard $shardId completed for consumer $label"))
