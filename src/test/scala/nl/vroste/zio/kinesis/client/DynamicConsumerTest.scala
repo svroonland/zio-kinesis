@@ -104,7 +104,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                   case (r: DynamicConsumer.Record[String], sequenceNumberForShard: Long) =>
                     handler(shardId, r) *>
                       (putStrLn(
-                        s"Checkpointing at offset ${sequenceNumberForShard} in consumer ${label}"
+                        s"Checkpointing at offset ${sequenceNumberForShard} in consumer ${label}, shard ${shardId}"
                       ) *> r.checkpoint).when(sequenceNumberForShard % checkpointDivisor == checkpointDivisor - 1)
                 }.map(_._1)
                   .as((label, shardId))
