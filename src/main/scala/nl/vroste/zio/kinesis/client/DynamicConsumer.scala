@@ -183,13 +183,12 @@ object DynamicConsumer {
                            .retrievalSpecificConfig(retrievalConfig(kinesisClient))
                        )
                      ).toManaged_
-        _             <- ZManaged.fromEffect {
-               zio.blocking
-                 .blocking(ZIO(scheduler.run()))
-                 .fork
-                 .flatMap(_.join)
-                 .onInterrupt(ZIO.fromFutureJava(scheduler.startGracefulShutdown()).unit.orDie)
-             }.fork
+        _             <- zio.blocking
+               .blocking(ZIO(scheduler.run()))
+               .fork
+               .flatMap(_.join)
+               .onInterrupt(ZIO.fromFutureJava(scheduler.startGracefulShutdown()).unit.orDie)
+               .forkManaged
       } yield ZStream.fromQueue(queues.shards).collectWhileSuccess
 
     ZStream.unwrapManaged(schedulerM)
