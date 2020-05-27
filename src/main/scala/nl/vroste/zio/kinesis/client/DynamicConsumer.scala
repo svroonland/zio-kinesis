@@ -70,7 +70,7 @@ object DynamicConsumer {
       shardId: String,
       runtime: zio.Runtime[R],
       q: Queue[Exit[Option[Throwable], Chunk[Record[T]]]],
-      shutdownRequestPromise: Promise[Throwable, Unit],
+      shutdownRequest: Promise[Throwable, Unit],
       streamComplete: Promise[Throwable, Unit]
     ) {
       def offerRecords(r: java.util.List[KinesisClientRecord], checkpointer: RecordProcessorCheckpointer): Unit =
@@ -112,7 +112,7 @@ object DynamicConsumer {
         runtime.unsafeRun {
           q.takeAll *>
             q.offer(Exit.fail(None)).unit <*
-            shutdownRequestPromise.succeed(()) *>
+            shutdownRequest.succeed(()) *>
               streamComplete.await
         }
     }
