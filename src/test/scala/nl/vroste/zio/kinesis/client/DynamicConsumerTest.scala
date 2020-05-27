@@ -105,7 +105,9 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                     handler(shardId, r) *>
                       (putStrLn(
                         s"Checkpointing at offset ${sequenceNumberForShard} in consumer ${label}, shard ${shardId}"
-                      ) *> r.checkpoint).when(sequenceNumberForShard % checkpointDivisor == checkpointDivisor - 1)
+                      ) *> r.checkpoint)
+                        .when(sequenceNumberForShard % checkpointDivisor == checkpointDivisor - 1)
+                        .tapError(e => putStrLn(s"Failed to checkpoint in consumer ${label}, shard ${shardId}"))
                 }.map(_._1)
                   .as((label, shardId))
                   .ensuring(putStrLn(s"Shard $shardId completed for consumer $label"))
