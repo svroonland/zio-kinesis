@@ -16,7 +16,7 @@ import software.amazon.kinesis.retrieval.fanout.FanOutConfig
 import software.amazon.kinesis.retrieval.polling.PollingConfig
 import zio._
 import zio.blocking.Blocking
-import zio.stream.{ StreamChunk, Take, ZStream, ZStreamChunk }
+import zio.stream.ZStream
 
 import scala.jdk.CollectionConverters._
 
@@ -56,10 +56,27 @@ object DynamicConsumer {
       InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON),
     isEnhancedFanOut: Boolean = true,
     leaseTableName: Option[String] = None
-  ): ZStream[Blocking with R, Throwable, (String, ZStreamChunk[Any, Throwable, Record[T]])] = {
+  ): ZStream[Blocking with R, Throwable, (String, ZStream[Any, Throwable, Record[T]])] = {
 
-    case class ShardQueue(runtime: zio.Runtime[R], q: Queue[Take[Throwable, Chunk[Record[T]]]]) {
-      def offerRecords(r: java.util.List[KinesisClientRecord], checkpointer: RecordProcessorCheckpointer): Unit = {
+    /**
+     * A queue for a single Shard and interface between the KCL threadpool and the ZIO runtime
+     *
+     * This queue is used by a ZStream for a single Shard
+     *
+     * The Queue uses the error channel (E type parameter) to signal failure (Some[Throwable])
+     * and completion (None)
+     *
+     * @param shardId Shard identifier
+     * @param runtime ZIO runtime
+     * @param q Queue for record chunks
+     */
+    case class ShardQueue(
+      shardId: String,
+      runtime: zio.Runtime[R],
+      q: Queue[Exit[Option[Throwable], Chunk[Record[T]]]]
+    ) {
+      def offerRecords(r: java.util.List[KinesisClientRecord], checkpointer: RecordProcessorCheckpointer): Unit =
+        // TODO only offer to the queue in unsafeRun, run the rest 'within' the regular ZIO runtime
         runtime.unsafeRun {
           ZIO
             .foreach(r.asScala)(r => deserializer.deserialize(r.data()).map((r, _)))
@@ -81,18 +98,15 @@ object DynamicConsumer {
                   )
               })
             }
-            .foldCause(Take.Fail(_), Take.Value(_))
+            .fold(e => Exit.fail(Some(e)), Exit.succeed)
             .flatMap(q.offer)
+            .unit
         }
-        ()
-      }
 
-      def stop(): Unit = {
+      def stop(): Unit =
         runtime.unsafeRun {
-          q.offer(Take.End)
+          q.offer(Exit.fail(None)).unit
         }
-        ()
-      }
     }
 
     class ZioShardProcessor(queues: Queues) extends ShardRecordProcessor {
@@ -111,16 +125,20 @@ object DynamicConsumer {
         shardQueue.stop()
 
       override def shutdownRequested(shutdownRequestedInput: ShutdownRequestedInput): Unit =
+        // TODO should we wait for processing of this shard to complete?
         shardQueue.stop()
     }
 
-    class Queues(private val runtime: zio.Runtime[R], val shards: Queue[Take[Throwable, (String, ShardStream[T])]]) {
+    class Queues(
+      private val runtime: zio.Runtime[R],
+      val shards: Queue[Exit[Option[Throwable], (String, ShardStream[T])]]
+    ) {
       def newShard(shard: String): ShardQueue =
         runtime.unsafeRun {
           for {
-            queue <- Queue.unbounded[Take[Throwable, Chunk[Record[T]]]].map(ShardQueue(runtime, _))
-            stream = ZStreamChunk(ZStream.fromQueue(queue.q).unTake)
-            _     <- shards.offer(Take.Value(shard -> stream)).unit
+            queue <- Queue.unbounded[Exit[Option[Throwable], Chunk[Record[T]]]].map(ShardQueue(shard, runtime, _))
+            stream = ZStream.fromQueue(queue.q).collectWhileSuccess.flattenChunks
+            _     <- shards.offer(Exit.succeed(shard -> stream)).unit
           } yield queue
         }
     }
@@ -129,7 +147,7 @@ object DynamicConsumer {
       def make: ZManaged[R, Nothing, Queues] =
         for {
           runtime <- ZIO.runtime[R].toManaged_
-          q       <- Queue.unbounded[Take[Throwable, (String, ShardStream[T])]].toManaged(_.shutdown)
+          q       <- Queue.unbounded[Exit[Option[Throwable], (String, ShardStream[T])]].toManaged(_.shutdown)
         } yield new Queues(runtime, q)
     }
 
@@ -140,7 +158,7 @@ object DynamicConsumer {
         new PollingConfig(streamName, kinesisClient)
 
     // Run the scheduler
-    val schedulerM                                         =
+    val schedulerM =
       for {
         queues           <- Queues.make
         kinesisClient    <- ZManaged.fromAutoCloseable(ZIO(kinesisClientBuilder.build()))
@@ -174,14 +192,13 @@ object DynamicConsumer {
                            .retrievalSpecificConfig(retrievalConfig(kinesisClient))
                        )
                      ).toManaged_
-        _             <- ZManaged.fromEffect {
-               zio.blocking
-                 .blocking(ZIO(scheduler.run()))
-                 .fork
-                 .flatMap(_.join)
-                 .onInterrupt(ZIO.fromFutureJava(scheduler.startGracefulShutdown()).unit.orDie)
-             }.fork
-      } yield ZStream.fromQueue(queues.shards).unTake
+        _             <- zio.blocking
+               .blocking(ZIO(scheduler.run()))
+               .fork
+               .flatMap(_.join)
+               .onInterrupt(ZIO.fromFutureJava(scheduler.startGracefulShutdown()).unit.orDie)
+               .forkManaged
+      } yield ZStream.fromQueue(queues.shards).collectWhileSuccess
 
     ZStream.unwrapManaged(schedulerM)
   }
@@ -196,17 +213,15 @@ object DynamicConsumer {
     kinesisClientBuilder: KinesisAsyncClientBuilder = KinesisAsyncClient.builder(),
     cloudWatchClientBuilder: CloudWatchAsyncClientBuilder = CloudWatchAsyncClient.builder,
     dynamoDbClientBuilder: DynamoDbAsyncClientBuilder = DynamoDbAsyncClient.builder()
-  ): ZStreamChunk[Blocking with R, Throwable, Record[T]] =
-    ZStreamChunk {
-      shardedStream(
-        streamName,
-        applicationName,
-        deserializer,
-        kinesisClientBuilder,
-        cloudWatchClientBuilder,
-        dynamoDbClientBuilder
-      ).flatMapPar(Int.MaxValue)(_._2.chunks)
-    }
+  ): ZStream[Blocking with R, Throwable, Record[T]] =
+    shardedStream(
+      streamName,
+      applicationName,
+      deserializer,
+      kinesisClientBuilder,
+      cloudWatchClientBuilder,
+      dynamoDbClientBuilder
+    ).flatMapPar(Int.MaxValue)(_._2)
 
   case class Record[T](
     sequenceNumber: String,
@@ -220,5 +235,5 @@ object DynamicConsumer {
     checkpoint: ZIO[Blocking, Throwable, Unit]
   )
 
-  type ShardStream[T] = StreamChunk[Throwable, Record[T]]
+  type ShardStream[T] = ZStream[Any, Throwable, Record[T]]
 }

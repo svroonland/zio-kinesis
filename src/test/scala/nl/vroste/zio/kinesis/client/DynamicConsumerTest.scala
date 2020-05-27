@@ -15,12 +15,13 @@ import zio.test._
 import zio.{ Schedule, ZIO }
 
 object DynamicConsumerTest extends DefaultRunnableSpec {
-  private val retryOnResourceNotFound = Schedule.doWhile[Throwable] {
-    case _: ResourceNotFoundException => true
-    case _                            => false
-  } &&
-    Schedule.recurs(5) &&
-    Schedule.exponential(2.second)
+  private val retryOnResourceNotFound: Schedule[Clock, Throwable, ((Throwable, Int), Duration)] =
+    Schedule.doWhile[Throwable] {
+      case _: ResourceNotFoundException => true
+      case _                            => false
+    } &&
+      Schedule.recurs(5) &&
+      Schedule.exponential(2.second)
 
   private val createStream = (streamName: String, nrShards: Int) =>
     for {
@@ -68,7 +69,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                        applicationName = applicationName,
                        deserializer = Serde.asciiString
                      )
-                     .flatMapPar(Int.MaxValue)(_._2.flattenChunks)
+                     .flatMapPar(Int.MaxValue)(_._2)
                      .take(2)
                      .tap(r => putStrLn(s"Got record $r") *> r.checkpoint.retry(Schedule.exponential(100.millis)))
                      .runCollect
@@ -80,7 +81,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
         val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
         val applicationName = "zio-test-" + UUID.randomUUID().toString
 
-        val nrRecords = 40
+        val nrRecords = 80
 
         def streamConsumer(label: String) = {
           val checkpointDivisor = 500
@@ -102,10 +103,11 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                 shardStream.zipWithIndex.tap {
                   case (r: DynamicConsumer.Record[String], sequenceNumberForShard: Long) =>
                     handler(shardId, r) *>
-                      ZIO.when(sequenceNumberForShard % checkpointDivisor == checkpointDivisor - 1)(r.checkpoint)
-                }.map(_._1) // remove sequence numbering
-                  .flattenChunks
-                  .map(_ => (label, shardId))
+                      (putStrLn(
+                        s"Checkpointing at offset ${sequenceNumberForShard} in consumer ${label}, shard ${shardId}"
+                      ) *> r.checkpoint).when(sequenceNumberForShard % checkpointDivisor == checkpointDivisor - 1)
+                }.map(_._1)
+                  .as((label, shardId))
                   .ensuring(putStrLn(s"Shard $shardId completed for consumer $label"))
             }
         }

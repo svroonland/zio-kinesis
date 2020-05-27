@@ -15,7 +15,7 @@ lazy val silencer = {
 inThisBuild(
   List(
     organization := "nl.vroste",
-    version := "0.5.0",
+    version := "0.6.0",
     homepage := Some(url("https://github.com/svroonland/zio-kinesis")),
     licenses := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
     scalaVersion := mainScala,
@@ -44,11 +44,11 @@ name := "zio-kinesis"
 scalafmtOnCompile := true
 
 libraryDependencies ++= Seq(
-  "dev.zio"                %% "zio-streams"                 % "1.0.0-RC18-2",
-  "dev.zio"                %% "zio-test"                    % "1.0.0-RC18-2" % "test",
-  "dev.zio"                %% "zio-test-sbt"                % "1.0.0-RC18-2" % "test",
-  "dev.zio"                %% "zio-interop-reactivestreams" % "1.0.3.5-RC7",
-  "software.amazon.awssdk"  % "kinesis"                     % "2.13.24",
+  "dev.zio"                %% "zio-streams"                 % "1.0.0-RC20",
+  "dev.zio"                %% "zio-test"                    % "1.0.0-RC20" % "test",
+  "dev.zio"                %% "zio-test-sbt"                % "1.0.0-RC20" % "test",
+  "dev.zio"                %% "zio-interop-reactivestreams" % "1.0.3.5-RC10",
+  "software.amazon.awssdk"  % "kinesis"                     % "2.13.13",
   "ch.qos.logback"          % "logback-classic"             % "1.2.3",
   "software.amazon.kinesis" % "amazon-kinesis-client"       % "2.2.10",
   "org.scala-lang.modules" %% "scala-collection-compat"     % "2.1.6"

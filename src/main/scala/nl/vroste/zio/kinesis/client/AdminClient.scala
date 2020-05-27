@@ -4,7 +4,7 @@ import java.time.Instant
 import nl.vroste.zio.kinesis.client.Util.{ asZIO, paginatedRequest }
 import software.amazon.awssdk.services.kinesis.model._
 import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyncClientBuilder }
-import zio._
+import zio.{ Chunk, Schedule, Task, ZIO, ZManaged }
 import zio.clock.Clock
 import zio.duration._
 import zio.interop.reactivestreams._
@@ -203,7 +203,7 @@ class AdminClient(val kinesisClient: KinesisAsyncClient) {
   def listStreams(
     chunkSize: Int = 10,
     backoffSchedule: Schedule[Clock, Throwable, Any] = defaultBackoffSchedule
-  ): ZStream[Clock, Throwable, String]                                                         =
+  ): ZStream[Clock, Throwable, String] =
     paginatedRequest { token =>
       val requestBuilder = ListStreamsRequest.builder().limit(chunkSize)
 
