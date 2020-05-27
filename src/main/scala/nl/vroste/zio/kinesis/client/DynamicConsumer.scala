@@ -127,14 +127,18 @@ object DynamicConsumer {
       override def processRecords(processRecordsInput: ProcessRecordsInput): Unit =
         shardQueue.offerRecords(processRecordsInput.records(), processRecordsInput.checkpointer())
 
-      override def leaseLost(leaseLostInput: LeaseLostInput): Unit =
+      override def leaseLost(leaseLostInput: LeaseLostInput): Unit = {
+        println(s"Lease lost for shard ${shardQueue.shardId}")
         shardQueue.stop()
+      }
 
       override def shardEnded(shardEndedInput: ShardEndedInput): Unit =
         shardQueue.stop()
 
-      override def shutdownRequested(shutdownRequestedInput: ShutdownRequestedInput): Unit =
+      override def shutdownRequested(shutdownRequestedInput: ShutdownRequestedInput): Unit = {
+        println(s"Shutdown requested for shard ${shardQueue.shardId}")
         shardQueue.stop()
+      }
     }
 
     class Queues(

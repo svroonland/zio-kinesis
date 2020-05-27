@@ -44,38 +44,38 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
   override def spec =
     suite("DynamicConsumer")(
-      testM("consume records produced on all shards produced on the stream") {
-
-        val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
-        val applicationName = "zio-test-" + UUID.randomUUID().toString
-
-        (Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder) <* createStream(streamName, 2)).use {
-          client =>
-            for {
-              _ <- putStrLn("Putting records")
-              _ <- client
-                     .putRecords(
-                       streamName,
-                       Serde.asciiString,
-                       Seq(ProducerRecord("key1", "msg1"), ProducerRecord("key2", "msg2"))
-                     )
-                     .retry(retryOnResourceNotFound)
-                     .provideLayer(Clock.live)
-
-              _ <- putStrLn("Starting dynamic consumer")
-              _ <- LocalStackDynamicConsumer
-                     .shardedStream(
-                       streamName,
-                       applicationName = applicationName,
-                       deserializer = Serde.asciiString
-                     )
-                     .flatMapPar(Int.MaxValue)(_._2)
-                     .take(2)
-                     .tap(r => putStrLn(s"Got record $r") *> r.checkpoint.retry(Schedule.exponential(100.millis)))
-                     .runCollect
-            } yield assertCompletes
-        }
-      },
+//      testM("consume records produced on all shards produced on the stream") {
+//
+//        val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
+//        val applicationName = "zio-test-" + UUID.randomUUID().toString
+//
+//        (Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder) <* createStream(streamName, 2)).use {
+//          client =>
+//            for {
+//              _ <- putStrLn("Putting records")
+//              _ <- client
+//                     .putRecords(
+//                       streamName,
+//                       Serde.asciiString,
+//                       Seq(ProducerRecord("key1", "msg1"), ProducerRecord("key2", "msg2"))
+//                     )
+//                     .retry(retryOnResourceNotFound)
+//                     .provideLayer(Clock.live)
+//
+//              _ <- putStrLn("Starting dynamic consumer")
+//              _ <- LocalStackDynamicConsumer
+//                     .shardedStream(
+//                       streamName,
+//                       applicationName = applicationName,
+//                       deserializer = Serde.asciiString
+//                     )
+//                     .flatMapPar(Int.MaxValue)(_._2)
+//                     .take(2)
+//                     .tap(r => putStrLn(s"Got record $r") *> r.checkpoint.retry(Schedule.exponential(100.millis)))
+//                     .runCollect
+//            } yield assertCompletes
+//        }
+//      },
       testM("support multiple parallel streams") {
 
         val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
@@ -131,7 +131,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                      .runDrain
                      .fork
 
-              _ <- putStrLn("Starting dynamic consumer")
+              _ <- putStrLn("Starting dynamic consumers")
 
               records <- (streamConsumer("1")
                              merge ZStream
