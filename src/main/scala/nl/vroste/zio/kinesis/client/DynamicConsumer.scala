@@ -65,6 +65,10 @@ object DynamicConsumer {
      *
      * The Queue uses the error channel (E type parameter) to signal failure (Some[Throwable])
      * and completion (None)
+     *
+     * @param shardId Shard identifier
+     * @param runtime ZIO runtime
+     * @param q Queue for record chunks
      */
     case class ShardQueue(
       shardId: String,
