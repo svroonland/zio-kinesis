@@ -112,7 +112,6 @@ object DynamicConsumer {
         runtime.unsafeRun {
           q.takeAll *>
             q.offer(Exit.fail(None)).unit <*
-            // TODO don't think we need the Exit anymore if we interrupt the stream this way
             shutdownRequestPromise.succeed(()) *>
               streamComplete.await
         }
@@ -127,18 +126,14 @@ object DynamicConsumer {
       override def processRecords(processRecordsInput: ProcessRecordsInput): Unit =
         shardQueue.offerRecords(processRecordsInput.records(), processRecordsInput.checkpointer())
 
-      override def leaseLost(leaseLostInput: LeaseLostInput): Unit = {
-        println(s"Lease lost for shard ${shardQueue.shardId}")
+      override def leaseLost(leaseLostInput: LeaseLostInput): Unit =
         shardQueue.stop()
-      }
 
       override def shardEnded(shardEndedInput: ShardEndedInput): Unit =
         shardQueue.stop()
 
-      override def shutdownRequested(shutdownRequestedInput: ShutdownRequestedInput): Unit = {
-        println(s"Shutdown requested for shard ${shardQueue.shardId}")
+      override def shutdownRequested(shutdownRequestedInput: ShutdownRequestedInput): Unit =
         shardQueue.stop()
-      }
     }
 
     class Queues(
