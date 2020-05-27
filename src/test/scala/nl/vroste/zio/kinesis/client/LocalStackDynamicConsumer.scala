@@ -17,7 +17,7 @@ import software.amazon.awssdk.services.dynamodb.{ DynamoDbAsyncClient, DynamoDbA
 import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyncClientBuilder }
 import software.amazon.awssdk.utils.AttributeMap
 import zio.blocking.Blocking
-import zio.stream.{ ZStream, ZStreamChunk }
+import zio.stream.ZStream
 
 object LocalStackDynamicConsumer {
 
@@ -69,7 +69,7 @@ object LocalStackDynamicConsumer {
     streamName: String,
     applicationName: String,
     deserializer: Deserializer[R, T]
-  ): ZStream[Blocking with R, Throwable, (String, ZStreamChunk[Any, Throwable, DynamicConsumer.Record[T]])] =
+  ): ZStream[Blocking with R, Throwable, (String, ZStream[Any, Throwable, DynamicConsumer.Record[T]])] =
     DynamicConsumer.shardedStream(
       streamName,
       applicationName,

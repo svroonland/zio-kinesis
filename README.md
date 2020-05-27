@@ -58,7 +58,6 @@ DynamicConsumer
       .tap { r: DynamicConsumer.Record[String] =>
           ZIO(println(s"Got record ${r} on shard ${shardId}")) *> r.checkpoint
         }
-      .flattenChunks
   }
   .runDrain
 ```
@@ -92,7 +91,7 @@ DynamicConsumer
     deserializer = Serde.byteBuffer
   )
   .flatMapPar(maxParallel) {
-    case (shardId: String, shardStream: ZStreamChunk[Any, Throwable, DynamicConsumer.Record[ByteBuffer]]) =>
+    case (shardId: String, shardStream: ZStream[Any, Throwable, DynamicConsumer.Record[ByteBuffer]]) =>
       shardStream
         .zipWithIndex
         .tap {
@@ -101,7 +100,6 @@ DynamicConsumer
               ZIO.when(sequenceNumberForShard % checkpointDivisor == checkpointDivisor - 1)(r.checkpoint)
         }
         .map(_._1) // remove sequence numbering
-        .flattenChunks
   }
 ```
 
@@ -234,16 +232,15 @@ The tests run against a [`localstack`](https://github.com/localstack/localstack)
 `kinesis`, `dynamoDb` and `cloudwatch` endpoints locally. In order to run the tests you need to have `docker` and `docker-compose` 
 installed on your machine. Then on your machine open a terminal window and navigate to the root of this project and type: 
 
-    > cd docker
-    > docker-compose up -d
+    > docker-compose -f docker/docker-compose.yml up -d
     
-To run the tests, open another terminal window, cd to the root of the project and type:
+To run the tests, enter the following in the terminal:
 
     > sbt test   
     
-Don't forget to shut down the docker container after you have finished. In the first terminal type:     
+Don't forget to shut down the docker container after you have finished. In the terminal type:     
 
-    > docker-compose down
+    > docker-compose -f docker/docker-compose.yml down
 
 ## Credits
 
