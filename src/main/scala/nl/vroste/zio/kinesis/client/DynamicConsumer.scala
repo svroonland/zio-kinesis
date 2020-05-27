@@ -58,22 +58,20 @@ object DynamicConsumer {
     leaseTableName: Option[String] = None
   ): ZStream[Blocking with R, Throwable, (String, ZStream[Any, Throwable, Record[T]])] = {
 
-    /**
+    /*
      * A queue for a single Shard and interface between the KCL threadpool and the ZIO runtime
      *
      * This queue is used by a ZStream for a single Shard
      *
      * The Queue uses the error channel (E type parameter) to signal failure (Some[Throwable])
      * and completion (None)
-     *
-     * @param shardId Shard identifier
-     * @param runtime ZIO runtime
-     * @param q Queue for record chunks
      */
     case class ShardQueue(
       shardId: String,
       runtime: zio.Runtime[R],
-      q: Queue[Exit[Option[Throwable], Chunk[Record[T]]]]
+      q: Queue[Exit[Option[Throwable], Chunk[Record[T]]]],
+      shutdownRequestPromise: Promise[Throwable, Unit],
+      streamComplete: Promise[Throwable, Unit]
     ) {
       def offerRecords(r: java.util.List[KinesisClientRecord], checkpointer: RecordProcessorCheckpointer): Unit =
         // TODO only offer to the queue in unsafeRun, run the rest 'within' the regular ZIO runtime
@@ -103,9 +101,20 @@ object DynamicConsumer {
             .unit
         }
 
+      /**
+       * Shutdown processing for this shard
+       *
+       * Clear everything that is still in the queue, offer a completion signal for the queue,
+       * set an interrupt signal and await stream completion (in-flight messages processed)
+       *
+       */
       def stop(): Unit =
         runtime.unsafeRun {
-          q.offer(Exit.fail(None)).unit
+          q.takeAll *>
+            q.offer(Exit.fail(None)).unit <*
+            // TODO don't think we need the Exit anymore if we interrupt the stream this way
+            shutdownRequestPromise.succeed(()) *>
+              streamComplete.await
         }
     }
 
@@ -125,7 +134,6 @@ object DynamicConsumer {
         shardQueue.stop()
 
       override def shutdownRequested(shutdownRequestedInput: ShutdownRequestedInput): Unit =
-        // TODO should we wait for processing of this shard to complete?
         shardQueue.stop()
     }
 
@@ -136,9 +144,18 @@ object DynamicConsumer {
       def newShard(shard: String): ShardQueue =
         runtime.unsafeRun {
           for {
-            queue <- Queue.unbounded[Exit[Option[Throwable], Chunk[Record[T]]]].map(ShardQueue(shard, runtime, _))
-            stream = ZStream.fromQueue(queue.q).collectWhileSuccess.flattenChunks
-            _     <- shards.offer(Exit.succeed(shard -> stream)).unit
+            shutdownRequested <- Promise.make[Throwable, Unit]
+            streamComplete    <- Promise.make[Throwable, Unit]
+            queue             <- Queue
+                       .unbounded[Exit[Option[Throwable], Chunk[Record[T]]]]
+                       .map(ShardQueue(shard, runtime, _, shutdownRequested, streamComplete))
+            stream             = ZStream
+                       .fromQueue(queue.q)
+                       .collectWhileSuccess
+                       .flattenChunks
+                       .interruptWhen(shutdownRequested)
+                       .ensuring(streamComplete.succeed(()))
+            _                 <- shards.offer(Exit.succeed(shard -> stream)).unit
           } yield queue
         }
     }
