@@ -112,28 +112,21 @@ object DynamicConsumer {
     class ZioShardProcessor(queues: Queues) extends ShardRecordProcessor {
       var shardQueue: ShardQueue = _
 
-      override def initialize(input: InitializationInput): Unit = {
-        println(s"Initializing shard processor for ${input.shardId()}")
+      override def initialize(input: InitializationInput): Unit =
         shardQueue = queues.newShard(input.shardId())
-      }
 
       override def processRecords(processRecordsInput: ProcessRecordsInput): Unit =
         shardQueue.offerRecords(processRecordsInput.records(), processRecordsInput.checkpointer())
 
-      override def leaseLost(leaseLostInput: LeaseLostInput): Unit = {
-        println(s"Lease lost for ${shardQueue.shardId}")
+      override def leaseLost(leaseLostInput: LeaseLostInput): Unit =
         shardQueue.stop()
-      }
 
-      override def shardEnded(shardEndedInput: ShardEndedInput): Unit = {
-        println(s"Shard ended for ${shardQueue.shardId}")
+      override def shardEnded(shardEndedInput: ShardEndedInput): Unit =
         shardQueue.stop()
-      }
 
-      override def shutdownRequested(shutdownRequestedInput: ShutdownRequestedInput): Unit = {
-        println(s"Shutdown requested for ${shardQueue.shardId}")
+      override def shutdownRequested(shutdownRequestedInput: ShutdownRequestedInput): Unit =
+        // TODO should we wait for processing of this shard to complete?
         shardQueue.stop()
-      }
     }
 
     class Queues(
