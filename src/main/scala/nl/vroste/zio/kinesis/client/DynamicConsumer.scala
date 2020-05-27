@@ -66,7 +66,11 @@ object DynamicConsumer {
      * The Queue uses the error channel (E type parameter) to signal failure (Some[Throwable])
      * and completion (None)
      */
-    case class ShardQueue(runtime: zio.Runtime[R], q: Queue[Exit[Option[Throwable], Chunk[Record[T]]]]) {
+    case class ShardQueue(
+      shardId: String,
+      runtime: zio.Runtime[R],
+      q: Queue[Exit[Option[Throwable], Chunk[Record[T]]]]
+    ) {
       def offerRecords(r: java.util.List[KinesisClientRecord], checkpointer: RecordProcessorCheckpointer): Unit =
         // TODO only offer to the queue in unsafeRun, run the rest 'within' the regular ZIO runtime
         runtime.unsafeRun {
@@ -104,20 +108,28 @@ object DynamicConsumer {
     class ZioShardProcessor(queues: Queues) extends ShardRecordProcessor {
       var shardQueue: ShardQueue = _
 
-      override def initialize(input: InitializationInput): Unit =
+      override def initialize(input: InitializationInput): Unit = {
+        println(s"Initializing shard processor for ${input.shardId()}")
         shardQueue = queues.newShard(input.shardId())
+      }
 
       override def processRecords(processRecordsInput: ProcessRecordsInput): Unit =
         shardQueue.offerRecords(processRecordsInput.records(), processRecordsInput.checkpointer())
 
-      override def leaseLost(leaseLostInput: LeaseLostInput): Unit =
+      override def leaseLost(leaseLostInput: LeaseLostInput): Unit = {
+        println(s"Lease lost for ${shardQueue.shardId}")
         shardQueue.stop()
+      }
 
-      override def shardEnded(shardEndedInput: ShardEndedInput): Unit =
+      override def shardEnded(shardEndedInput: ShardEndedInput): Unit = {
+        println(s"Shard ended for ${shardQueue.shardId}")
         shardQueue.stop()
+      }
 
-      override def shutdownRequested(shutdownRequestedInput: ShutdownRequestedInput): Unit =
+      override def shutdownRequested(shutdownRequestedInput: ShutdownRequestedInput): Unit = {
+        println(s"Shutdown requested for ${shardQueue.shardId}")
         shardQueue.stop()
+      }
     }
 
     class Queues(
@@ -127,7 +139,7 @@ object DynamicConsumer {
       def newShard(shard: String): ShardQueue =
         runtime.unsafeRun {
           for {
-            queue <- Queue.unbounded[Exit[Option[Throwable], Chunk[Record[T]]]].map(ShardQueue(runtime, _))
+            queue <- Queue.unbounded[Exit[Option[Throwable], Chunk[Record[T]]]].map(ShardQueue(shard, runtime, _))
             stream = ZStream.fromQueue(queue.q).collectWhileSuccess.flattenChunks
             _     <- shards.offer(Exit.succeed(shard -> stream)).unit
           } yield queue
