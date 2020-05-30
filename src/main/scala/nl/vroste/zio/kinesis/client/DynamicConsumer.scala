@@ -75,7 +75,7 @@ object DynamicConsumer {
       def offerRecords(r: java.util.List[KinesisClientRecord], checkpointer: RecordProcessorCheckpointer): Unit =
         // Calls to q.offer will fail with an interruption error after the queue has been shutdown
         runtime.unsafeRun(
-          q.offer(r.asScala -> checkpointer).catchSomeCause { case c if c.interrupted => ZIO.unit }.unit
+          q.offer(r.asScala -> checkpointer).unit.catchSomeCause { case c if c.interrupted => ZIO.unit }
         )
 
       def shutdownQueue: UIO[Unit] =
