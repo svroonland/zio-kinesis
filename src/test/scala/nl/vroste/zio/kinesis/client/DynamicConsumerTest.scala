@@ -82,42 +82,48 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
       val nrRecords = 80
 
-      def streamConsumer(label: String, activeConsumers: Ref[Set[String]]) = {
-        val checkpointDivisor = 500
+      def streamConsumer(workerIdentifier: String, activeConsumers: Ref[Set[String]]) = {
+        val checkpointDivisor = 1
 
         def handler(shardId: String, r: DynamicConsumer.Record[String]) =
           for {
             id <- ZIO.fiberId
-            _  <- putStrLn(s"Consumer $label on fiber $id got record $r on shard $shardId")
+            _  <- putStrLn(s"Consumer $workerIdentifier on fiber $id got record $r on shard $shardId")
+            // Simulate some effectful processing
+            _  <- sleep(50.millis)
           } yield ()
 
         ZStream
-          .fromEffect(putStrLn(s"Starting consumer $label"))
+          .fromEffect(putStrLn(s"Starting consumer $workerIdentifier"))
           .flatMap(_ =>
             LocalStackDynamicConsumer
               .shardedStream(
                 streamName,
                 applicationName = applicationName,
-                deserializer = Serde.asciiString
+                deserializer = Serde.asciiString,
+                workerIdentifier = applicationName + "-" + workerIdentifier
               )
               .flatMapPar(Int.MaxValue) {
                 case (shardId, shardStream) =>
-                  shardStream
-                    .tap(_ => activeConsumers.update(_ + label))
-                    .zipWithIndex
-                    .tap {
-                      case (r: DynamicConsumer.Record[String], sequenceNumberForShard: Long) =>
-                        handler(shardId, r).as(r) <*
-                          (putStrLn(
-                            s"Checkpointing at offset ${sequenceNumberForShard} in consumer ${label}, shard ${shardId}"
-                          ) *> r.checkpoint.catchSome {
-                            case _: ShutdownException => // This will be thrown when the shard lease has been stolen
-                              ZIO.unit
-                          }).when(sequenceNumberForShard % checkpointDivisor == checkpointDivisor - 1)
-                            .tapError(_ => putStrLn(s"Failed to checkpoint in consumer ${label}, shard ${shardId}"))
+                  shardStream.zipWithIndex.tap {
+                    case (r: DynamicConsumer.Record[String], sequenceNumberForShard: Long) =>
+                      handler(shardId, r).as(r) <*
+                        (putStrLn(
+                          s"Checkpointing at offset ${sequenceNumberForShard} in consumer ${workerIdentifier}, shard ${shardId}"
+                        ) *> r.checkpoint)
+                          .when(sequenceNumberForShard % checkpointDivisor == checkpointDivisor - 1)
+                          .tapError(_ =>
+                            putStrLn(s"Failed to checkpoint in consumer ${workerIdentifier}, shard ${shardId}")
+                          )
+                  }.as((workerIdentifier, shardId))
+                    // Background and a bit delayed so we get a chance to actually emit some records
+                    .tap(_ => (sleep(1.second) *> activeConsumers.update(_ + workerIdentifier)).fork)
+                    .ensuring(putStrLn(s"Shard $shardId completed for consumer $workerIdentifier"))
+                    .catchSome {
+                      case _: ShutdownException => // This will be thrown when the shard lease has been stolen
+                        // Abort the stream when we no longer have the lease
+                        ZStream.empty
                     }
-                    .as((label, shardId))
-                    .ensuring(putStrLn(s"Shard $shardId completed for consumer $label"))
               }
           )
       }
@@ -127,8 +133,8 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
           val records =
             (1 to nrRecords).map(i => ProducerRecord(s"key$i", s"msg$i"))
           for {
-            _                           <- putStrLn("Putting records")
-            _                           <- ZStream
+            _                     <- putStrLn("Putting records")
+            _                     <- ZStream
                    .fromIterable(1 to nrRecords)
                    .schedule(Schedule.spaced(250.millis))
                    .mapM { _ =>
