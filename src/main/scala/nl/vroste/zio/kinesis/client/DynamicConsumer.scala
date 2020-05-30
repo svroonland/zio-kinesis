@@ -66,15 +66,18 @@ object DynamicConsumer {
      * The Queue uses the error channel (E type parameter) to signal failure (Some[Throwable])
      * and completion (None)
      */
-    case class ShardQueue(
-      shardId: String,
+    class ShardQueue(
+      val shardId: String,
       runtime: zio.Runtime[Any],
-      q: Queue[(Iterable[KinesisClientRecord], RecordProcessorCheckpointer)],
-      shutdownRequest: Promise[Throwable, Unit],
-      streamComplete: Promise[Throwable, Unit]
+      val q: Queue[(Iterable[KinesisClientRecord], RecordProcessorCheckpointer)],
+      val shutdownRequest: Promise[Throwable, Unit]
     ) {
       def offerRecords(r: java.util.List[KinesisClientRecord], checkpointer: RecordProcessorCheckpointer): Unit =
-        runtime.unsafeRun(q.offer(r.asScala -> checkpointer).unit)
+        // Calls to q.offer will fail with an interruption error after the queue has been shutdown
+        runtime.unsafeRun(q.offer(r.asScala -> checkpointer).catchSomeCause { case c if c.interrupted => ZIO.unit })
+
+      def shutdownQueue: UIO[Unit]                                                                              =
+        q.shutdown
 
       /**
        * Shutdown processing for this shard
@@ -83,9 +86,9 @@ object DynamicConsumer {
        * set an interrupt signal and await stream completion (in-flight messages processed)
        *
        */
-      def stop(): Unit                                                                                          =
+      def stop(): Unit =
         runtime.unsafeRun {
-          q.takeAll.unit <* shutdownRequest.succeed(()) *> streamComplete.await
+          q.takeAll.unit <* shutdownRequest.succeed(()) *> q.awaitShutdown
         }
     }
 
@@ -116,10 +119,9 @@ object DynamicConsumer {
         runtime.unsafeRun {
           for {
             shutdownRequested <- Promise.make[Throwable, Unit]
-            streamComplete    <- Promise.make[Throwable, Unit]
             queue             <- Queue
                        .unbounded[(Iterable[KinesisClientRecord], RecordProcessorCheckpointer)]
-                       .map(ShardQueue(shard, runtime, _, shutdownRequested, streamComplete))
+                       .map(new ShardQueue(shard, runtime, _, shutdownRequested))
             _                 <- shards.offer(Exit.succeed(shard -> queue)).unit
           } yield queue
         }
@@ -204,9 +206,11 @@ object DynamicConsumer {
           case (shardId, shardQueue) =>
             val stream = ZStream
               .fromQueue(shardQueue.q)
+              .ensuring(shardQueue.shutdownQueue)
               .mapConcatM { case (records, checkpointer) => ZIO.foreach(records)(toRecord(_, checkpointer)) }
-              .interruptWhen(shardQueue.shutdownRequest) // Shut down the stream when KCL signals shutdown / lease lost
-              .ensuring(shardQueue.streamComplete.succeed(())) // Signal back that stream shutdown is complete
+              .interruptWhen(
+                shardQueue.shutdownRequest.await
+              ) // Shut down the stream when KCL signals shutdown / lease lost
               .provide(env)
 
             (shardId, stream)
