@@ -57,6 +57,81 @@ object DynamicConsumer {
     isEnhancedFanOut: Boolean = true,
     leaseTableName: Option[String] = None
   ): ZStream[Blocking with R, Throwable, (String, ZStream[Any, Throwable, Record[T]])] = {
+    /*
+     * A queue for a single Shard and interface between the KCL threadpool and the ZIO runtime
+     *
+     * This queue is used by a ZStream for a single Shard
+     *
+     * The Queue uses the error channel (E type parameter) to signal failure (Some[Throwable])
+     * and completion (None)
+     */
+    case class ShardQueue(
+      shardId: String,
+      runtime: zio.Runtime[Any],
+      q: Queue[(Iterable[KinesisClientRecord], RecordProcessorCheckpointer)],
+      shutdownRequest: Promise[Throwable, Unit],
+      streamComplete: Promise[Throwable, Unit]
+    ) {
+      def offerRecords(r: java.util.List[KinesisClientRecord], checkpointer: RecordProcessorCheckpointer): Unit =
+        runtime.unsafeRun(q.offer(r.asScala -> checkpointer).unit)
+
+      /**
+       * Shutdown processing for this shard
+       *
+       * Clear everything that is still in the queue, offer a completion signal for the queue,
+       * set an interrupt signal and await stream completion (in-flight messages processed)
+       *
+       */
+      def stop(): Unit                                                                                          =
+        runtime.unsafeRun {
+          q.takeAll.unit <* shutdownRequest.succeed(()) *> streamComplete.await
+        }
+    }
+
+    class ZioShardProcessor(queues: Queues) extends ShardRecordProcessor {
+      var shardQueue: ShardQueue = _
+
+      override def initialize(input: InitializationInput): Unit =
+        shardQueue = queues.newShard(input.shardId())
+
+      override def processRecords(processRecordsInput: ProcessRecordsInput): Unit =
+        shardQueue.offerRecords(processRecordsInput.records(), processRecordsInput.checkpointer())
+
+      override def leaseLost(leaseLostInput: LeaseLostInput): Unit =
+        shardQueue.stop()
+
+      override def shardEnded(shardEndedInput: ShardEndedInput): Unit =
+        shardQueue.stop()
+
+      override def shutdownRequested(shutdownRequestedInput: ShutdownRequestedInput): Unit =
+        shardQueue.stop()
+    }
+
+    class Queues(
+      private val runtime: zio.Runtime[Any],
+      val shards: Queue[Exit[Option[Throwable], (String, ShardQueue)]]
+    ) {
+      def newShard(shard: String): ShardQueue =
+        runtime.unsafeRun {
+          for {
+            shutdownRequested <- Promise.make[Throwable, Unit]
+            streamComplete    <- Promise.make[Throwable, Unit]
+            queue             <- Queue
+                       .unbounded[(Iterable[KinesisClientRecord], RecordProcessorCheckpointer)]
+                       .map(ShardQueue(shard, runtime, _, shutdownRequested, streamComplete))
+            _                 <- shards.offer(Exit.succeed(shard -> queue)).unit
+          } yield queue
+        }
+    }
+
+    object Queues {
+      def make: ZManaged[Any, Nothing, Queues] =
+        for {
+          runtime <- ZIO.runtime[Any].toManaged_
+          q       <- Queue.unbounded[Exit[Option[Throwable], (String, ShardQueue)]].toManaged(_.shutdown)
+        } yield new Queues(runtime, q)
+    }
+
     def retrievalConfig(kinesisClient: KinesisAsyncClient) =
       if (isEnhancedFanOut)
         new FanOutConfig(kinesisClient).streamName(streamName).applicationName(applicationName)
@@ -171,88 +246,6 @@ object DynamicConsumer {
     aggregated: Boolean,
     checkpoint: ZIO[Blocking, Throwable, Unit]
   )
-
-  /*
-   * A queue for a single Shard and interface between the KCL threadpool and the ZIO runtime
-   *
-   * This queue is used by a ZStream for a single Shard
-   *
-   * The Queue uses the error channel (E type parameter) to signal failure (Some[Throwable])
-   * and completion (None)
-   */
-  private case class ShardQueue(
-    shardId: String,
-    runtime: zio.Runtime[Any],
-    q: Queue[(Iterable[KinesisClientRecord], RecordProcessorCheckpointer)],
-    shutdownRequest: Promise[Throwable, Unit],
-    streamComplete: Promise[Throwable, Unit]
-  ) {
-    def offerRecords(r: java.util.List[KinesisClientRecord], checkpointer: RecordProcessorCheckpointer): Unit =
-      runtime.unsafeRun(q.offer(r.asScala -> checkpointer).unit)
-
-    /**
-     * Shutdown processing for this shard
-     *
-     * Clear everything that is still in the queue, offer a completion signal for the queue,
-     * set an interrupt signal and await stream completion (in-flight messages processed)
-     *
-     */
-    def stop(): Unit                                                                                          =
-      runtime.unsafeRun {
-        // TODO what if we're already stopped..? i.e. shutdownRequest >> leaseLost
-        q.takeAll.unit <* shutdownRequest.succeed(()) *> streamComplete.await
-      }
-  }
-
-  private class ZioShardProcessor(queues: Queues) extends ShardRecordProcessor {
-    var shardQueue: ShardQueue = _
-
-    override def initialize(input: InitializationInput): Unit =
-      shardQueue = queues.newShard(input.shardId())
-
-    override def processRecords(processRecordsInput: ProcessRecordsInput): Unit =
-      shardQueue.offerRecords(processRecordsInput.records(), processRecordsInput.checkpointer())
-
-    override def leaseLost(leaseLostInput: LeaseLostInput): Unit = {
-      println(s"Lease lost for shard ${shardQueue.shardId}")
-      shardQueue.stop()
-      println(s"Lease lost COMPLETE for shard ${shardQueue.shardId}")
-    }
-
-    override def shardEnded(shardEndedInput: ShardEndedInput): Unit =
-      shardQueue.stop()
-
-    override def shutdownRequested(shutdownRequestedInput: ShutdownRequestedInput): Unit = {
-      println(s"Shutdown requested for shard ${shardQueue.shardId}")
-      shardQueue.stop()
-      println(s"Shutdown requested COMPLETE for shard ${shardQueue.shardId}")
-    }
-  }
-
-  private class Queues(
-    private val runtime: zio.Runtime[Any],
-    val shards: Queue[Exit[Option[Throwable], (String, ShardQueue)]]
-  ) {
-    def newShard(shard: String): ShardQueue =
-      runtime.unsafeRun {
-        for {
-          shutdownRequested <- Promise.make[Throwable, Unit]
-          streamComplete    <- Promise.make[Throwable, Unit]
-          queue             <- Queue
-                     .unbounded[(Iterable[KinesisClientRecord], RecordProcessorCheckpointer)]
-                     .map(ShardQueue(shard, runtime, _, shutdownRequested, streamComplete))
-          _                 <- shards.offer(Exit.succeed(shard -> queue)).unit
-        } yield queue
-      }
-  }
-
-  private object Queues {
-    def make: ZManaged[Any, Nothing, Queues] =
-      for {
-        runtime <- ZIO.runtime[Any].toManaged_
-        q       <- Queue.unbounded[Exit[Option[Throwable], (String, ShardQueue)]].toManaged(_.shutdown)
-      } yield new Queues(runtime, q)
-  }
 
   type ShardStream[T] = ZStream[Any, Throwable, Record[T]]
 }
