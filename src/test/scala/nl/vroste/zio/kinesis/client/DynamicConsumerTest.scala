@@ -5,6 +5,7 @@ import java.util.UUID
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException }
+import software.amazon.kinesis.exceptions.ShutdownException
 import zio.clock.Clock
 import zio.console._
 import zio.duration._
@@ -102,11 +103,13 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
               case (shardId, shardStream) =>
                 shardStream.zipWithIndex.tap {
                   case (r: DynamicConsumer.Record[String], sequenceNumberForShard: Long) =>
-                    handler(shardId, r) *>
+                    handler(shardId, r).as(r) <*
                       (putStrLn(
                         s"Checkpointing at offset ${sequenceNumberForShard} in consumer ${label}, shard ${shardId}"
-                      ) *> r.checkpoint) // TODO this may fail when the shard lease has been stolen
-                        .when(sequenceNumberForShard % checkpointDivisor == checkpointDivisor - 1)
+                      ) *> r.checkpoint.catchSome {
+                        case e: ShutdownException => // This will be throw when the shard lease has been stolen
+                          ZIO.unit
+                      }).when(sequenceNumberForShard % checkpointDivisor == checkpointDivisor - 1)
                         .tapError(_ => putStrLn(s"Failed to checkpoint in consumer ${label}, shard ${shardId}"))
                 }.map(_._1)
                   .as((label, shardId))
