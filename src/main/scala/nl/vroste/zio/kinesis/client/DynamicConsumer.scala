@@ -55,57 +55,42 @@ object DynamicConsumer {
     initialPosition: InitialPositionInStreamExtended =
       InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON),
     isEnhancedFanOut: Boolean = true,
-    leaseTableName: Option[String] = None
+    leaseTableName: Option[String] = None,
+    workerIdentifier: String = UUID.randomUUID().toString
   ): ZStream[Blocking with R, Throwable, (String, ZStream[Any, Throwable, Record[T]])] = {
-
-    /**
+    /*
      * A queue for a single Shard and interface between the KCL threadpool and the ZIO runtime
      *
      * This queue is used by a ZStream for a single Shard
      *
      * The Queue uses the error channel (E type parameter) to signal failure (Some[Throwable])
      * and completion (None)
-     *
-     * @param shardId Shard identifier
-     * @param runtime ZIO runtime
-     * @param q Queue for record chunks
      */
-    case class ShardQueue(
-      shardId: String,
-      runtime: zio.Runtime[R],
-      q: Queue[Exit[Option[Throwable], Chunk[Record[T]]]]
+    class ShardQueue(
+      val shardId: String,
+      runtime: zio.Runtime[Any],
+      val q: Queue[(Iterable[KinesisClientRecord], RecordProcessorCheckpointer)],
+      val shutdownRequest: Promise[Throwable, Unit]
     ) {
       def offerRecords(r: java.util.List[KinesisClientRecord], checkpointer: RecordProcessorCheckpointer): Unit =
-        // TODO only offer to the queue in unsafeRun, run the rest 'within' the regular ZIO runtime
-        runtime.unsafeRun {
-          ZIO
-            .foreach(r.asScala)(r => deserializer.deserialize(r.data()).map((r, _)))
-            .map { records =>
-              Chunk.fromIterable(records.map {
-                case (r, data) =>
-                  Record(
-                    r.sequenceNumber(),
-                    r.approximateArrivalTimestamp(),
-                    data,
-                    r.partitionKey(),
-                    r.encryptionType(),
-                    r.subSequenceNumber(),
-                    r.explicitHashKey(),
-                    r.aggregated(),
-                    checkpoint = zio.blocking.blocking {
-                      Task(checkpointer.checkpoint(r.sequenceNumber(), r.subSequenceNumber()))
-                    }
-                  )
-              })
-            }
-            .fold(e => Exit.fail(Some(e)), Exit.succeed)
-            .flatMap(q.offer)
-            .unit
-        }
+        // Calls to q.offer will fail with an interruption error after the queue has been shutdown
+        runtime.unsafeRun(
+          q.offer(r.asScala -> checkpointer).unit.catchSomeCause { case c if c.interrupted => ZIO.unit }
+        )
 
+      def shutdownQueue: UIO[Unit] =
+        q.shutdown
+
+      /**
+       * Shutdown processing for this shard
+       *
+       * Clear everything that is still in the queue, offer a completion signal for the queue,
+       * set an interrupt signal and await stream completion (in-flight messages processed)
+       *
+       */
       def stop(): Unit =
         runtime.unsafeRun {
-          q.offer(Exit.fail(None)).unit
+          q.takeAll.unit <* shutdownRequest.succeed(()) *> q.awaitShutdown
         }
     }
 
@@ -125,29 +110,30 @@ object DynamicConsumer {
         shardQueue.stop()
 
       override def shutdownRequested(shutdownRequestedInput: ShutdownRequestedInput): Unit =
-        // TODO should we wait for processing of this shard to complete?
         shardQueue.stop()
     }
 
     class Queues(
-      private val runtime: zio.Runtime[R],
-      val shards: Queue[Exit[Option[Throwable], (String, ShardStream[T])]]
+      private val runtime: zio.Runtime[Any],
+      val shards: Queue[Exit[Option[Throwable], (String, ShardQueue)]]
     ) {
       def newShard(shard: String): ShardQueue =
         runtime.unsafeRun {
           for {
-            queue <- Queue.unbounded[Exit[Option[Throwable], Chunk[Record[T]]]].map(ShardQueue(shard, runtime, _))
-            stream = ZStream.fromQueue(queue.q).collectWhileSuccess.flattenChunks
-            _     <- shards.offer(Exit.succeed(shard -> stream)).unit
+            shutdownRequested <- Promise.make[Throwable, Unit]
+            queue             <- Queue
+                       .unbounded[(Iterable[KinesisClientRecord], RecordProcessorCheckpointer)]
+                       .map(new ShardQueue(shard, runtime, _, shutdownRequested))
+            _                 <- shards.offer(Exit.succeed(shard -> queue)).unit
           } yield queue
         }
     }
 
     object Queues {
-      def make: ZManaged[R, Nothing, Queues] =
+      def make: ZManaged[Any, Nothing, Queues] =
         for {
-          runtime <- ZIO.runtime[R].toManaged_
-          q       <- Queue.unbounded[Exit[Option[Throwable], (String, ShardStream[T])]].toManaged(_.shutdown)
+          runtime <- ZIO.runtime[Any].toManaged_
+          q       <- Queue.unbounded[Exit[Option[Throwable], (String, ShardQueue)]].toManaged(_.shutdown)
         } yield new Queues(runtime, q)
     }
 
@@ -156,6 +142,23 @@ object DynamicConsumer {
         new FanOutConfig(kinesisClient).streamName(streamName).applicationName(applicationName)
       else
         new PollingConfig(streamName, kinesisClient)
+
+    def toRecord(r: KinesisClientRecord, checkpointer: RecordProcessorCheckpointer): ZIO[R, Throwable, Record[T]] =
+      deserializer.deserialize(r.data()).map { data =>
+        Record(
+          r.sequenceNumber(),
+          r.approximateArrivalTimestamp(),
+          data,
+          r.partitionKey(),
+          r.encryptionType(),
+          r.subSequenceNumber(),
+          r.explicitHashKey(),
+          r.aggregated(),
+          checkpoint = zio.blocking.blocking {
+            Task(checkpointer.checkpoint(r.sequenceNumber(), r.subSequenceNumber()))
+          }
+        )
+      }
 
     // Run the scheduler
     val schedulerM =
@@ -172,13 +175,14 @@ object DynamicConsumer {
             kinesisClient,
             dynamoDbClient,
             cloudWatchClient,
-            UUID.randomUUID.toString,
+            workerIdentifier,
             () => new ZioShardProcessor(queues)
           )
           leaseTableName.fold(configsBuilder)(configsBuilder.tableName)
         }
+        env           <- ZIO.environment[R].toManaged_
 
-        scheduler     <- Task(
+        scheduler <- Task(
                        new Scheduler(
                          configsBuilder.checkpointConfig(),
                          configsBuilder.coordinatorConfig(),
@@ -192,13 +196,28 @@ object DynamicConsumer {
                            .retrievalSpecificConfig(retrievalConfig(kinesisClient))
                        )
                      ).toManaged_
-        _             <- zio.blocking
+        _         <- zio.blocking
                .blocking(ZIO(scheduler.run()))
                .fork
                .flatMap(_.join)
                .onInterrupt(ZIO.fromFutureJava(scheduler.startGracefulShutdown()).unit.orDie)
                .forkManaged
-      } yield ZStream.fromQueue(queues.shards).collectWhileSuccess
+      } yield ZStream
+        .fromQueue(queues.shards)
+        .map(_.map {
+          case (shardId, shardQueue) =>
+            val stream = ZStream
+              .fromQueue(shardQueue.q)
+              .ensuring(shardQueue.shutdownQueue)
+              .mapConcatM { case (records, checkpointer) => ZIO.foreach(records)(toRecord(_, checkpointer)) }
+              .interruptWhen(
+                shardQueue.shutdownRequest.await
+              ) // Shut down the stream when KCL signals shutdown / lease lost
+              .provide(env)
+
+            (shardId, stream)
+        })
+        .collectWhileSuccess
 
     ZStream.unwrapManaged(schedulerM)
   }
@@ -232,6 +251,16 @@ object DynamicConsumer {
     subSequenceNumber: Long,
     explicitHashKey: String,
     aggregated: Boolean,
+    /**
+     * Checkpoint the sequencenumber and subsequencenumber (if applicable) of this record
+     *
+     * Exceptions you should be prepared to handle:
+     * - [[software.amazon.kinesis.exceptions.ShutdownException]] when the lease for this shard has been lost, when
+     *   another worker has stolen the lease (this can happen at any time).
+     * - [[software.amazon.kinesis.exceptions.ThrottlingException]]
+     *
+     * See also [[RecordProcessorCheckpointer]]
+     */
     checkpoint: ZIO[Blocking, Throwable, Unit]
   )
 
