@@ -10,7 +10,6 @@ import zio.clock.Clock
 import zio.console._
 import zio.duration._
 import zio.stream.ZStream
-import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test._
 import zio.{ Promise, Ref, Schedule, ZIO, ZManaged }
@@ -142,26 +141,14 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                    .runDrain
                    .fork
 
-            _                           <- putStrLn("Starting dynamic consumers")
-            activeConsumers             <- Ref.make[Set[String]](Set.empty)
-            // Checke very second if all consumers got a shard lease to process
-            allConsumersGotAShard        = activeConsumers.get.map(_ == Set("1", "2"))
-            allConsumersGotAShardSignal <- Promise.make[Throwable, Unit]
-            _                           <- ZIO
-                   .whenM(allConsumersGotAShard)(allConsumersGotAShardSignal.succeed(()))
-                   .repeat(Schedule.fixed(1.second))
-                   .provideLayer(Clock.live)
-                   .fork
-
-            records                     <- (streamConsumer("1", activeConsumers)
-                           merge ZStream
-                             .fromEffect(sleep(5.seconds))
-                             .flatMap(_ => streamConsumer("2", activeConsumers)))
-                         .interruptWhen(allConsumersGotAShardSignal.await)
-                         .runCollect
-            // Both consumers should have gotten some records
-            usedConsumers                = records.map(_._1).toSet
-          } yield assert(usedConsumers)(equalTo(Set("1", "2")))
+            _                     <- putStrLn("Starting dynamic consumers")
+            activeConsumers       <- Ref.make[Set[String]](Set.empty)
+            allConsumersGotAShard <- awaitRefPredicate(activeConsumers)(_ == Set("1", "2"))
+            _                     <- (streamConsumer("1", activeConsumers)
+                     merge delayStream(streamConsumer("2", activeConsumers), 5.seconds))
+                   .interruptWhen(allConsumersGotAShard.join)
+                   .runCollect
+          } yield assertCompletes
       }
     }
 
@@ -172,4 +159,19 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
     ) @@ timeout(5.minute) @@ sequential
 
   def sleep(d: Duration) = ZIO.sleep(d).provideLayer(Clock.live)
+
+  def delayStream[R, E, O](s: ZStream[R, E, O], delay: Duration) =
+    ZStream.fromEffect(sleep(delay)).flatMap(_ => s)
+
+  def awaitRefPredicate[T](ref: Ref[T])(predicate: T => Boolean) =
+    (for {
+      p <- Promise.make[Nothing, Unit]
+      _ <- ZIO
+             .whenM(ref.get.map(predicate))(p.succeed(()))
+             .repeat(Schedule.fixed(1.second))
+             .provideLayer(Clock.live)
+             .fork
+      _ <- p.await
+    } yield ()).fork
+
 }
