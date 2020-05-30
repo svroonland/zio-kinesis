@@ -93,7 +93,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
               _  <- putStrLn(s"Consumer $label on fiber $id got record $r on shard $shardId")
             } yield ()
 
-          ZStream.fromEffect(putStrLn("Starting consumer ${label}")) *> LocalStackDynamicConsumer
+          ZStream.fromEffect(putStrLn(s"Starting consumer $label")) *> LocalStackDynamicConsumer
             .shardedStream(
               streamName,
               applicationName = applicationName,
