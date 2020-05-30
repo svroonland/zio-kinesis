@@ -107,7 +107,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                       (putStrLn(
                         s"Checkpointing at offset ${sequenceNumberForShard} in consumer ${label}, shard ${shardId}"
                       ) *> r.checkpoint.catchSome {
-                        case e: ShutdownException => // This will be throw when the shard lease has been stolen
+                        case _: ShutdownException => // This will be throw when the shard lease has been stolen
                           ZIO.unit
                       }).when(sequenceNumberForShard % checkpointDivisor == checkpointDivisor - 1)
                         .tapError(_ => putStrLn(s"Failed to checkpoint in consumer ${label}, shard ${shardId}"))
