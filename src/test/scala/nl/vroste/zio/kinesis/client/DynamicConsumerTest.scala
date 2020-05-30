@@ -77,7 +77,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
             } yield assertCompletes
         }
       },
-      testM("support multiple parallel streams") {
+      testM("support multiple parallel consumers on the same Kinesis stream") {
 
         val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
         val applicationName = "zio-test-" + UUID.randomUUID().toString
@@ -93,7 +93,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
               _  <- putStrLn(s"Consumer $label on fiber $id got record $r on shard $shardId")
             } yield ()
 
-          LocalStackDynamicConsumer
+          ZStream.fromEffect(putStrLn("Starting consumer ${label}")) *> LocalStackDynamicConsumer
             .shardedStream(
               streamName,
               applicationName = applicationName,
@@ -138,16 +138,18 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
               _ <- putStrLn("Starting dynamic consumers")
 
-              records <- (streamConsumer("1")
+              records      <- (streamConsumer("1")
                              merge ZStream
-                               .fromEffect(ZIO.sleep(5.seconds).provideLayer(Clock.live))
+                               .fromEffect(sleep(5.seconds))
                                .flatMap(_ => streamConsumer("2")))
                            .take(nrRecords * nrRecords.toLong)
                            .runCollect
-              _       <- ZIO.foreach_(records.map(_.toString))(s => putStrLn(s).provideLayer(Console.live))
               // Both consumers should have gotten some records
-            } yield assert(records.map(_._1).toSet)(equalTo(Set("1", "2")))
+              usedConsumers = records.map(_._1).toSet
+            } yield assert(usedConsumers)(equalTo(Set("1", "2")))
         }
       }
     ) @@ timeout(5.minute) @@ sequential
+
+  def sleep(d: Duration) = ZIO.sleep(d).provideLayer(Clock.live)
 }
