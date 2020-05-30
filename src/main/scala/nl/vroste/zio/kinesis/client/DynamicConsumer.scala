@@ -244,6 +244,16 @@ object DynamicConsumer {
     subSequenceNumber: Long,
     explicitHashKey: String,
     aggregated: Boolean,
+    /**
+     * Checkpoint the sequencenumber and subsequencenumber (if applicable) of this record
+     *
+     * Exceptions you should be prepared to handle:
+     * - [[software.amazon.kinesis.exceptions.ShutdownException]] when the lease for this shard has been lost, when
+     *   another worker has stolen the lease (this can happen at any time).
+     * - [[software.amazon.kinesis.exceptions.ThrottlingException]]
+     *
+     * See also [[RecordProcessorCheckpointer]]
+     */
     checkpoint: ZIO[Blocking, Throwable, Unit]
   )
 
