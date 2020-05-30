@@ -1,6 +1,7 @@
 package nl.vroste.zio.kinesis.client
 
 import java.net.URI
+import java.util.UUID
 
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import software.amazon.awssdk.auth.credentials.{
@@ -68,7 +69,8 @@ object LocalStackDynamicConsumer {
   def shardedStream[R, T](
     streamName: String,
     applicationName: String,
-    deserializer: Deserializer[R, T]
+    deserializer: Deserializer[R, T],
+    workerIdentifier: String = UUID.randomUUID().toString
   ): ZStream[Blocking with R, Throwable, (String, ZStream[Any, Throwable, DynamicConsumer.Record[T]])] =
     DynamicConsumer.shardedStream(
       streamName,
@@ -77,7 +79,8 @@ object LocalStackDynamicConsumer {
       kinesisAsyncClientBuilder,
       cloudWatchClientBuilder,
       dynamoDbClientBuilder,
-      isEnhancedFanOut = false
+      isEnhancedFanOut = false,
+      workerIdentifier = workerIdentifier
     )
 
 }

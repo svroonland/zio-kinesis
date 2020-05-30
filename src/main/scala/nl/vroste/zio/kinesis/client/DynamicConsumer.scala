@@ -55,7 +55,8 @@ object DynamicConsumer {
     initialPosition: InitialPositionInStreamExtended =
       InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON),
     isEnhancedFanOut: Boolean = true,
-    leaseTableName: Option[String] = None
+    leaseTableName: Option[String] = None,
+    workerIdentifier: String = UUID.randomUUID().toString
   ): ZStream[Blocking with R, Throwable, (String, ZStream[Any, Throwable, Record[T]])] = {
     /*
      * A queue for a single Shard and interface between the KCL threadpool and the ZIO runtime
@@ -170,7 +171,7 @@ object DynamicConsumer {
             kinesisClient,
             dynamoDbClient,
             cloudWatchClient,
-            UUID.randomUUID.toString,
+            workerIdentifier,
             () => new ZioShardProcessor(queues)
           )
           leaseTableName.fold(configsBuilder)(configsBuilder.tableName)
