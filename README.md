@@ -33,7 +33,7 @@ Your SBT settings must specify the resolver for JCenter.
 ## DynamicConsumer
 `DynamicConsumer` offers a `ZStream`-based interface to the Kinesis Client Library (KCL). KCL supports shard offset checkpoint storage in DynamoDB and automatic rebalancing of shard consumers between multiple workers within an application group. 
 
-This is modeled as a stream of streams, where the inner streams represent the individual shards. They can complete when the shard is assigned to another worker. The outer stream can emit new elements as shards are assigned to this worker. The inner streams can be processed in parallel as you desire.
+This is modeled as a stream of streams, where the inner streams represent the individual shards. The inner streams can complete when the shard is assigned to another worker. The outer stream can emit new elements as shards are assigned to this worker. The inner streams can be processed in parallel as you desire.
 
 `DynamicConsumer` will handle deserialization of the data bytes as part of the stream via the `Deserializer` (or `Serde`) you pass it. In the example below a deserializer for ASCII strings is used. It's easy to define custom (de)serializers for, for example, JSON data using a JSON library of your choice.
 
@@ -73,15 +73,19 @@ DynamicConsumer
   When an application restarts, it will resume from the previous checkpoint,
   and so will continue from where it left off in the Kinesis stream.
   
+- Checkpointing may fail with a `ShutdownException` when another worker has stolen the lease for a shard. Your application should handle this, otherwise your stream will fail with this exception. Note that the shard stream may still emit some buffered records in this situation, before it is completed.
+  
 - [Enhanced Fan Out capability](https://docs.aws.amazon.com/streams/latest/dev/enhanced-consumers.html) is set by the
  `isEnhancedFanOut` flag, which defaults to `true`.   
 
-#### Checkpoint coordination schemes
+#### Checkpointing
 
-The handler for messages in the example above calls `r.checkpoint`. This checkpoints every message.
-It is [recommended](https://github.com/awslabs/amazon-kinesis-client/blob/master/amazon-kinesis-client/src/main/java/software/amazon/kinesis/processor/RecordProcessorCheckpointer.java#L35)
-to not checkpoint not too frequently.
-Instead, a count-based or period-based checkpointing scheme should be used as shown as follows.
+You need to manually store checkpoints for all records that your application has processed. Kinesis works with sequence numbers instead of something like ACKs; checkpointing for sequence number X means 'all records up to and including X'. Therefore you don't have to checkpoint each individual record, periodic checkpointing is sufficient.
+
+In fact, it is [recommended](https://github.com/awslabs/amazon-kinesis-client/blob/master/amazon-kinesis-client/src/main/java/software/amazon/kinesis/processor/RecordProcessorCheckpointer.java#L35)
+not to checkpoint too frequently.
+
+ZStream's `aggregateAsyncWithin` is useful for such a checkpointing scheme. In this example, checkpointing is done for each shard once per second.
 
 ```scala
 DynamicConsumer
@@ -96,14 +100,28 @@ DynamicConsumer
         .zipWithIndex
         .tap {
           case (r: DynamicConsumer.Record[ByteBuffer], sequenceNumberForShard: Long) =>
-            handler(shardId, r) *>
-              ZIO.when(sequenceNumberForShard % checkpointDivisor == checkpointDivisor - 1)(r.checkpoint)
+            handler(shardId, r)
+        }
+        .aggregateAsyncWithin(ZTransducer.last, Schedule.fixed(1.second))
+        .mapConcat(_.toList)
+        .tap { r =>
+          r.checkpoint
         }
         .map(_._1) // remove sequence numbering
   }
+  .runDrain 
 ```
+ 
+#### Clean Shutdown
+It is nice to ensure that every record that is (side-effectfully) processed is checkpointed before the stream is shutdown. The method of shutdown is therefore important.
 
-In this example, checkpointing is done once per batch of `checkpointDivisor` records. This batch counting is per-shard. 
+Interrupting the fiber that is running the stream will terminate the stream, but will not guarantee that the last processed records have been checkpointed. Instead use the `requestShutdown` parameter of `DynamicCustomer.shardedStream` to pass a ZIO (or a Promise followed by `.await`) that completes when the stream should be shutdown. 
+
+You should also perform checkpointing before merging the shard streams (using eg `flatMapPar`) to guarantee that the KCL has not taken away the lease for that shard. The example above does this correctly.
+
+TODO plainStream does not support this scheme, since it checkpoints after merging the shard sterams
+
+TODO how to integrate this in a ZIO app, how to respond to interruption of that app, etc
 
 #### Authentication with AWS
 
