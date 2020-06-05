@@ -3,7 +3,6 @@ package nl.vroste.zio.kinesis.client
 import java.util.UUID
 
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
-import nl.vroste.zio.kinesis.client.ZioFixes.MyZStreamExtensions
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException }
 import software.amazon.kinesis.exceptions.ShutdownException
@@ -201,18 +200,15 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                    case (shardId, shardStream) =>
                      shardStream
                        .tap(record => lastProcessedRecords.update(_ + (shardId -> record.sequenceNumber)))
-                       .tap(_ => ZIO.unit.delay(100.millis))
                        // equal to the checkpointed offset
                        //                         .tap(r => putStrLn(s"Shard ${shardId} got record ${r.data}"))
                        // It's important that the checkpointing is always done before flattening the stream, otherwise
                        // we cannot guarantee that the KCL has not yet shutdown the record processor and taken away the lease
-                       .myAggregateAsyncWithin(
-                         ZTransducer.collectAllN(
-                           500
-                         ), // TODO we need to make sure that in our test this thing has some records buffered after shutdown request
+                       .aggregateAsyncWithin(
+                         ZTransducer.last, // TODO we need to make sure that in our test this thing has some records buffered after shutdown request
                          Schedule.fixed(1.seconds)
                        )
-                       .mapConcat(_.groupBy(_.shardId).view.mapValues(_.last).values)
+                       .mapConcat(_.toList)
                        .tap { r =>
                          putStrLn(s"Shard ${r.shardId}: checkpointing for record $r") *>
                            r.checkpoint
@@ -224,7 +220,6 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                  .runCollect
           _                         <- producing.interrupt
           (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
-          _                         <- putStrLn((processed, checkpointed).toString())
         } yield assert(processed)(equalTo(checkpointed))
       }.provideCustomLayer(Clock.live)
     } @@ TestAspect.timeout(40.seconds)
