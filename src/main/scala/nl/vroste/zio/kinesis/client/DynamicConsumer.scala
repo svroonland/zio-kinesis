@@ -75,13 +75,16 @@ object DynamicConsumer {
     ) {
       def offerRecords(r: java.util.List[KinesisClientRecord], checkpointer: RecordProcessorCheckpointer): Unit =
         // Calls to q.offer will fail with an interruption error after the queue has been shutdown
+        // TODO we must make sure never to throw an exception here, because KCL will delete the records
+        // See https://github.com/awslabs/amazon-kinesis-client/issues/10
         runtime.unsafeRun(
           // TODO what do do if queue is already shutdown for some reason..?
           q.offer(Exit.succeed(r.asScala -> checkpointer)).unit.catchSomeCause { case c if c.interrupted => ZIO.unit }
         )
 
       def shutdownQueue: UIO[Unit] =
-        UIO(println(s"ShardQueue: shutdownQueue for ${shardId}")) *> q.shutdown
+//        UIO(println(s"ShardQueue: shutdownQueue for ${shardId}")) *>
+        q.shutdown
 
       /**
        * Shutdown processing for this shard
@@ -92,8 +95,8 @@ object DynamicConsumer {
        */
       def stop(reason: String): Unit =
         runtime.unsafeRun {
-          UIO(println(s"ShardQueue: stop() for ${shardId} because of ${reason}")) *>
-            q.takeAll.unit *>           // Clear the queue so it doesn't have to be drained fully
+//          UIO(println(s"ShardQueue: stop() for ${shardId} because of ${reason}")) *>
+          q.takeAll.unit *>             // Clear the queue so it doesn't have to be drained fully
             q.offer(Exit.fail(None)) <* // Pass an exit signal in the queue to stop the stream
 //            shutdownRequest.succeed(()) *>
             q.awaitShutdown             // Wait for the stream's end to 'bubble up', meaning all in-flight elements have been processed
@@ -215,27 +218,24 @@ object DynamicConsumer {
                           .blocking(ZIO(scheduler.run()))
                           .fork
                           .flatMap(_.join)
-                          .tap(_ => UIO(println("Scheduler fib inner done naturally")))
+                          //                          .tap(_ => UIO(println("Scheduler fib inner done naturally")))
                           .onInterrupt(
-                            UIO(println("Scheduler fib inner interrupted")) *> ZIO
-                              .fromFutureJava(scheduler.startGracefulShutdown())
-                              .unit
-                              .orDie <* queues.shutdown
+//                            UIO(println("Scheduler fib inner interrupted")) *>
+                            ZIO.fromFutureJava(scheduler.startGracefulShutdown()).unit.orDie <* queues.shutdown
                           )
                           .forkManaged
-                          .ensuring(UIO(println("Scheduler fib outer done")))
+//                          .ensuring(UIO(println("Scheduler fib outer done")))
         _            <- (requestShutdown *> schedulerFib.interrupt).forkManaged
-               .ensuring(UIO(println("Request shutdown waiter done")))
+//               .ensuring(UIO(println("Request shutdown waiter done")))
       } yield ZStream
         .fromQueue(queues.shards)
-        //        .ensuringFirst(queues.shards.shutdown)
         .collectWhileSuccess
         .map {
           case (shardId, shardQueue) =>
             val stream = ZStream
               .fromQueue(shardQueue.q)
-              .collectWhileSuccess
               .ensuringFirst(shardQueue.shutdownQueue)
+              .collectWhileSuccess
               .mapConcatM { case (records, checkpointer) => ZIO.foreach(records)(toRecord(shardId, _, checkpointer)) }
               .provide(env)
 
