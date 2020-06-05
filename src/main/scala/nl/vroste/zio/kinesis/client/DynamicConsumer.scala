@@ -56,7 +56,8 @@ object DynamicConsumer {
       InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON),
     isEnhancedFanOut: Boolean = true,
     leaseTableName: Option[String] = None,
-    workerIdentifier: String = UUID.randomUUID().toString
+    workerIdentifier: String = UUID.randomUUID().toString,
+    requestShutdown: UIO[Unit] = UIO.never
   ): ZStream[Blocking with R, Throwable, (String, ZStream[Any, Throwable, Record[T]])] = {
     /*
      * A queue for a single Shard and interface between the KCL threadpool and the ZIO runtime
@@ -202,6 +203,7 @@ object DynamicConsumer {
                .flatMap(_.join)
                .onInterrupt(ZIO.fromFutureJava(scheduler.startGracefulShutdown()).unit.orDie)
                .forkManaged
+        _         <- (requestShutdown *> ZIO.fromFutureJava(scheduler.startGracefulShutdown())).unit.orDie.forkManaged
       } yield ZStream
         .fromQueue(queues.shards)
         .map(_.map {
