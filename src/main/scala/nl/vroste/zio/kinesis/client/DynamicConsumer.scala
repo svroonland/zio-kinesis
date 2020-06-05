@@ -79,7 +79,8 @@ object DynamicConsumer {
         // See https://github.com/awslabs/amazon-kinesis-client/issues/10
         runtime.unsafeRun(
           // TODO what do do if queue is already shutdown for some reason..?
-          q.offer(Exit.succeed(r.asScala -> checkpointer)).unit.catchSomeCause { case c if c.interrupted => ZIO.unit }
+          q.offer(Exit.succeed(r.asScala -> checkpointer)).unit
+          //.catchSomeCause { case c if c.interrupted => ZIO.unit }
         )
 
       def shutdownQueue: UIO[Unit] =
