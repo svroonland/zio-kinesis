@@ -95,11 +95,11 @@ object DynamicConsumer {
        */
       def stop(reason: String): Unit =
         runtime.unsafeRun {
-//          UIO(println(s"ShardQueue: stop() for ${shardId} because of ${reason}")) *>
-          q.takeAll.unit *>             // Clear the queue so it doesn't have to be drained fully
-            q.offer(Exit.fail(None)) <* // Pass an exit signal in the queue to stop the stream
+          UIO(println(s"ShardQueue: stop() for ${shardId} because of ${reason}")).when(false) *>
+            q.takeAll.unit *>                // Clear the queue so it doesn't have to be drained fully
+            q.offer(Exit.fail(None)).unit <* // Pass an exit signal in the queue to stop the stream
 //            shutdownRequest.succeed(()) *>
-            q.awaitShutdown             // Wait for the stream's end to 'bubble up', meaning all in-flight elements have been processed
+            q.awaitShutdown                  // Wait for the stream's end to 'bubble up', meaning all in-flight elements have been processed
           // TODO maybe we want to only do this when the main stream's completion has bubbled up..?
         }
     }
