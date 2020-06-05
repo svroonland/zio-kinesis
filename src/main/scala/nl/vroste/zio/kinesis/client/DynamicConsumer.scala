@@ -144,9 +144,14 @@ object DynamicConsumer {
       else
         new PollingConfig(streamName, kinesisClient)
 
-    def toRecord(r: KinesisClientRecord, checkpointer: RecordProcessorCheckpointer): ZIO[R, Throwable, Record[T]] =
+    def toRecord(
+      shardId: String,
+      r: KinesisClientRecord,
+      checkpointer: RecordProcessorCheckpointer
+    ): ZIO[R, Throwable, Record[T]] =
       deserializer.deserialize(r.data()).map { data =>
         Record(
+          shardId,
           r.sequenceNumber(),
           r.approximateArrivalTimestamp(),
           data,
@@ -211,7 +216,7 @@ object DynamicConsumer {
             val stream = ZStream
               .fromQueue(shardQueue.q)
               .ensuring(shardQueue.shutdownQueue)
-              .mapConcatM { case (records, checkpointer) => ZIO.foreach(records)(toRecord(_, checkpointer)) }
+              .mapConcatM { case (records, checkpointer) => ZIO.foreach(records)(toRecord(shardId, _, checkpointer)) }
               .interruptWhen(
                 shardQueue.shutdownRequest.await
               ) // Shut down the stream when KCL signals shutdown / lease lost
@@ -245,6 +250,7 @@ object DynamicConsumer {
     ).flatMapPar(Int.MaxValue)(_._2)
 
   case class Record[T](
+    shardId: String,
     sequenceNumber: String,
     approximateArrivalTimestamp: Instant,
     data: T,
