@@ -3,18 +3,18 @@ package nl.vroste.zio.kinesis.client
 import java.util.UUID
 
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
+import nl.vroste.zio.kinesis.client.ZioFixes.MyZStreamExtensions
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException }
 import software.amazon.kinesis.exceptions.ShutdownException
-import zio.Fiber.Status
 import zio.clock.Clock
 import zio.console._
 import zio.duration._
 import zio.stream.{ ZStream, ZTransducer }
+import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test._
-import zio.{ Fiber, Promise, Ref, Schedule, UIO, ZIO, ZManaged }
-import ZioFixes.MyZStreamExtensions
+import zio._
 
 object DynamicConsumerTest extends DefaultRunnableSpec {
   private val retryOnResourceNotFound: Schedule[Clock, Throwable, ((Throwable, Int), Duration)] =
@@ -171,8 +171,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
       (Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder) <* createStream(streamName, 2)).use { client =>
         for {
-          _           <- putStrLn("Putting records")
-          producing   <- ZStream
+          producing                 <- ZStream
                          .fromIterable(1 to nrBatches)
                          .schedule(Schedule.spaced(250.millis))
                          .mapM { _ =>
@@ -186,48 +185,47 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                          .tap(_ => ZIO(println("PRODUCING RECORDS DONE")))
                          .forkAs("RecordProducing")
 
-          _           <- putStrLn("Starting dynamic consumer")
-          interrupted <- Promise
+          interrupted               <- Promise
                            .make[Nothing, Unit]
                            .tap(p => (putStrLn("INTERRUPTING") *> p.succeed(())).delay(19.seconds + 333.millis).fork)
-          _            = println(interrupted)
-          fib         <- LocalStackDynamicConsumer
-                   .shardedStream(
-                     streamName,
-                     applicationName = applicationName,
-                     deserializer = Serde.asciiString,
-                     requestShutdown = interrupted.await.tap(_ => UIO(println("Interrupting shardedStream")))
-                   )
-                   .flatMapPar(Int.MaxValue) {
-                     case (shardId, shardStream) =>
-                       shardStream
-                       // TODO collect the highest sequence number that we tap at this point. That should be
+          lastProcessedRecords      <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
+          lastCheckpointedRecords   <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
+          _                         <- LocalStackDynamicConsumer
+                 .shardedStream(
+                   streamName,
+                   applicationName = applicationName,
+                   deserializer = Serde.asciiString,
+                   requestShutdown = interrupted.await.tap(_ => UIO(println("Interrupting shardedStream")))
+                 )
+                 .flatMapPar(Int.MaxValue) {
+                   case (shardId, shardStream) =>
+                     shardStream
+                       .tap(record => lastProcessedRecords.update(_ + (shardId -> record.sequenceNumber)))
+                       .tap(_ => ZIO.unit.delay(100.millis))
                        // equal to the checkpointed offset
                        //                         .tap(r => putStrLn(s"Shard ${shardId} got record ${r.data}"))
                        // It's important that the checkpointing is always done before flattening the stream, otherwise
                        // we cannot guarantee that the KCL has not yet shutdown the record processor and taken away the lease
-                         .myAggregateAsyncWithin(
-                           ZTransducer.collectAllN(
-                             500
-                           ), // TODO we need to make sure that in our test this thing has some records buffered after shutdown request
-                           Schedule.fixed(1.seconds)
-                         )
-                         //                 .ensuringFirst(UIO(println("Shutdown stage B")))
-                         .tap(_ => ZIO(println(s"Aggregate async done ${shardId}")))
-                         .mapConcat(_.groupBy(_.shardId).view.mapValues(_.last).values)
-                         .ensuringFirst(UIO(println(s"Shutdown stage C ${shardId}")))
-                         .tap { r =>
-                           putStrLn(s"Shard ${r.shardId}: checkpointing for record $r") *> r.checkpoint
+                       .myAggregateAsyncWithin(
+                         ZTransducer.collectAllN(
+                           500
+                         ), // TODO we need to make sure that in our test this thing has some records buffered after shutdown request
+                         Schedule.fixed(1.seconds)
+                       )
+                       .mapConcat(_.groupBy(_.shardId).view.mapValues(_.last).values)
+                       .tap { r =>
+                         putStrLn(s"Shard ${r.shardId}: checkpointing for record $r") *>
+                           r.checkpoint
                              .tapError(e => ZIO(println(s"Checkpointing failed: ${e}")))
+                             .tap(_ => lastCheckpointedRecords.update(_ + (shardId -> r.sequenceNumber)))
                              .tap(_ => ZIO(println(s"Checkpointing for shard ${r.shardId} done")))
-                         }
-                   }
-                   .runCollect
-                   .tap(_ => putStrLn("Done collecting!"))
-                   .forkAs("Stream in test")
-          _           <- fib.join
-          _           <- producing.interrupt
-        } yield assertCompletes
+                       }
+                 }
+                 .runCollect
+          _                         <- producing.interrupt
+          (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
+          _                         <- putStrLn((processed, checkpointed).toString())
+        } yield assert(processed)(equalTo(checkpointed))
       }.provideCustomLayer(Clock.live)
     } @@ TestAspect.timeout(40.seconds)
 
