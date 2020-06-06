@@ -4,8 +4,8 @@ import java.util.UUID
 
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.serde.Serde
-import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException }
 import software.amazon.kinesis.exceptions.ShutdownException
+import zio._
 import zio.clock.Clock
 import zio.console._
 import zio.duration._
@@ -13,35 +13,9 @@ import zio.stream.{ ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test._
-import zio._
 
 object DynamicConsumerTest extends DefaultRunnableSpec {
-  private val retryOnResourceNotFound: Schedule[Clock, Throwable, ((Throwable, Int), Duration)] =
-    Schedule.doWhile[Throwable] {
-      case _: ResourceNotFoundException => true
-      case _                            => false
-    } &&
-      Schedule.recurs(5) &&
-      Schedule.exponential(2.second)
-
-  private def createStream(streamName: String, nrShards: Int): ZManaged[Console, Throwable, Unit] =
-    for {
-      adminClient <- AdminClient.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
-      _           <- adminClient
-             .createStream(streamName, nrShards)
-             .catchSome {
-               case _: ResourceInUseException =>
-                 putStrLn("Stream already exists")
-             }
-             .toManaged { _ =>
-               adminClient
-                 .deleteStream(streamName, enforceConsumerDeletion = true)
-                 .catchSome {
-                   case _: ResourceNotFoundException => ZIO.unit
-                 }
-                 .orDie
-             }
-    } yield ()
+  import TestUtil._
 
   def testConsume1 =
     testM("consume records produced on all shards produced on the stream") {
