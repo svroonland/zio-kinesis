@@ -8,7 +8,6 @@ import zio.console._
 import zio.duration._
 import zio.stream.{ ZStream, ZTransducer }
 import zio.{ Chunk, ExitCode, Schedule, ZIO }
-import nl.vroste.zio.kinesis.client.withGracefulShutdownOnInterrupt
 
 object ExampleApp extends zio.App {
 
