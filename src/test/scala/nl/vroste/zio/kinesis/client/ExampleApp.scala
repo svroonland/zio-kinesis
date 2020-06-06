@@ -7,8 +7,7 @@ import nl.vroste.zio.kinesis.client.serde.Serde
 import zio.console._
 import zio.duration._
 import zio.stream.{ ZStream, ZTransducer }
-import zio.{ Chunk, ExitCode, Promise, Schedule, UIO, ZIO, ZManaged }
-import zio.Fiber
+import zio.{ Chunk, ExitCode, Promise, Schedule, ZIO, ZManaged }
 
 object ExampleApp extends zio.App {
   override def run(
@@ -22,7 +21,7 @@ object ExampleApp extends zio.App {
       (for {
         _         <- produceRecords(streamName, 20000).fork.toManaged_
         interrupt <- Promise.make[Throwable, Unit].toManaged_
-        streamFib <- LocalStackDynamicConsumer
+        _ <- LocalStackDynamicConsumer
                        .shardedStream(
                          streamName,
                          applicationName = "testApp",

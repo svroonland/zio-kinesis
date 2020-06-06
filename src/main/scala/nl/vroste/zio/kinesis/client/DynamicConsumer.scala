@@ -225,7 +225,7 @@ object DynamicConsumer {
         doShutdown    = UIO(println("Scheduler fib inner interrupted")) *>
                        ZIO.fromFutureJava(scheduler.startGracefulShutdown()).unit.orDie <*
                        queues.shutdown
-        schedulerFib <- zio.blocking
+        _ <- zio.blocking
                           .blocking(ZIO(scheduler.run()))
                           .fork
                           .flatMap(_.join)
