@@ -57,7 +57,8 @@ object DynamicConsumer {
     isEnhancedFanOut: Boolean = true,
     leaseTableName: Option[String] = None,
     workerIdentifier: String = UUID.randomUUID().toString,
-    requestShutdown: UIO[Unit] = UIO.never
+    requestShutdown: UIO[Unit] = UIO.never,
+    maxShardBufferSize: Int = 1024 // Prefer powers of 2
   ): ZStream[Blocking with R, Throwable, (String, ZStream[Any, Throwable, Record[T]])] = {
     /*
      * A queue for a single Shard and interface between the KCL threadpool and the ZIO runtime
@@ -70,22 +71,26 @@ object DynamicConsumer {
     class ShardQueue(
       val shardId: String,
       runtime: zio.Runtime[Any],
-      val q: Queue[Exit[Option[Throwable], (Iterable[KinesisClientRecord], RecordProcessorCheckpointer)]],
+      val q: Queue[Exit[Option[Throwable], (KinesisClientRecord, RecordProcessorCheckpointer)]],
       val shutdownRequest: Promise[Throwable, Unit]
     ) {
-      def offerRecords(r: java.util.List[KinesisClientRecord], checkpointer: RecordProcessorCheckpointer): Unit =
+      def offerRecords(r: java.util.List[KinesisClientRecord], checkpointer: RecordProcessorCheckpointer): Unit = {
+        println(s"ShardQueue: offerRecords for ${shardId} got ${r.size()} records")
         // Calls to q.offer will fail with an interruption error after the queue has been shutdown
         // TODO we must make sure never to throw an exception here, because KCL will delete the records
         // See https://github.com/awslabs/amazon-kinesis-client/issues/10
         runtime.unsafeRun(
           // TODO what do do if queue is already shutdown for some reason..?
-          q.offer(Exit.succeed(r.asScala -> checkpointer)).unit
+          q.offerAll(r.asScala.map(r => Exit.succeed(r -> checkpointer))).unit *>
+            UIO(println(s"ShardQueue: offerRecords for ${shardId} COMPLETE"))
+//          q.offer(Exit.succeed(r.asScala -> checkpointer)).unit
           //.catchSomeCause { case c if c.interrupted => ZIO.unit }
         )
+      }
 
       def shutdownQueue: UIO[Unit] =
-//        UIO(println(s"ShardQueue: shutdownQueue for ${shardId}")) *>
-        q.shutdown
+        UIO(println(s"ShardQueue: shutdownQueue for ${shardId}")) *>
+          q.shutdown
 
       /**
        * Shutdown processing for this shard
@@ -96,7 +101,7 @@ object DynamicConsumer {
        */
       def stop(reason: String): Unit =
         runtime.unsafeRun {
-          UIO(println(s"ShardQueue: stop() for ${shardId} because of ${reason}")).when(false) *>
+          UIO(println(s"ShardQueue: stop() for ${shardId} because of ${reason}")).when(true) *>
             q.takeAll.unit *>                // Clear the queue so it doesn't have to be drained fully
             q.offer(Exit.fail(None)).unit <* // Pass an exit signal in the queue to stop the stream
 //            shutdownRequest.succeed(()) *>
@@ -133,7 +138,9 @@ object DynamicConsumer {
           for {
             shutdownRequested <- Promise.make[Throwable, Unit]
             queue             <- Queue
-                       .unbounded[Exit[Option[Throwable], (Iterable[KinesisClientRecord], RecordProcessorCheckpointer)]]
+                       .bounded[Exit[Option[Throwable], (KinesisClientRecord, RecordProcessorCheckpointer)]](
+                         maxShardBufferSize
+                       )
                        .map(new ShardQueue(shard, runtime, _, shutdownRequested))
             _                 <- shards.offer(Exit.succeed(shard -> queue)).unit
           } yield queue
@@ -219,15 +226,15 @@ object DynamicConsumer {
                           .blocking(ZIO(scheduler.run()))
                           .fork
                           .flatMap(_.join)
-                          //                          .tap(_ => UIO(println("Scheduler fib inner done naturally")))
+                          .tap(_ => UIO(println("Scheduler fib inner done naturally")))
                           .onInterrupt(
-//                            UIO(println("Scheduler fib inner interrupted")) *>
-                            ZIO.fromFutureJava(scheduler.startGracefulShutdown()).unit.orDie <* queues.shutdown
+                            UIO(println("Scheduler fib inner interrupted")) *>
+                              ZIO.fromFutureJava(scheduler.startGracefulShutdown()).unit.orDie <* queues.shutdown
                           )
                           .forkManaged
-//                          .ensuring(UIO(println("Scheduler fib outer done")))
+                          .ensuring(UIO(println("Scheduler fib outer done")))
         _            <- (requestShutdown *> schedulerFib.interrupt).forkManaged
-//               .ensuring(UIO(println("Request shutdown waiter done")))
+               .ensuring(UIO(println("Request shutdown waiter done")))
       } yield ZStream
         .fromQueue(queues.shards)
         .collectWhileSuccess
@@ -237,7 +244,9 @@ object DynamicConsumer {
               .fromQueue(shardQueue.q)
               .ensuringFirst(shardQueue.shutdownQueue)
               .collectWhileSuccess
-              .mapConcatM { case (records, checkpointer) => ZIO.foreach(records)(toRecord(shardId, _, checkpointer)) }
+              .mapChunksM { chunk =>
+                chunk.mapM { case (record, checkpointer) => toRecord(shardId, record, checkpointer) }
+              }
               .provide(env)
 
             (shardId, stream)
