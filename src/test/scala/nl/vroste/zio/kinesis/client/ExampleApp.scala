@@ -7,23 +7,10 @@ import nl.vroste.zio.kinesis.client.serde.Serde
 import zio.console._
 import zio.duration._
 import zio.stream.{ ZStream, ZTransducer }
-import zio.{ Chunk, ExitCode, Promise, Schedule, UIO, ZIO, ZManaged }
+import zio.{ Chunk, ExitCode, Schedule, ZIO }
+import nl.vroste.zio.kinesis.client.withGracefulShutdownOnInterrupt
 
 object ExampleApp extends zio.App {
-  /**
-    * Run an effect that can be gracefully shutdown on interruption
-    * 
-    * The effect is run in a fiber
-    *
-    * @param f Create the effect to run, given a UIO that will complete to signal graceful interruption
-    * @return The result of the effect created by f
-    */
-  def withGracefulShutdownOnInterrupt[R, E, A](f: UIO[Unit] => ZIO[R, E, A]) =
-    for {
-      interrupt <- Promise.make[Throwable, Unit].toManaged_
-      result    <- f(interrupt.await.ignore).fork.toManaged(_.join.ignore)
-      _         <- ZManaged.finalizer(interrupt.succeed(()))
-    } yield result
 
   override def run(
     args: List[String]

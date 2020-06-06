@@ -115,13 +115,13 @@ DynamicConsumer
 #### Clean Shutdown
 It is nice to ensure that every record that is (side-effectfully) processed is checkpointed before the stream is shutdown. The method of shutdown is therefore important.
 
-Interrupting the fiber that is running the stream will terminate the stream, but will not guarantee that the last processed records have been checkpointed. Instead use the `requestShutdown` parameter of `DynamicCustomer.shardedStream` to pass a ZIO (or a Promise followed by `.await`) that completes when the stream should be shutdown. 
+Simply interrupting the fiber that is running the stream will terminate the stream, but will not guarantee that the last processed records have been checkpointed. Instead use the `requestShutdown` parameter of `DynamicCustomer.shardedStream` to pass a ZIO (or a Promise followed by `.await`) that completes when the stream should be shutdown. 
 
 You should also perform checkpointing before merging the shard streams (using eg `flatMapPar`) to guarantee that the KCL has not taken away the lease for that shard. The example above does this correctly.
 
-TODO plainStream does not support this scheme, since it checkpoints after merging the shard sterams
+Use `withGracefulShutdownOnInterrupt` from the `nl.vroste.zio.kinesis.client` package to help with this. See `src/test/scala/nl/vroste/zio/kinesis/client/ExampleApp.scala` for an example.
 
-TODO how to integrate this in a ZIO app, how to respond to interruption of that app, etc
+Note that `plainStream` does not support this scheme, since it checkpoints after merging the shard streams. At shutdown, there may no longer be a valid lease for each of the shards. 
 
 #### Authentication with AWS
 
