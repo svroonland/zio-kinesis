@@ -8,23 +8,9 @@ import zio.console._
 import zio.duration._
 import zio.stream.{ ZStream, ZTransducer }
 import zio.{ Chunk, ExitCode, Promise, Schedule, UIO, ZIO, ZManaged }
+import zio.Fiber
 
 object ExampleApp extends zio.App {
-
-  def withGracefulShutdown[R, E, A](f: UIO[Unit] => ZIO[R, E, A]) =
-    (for {
-      requestShutdown <- Promise.make[Nothing, Unit].toManaged_
-      streamFiber     <- f(requestShutdown.await).forkManaged
-      result          <- Promise.make[E, A].toManaged_
-      _               <- ZManaged.unit.ensuring {
-             UIO(println("WGS INTERRUPT")) <*
-               requestShutdown.succeed(()) *>
-                 streamFiber.join.foldM(result.fail, result.succeed)
-           }
-    } yield (result, requestShutdown)).use {
-      case (result, requestShutdown) => result.await.onInterrupt(requestShutdown.succeed(()))
-    }
-
   override def run(
     args: List[String]
   ): ZIO[zio.ZEnv, Nothing, ExitCode] = {
@@ -32,37 +18,44 @@ object ExampleApp extends zio.App {
     val streamName = "zio-test-stream-" + UUID.randomUUID().toString
 
     TestUtil
-      .createStreamUnmanaged(streamName, 2) *>
+      .createStreamUnmanaged(streamName, 10) *>
       (for {
-        _         <- produceRecords(streamName, 2000).fork
-        streamFib <- withGracefulShutdown { requestShutdown =>
-                       LocalStackDynamicConsumer
-                         .shardedStream(
-                           streamName,
-                           applicationName = "testApp",
-                           deserializer = Serde.asciiString,
-                           requestShutdown = requestShutdown
-                         )
-                         .flatMapPar(Int.MaxValue) {
-                           case (shardID, shardStream) =>
-                             shardStream
-                               .tap(r => putStrLn(s"Got record $r").delay(100.millis))
-                               .aggregateAsyncWithin(ZTransducer.last, Schedule.fixed(1.second))
-                               .mapConcat(_.toList)
-                               .tap { r =>
-                                 putStrLn(s"Checkpointing ${shardID}") *> r.checkpoint
-                               }
-                         }
-                         .runCollect
-                     }.fork
-        _         <- putStrLn("Press enter to exit")
-        _         <- ZIO.unit.delay(20.seconds)
-        _         <- putStrLn("Exiting app")
-//        _         <- streamFib.interrupt
-//          _           <- (putStrLn("Interrupting") *> streamFiber.interrupt).delay(15.seconds)
-        // TODO we want to be able to catch an external interrupt and handle it correctly (top down)
+        _         <- produceRecords(streamName, 20000).fork.toManaged_
+        interrupt <- Promise.make[Throwable, Unit].toManaged_
+        streamFib <- LocalStackDynamicConsumer
+                       .shardedStream(
+                         streamName,
+                         applicationName = "testApp",
+                         deserializer = Serde.asciiString,
+                         requestShutdown = interrupt.await.ignore
+                       )
+                       .flatMapPar(Int.MaxValue) {
+                         case (shardID, shardStream) =>
+                           shardStream
+                             .tap(r => putStrLn(s"Got record $r")) // .delay(100.millis))
+                             .aggregateAsyncWithin(ZTransducer.last, Schedule.fixed(1.second))
+                             .mapConcat(_.toList)
+                             .tap { r =>
+                               putStrLn(s"Checkpointing ${shardID}") *> r.checkpoint
+                             }
+                       }
+                       .runCollect
+                       .fork
+                       .toManaged(fib =>
+                         putStrLn("Awaiaint fiber thingy") *> fib.join.orDie *> putStrLn("Awaiting fiber thingy done")
+                       )
+        _         <- ZManaged.finalizer(
+               putStrLn("Bulkhead shutdown") *> interrupt.succeed(()) *> putStrLn("Bulkhead shutdown done")
+             )
 
-      } yield ExitCode.success)
+      } yield ()).use_ {
+        for {
+          _ <- putStrLn("App started")
+          _ <- ZIO.unit.delay(15.seconds)
+          _ <- putStrLn("Exiting app")
+
+        } yield ExitCode.success
+      }
   }.orDie
 
   def produceRecords(streamName: String, nrRecords: Int) =

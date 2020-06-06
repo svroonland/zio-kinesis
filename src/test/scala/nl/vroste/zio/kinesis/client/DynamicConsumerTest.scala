@@ -198,6 +198,8 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
       }.provideCustomLayer(Clock.live)
     } @@ TestAspect.timeout(40.seconds)
 
+  // TODO check the order of received records is correct
+
   override def spec =
     suite("DynamicConsumer")(
       testConsume1,

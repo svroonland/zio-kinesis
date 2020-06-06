@@ -222,18 +222,18 @@ object DynamicConsumer {
                            .retrievalSpecificConfig(retrievalConfig(kinesisClient))
                        )
                      ).toManaged_
+        doShutdown    = UIO(println("Scheduler fib inner interrupted")) *>
+                       ZIO.fromFutureJava(scheduler.startGracefulShutdown()).unit.orDie <*
+                       queues.shutdown
         schedulerFib <- zio.blocking
                           .blocking(ZIO(scheduler.run()))
                           .fork
                           .flatMap(_.join)
                           .tap(_ => UIO(println("Scheduler fib inner done naturally")))
-                          .onInterrupt(
-                            UIO(println("Scheduler fib inner interrupted")) *>
-                              ZIO.fromFutureJava(scheduler.startGracefulShutdown()).unit.orDie <* queues.shutdown
-                          )
+                          .onInterrupt(doShutdown)
                           .forkManaged
                           .ensuring(UIO(println("Scheduler fib outer done")))
-        _            <- (requestShutdown *> schedulerFib.interrupt).forkManaged
+        _            <- (requestShutdown *> doShutdown).forkManaged
                .ensuring(UIO(println("Request shutdown waiter done")))
       } yield ZStream
         .fromQueue(queues.shards)

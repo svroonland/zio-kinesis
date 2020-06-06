@@ -21,7 +21,8 @@ inThisBuild(
     scalaVersion := mainScala,
     crossScalaVersions := allScala,
     parallelExecution in Test := false,
-    fork in Test := false,
+    cancelable in Global := true,
+    fork in Test := true,
     fork in run := true,
     publishMavenStyle := true,
     publishArtifact in Test :=
