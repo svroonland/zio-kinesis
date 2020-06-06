@@ -12,7 +12,7 @@ More beta customers are welcome.
 * [DynamicConsumer](#dynamicconsumer)
   + [Checkpointing](#checkpointing)
   + [Clean Shutdown](#clean-shutdown)
-* [Configuration](#configuration)
+  + [Configuration](#configuration)
 * [Producer](#producer)
 * [Consuming a stream (low level)](#consuming-a-stream--low-level-)
 * [Admin client](#admin-client)
@@ -111,7 +111,7 @@ It is also important that you perform checkpointing before merging the shard str
 
 Note that `plainStream` does not support this scheme, since it checkpoints after merging the shard streams. At shutdown, there may no longer be a valid lease for each of the shards. 
 
-## Configuration
+### Configuration
 By default `Client`, `AdminClient`, `DynamicConsumer` and `Producer` will load AWS credentials and regions via the [Default Credential/Region Provider](https://docs.aws.amazon.com/sdk-for-java/v1/developer-guide/credentials.html). Using the client builders, many parameters can be customized. Refer to the AWS documentation for more information.
 
 The following snippet shows the full range of parameters to `DynamicConsumer.shardedStream`, most of which relate
