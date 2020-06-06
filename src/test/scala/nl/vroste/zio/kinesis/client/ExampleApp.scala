@@ -21,28 +21,28 @@ object ExampleApp extends zio.App {
       (for {
         _         <- produceRecords(streamName, 20000).fork.toManaged_
         interrupt <- Promise.make[Throwable, Unit].toManaged_
-        _ <- LocalStackDynamicConsumer
-                       .shardedStream(
-                         streamName,
-                         applicationName = "testApp",
-                         deserializer = Serde.asciiString,
-                         requestShutdown = interrupt.await.ignore
-                       )
-                       .flatMapPar(Int.MaxValue) {
-                         case (shardID, shardStream) =>
-                           shardStream
-                             .tap(r => putStrLn(s"Got record $r")) // .delay(100.millis))
-                             .aggregateAsyncWithin(ZTransducer.last, Schedule.fixed(1.second))
-                             .mapConcat(_.toList)
-                             .tap { r =>
-                               putStrLn(s"Checkpointing ${shardID}") *> r.checkpoint
-                             }
-                       }
-                       .runCollect
-                       .fork
-                       .toManaged(fib =>
-                         putStrLn("Awaiaint fiber thingy") *> fib.join.orDie *> putStrLn("Awaiting fiber thingy done")
-                       )
+        _         <- LocalStackDynamicConsumer
+               .shardedStream(
+                 streamName,
+                 applicationName = "testApp",
+                 deserializer = Serde.asciiString,
+                 requestShutdown = interrupt.await.ignore
+               )
+               .flatMapPar(Int.MaxValue) {
+                 case (shardID, shardStream) =>
+                   shardStream
+                     .tap(r => putStrLn(s"Got record $r")) // .delay(100.millis))
+                     .aggregateAsyncWithin(ZTransducer.last, Schedule.fixed(1.second))
+                     .mapConcat(_.toList)
+                     .tap { r =>
+                       putStrLn(s"Checkpointing ${shardID}") *> r.checkpoint
+                     }
+               }
+               .runCollect
+               .fork
+               .toManaged(fib =>
+                 putStrLn("Awaiaint fiber thingy") *> fib.join.orDie *> putStrLn("Awaiting fiber thingy done")
+               )
         _         <- ZManaged.finalizer(
                putStrLn("Bulkhead shutdown") *> interrupt.succeed(()) *> putStrLn("Bulkhead shutdown done")
              )
