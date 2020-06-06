@@ -41,9 +41,11 @@ object DynamicConsumer {
    * @param dynamoDbClientBuilder
    * @param isEnhancedFanOut Flag for setting retrieval config - defaults to `true`. If `false` polling config is set.
    * @param leaseTableName Optionally set the lease table name - defaults to None. If not specified the `applicationName` will be used.
+   * @param maxShardBufferSize The maximum number of records per shard to store in a queue before blocking
+   *   the KCL record processor until records have been dequeued. Note that the stream returned from this
+   *   method will have internal chunk buffers as well.
    * @tparam R ZIO environment type required by the `deserializer`
    * @tparam T Type of record values
-   * @return
    */
   def shardedStream[R, T](
     streamName: String,
@@ -52,12 +54,12 @@ object DynamicConsumer {
     kinesisClientBuilder: KinesisAsyncClientBuilder = KinesisAsyncClient.builder(),
     cloudWatchClientBuilder: CloudWatchAsyncClientBuilder = CloudWatchAsyncClient.builder,
     dynamoDbClientBuilder: DynamoDbAsyncClientBuilder = DynamoDbAsyncClient.builder(),
+    requestShutdown: UIO[Unit] = UIO.never,
     initialPosition: InitialPositionInStreamExtended =
       InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON),
     isEnhancedFanOut: Boolean = true,
     leaseTableName: Option[String] = None,
     workerIdentifier: String = UUID.randomUUID().toString,
-    requestShutdown: UIO[Unit] = UIO.never,
     maxShardBufferSize: Int = 1024 // Prefer powers of 2
   ): ZStream[Blocking with R, Throwable, (String, ZStream[Any, Throwable, Record[T]])] = {
     /*
