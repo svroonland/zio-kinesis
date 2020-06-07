@@ -67,7 +67,7 @@ object DynamicConsumer {
     leaseTableName: Option[String] = None,
     workerIdentifier: String = UUID.randomUUID().toString,
     maxShardBufferSize: Int = 1024 // Prefer powers of 2
-  ): ZStream[Blocking with R, Throwable, (String, ZStream[Any, Throwable, Record[T]])] = {
+  ): ZStream[Blocking with R, Throwable, (String, ZStream[Blocking, Throwable, Record[T]], Checkpointer)] = {
     /*
      * A queue for a single Shard and interface between the KCL threadpool and the ZIO runtime
      *
@@ -135,17 +135,18 @@ object DynamicConsumer {
 
     class Queues(
       private val runtime: zio.Runtime[Any],
-      val shards: Queue[Exit[Option[Throwable], (String, ShardQueue)]]
+      val shards: Queue[Exit[Option[Throwable], (String, ShardQueue, Checkpointer)]]
     ) {
       def newShard(shard: String): ShardQueue =
         runtime.unsafeRun {
           for {
-            queue <- Queue
+            queue        <- Queue
                        .bounded[Exit[Option[Throwable], (KinesisClientRecord, RecordProcessorCheckpointer)]](
                          maxShardBufferSize
                        )
                        .map(new ShardQueue(shard, runtime, _))
-            _     <- shards.offer(Exit.succeed(shard -> queue)).unit
+            checkpointer <- Checkpointer.make(shard)
+            _            <- shards.offer(Exit.succeed((shard, queue, checkpointer))).unit
           } yield queue
         }
 
@@ -157,7 +158,7 @@ object DynamicConsumer {
       def make: ZManaged[Any, Nothing, Queues] =
         for {
           runtime <- ZIO.runtime[Any].toManaged_
-          q       <- Queue.unbounded[Exit[Option[Throwable], (String, ShardQueue)]].toManaged(_.shutdown)
+          q       <- Queue.unbounded[Exit[Option[Throwable], (String, ShardQueue, Checkpointer)]].toManaged(_.shutdown)
         } yield new Queues(runtime, q)
     }
 
@@ -239,7 +240,7 @@ object DynamicConsumer {
         .fromQueue(queues.shards)
         .collectWhileSuccess
         .map {
-          case (shardId, shardQueue) =>
+          case (shardId, shardQueue, checkpointer) =>
             val stream = ZStream
               .fromQueue(shardQueue.q)
               .ensuringFirst(shardQueue.shutdownQueue)
@@ -248,8 +249,9 @@ object DynamicConsumer {
                 chunk.mapM { case (record, checkpointer) => toRecord(shardId, record, checkpointer) }
               }
               .provide(env)
+              .ensuringFirst(UIO(println(s"$shardId - CHECKPOINT on ensuring")) *> checkpointer.checkpoint.orDie)
 
-            (shardId, stream)
+            (shardId, stream, checkpointer)
         }
 
     ZStream.unwrapManaged(schedulerM)
@@ -299,4 +301,50 @@ object DynamicConsumer {
   )
 
   type ShardStream[T] = ZStream[Any, Throwable, Record[T]]
+
+  /**
+   * Staging area for checkpoints
+   *
+   * Guarantees that the last staged record is checkpointed upon stream shutdown / interruption
+   */
+  trait Checkpointer {
+
+    /**
+     * Stages a record for checkpointing
+     *
+     * Checkpoints are not actually performed until flush is called.
+     *
+     * @param r Record to checkpoint
+     * @return Effect that completes immediately
+     */
+    def stage(r: Record[_]): UIO[Unit]
+
+    /**
+     * Checkpoint the last staged checkpoint
+     *
+     * Exceptions you should be prepared to handle:
+     * - [[software.amazon.kinesis.exceptions.ShutdownException]] when the lease for this shard has been lost, when
+     *   another worker has stolen the lease (this can happen at any time).
+     * - [[software.amazon.kinesis.exceptions.ThrottlingException]]
+     *
+     * See also [[RecordProcessorCheckpointer]]
+     */
+    def checkpoint: ZIO[Blocking, Throwable, Unit]
+  }
+
+  object Checkpointer {
+    private[client] def make(shardId: String): UIO[Checkpointer] =
+      for {
+        latest <- Ref.make[Option[Record[_]]](None)
+      } yield new Checkpointer {
+        override def stage(r: Record[_]): UIO[Unit] =
+          latest.set(Some(r))
+
+        override def checkpoint: ZIO[Blocking, Throwable, Unit] =
+          latest.get.flatMap {
+            case Some(record) => record.checkpoint *> latest.set(None)
+            case None         => UIO.unit
+          }
+      }
+  }
 }

@@ -17,38 +17,33 @@ object ExampleApp extends zio.App {
 
     val streamName = "zio-test-stream-" + UUID.randomUUID().toString
 
-    TestUtil
-      .createStreamUnmanaged(streamName, 10) *>
-      (for {
-        _ <- produceRecords(streamName, 20000).fork.toManaged_
-        _ <- withGracefulShutdownOnInterrupt { interrupt =>
-               LocalStackDynamicConsumer
-                 .shardedStream(
-                   streamName,
-                   applicationName = "testApp",
-                   deserializer = Serde.asciiString,
-                   requestShutdown = interrupt
-                 )
-                 .flatMapPar(Int.MaxValue) {
-                   case (shardID, shardStream) =>
-                     shardStream
-                       .tap(r => putStrLn(s"Got record $r")) // .delay(100.millis))
-                       .aggregateAsyncWithin(ZTransducer.last, Schedule.fixed(1.second))
-                       .mapConcat(_.toList)
-                       .tap { r =>
-                         putStrLn(s"Checkpointing ${shardID}") *> r.checkpoint
-                       }
-                 }
-                 .runCollect
+    for {
+      _ <- TestUtil.createStreamUnmanaged(streamName, 10)
+      _ <- produceRecords(streamName, 20000).fork
+      _ <- LocalStackDynamicConsumer
+             .shardedStream(
+               streamName,
+               applicationName = "testApp-" + UUID.randomUUID().toString(),
+               deserializer = Serde.asciiString
+             )
+             .flatMapPar(Int.MaxValue) {
+               case (shardID, shardStream, checkpointer) =>
+                 shardStream
+                   .tap(r => putStrLn(s"Got record $r")) // .delay(100.millis))
+                   .tap(checkpointer.stage)
+                   .aggregateAsyncWithin(ZTransducer.last, Schedule.fixed(1.second))
+                   .mapConcat(_.toList)
+                   .tap { _ =>
+                     putStrLn(s"Checkpointing ${shardID}") *> checkpointer.checkpoint
+                   }
              }
-      } yield ()).use_ {
-        for {
-          _ <- putStrLn("App started")
-          _ <- ZIO.unit.delay(15.seconds)
-          _ <- putStrLn("Exiting app")
+             .runCollect
+             .fork
+      _ <- putStrLn("App started")
+      _ <- ZIO.unit.delay(15.seconds)
+      _ <- putStrLn("Exiting app")
 
-        } yield ExitCode.success
-      }
+    } yield ExitCode.success
   }.orDie
 
   def produceRecords(streamName: String, nrRecords: Int) =

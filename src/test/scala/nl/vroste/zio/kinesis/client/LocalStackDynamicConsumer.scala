@@ -4,6 +4,7 @@ import java.net.URI
 import java.util.UUID
 
 import nl.vroste.zio.kinesis.client.serde.Deserializer
+import nl.vroste.zio.kinesis.client.DynamicConsumer.Checkpointer
 import software.amazon.awssdk.auth.credentials.{
   AwsBasicCredentials,
   AwsCredentialsProvider,
@@ -73,7 +74,11 @@ object LocalStackDynamicConsumer {
     deserializer: Deserializer[R, T],
     workerIdentifier: String = UUID.randomUUID().toString,
     requestShutdown: UIO[Unit] = UIO.never
-  ): ZStream[Blocking with R, Throwable, (String, ZStream[Any, Throwable, DynamicConsumer.Record[T]])] =
+  ): ZStream[
+    Blocking with R,
+    Throwable,
+    (String, ZStream[Blocking, Throwable, DynamicConsumer.Record[T]], Checkpointer)
+  ] =
     DynamicConsumer.shardedStream(
       streamName,
       applicationName,

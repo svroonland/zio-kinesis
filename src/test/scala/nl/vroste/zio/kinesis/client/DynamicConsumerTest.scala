@@ -79,7 +79,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                 workerIdentifier = applicationName + "-" + workerIdentifier
               )
               .flatMapPar(Int.MaxValue) {
-                case (shardId, shardStream) =>
+                case (shardId, shardStream, checkpointer @ _) =>
                   shardStream.zipWithIndex.tap {
                     case (r: DynamicConsumer.Record[String], sequenceNumberForShard: Long) =>
                       handler(shardId, r).as(r) <*
@@ -171,7 +171,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                    requestShutdown = interrupted.await.tap(_ => UIO(println("Interrupting shardedStream")))
                  )
                  .flatMapPar(Int.MaxValue) {
-                   case (shardId, shardStream) =>
+                   case (shardId, shardStream, checkpointer @ _) =>
                      shardStream
                        .tap(record => lastProcessedRecords.update(_ + (shardId -> record.sequenceNumber)))
                        // equal to the checkpointed offset
