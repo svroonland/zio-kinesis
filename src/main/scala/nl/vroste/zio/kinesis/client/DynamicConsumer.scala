@@ -149,7 +149,7 @@ object DynamicConsumer {
                          maxShardBufferSize
                        )
                        .map(new ShardQueue(shard, runtime, _))
-            checkpointer <- Checkpointer.make(shard, checkpointer)
+            checkpointer <- Checkpointer.make(checkpointer)
             _            <- shards.offer(Exit.succeed((shard, queue, checkpointer))).unit
           } yield queue
         }
@@ -321,7 +321,7 @@ object DynamicConsumer {
   }
 
   object Checkpointer {
-    private[client] def make(shardId: String, kclCheckpointer: RecordProcessorCheckpointer): UIO[Checkpointer] =
+    private[client] def make(kclCheckpointer: RecordProcessorCheckpointer): UIO[Checkpointer] =
       for {
         latestStaged <- Ref.make[Option[Record[_]]](None)
       } yield new Checkpointer {
