@@ -19,6 +19,7 @@ import zio.blocking.Blocking
 import zio.stream.ZStream
 
 import scala.jdk.CollectionConverters._
+import software.amazon.kinesis.exceptions.ShutdownException
 
 /**
  * Offers a ZStream based interface to the Amazon Kinesis Client Library (KCL)
@@ -86,16 +87,16 @@ object DynamicConsumer {
         // TODO we must make sure never to throw an exception here, because KCL will delete the records
         // See https://github.com/awslabs/amazon-kinesis-client/issues/10
         runtime.unsafeRun {
-          // UIO(println(s"ShardQueue: offerRecords for ${shardId} got ${r.size()} records")) *>
-          q.offerAll(r.asScala.map(Exit.succeed(_))).unit.catchSomeCause {
-            case c if c.interrupted => ZIO.unit
-          } // TODO what behavior do we want if the queue + substream are already shutdown for some reason..?
-          // UIO(println(s"ShardQueue: offerRecords for ${shardId} COMPLETE"))
+          UIO(println(s"ShardQueue: offerRecords for ${shardId} got ${r.size()} records")) *>
+            q.offerAll(r.asScala.map(Exit.succeed(_))).unit.catchSomeCause {
+              case c if c.interrupted => ZIO.unit
+            } *> // TODO what behavior do we want if the queue + substream are already shutdown for some reason..?
+            UIO(println(s"ShardQueue: offerRecords for ${shardId} COMPLETE"))
         }
 
       def shutdownQueue: UIO[Unit] =
-        // UIO(println(s"ShardQueue: shutdownQueue for ${shardId}")) *>
-        q.shutdown
+        UIO(println(s"ShardQueue: shutdownQueue for ${shardId}")) *>
+          q.shutdown
 
       /**
        * Shutdown processing for this shard
@@ -106,10 +107,15 @@ object DynamicConsumer {
        */
       def stop(reason: String): Unit =
         runtime.unsafeRun {
-          UIO(println(s"ShardQueue: stop() for ${shardId} because of ${reason}")).when(false) *>
-            q.takeAll.unit *>                // Clear the queue so it doesn't have to be drained fully
-            q.offer(Exit.fail(None)).unit <* // Pass an exit signal in the queue to stop the stream
-            q.awaitShutdown                  // Wait for the stream's end to 'bubble up', meaning all in-flight elements have been processed
+          UIO(println(s"ShardQueue: stop() for ${shardId} because of ${reason}")).when(true) *>
+            (
+              q.takeAll.unit *>                  // Clear the queue so it doesn't have to be drained fully
+                q.offer(Exit.fail(None)).unit <* // Pass an exit signal in the queue to stop the stream
+                q.awaitShutdown
+            ).race(
+              q.awaitShutdown
+            ) <* // Wait for the stream's end to 'bubble up', meaning all in-flight elements have been processed
+            UIO(println(s"ShardQueue: stop() for ${shardId} because of ${reason} - COMPLETE")).when(true)
           // TODO maybe we want to only do this when the main stream's completion has bubbled up..?
         }
     }
@@ -226,7 +232,7 @@ object DynamicConsumer {
                            .retrievalSpecificConfig(retrievalConfig(kinesisClient))
                        )
                      ).toManaged_
-        doShutdown = // UIO(println("Scheduler fib inner interrupted")) *>
+        doShutdown = // UIO(println("Starting graceful shutdown")) *>
                      ZIO.fromFutureJava(scheduler.startGracefulShutdown()).unit.orDie <*
                        queues.shutdown
         _         <- zio.blocking
@@ -247,7 +253,7 @@ object DynamicConsumer {
               .collectWhileSuccess
               .mapChunksM(_.mapM(toRecord(shardId, _)))
               .provide(env)
-              .ensuringFirst(UIO(println(s"$shardId - CHECKPOINT on ensuring")) *> checkpointer.checkpoint.orDie)
+              .ensuringFirst(checkpointer.checkpoint.catchSome { case e: ShutdownException => UIO.unit }.orDie)
 
             (shardId, stream, checkpointer)
         }
