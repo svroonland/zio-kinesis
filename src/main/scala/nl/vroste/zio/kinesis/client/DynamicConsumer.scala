@@ -39,8 +39,14 @@ object DynamicConsumer {
    * @param kinesisClientBuilder
    * @param cloudWatchClientBuilder
    * @param dynamoDbClientBuilder
+   * @param requestShutdown Effect that when completed will trigger a graceful shutdown of the KCL
+   *   and the streams.
+   * @param initialPosition Position in stream to start at when there is no previous checkpoint
+   *   for this application
    * @param isEnhancedFanOut Flag for setting retrieval config - defaults to `true`. If `false` polling config is set.
    * @param leaseTableName Optionally set the lease table name - defaults to None. If not specified the `applicationName` will be used.
+   * @param workerIdentifier Identifier used for the worker in this application group. Used in logging
+   *   and written to the lease table.
    * @param maxShardBufferSize The maximum number of records per shard to store in a queue before blocking
    *   the KCL record processor until records have been dequeued. Note that the stream returned from this
    *   method will have internal chunk buffers as well.

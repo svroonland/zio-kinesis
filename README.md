@@ -73,7 +73,7 @@ DynamicConsumer is built on `ZManaged` and therefore resource-safe: after stream
 
 ### Checkpointing
 
-You need to manually store checkpoints for all records that your application has processed. Kinesis works with sequence numbers instead of something like ACKs; checkpointing for sequence number X means 'all records up to and including X'. Therefore you don't have to checkpoint each individual record, periodic checkpointing is sufficient.
+You need to manually checkpoints records that your application has processed so far. Kinesis works with sequence numbers instead of something like ACKs; checkpointing for sequence number X means 'all records up to and including X'. Therefore you don't have to checkpoint each individual record, periodic checkpointing is sufficient.
 
 In fact, it is [recommended](https://github.com/awslabs/amazon-kinesis-client/blob/master/amazon-kinesis-client/src/main/java/software/amazon/kinesis/processor/RecordProcessorCheckpointer.java#L35)
 not to checkpoint too frequently. It depends on your application and stream volume what is a good checkpoint frequency. 
