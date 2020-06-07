@@ -100,15 +100,12 @@ class Client(val kinesisClient: KinesisAsyncClient) {
   /**
    * Creates a `ZStream` of the records in the given shard
    *
-   * Records are deserialized to values of type `T`
-   *
    * Subscriptions are valid for only 5 minutes and should be renewed by the caller with
    * an up to date starting position.
    *
    * @param consumerARN
    * @param shardID
    * @param startingPosition
-   * @param deserializer Converter of record's data bytes to a value of type T
    * @tparam R Environment required by the deserializer
    * @tparam T Type of values
    * @return Stream of records. When exceptions occur in the subscription or the streaming, the
@@ -117,9 +114,8 @@ class Client(val kinesisClient: KinesisAsyncClient) {
   def subscribeToShard[R, T](
     consumerARN: String,
     shardID: String,
-    startingPosition: ShardIteratorType,
-    deserializer: Deserializer[R, T]
-  ): ZStream[R, Throwable, ConsumerRecord[T]] = {
+    startingPosition: ShardIteratorType
+  ): ZStream[R, Throwable, ConsumerRecord] = {
 
     val b = StartingPosition.builder()
 
@@ -154,17 +150,15 @@ class Client(val kinesisClient: KinesisAsyncClient) {
         _                <- subscribeResponse.unit race streamP.await
         stream           <- streamP.await
       } yield stream
-    }.flatMap(identity).mapM { record =>
-      deserializer.deserialize(record.data().asByteBuffer()).map { data =>
-        ConsumerRecord(
-          record.sequenceNumber(),
-          record.approximateArrivalTimestamp(),
-          data,
-          record.partitionKey(),
-          record.encryptionType(),
-          shardID
-        )
-      }
+    }.flatMap(identity).map { record =>
+      ConsumerRecord(
+        record.sequenceNumber(),
+        record.approximateArrivalTimestamp(),
+        record.data(),
+        record.partitionKey(),
+        record.encryptionType(),
+        shardID
+      )
     }
   }
 
@@ -273,10 +267,10 @@ object Client {
       ZIO.effect(builder.build())
     }.map(new Client(_))
 
-  case class ConsumerRecord[T](
+  case class ConsumerRecord(
     sequenceNumber: String,
     approximateArrivalTimestamp: Instant,
-    data: T,
+    data: SdkBytes,
     partitionKey: String,
     encryptionType: EncryptionType,
     shardID: String
