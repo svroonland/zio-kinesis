@@ -105,17 +105,6 @@ DynamicConsumer
 ```
 
 Checkpointing may fail with a `ShutdownException` when another worker has stolen the lease for a shard. Your application should handle this, otherwise your stream will fail with this exception. Note that the shard stream may still emit some buffered records in this situation, before it is completed. 
- 
-### Clean Shutdown
-It is nice to ensure that every record that is (side-effectfully) processed is checkpointed before the stream is shutdown. The method of shutdown is therefore important.
-
-Simply interrupting the fiber that is running the stream will terminate the stream, but will not guarantee that the last processed records have been checkpointed. Instead use the `requestShutdown` parameter of `DynamicCustomer.shardedStream` to pass a ZIO (or a Promise followed by `.await`) that completes when the stream should be shutdown. 
-
-Use `withGracefulShutdownOnInterrupt` from the `nl.vroste.zio.kinesis.client` package to help with this. See `src/test/scala/nl/vroste/zio/kinesis/client/ExampleApp.scala` for an example.
-
-It is also important that you perform checkpointing before merging the shard streams (using eg `flatMapPar`) to guarantee that the KCL has not taken away the lease for that shard when checkpointing. The example above does this correctly.
-
-Note that `plainStream` does not support this scheme, since it checkpoints after merging the shard streams. At shutdown, there may no longer be a valid lease for each of the shards. 
 
 ### Configuration
 By default `Client`, `AdminClient`, `DynamicConsumer` and `Producer` will load AWS credentials and regions via the [Default Credential/Region Provider](https://docs.aws.amazon.com/sdk-for-java/v1/developer-guide/credentials.html). Using the client builders, many parameters can be customized. Refer to the AWS documentation for more information.

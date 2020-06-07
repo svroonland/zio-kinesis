@@ -255,26 +255,6 @@ object DynamicConsumer {
     ZStream.unwrapManaged(schedulerM)
   }
 
-  /**
-   * Like [[shardedStream]], but merges all shards into one ZStream
-   */
-  def plainStream[R, T](
-    streamName: String,
-    applicationName: String,
-    deserializer: Deserializer[R, T],
-    kinesisClientBuilder: KinesisAsyncClientBuilder = KinesisAsyncClient.builder(),
-    cloudWatchClientBuilder: CloudWatchAsyncClientBuilder = CloudWatchAsyncClient.builder,
-    dynamoDbClientBuilder: DynamoDbAsyncClientBuilder = DynamoDbAsyncClient.builder()
-  ): ZStream[Blocking with R, Throwable, Record[T]] =
-    shardedStream(
-      streamName,
-      applicationName,
-      deserializer,
-      kinesisClientBuilder,
-      cloudWatchClientBuilder,
-      dynamoDbClientBuilder
-    ).flatMapPar(Int.MaxValue)(_._2)
-
   case class Record[T](
     shardId: String,
     sequenceNumber: String,
