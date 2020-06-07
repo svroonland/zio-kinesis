@@ -41,11 +41,17 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                    applicationName = applicationName,
                    deserializer = Serde.asciiString
                  )
-                 .flatMapPar(Int.MaxValue)(_._2)
+                 .flatMapPar(Int.MaxValue) {
+                   case (shardId @ _, shardStream, checkpointer) =>
+                     shardStream.tap(r =>
+                       putStrLn(s"Got record $r") *> checkpointer
+                         .checkpointNow(r)
+                         .retry(Schedule.exponential(100.millis))
+                     )
+                 }
                  .take(2)
-                 .tap(r => putStrLn(s"Got record $r") *> r.checkpoint.retry(Schedule.exponential(100.millis)))
                  .runCollect
-        } yield assertCompletes
+        } yield assertCompletes // TODO this assertion doesn't do what the test says
       }
     }
 
@@ -82,10 +88,12 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                 case (shardId, shardStream, checkpointer @ _) =>
                   shardStream.zipWithIndex.tap {
                     case (r: DynamicConsumer.Record[String], sequenceNumberForShard: Long) =>
-                      handler(shardId, r).as(r) <*
+                      handler(shardId, r)
+                        .as(r)
+                        .tap(checkpointer.stage) <*
                         (putStrLn(
                           s"Checkpointing at offset ${sequenceNumberForShard} in consumer ${workerIdentifier}, shard ${shardId}"
-                        ) *> r.checkpoint)
+                        ) *> checkpointer.checkpoint)
                           .when(sequenceNumberForShard % checkpointDivisor == checkpointDivisor - 1)
                           .tapError(_ =>
                             putStrLn(s"Failed to checkpoint in consumer ${workerIdentifier}, shard ${shardId}")
@@ -174,8 +182,8 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                    case (shardId, shardStream, checkpointer @ _) =>
                      shardStream
                        .tap(record => lastProcessedRecords.update(_ + (shardId -> record.sequenceNumber)))
-                       // equal to the checkpointed offset
-                       //                         .tap(r => putStrLn(s"Shard ${shardId} got record ${r.data}"))
+                       .tap(checkpointer.stage)
+                       // .tap(r => putStrLn(s"Shard ${shardId} got record ${r.data}"))
                        // It's important that the checkpointing is always done before flattening the stream, otherwise
                        // we cannot guarantee that the KCL has not yet shutdown the record processor and taken away the lease
                        .aggregateAsyncWithin(
@@ -185,7 +193,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                        .mapConcat(_.toList)
                        .tap { r =>
                          putStrLn(s"Shard ${r.shardId}: checkpointing for record $r") *>
-                           r.checkpoint
+                           checkpointer.checkpoint
                              .tapError(e => ZIO(println(s"Checkpointing failed: ${e}")))
                              .tap(_ => lastCheckpointedRecords.update(_ + (shardId -> r.sequenceNumber)))
                              .tap(_ => ZIO(println(s"Checkpointing for shard ${r.shardId} done")))

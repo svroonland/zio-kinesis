@@ -79,15 +79,15 @@ object DynamicConsumer {
     class ShardQueue(
       val shardId: String,
       runtime: zio.Runtime[Any],
-      val q: Queue[Exit[Option[Throwable], (KinesisClientRecord, RecordProcessorCheckpointer)]]
+      val q: Queue[Exit[Option[Throwable], KinesisClientRecord]]
     ) {
-      def offerRecords(r: java.util.List[KinesisClientRecord], checkpointer: RecordProcessorCheckpointer): Unit =
+      def offerRecords(r: java.util.List[KinesisClientRecord]): Unit =
         // Calls to q.offer will fail with an interruption error after the queue has been shutdown
         // TODO we must make sure never to throw an exception here, because KCL will delete the records
         // See https://github.com/awslabs/amazon-kinesis-client/issues/10
         runtime.unsafeRun {
           // UIO(println(s"ShardQueue: offerRecords for ${shardId} got ${r.size()} records")) *>
-          q.offerAll(r.asScala.map(r => Exit.succeed(r -> checkpointer))).unit.catchSomeCause {
+          q.offerAll(r.asScala.map(Exit.succeed(_))).unit.catchSomeCause {
             case c if c.interrupted => ZIO.unit
           } // TODO what behavior do we want if the queue + substream are already shutdown for some reason..?
           // UIO(println(s"ShardQueue: offerRecords for ${shardId} COMPLETE"))
@@ -115,13 +115,17 @@ object DynamicConsumer {
     }
 
     class ZioShardProcessor(queues: Queues) extends ShardRecordProcessor {
+      var shardId: String        = _
       var shardQueue: ShardQueue = _
 
       override def initialize(input: InitializationInput): Unit =
-        shardQueue = queues.newShard(input.shardId())
+        shardId = input.shardId()
 
-      override def processRecords(processRecordsInput: ProcessRecordsInput): Unit =
-        shardQueue.offerRecords(processRecordsInput.records(), processRecordsInput.checkpointer())
+      override def processRecords(processRecordsInput: ProcessRecordsInput): Unit = {
+        if (shardQueue == null)
+          shardQueue = queues.newShard(shardId, processRecordsInput.checkpointer())
+        shardQueue.offerRecords(processRecordsInput.records())
+      }
 
       override def leaseLost(leaseLostInput: LeaseLostInput): Unit =
         shardQueue.stop("lease lost")
@@ -137,15 +141,15 @@ object DynamicConsumer {
       private val runtime: zio.Runtime[Any],
       val shards: Queue[Exit[Option[Throwable], (String, ShardQueue, Checkpointer)]]
     ) {
-      def newShard(shard: String): ShardQueue =
+      def newShard(shard: String, checkpointer: RecordProcessorCheckpointer): ShardQueue =
         runtime.unsafeRun {
           for {
             queue        <- Queue
-                       .bounded[Exit[Option[Throwable], (KinesisClientRecord, RecordProcessorCheckpointer)]](
+                       .bounded[Exit[Option[Throwable], KinesisClientRecord]](
                          maxShardBufferSize
                        )
                        .map(new ShardQueue(shard, runtime, _))
-            checkpointer <- Checkpointer.make(shard)
+            checkpointer <- Checkpointer.make(shard, checkpointer)
             _            <- shards.offer(Exit.succeed((shard, queue, checkpointer))).unit
           } yield queue
         }
@@ -170,8 +174,7 @@ object DynamicConsumer {
 
     def toRecord(
       shardId: String,
-      r: KinesisClientRecord,
-      checkpointer: RecordProcessorCheckpointer
+      r: KinesisClientRecord
     ): ZIO[R, Throwable, Record[T]] =
       deserializer.deserialize(r.data()).map { data =>
         Record(
@@ -183,10 +186,7 @@ object DynamicConsumer {
           r.encryptionType(),
           r.subSequenceNumber(),
           r.explicitHashKey(),
-          r.aggregated(),
-          checkpoint = zio.blocking.blocking {
-            Task(checkpointer.checkpoint(r.sequenceNumber(), r.subSequenceNumber()))
-          }
+          r.aggregated()
         )
       }
 
@@ -245,9 +245,7 @@ object DynamicConsumer {
               .fromQueue(shardQueue.q)
               .ensuringFirst(shardQueue.shutdownQueue)
               .collectWhileSuccess
-              .mapChunksM { chunk =>
-                chunk.mapM { case (record, checkpointer) => toRecord(shardId, record, checkpointer) }
-              }
+              .mapChunksM(_.mapM(toRecord(shardId, _)))
               .provide(env)
               .ensuringFirst(UIO(println(s"$shardId - CHECKPOINT on ensuring")) *> checkpointer.checkpoint.orDie)
 
@@ -286,18 +284,7 @@ object DynamicConsumer {
     encryptionType: EncryptionType,
     subSequenceNumber: Long,
     explicitHashKey: String,
-    aggregated: Boolean,
-    /*
-     * Checkpoint the sequencenumber and subsequencenumber (if applicable) of this record
-     *
-     * Exceptions you should be prepared to handle:
-     * - [[software.amazon.kinesis.exceptions.ShutdownException]] when the lease for this shard has been lost, when
-     *   another worker has stolen the lease (this can happen at any time).
-     * - [[software.amazon.kinesis.exceptions.ThrottlingException]]
-     *
-     * See also [[RecordProcessorCheckpointer]]
-     */
-    checkpoint: ZIO[Blocking, Throwable, Unit]
+    aggregated: Boolean
   )
 
   type ShardStream[T] = ZStream[Any, Throwable, Record[T]]
@@ -312,12 +299,18 @@ object DynamicConsumer {
     /**
      * Stages a record for checkpointing
      *
-     * Checkpoints are not actually performed until flush is called.
+     * Checkpoints are not actually performed until `checkpoint` is called
      *
      * @param r Record to checkpoint
      * @return Effect that completes immediately
      */
     def stage(r: Record[_]): UIO[Unit]
+
+    /**
+     * Immediately checkpoint this record
+     */
+    def checkpointNow(r: Record[_]): ZIO[Blocking, Throwable, Unit] =
+      stage(r) *> checkpoint
 
     /**
      * Checkpoint the last staged checkpoint
@@ -333,17 +326,19 @@ object DynamicConsumer {
   }
 
   object Checkpointer {
-    private[client] def make(shardId: String): UIO[Checkpointer] =
+    private[client] def make(shardId: String, kclCheckpointer: RecordProcessorCheckpointer): UIO[Checkpointer] =
       for {
-        latest <- Ref.make[Option[Record[_]]](None)
+        latestStaged <- Ref.make[Option[Record[_]]](None)
       } yield new Checkpointer {
         override def stage(r: Record[_]): UIO[Unit] =
-          latest.set(Some(r))
+          latestStaged.set(Some(r))
 
         override def checkpoint: ZIO[Blocking, Throwable, Unit] =
-          latest.get.flatMap {
+          latestStaged.get.flatMap {
             case Some(record) =>
-              record.checkpoint *> latest.update {
+              zio.blocking.blocking {
+                Task(kclCheckpointer.checkpoint(record.sequenceNumber, record.subSequenceNumber))
+              } *> latestStaged.update {
                 case Some(r) if r == record => None
                 case r                      => r // A newer record may have been staged by now
               }
