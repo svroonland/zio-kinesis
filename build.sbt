@@ -22,7 +22,7 @@ inThisBuild(
     crossScalaVersions := allScala,
     parallelExecution in Test := false,
     cancelable in Global := true,
-    fork in Test := true,
+    fork in Test := false,
     fork in run := true,
     publishMavenStyle := true,
     publishArtifact in Test :=
