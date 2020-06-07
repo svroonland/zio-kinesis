@@ -76,9 +76,14 @@ DynamicConsumer is built on `ZManaged` and therefore resource-safe: after stream
 You need to manually checkpoints records that your application has processed so far. Kinesis works with sequence numbers instead of something like ACKs; checkpointing for sequence number X means 'all records up to and including X'. Therefore you don't have to checkpoint each individual record, periodic checkpointing is sufficient.
 
 In fact, it is [recommended](https://github.com/awslabs/amazon-kinesis-client/blob/master/amazon-kinesis-client/src/main/java/software/amazon/kinesis/processor/RecordProcessorCheckpointer.java#L35)
-not to checkpoint too frequently. It depends on your application and stream volume what is a good checkpoint frequency. 
+not to checkpoint too frequently. It depends on your application and stream volume what is a good checkpoint frequency (in terms of number of records and/or interval). ZStream's `aggregateAsyncWithin` is useful for such a checkpointing scheme.
 
-ZStream's `aggregateAsyncWithin` is useful for such a checkpointing scheme. In this example, checkpointing is done for each shard once per second.
+`zio-kinesis` has some mechanisms to improve checkpointing safety in the case of interruption or failures:
+
+* To guarantee that the last processed records is checkpointed when the stream shuts down, because of failure or interruption for example, checkpoints for every record should be staged by calling `checkpointer.stage(record)`. A periodic call to `checkpointer.checkpoint` will 'flush' the last staged checkpoint.
+* To ensure that processing of a record is always followed by a checkpoint stage, even in the face of fiber interruption, use the utility method `Checkpointer.stageOnSuccess(processingEffect)(r)`. 
+
+The example below shows how to combine this and checkpoint every max every 500 records or 1 second, whichever comes sooner:
 
 ```scala
 DynamicConsumer
@@ -88,12 +93,13 @@ DynamicConsumer
     deserializer = Serde.byteBuffer
   )
   .flatMapPar(maxParallel) {
-    case (shardId: String, shardStream: ZStream[Any, Throwable, DynamicConsumer.Record[ByteBuffer]]) =>
+    case (shardId: String, shardStream: ZStream[Any, Throwable, DynamicConsumer.Record[ByteBuffer]], checkpointer: Checkpointer) =>
       shardStream
-        .tap { record => handler(shardId, record) }
-        .aggregateAsyncWithin(ZTransducer.last, Schedule.fixed(1.second))
+        .tap { record => checkpointer.stageOnSuccess(processMyRecord(shardId, record))(record) }
+        .as(())
+        .aggregateAsyncWithin(ZTransducer.collectAllN(500), Schedule.fixed(1.second))
         .mapConcat(_.toList)
-        .tap(r => r.checkpoint)
+        .tap(_ => checkpointer.checkpoint)
   }
   .runDrain 
 ```
