@@ -87,16 +87,16 @@ object DynamicConsumer {
         // TODO we must make sure never to throw an exception here, because KCL will delete the records
         // See https://github.com/awslabs/amazon-kinesis-client/issues/10
         runtime.unsafeRun {
-          UIO(println(s"ShardQueue: offerRecords for ${shardId} got ${r.size()} records")) *>
-            q.offerAll(r.asScala.map(Exit.succeed(_))).unit.catchSomeCause {
-              case c if c.interrupted => ZIO.unit
-            } *> // TODO what behavior do we want if the queue + substream are already shutdown for some reason..?
-            UIO(println(s"ShardQueue: offerRecords for ${shardId} COMPLETE"))
+          // UIO(println(s"ShardQueue: offerRecords for ${shardId} got ${r.size()} records")) *>
+          q.offerAll(r.asScala.map(Exit.succeed(_))).unit.catchSomeCause {
+            case c if c.interrupted => ZIO.unit
+          } // TODO what behavior do we want if the queue + substream are already shutdown for some reason..?
+          // UIO(println(s"ShardQueue: offerRecords for ${shardId} COMPLETE"))
         }
 
       def shutdownQueue: UIO[Unit] =
-        UIO(println(s"ShardQueue: shutdownQueue for ${shardId}")) *>
-          q.shutdown
+        // UIO(println(s"ShardQueue: shutdownQueue for ${shardId}")) *>
+        q.shutdown
 
       /**
        * Shutdown processing for this shard
@@ -107,15 +107,15 @@ object DynamicConsumer {
        */
       def stop(reason: String): Unit =
         runtime.unsafeRun {
-          UIO(println(s"ShardQueue: stop() for ${shardId} because of ${reason}")).when(true) *>
+          UIO(println(s"ShardQueue: stop() for ${shardId} because of ${reason}")).when(false) *>
             (
               q.takeAll.unit *>                  // Clear the queue so it doesn't have to be drained fully
                 q.offer(Exit.fail(None)).unit <* // Pass an exit signal in the queue to stop the stream
-                q.awaitShutdown
+                q.awaitShutdown                  // Wait for the stream's end to 'bubble up', meaning all in-flight elements have been processed
             ).race(
               q.awaitShutdown
-            ) <* // Wait for the stream's end to 'bubble up', meaning all in-flight elements have been processed
-            UIO(println(s"ShardQueue: stop() for ${shardId} because of ${reason} - COMPLETE")).when(true)
+            ) <*
+            UIO(println(s"ShardQueue: stop() for ${shardId} because of ${reason} - COMPLETE")).when(false)
           // TODO maybe we want to only do this when the main stream's completion has bubbled up..?
         }
     }

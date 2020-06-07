@@ -80,7 +80,7 @@ not to checkpoint too frequently. It depends on your application and stream volu
 
 `zio-kinesis` has some mechanisms to improve checkpointing safety in the case of interruption or failures:
 
-* To guarantee that the last processed records is checkpointed when the stream shuts down, because of failure or interruption for example, checkpoints for every record should be staged by calling `checkpointer.stage(record)`. A periodic call to `checkpointer.checkpoint` will 'flush' the last staged checkpoint.
+* To guarantee that the last processed record is checkpointed when the stream shuts down, because of failure or interruption for example, checkpoints for every record should be staged by calling `checkpointer.stage(record)`. A periodic call to `checkpointer.checkpoint` will 'flush' the last staged checkpoint.
 * To ensure that processing of a record is always followed by a checkpoint stage, even in the face of fiber interruption, use the utility method `Checkpointer.stageOnSuccess(processingEffect)(r)`. 
 
 The example below shows how to combine this and checkpoint every max every 500 records or 1 second, whichever comes sooner:
