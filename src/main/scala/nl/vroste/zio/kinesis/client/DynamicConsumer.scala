@@ -273,8 +273,6 @@ object DynamicConsumer {
     aggregated: Boolean
   )
 
-  type ShardStream[T] = ZStream[Any, Throwable, Record[T]]
-
   /**
    * Staging area for checkpoints
    *
