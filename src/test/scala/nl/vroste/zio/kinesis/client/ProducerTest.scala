@@ -4,11 +4,7 @@ import java.util.UUID
 
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.serde.Serde
-import software.amazon.awssdk.services.kinesis.model.{
-  KinesisException,
-  ResourceInUseException,
-  ResourceNotFoundException
-}
+import software.amazon.awssdk.services.kinesis.model.KinesisException
 import zio.clock.Clock
 import zio.console._
 import zio.duration._
@@ -18,24 +14,7 @@ import zio.test._
 import zio.{ Chunk, ZIO }
 
 object ProducerTest extends DefaultRunnableSpec {
-  val createStream = (streamName: String, nrShards: Int) =>
-    for {
-      adminClient <- AdminClient.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
-      _           <- adminClient
-             .createStream(streamName, nrShards)
-             .catchSome {
-               case _: ResourceInUseException =>
-                 putStrLn("Stream already exists")
-             }
-             .toManaged { _ =>
-               adminClient
-                 .deleteStream(streamName, enforceConsumerDeletion = true)
-                 .catchSome {
-                   case _: ResourceNotFoundException => ZIO.unit
-                 }
-                 .orDie
-             }
-    } yield ()
+  import TestUtil._
 
   def spec =
     suite("Producer")(

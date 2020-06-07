@@ -17,6 +17,7 @@ import software.amazon.awssdk.services.cloudwatch.{ CloudWatchAsyncClient, Cloud
 import software.amazon.awssdk.services.dynamodb.{ DynamoDbAsyncClient, DynamoDbAsyncClientBuilder }
 import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyncClientBuilder }
 import software.amazon.awssdk.utils.AttributeMap
+import zio.UIO
 import zio.blocking.Blocking
 import zio.stream.ZStream
 
@@ -70,7 +71,8 @@ object LocalStackDynamicConsumer {
     streamName: String,
     applicationName: String,
     deserializer: Deserializer[R, T],
-    workerIdentifier: String = UUID.randomUUID().toString
+    workerIdentifier: String = UUID.randomUUID().toString,
+    requestShutdown: UIO[Unit] = UIO.never
   ): ZStream[Blocking with R, Throwable, (String, ZStream[Any, Throwable, DynamicConsumer.Record[T]])] =
     DynamicConsumer.shardedStream(
       streamName,
@@ -80,7 +82,8 @@ object LocalStackDynamicConsumer {
       cloudWatchClientBuilder,
       dynamoDbClientBuilder,
       isEnhancedFanOut = false,
-      workerIdentifier = workerIdentifier
+      workerIdentifier = workerIdentifier,
+      requestShutdown = requestShutdown
     )
 
 }
