@@ -253,7 +253,7 @@ object DynamicConsumer {
               .collectWhileSuccess
               .mapChunksM(_.mapM(toRecord(shardId, _)))
               .provide(env)
-              .ensuringFirst(checkpointer.checkpoint.catchSome { case e: ShutdownException => UIO.unit }.orDie)
+              .ensuringFirst(checkpointer.checkpoint.catchSome { case _: ShutdownException => UIO.unit }.orDie)
 
             (shardId, stream, checkpointer)
         }
