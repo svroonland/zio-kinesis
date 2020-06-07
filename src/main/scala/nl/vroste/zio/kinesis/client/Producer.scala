@@ -13,6 +13,7 @@ import zio.stream.{ ZSink, ZStream, ZTransducer }
 
 import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
+import scala.collection.immutable.Nil
 
 /**
  * Producer for Kinesis records
@@ -96,8 +97,10 @@ object Producer {
                ZTransducer.fold(PutRecordsBatch.empty)(_.isWithinLimits)(_.add(_)),
                Schedule.spaced(settings.maxBufferDuration)
              )
+             .map(_.removeLastAdded) // Because ZTransducer.fold will include the entry that was just over the limit
              // Several putRecords requests in parallel
              .mapMPar(settings.maxParallelRequests) { batch: PutRecordsBatch =>
+               println(s"PRODUCING BATCH OF SIZE ${batch.entries.size}")
                (for {
                  response              <- client
                                .putRecords(streamName, batch.entries.map(_.r))
@@ -181,20 +184,35 @@ object Producer {
   )
 
   private final case class PutRecordsBatch(entries: List[ProduceRequest], nrRecords: Int, payloadSize: Long) {
+    import PutRecordsBatch.payloadSizeForEntry
     def add(entry: ProduceRequest): PutRecordsBatch =
       copy(
         entries = entry +: entries,
         nrRecords = nrRecords + 1,
-        payloadSize = payloadSize + entry.r.partitionKey().length + entry.r.data().asByteArray().length
+        payloadSize = payloadSize + payloadSizeForEntry(entry)
       )
 
     def isWithinLimits =
       nrRecords <= maxRecordsPerRequest &&
-        payloadSize < maxPayloadSizePerRequest
+        payloadSize <= maxPayloadSizePerRequest
+
+    def removeLastAdded: PutRecordsBatch =
+      entries match {
+        case head :: tail =>
+          copy(
+            entries = tail,
+            nrRecords = nrRecords - 1,
+            payloadSize = payloadSize - payloadSizeForEntry(head)
+          )
+        case Nil          => this
+      }
   }
 
   private object PutRecordsBatch {
     val empty = PutRecordsBatch(List.empty, 0, 0)
+
+    def payloadSizeForEntry(entry: ProduceRequest) =
+      entry.r.partitionKey().length + entry.r.data().asByteArray().length
   }
 
   private final def scheduleCatchRecoverable: Schedule[Any, Throwable, Throwable] =
