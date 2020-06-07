@@ -342,7 +342,11 @@ object DynamicConsumer {
 
         override def checkpoint: ZIO[Blocking, Throwable, Unit] =
           latest.get.flatMap {
-            case Some(record) => record.checkpoint *> latest.set(None)
+            case Some(record) =>
+              record.checkpoint *> latest.update {
+                case Some(r) if r == record => None
+                case r                      => r // A newer record may have been staged by now
+              }
             case None         => UIO.unit
           }
       }
