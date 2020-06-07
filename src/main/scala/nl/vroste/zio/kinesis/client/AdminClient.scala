@@ -4,7 +4,7 @@ import java.time.Instant
 import nl.vroste.zio.kinesis.client.Util.{ asZIO, paginatedRequest }
 import software.amazon.awssdk.services.kinesis.model._
 import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyncClientBuilder }
-import zio._
+import zio.{ Chunk, Schedule, Task, ZIO, ZManaged }
 import zio.clock.Clock
 import zio.duration._
 import zio.interop.reactivestreams._

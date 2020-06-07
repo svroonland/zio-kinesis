@@ -83,13 +83,13 @@ class Client(val kinesisClient: KinesisAsyncClient) {
       .shardId(shardId)
 
     val request = iteratorType match {
-      case ShardIteratorType.Latest      => b.shardIteratorType(JIteratorType.LATEST)
-      case ShardIteratorType.TrimHorizon => b.shardIteratorType(JIteratorType.TRIM_HORIZON)
-      case ShardIteratorType.AtSequenceNumber(sequenceNumber) =>
+      case ShardIteratorType.Latest                              => b.shardIteratorType(JIteratorType.LATEST)
+      case ShardIteratorType.TrimHorizon                         => b.shardIteratorType(JIteratorType.TRIM_HORIZON)
+      case ShardIteratorType.AtSequenceNumber(sequenceNumber)    =>
         b.shardIteratorType(JIteratorType.AT_SEQUENCE_NUMBER).startingSequenceNumber(sequenceNumber)
       case ShardIteratorType.AfterSequenceNumber(sequenceNumber) =>
         b.shardIteratorType(JIteratorType.AFTER_SEQUENCE_NUMBER).startingSequenceNumber(sequenceNumber)
-      case ShardIteratorType.AtTimestamp(timestamp) =>
+      case ShardIteratorType.AtTimestamp(timestamp)              =>
         b.shardIteratorType(JIteratorType.AT_TIMESTAMP).timestamp(timestamp)
     }
 
@@ -124,13 +124,13 @@ class Client(val kinesisClient: KinesisAsyncClient) {
     val b = StartingPosition.builder()
 
     val jStartingPosition = startingPosition match {
-      case ShardIteratorType.Latest      => b.`type`(JIteratorType.LATEST)
-      case ShardIteratorType.TrimHorizon => b.`type`(JIteratorType.TRIM_HORIZON)
-      case ShardIteratorType.AtSequenceNumber(sequenceNumber) =>
+      case ShardIteratorType.Latest                              => b.`type`(JIteratorType.LATEST)
+      case ShardIteratorType.TrimHorizon                         => b.`type`(JIteratorType.TRIM_HORIZON)
+      case ShardIteratorType.AtSequenceNumber(sequenceNumber)    =>
         b.`type`(JIteratorType.AT_SEQUENCE_NUMBER).sequenceNumber(sequenceNumber)
       case ShardIteratorType.AfterSequenceNumber(sequenceNumber) =>
         b.`type`(JIteratorType.AFTER_SEQUENCE_NUMBER).sequenceNumber(sequenceNumber)
-      case ShardIteratorType.AtTimestamp(timestamp) =>
+      case ShardIteratorType.AtTimestamp(timestamp)              =>
         b.`type`(JIteratorType.AT_TIMESTAMP).timestamp(timestamp)
     }
 
@@ -140,19 +140,19 @@ class Client(val kinesisClient: KinesisAsyncClient) {
         runtime <- ZIO.runtime[Any]
 
         subscribeResponse = asZIO {
-          kinesisClient.subscribeToShard(
-            SubscribeToShardRequest
-              .builder()
-              .consumerARN(consumerARN)
-              .shardId(shardID)
-              .startingPosition(jStartingPosition.build())
-              .build(),
-            subscribeToShardResponseHandler(runtime, streamP)
-          )
-        }
+                              kinesisClient.subscribeToShard(
+                                SubscribeToShardRequest
+                                  .builder()
+                                  .consumerARN(consumerARN)
+                                  .shardId(shardID)
+                                  .startingPosition(jStartingPosition.build())
+                                  .build(),
+                                subscribeToShardResponseHandler(runtime, streamP)
+                              )
+                            }
         // subscribeResponse only completes with failure, not with success. It does not contain information of value anyway
-        _      <- subscribeResponse.unit race streamP.await
-        stream <- streamP.await
+        _                <- subscribeResponse.unit race streamP.await
+        stream           <- streamP.await
       } yield stream
     }.flatMap(identity).mapM { record =>
       deserializer.deserialize(record.data().asByteBuffer()).map { data =>
@@ -219,13 +219,13 @@ class Client(val kinesisClient: KinesisAsyncClient) {
   ): ZIO[R, Throwable, PutRecordResponse] =
     for {
       dataBytes <- serializer.serialize(r.data)
-      request = PutRecordRequest
-        .builder()
-        .streamName(streamName)
-        .partitionKey(r.partitionKey)
-        .data(SdkBytes.fromByteBuffer(dataBytes))
-        .build()
-      response <- putRecord(request)
+      request    = PutRecordRequest
+                  .builder()
+                  .streamName(streamName)
+                  .partitionKey(r.partitionKey)
+                  .data(SdkBytes.fromByteBuffer(dataBytes))
+                  .build()
+      response  <- putRecord(request)
     } yield response
 
   def putRecords[R, T](
@@ -235,11 +235,15 @@ class Client(val kinesisClient: KinesisAsyncClient) {
   ): ZIO[R, Throwable, PutRecordsResponse] =
     for {
       recordsAndBytes <- ZIO.foreach(records)(r => serializer.serialize(r.data).map((_, r.partitionKey)))
-      entries = recordsAndBytes.map {
-        case (data, partitionKey) =>
-          PutRecordsRequestEntry.builder().data(SdkBytes.fromByteBuffer(data)).partitionKey(partitionKey).build()
-      }
-      response <- putRecords(streamName, entries)
+      entries          = recordsAndBytes.map {
+                  case (data, partitionKey) =>
+                    PutRecordsRequestEntry
+                      .builder()
+                      .data(SdkBytes.fromByteBuffer(data))
+                      .partitionKey(partitionKey)
+                      .build()
+                }
+      response        <- putRecords(streamName, entries)
     } yield response
 
   def putRecords(streamName: String, entries: List[PutRecordsRequestEntry]): Task[PutRecordsResponse] =
@@ -301,7 +305,7 @@ private object Util {
     ZStream.fromEffect(fetch(None)).flatMap {
       case (results, nextTokenOpt) =>
         ZStream.succeed(results) ++ (nextTokenOpt match {
-          case None => ZStream.empty
+          case None            => ZStream.empty
           case Some(nextToken) =>
             ZStream.paginateM[R, E, A, Token](nextToken)(token => fetch(Some(token))).scheduleElements(throttling)
         })
