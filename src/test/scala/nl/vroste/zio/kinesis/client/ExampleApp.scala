@@ -29,8 +29,7 @@ object ExampleApp extends zio.App {
              .flatMapPar(Int.MaxValue) {
                case (shardID, shardStream, checkpointer) =>
                  shardStream
-                   .tap(r => putStrLn(s"Got record $r")) // .delay(100.millis))
-                   .tap(checkpointer.stage)
+                   .tap(r => checkpointer.stageOnSuccess(putStrLn(s"Processing record $r"))(r)) // .delay(100.millis))
                    .aggregateAsyncWithin(ZTransducer.last, Schedule.fixed(1.second))
                    .mapConcat(_.toList)
                    .tap { _ =>

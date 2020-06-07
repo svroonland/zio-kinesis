@@ -307,10 +307,19 @@ object DynamicConsumer {
     def stage(r: Record[_]): UIO[Unit]
 
     /**
-     * Immediately checkpoint this record
+     * Helper method that ensures that a checkpoint is staged when 'effect' completes
+     * successfully, even when the fiber is interrupted. When 'effect' fails or is itself
+     * interrupted, the checkpoint is not staged.
+     *
+     * @param effect Effect to execute
+     * @param r Record to stage a checkpoint for
+     * @return Effect that completes with the result of 'effect'
      */
-    def checkpointNow(r: Record[_]): ZIO[Blocking, Throwable, Unit] =
-      stage(r) *> checkpoint
+    def stageOnSuccess[R, E, A](effect: ZIO[R, E, A])(r: Record[_]): ZIO[R, E, A] =
+      effect.onExit {
+        case Exit.Success(_) => stage(r)
+        case _               => UIO.unit
+      }
 
     /**
      * Checkpoint the last staged checkpoint
@@ -323,6 +332,12 @@ object DynamicConsumer {
      * See also [[RecordProcessorCheckpointer]]
      */
     def checkpoint: ZIO[Blocking, Throwable, Unit]
+
+    /**
+     * Immediately checkpoint this record
+     */
+    def checkpointNow(r: Record[_]): ZIO[Blocking, Throwable, Unit] =
+      stage(r) *> checkpoint
   }
 
   object Checkpointer {

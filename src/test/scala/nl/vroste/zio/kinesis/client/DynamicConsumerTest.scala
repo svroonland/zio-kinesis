@@ -88,9 +88,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                 case (shardId, shardStream, checkpointer @ _) =>
                   shardStream.zipWithIndex.tap {
                     case (r: DynamicConsumer.Record[String], sequenceNumberForShard: Long) =>
-                      handler(shardId, r)
-                        .as(r)
-                        .tap(checkpointer.stage) <*
+                      checkpointer.stageOnSuccess(handler(shardId, r))(r).as(r) <*
                         (putStrLn(
                           s"Checkpointing at offset ${sequenceNumberForShard} in consumer ${workerIdentifier}, shard ${shardId}"
                         ) *> checkpointer.checkpoint)
