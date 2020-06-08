@@ -100,6 +100,10 @@ DynamicConsumer
         .aggregateAsyncWithin(ZTransducer.collectAllN(500), Schedule.fixed(1.second))
         .mapConcat(_.toList)
         .tap(_ => checkpointer.checkpoint)
+        .catchSome {
+          // This happens when the lease for the shard is lost. Best we can do is end the stream.
+          case _: ShutdownException => ZStream.empty
+        }
   }
   .runDrain 
 ```

@@ -8,6 +8,7 @@ import zio.console._
 import zio.duration._
 import zio.stream.{ ZStream, ZTransducer }
 import zio.{ Chunk, ExitCode, Schedule, ZIO }
+import software.amazon.kinesis.exceptions.ShutdownException
 
 object ExampleApp extends zio.App {
 
@@ -34,6 +35,10 @@ object ExampleApp extends zio.App {
                    .mapConcat(_.toList)
                    .tap { _ =>
                      putStrLn(s"Checkpointing ${shardID}") *> checkpointer.checkpoint
+                   }
+                   .catchSome {
+                     // This happens when the lease for the shard is lost. Best we can do is end the stream.
+                     case _: ShutdownException => ZStream.empty
                    }
              }
              .runCollect
