@@ -9,6 +9,7 @@ import zio.duration._
 import zio.stream.{ ZStream, ZTransducer }
 import zio.{ Chunk, ExitCode, Schedule, ZIO }
 import software.amazon.kinesis.exceptions.ShutdownException
+import zio.UIO
 
 object ExampleApp extends zio.App {
 
@@ -18,37 +19,45 @@ object ExampleApp extends zio.App {
 
     val streamName = "zio-test-stream-" + UUID.randomUUID().toString
 
-    for {
-      _ <- TestUtil.createStreamUnmanaged(streamName, 10)
-      _ <- produceRecords(streamName, 20000).fork
-      _ <- LocalStackDynamicConsumer
-             .shardedStream(
-               streamName,
-               applicationName = "testApp-" + UUID.randomUUID().toString(),
-               deserializer = Serde.asciiString
-             )
-             .flatMapPar(Int.MaxValue) {
-               case (shardID, shardStream, checkpointer) =>
-                 shardStream
-                   .tap(r => checkpointer.stageOnSuccess(putStrLn(s"Processing record $r"))(r)) // .delay(100.millis))
-                   .aggregateAsyncWithin(ZTransducer.last, Schedule.fixed(1.second))
-                   .mapConcat(_.toList)
-                   .tap { _ =>
-                     putStrLn(s"Checkpointing ${shardID}") *> checkpointer.checkpoint
-                   }
-                   .catchSome {
-                     // This happens when the lease for the shard is lost. Best we can do is end the stream.
-                     case _: ShutdownException => ZStream.empty
-                   }
-             }
-             .runCollect
-             .fork
-      _ <- putStrLn("App started")
-      _ <- ZIO.unit.delay(15.seconds)
-      _ <- putStrLn("Exiting app")
-
-    } yield ExitCode.success
-  }.orDie
+    (for {
+      client      <- Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
+      adminClient <- AdminClient.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
+    } yield (client, adminClient)).use {
+      case (client, adminClient) =>
+        for {
+          _ <- TestUtil.createStreamUnmanaged(streamName, 10)
+          _ <- produceRecords(streamName, 20000).fork
+          _ <- UIO(println("Starting native consumer"))
+          _ <- native.Consumer
+                 .shardedStream(
+                   client,
+                   adminClient,
+                   streamName,
+                   applicationName = "testApp-" + UUID.randomUUID().toString(),
+                   deserializer = Serde.asciiString
+                 )
+                 .flatMapPar(Int.MaxValue) {
+                   case (shardID, shardStream, checkpointer) =>
+                     shardStream
+                       .tap(r =>
+                         checkpointer
+                           .stageOnSuccess(putStrLn(s"Processing record $r"))(r)
+                           .delay(100.millis)
+                       )
+                       .aggregateAsyncWithin(ZTransducer.last, Schedule.fixed(1.second))
+                       .mapConcat(_.toList)
+                       .tap { _ =>
+                         putStrLn(s"Checkpointing ${shardID}") *> checkpointer.checkpoint
+                       }
+                       .catchSome {
+                         // This happens when the lease for the shard is lost. Best we can do is end the stream.
+                         case _: ShutdownException => ZStream.empty
+                       }
+                 }
+                 .runCollect
+        } yield ExitCode.success
+    }.orDie
+  }
 
   def produceRecords(streamName: String, nrRecords: Int) =
     (for {

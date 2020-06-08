@@ -47,6 +47,7 @@ object LocalStackDynamicConsumer {
 
   val kinesisAsyncClientBuilder: KinesisAsyncClientBuilder = {
     System.setProperty(SdkSystemSetting.CBOR_ENABLED.property, "false")
+
     KinesisAsyncClient
       .builder()
       .credentialsProvider(credsProvider)

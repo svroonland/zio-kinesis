@@ -198,6 +198,16 @@ class Client(val kinesisClient: KinesisAsyncClient) {
     asZIO(kinesisClient.deregisterStreamConsumer(request)).unit
   }
 
+  def getRecords(shardIterator: String, limit: Int): Task[GetRecordsResponse] = {
+    val request = GetRecordsRequest
+      .builder()
+      .shardIterator(shardIterator)
+      .limit(limit)
+      .build()
+
+    asZIO(kinesisClient.getRecords(request))
+  }
+
   private def putRecord(request: PutRecordRequest): Task[PutRecordResponse] =
     asZIO(kinesisClient.putRecord(request))
 
