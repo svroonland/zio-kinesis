@@ -76,9 +76,14 @@ DynamicConsumer is built on `ZManaged` and therefore resource-safe: after stream
 You need to manually checkpoints records that your application has processed so far. Kinesis works with sequence numbers instead of something like ACKs; checkpointing for sequence number X means 'all records up to and including X'. Therefore you don't have to checkpoint each individual record, periodic checkpointing is sufficient.
 
 In fact, it is [recommended](https://github.com/awslabs/amazon-kinesis-client/blob/master/amazon-kinesis-client/src/main/java/software/amazon/kinesis/processor/RecordProcessorCheckpointer.java#L35)
-not to checkpoint too frequently. It depends on your application and stream volume what is a good checkpoint frequency. 
+not to checkpoint too frequently. It depends on your application and stream volume what is a good checkpoint frequency (in terms of number of records and/or interval). ZStream's `aggregateAsyncWithin` is useful for such a checkpointing scheme.
 
-ZStream's `aggregateAsyncWithin` is useful for such a checkpointing scheme. In this example, checkpointing is done for each shard once per second.
+`zio-kinesis` has some mechanisms to improve checkpointing safety in the case of interruption or failures:
+
+* To guarantee that the last processed record is checkpointed when the stream shuts down, because of failure or interruption for example, checkpoints for every record should be staged by calling `checkpointer.stage(record)`. A periodic call to `checkpointer.checkpoint` will 'flush' the last staged checkpoint.
+* To ensure that processing of a record is always followed by a checkpoint stage, even in the face of fiber interruption, use the utility method `Checkpointer.stageOnSuccess(processingEffect)(r)`. 
+
+The example below shows how to combine this and checkpoint every max every 500 records or 1 second, whichever comes sooner:
 
 ```scala
 DynamicConsumer
@@ -88,28 +93,22 @@ DynamicConsumer
     deserializer = Serde.byteBuffer
   )
   .flatMapPar(maxParallel) {
-    case (shardId: String, shardStream: ZStream[Any, Throwable, DynamicConsumer.Record[ByteBuffer]]) =>
+    case (shardId: String, shardStream: ZStream[Any, Throwable, DynamicConsumer.Record[ByteBuffer]], checkpointer: Checkpointer) =>
       shardStream
-        .tap { record => handler(shardId, record) }
-        .aggregateAsyncWithin(ZTransducer.last, Schedule.fixed(1.second))
+        .tap { record => checkpointer.stageOnSuccess(processMyRecord(shardId, record))(record) }
+        .as(())
+        .aggregateAsyncWithin(ZTransducer.collectAllN(500), Schedule.fixed(1.second))
         .mapConcat(_.toList)
-        .tap(r => r.checkpoint)
+        .tap(_ => checkpointer.checkpoint)
+        .catchSome {
+          // This happens when the lease for the shard is lost. Best we can do is end the stream.
+          case _: ShutdownException => ZStream.empty
+        }
   }
   .runDrain 
 ```
 
 Checkpointing may fail with a `ShutdownException` when another worker has stolen the lease for a shard. Your application should handle this, otherwise your stream will fail with this exception. Note that the shard stream may still emit some buffered records in this situation, before it is completed. 
- 
-### Clean Shutdown
-It is nice to ensure that every record that is (side-effectfully) processed is checkpointed before the stream is shutdown. The method of shutdown is therefore important.
-
-Simply interrupting the fiber that is running the stream will terminate the stream, but will not guarantee that the last processed records have been checkpointed. Instead use the `requestShutdown` parameter of `DynamicCustomer.shardedStream` to pass a ZIO (or a Promise followed by `.await`) that completes when the stream should be shutdown. 
-
-Use `withGracefulShutdownOnInterrupt` from the `nl.vroste.zio.kinesis.client` package to help with this. See `src/test/scala/nl/vroste/zio/kinesis/client/ExampleApp.scala` for an example.
-
-It is also important that you perform checkpointing before merging the shard streams (using eg `flatMapPar`) to guarantee that the KCL has not taken away the lease for that shard when checkpointing. The example above does this correctly.
-
-Note that `plainStream` does not support this scheme, since it checkpoints after merging the shard streams. At shutdown, there may no longer be a valid lease for each of the shards. 
 
 ### Configuration
 By default `Client`, `AdminClient`, `DynamicConsumer` and `Producer` will load AWS credentials and regions via the [Default Credential/Region Provider](https://docs.aws.amazon.com/sdk-for-java/v1/developer-guide/credentials.html). Using the client builders, many parameters can be customized. Refer to the AWS documentation for more information.
