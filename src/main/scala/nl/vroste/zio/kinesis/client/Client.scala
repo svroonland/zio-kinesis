@@ -106,16 +106,14 @@ class Client(val kinesisClient: KinesisAsyncClient) {
    * @param consumerARN
    * @param shardID
    * @param startingPosition
-   * @tparam R Environment required by the deserializer
-   * @tparam T Type of values
    * @return Stream of records. When exceptions occur in the subscription or the streaming, the
    *         stream will fail.
    */
-  def subscribeToShard[R, T](
+  def subscribeToShard(
     consumerARN: String,
     shardID: String,
     startingPosition: ShardIteratorType
-  ): ZStream[R, Throwable, ConsumerRecord] = {
+  ): ZStream[Any, Throwable, ConsumerRecord] = {
 
     val b = StartingPosition.builder()
 
