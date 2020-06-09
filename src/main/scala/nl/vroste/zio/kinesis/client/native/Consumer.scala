@@ -24,6 +24,9 @@ import nl.vroste.zio.kinesis.client.native.FetchMode.Polling
 import nl.vroste.zio.kinesis.client.native.FetchMode.EnhancedFanOut
 import zio.ZManaged
 import nl.vroste.zio.kinesis.client.AdminClient.StreamDescription
+import software.amazon.awssdk.services.kinesis.model.KmsThrottlingException
+import software.amazon.awssdk.services.kinesis.model.ProvisionedThroughputExceededException
+import software.amazon.awssdk.services.kinesis.model.LimitExceededException
 
 sealed trait FetchMode
 object FetchMode {
@@ -34,9 +37,14 @@ object FetchMode {
    * @param batchSize The maximum number of records to retrieve in one call to GetRecords. Note that Kinesis
    *        defines limits in terms of the maximum size in bytes of this call, so you need to take into account
    *        the distribution of data size of your records (i.e. avg and max).
-   * @param backoff How long to wait after polling returned no new records
+   * @param delay How long to wait after polling returned no new records
+   * @param backoff When getting a Provisioned Throughput Exception or KmsThrottlingException, schedule to apply for backoff
    */
-  case class Polling(batchSize: Int = 100, backoff: Duration = 1.second) extends FetchMode
+  case class Polling(
+    batchSize: Int = 100,
+    delay: Duration = 1.second,
+    backoff: Schedule[Clock, Throwable, Any] = Util.exponentialBackoff(1.second, 1.minute)
+  ) extends FetchMode
 
   /**
    * Fetch data using enhanced fanout
@@ -44,32 +52,52 @@ object FetchMode {
   case object EnhancedFanOut extends FetchMode
 }
 
+object Util {
+  // TODO add jitter
+  def exponentialBackoff(
+    min: Duration,
+    max: Duration,
+    factor: Double = 2.0,
+    maxRecurs: Option[Int] = None
+  ): Schedule[Clock, Throwable, Any] =
+    (Schedule.exponential(min).whileOutput(_ <= max) andThen Schedule.fixed(max)) &&
+      maxRecurs.map(Schedule.recurs).getOrElse(Schedule.forever)
+}
+
 private object EnhancedFanOutFetcher {
+  import Consumer.retryOnThrottledWithSchedule
+
   def shardStream(
     client: Client,
     consumer: software.amazon.awssdk.services.kinesis.model.Consumer,
     shard: Shard,
     startingPosition: ShardIteratorType
-  ): ZStream[Any, Throwable, ConsumerRecord] =
+  ): ZStream[Clock, Throwable, ConsumerRecord] =
     ZStream.unwrap {
       for {
         currentPosition <- Ref.make[ShardIteratorType](startingPosition)
-      } yield ZStream
-        .fromEffect(currentPosition.get)
-        .flatMap { pos =>
-          client
-            .subscribeToShard(
-              consumer.consumerARN(),
-              shard.shardId(),
-              pos
-            )
-        }
-        .tap(r => currentPosition.set(ShardIteratorType.AfterSequenceNumber(r.sequenceNumber)))
-        .repeat(Schedule.forever) // Shard subscriptions get canceled after 5 minutes
+        val stream       = ZStream
+                       .fromEffect(currentPosition.get)
+                       .flatMap { pos =>
+                         client
+                           .subscribeToShard(
+                             consumer.consumerARN(),
+                             shard.shardId(),
+                             pos
+                           )
+                       }
+                       .tap(r => currentPosition.set(ShardIteratorType.AfterSequenceNumber(r.sequenceNumber)))
+                       .repeat(Schedule.forever) // Shard subscriptions get canceled after 5 minutes
+
+      } yield stream.catchSome(
+        Consumer.isThrottlingException.andThen(_ => ZStream.unwrap(ZIO.sleep(1.second).as(stream)))
+      ) // TODO this should be replaced with a ZStream#retry with a proper exponential backoff scheme
     }
 }
 
 private object PollingFetcher {
+  import Consumer.retryOnThrottledWithSchedule
+
   def shardStream(
     client: Client,
     streamDescription: StreamDescription,
@@ -84,9 +112,15 @@ private object PollingFetcher {
         shardIterator        <- Ref.make[String](initialShardIterator)
       } yield ZStream.repeatEffectChunkOption {
         for {
-          _               <- (UIO(println("s${shard.shardId()}: delaying poll")) *> ZIO.sleep(config.backoff)).whenM(delayRef.get)
+          _               <- (
+                   // UIO(println("s${shard.shardId()}: delaying poll")) *>
+                   ZIO.sleep(config.delay)
+               ).whenM(delayRef.get)
           currentIterator <- shardIterator.get
-          response        <- client.getRecords(currentIterator, config.batchSize).asSomeError
+          response        <- client
+                        .getRecords(currentIterator, config.batchSize)
+                        .retry(retryOnThrottledWithSchedule(config.backoff))
+                        .asSomeError
           records          = response.records.asScala.toList
           _                = println(s"${shard.shardId()}: Got ${records.size} records")
           _               <- delayRef.set(records.isEmpty)
@@ -135,13 +169,14 @@ object Consumer {
 
     def makeFetcher(streamDescription: StreamDescription): ZManaged[Any, Throwable, Fetcher] =
       fetchMode match {
-        case c @ Polling(batchSize, backoff) =>
+        case c: Polling     =>
           ZManaged.succeed((shard, startingPosition) =>
             PollingFetcher.shardStream(client, streamDescription, shard, startingPosition, c)
           )
-        case EnhancedFanOut                  =>
+        case EnhancedFanOut =>
           client
             .createConsumer(streamDescription.streamARN, applicationName)
+            .ensuringFirst(UIO(println("Cleaning up stream consumer")))
             .map(consumer =>
               (shard, startingPosition) => EnhancedFanOutFetcher.shardStream(client, consumer, shard, startingPosition)
             )
@@ -151,7 +186,6 @@ object Consumer {
     ZStream.unwrapManaged {
       for {
         streamDescription <- adminClient.describeStream(streamName).debug("desribeStream").toManaged_
-        _                 <- UIO(println(s"Stream description: ${streamDescription}")).toManaged_
         fetcher           <- makeFetcher(streamDescription)
       } yield currentShards.map { shard =>
         val startingPosition = ShardIteratorType.TrimHorizon
@@ -184,4 +218,12 @@ object Consumer {
       shardId
     )
 
+  val isThrottlingException: PartialFunction[Throwable, Unit] = {
+    case _: KmsThrottlingException                 => ()
+    case _: ProvisionedThroughputExceededException => ()
+    case _: LimitExceededException                 => ()
+  }
+
+  def retryOnThrottledWithSchedule[R, A](schedule: Schedule[R, Throwable, A]): Schedule[R, Throwable, (Throwable, A)] =
+    Schedule.doWhile[Throwable](e => isThrottlingException.lift(e).map(_ => true).getOrElse(false)) && schedule
 }
