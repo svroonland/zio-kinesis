@@ -165,6 +165,11 @@ object Consumer {
 
     trait Fetcher {
       def fetch(shard: Shard, startingPosition: ShardIteratorType): ZStream[Clock, Throwable, ConsumerRecord]
+
+      def shardStreams[R](
+        shards: ZStream[R, Throwable, (Shard, ShardIteratorType)]
+      ): ZStream[R, Throwable, (Shard, ZStream[Clock, Throwable, ConsumerRecord])] =
+        shards.map { case (shard, startingPosition) => (shard, fetch(shard, startingPosition)) }
     }
 
     def makeFetcher(streamDescription: StreamDescription): ZManaged[Any, Throwable, Fetcher] =
@@ -187,14 +192,13 @@ object Consumer {
       for {
         streamDescription <- adminClient.describeStream(streamName).debug("desribeStream").toManaged_
         fetcher           <- makeFetcher(streamDescription)
-      } yield currentShards.map { shard =>
-        val startingPosition = ShardIteratorType.TrimHorizon
+      } yield fetcher.shardStreams(currentShards.map(_ -> ShardIteratorType.TrimHorizon)).map {
+        case (shard, shardStream) =>
+          val deserializedStream = shardStream.mapChunksM { chunk =>
+            chunk.mapM { case record => toRecord(shard.shardId(), record) }
+          }
 
-        val shardStream = fetcher.fetch(shard, startingPosition).mapChunksM { chunk =>
-          chunk.mapM { case record => toRecord(shard.shardId(), record) }
-        }
-
-        (shard.shardId(), shardStream, dummyCheckpointer)
+          (shard.shardId(), deserializedStream, dummyCheckpointer)
       }
     }
   }
