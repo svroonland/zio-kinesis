@@ -51,7 +51,7 @@ libraryDependencies ++= Seq(
   "dev.zio"                %% "zio-test"                    % "1.0.0-RC20" % "test",
   "dev.zio"                %% "zio-test-sbt"                % "1.0.0-RC20" % "test",
   "dev.zio"                %% "zio-interop-reactivestreams" % "1.0.3.5-RC10",
-  "software.amazon.awssdk"  % "kinesis"                     % "2.13.31",
+  "software.amazon.awssdk"  % "kinesis"                     % "2.13.33",
   "ch.qos.logback"          % "logback-classic"             % "1.2.3",
   "software.amazon.kinesis" % "amazon-kinesis-client"       % "2.2.10",
   "org.scala-lang.modules" %% "scala-collection-compat"     % "2.1.6"
