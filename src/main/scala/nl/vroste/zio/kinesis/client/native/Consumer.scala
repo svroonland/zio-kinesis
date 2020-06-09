@@ -20,21 +20,91 @@ import zio.UIO
 import scala.jdk.CollectionConverters._
 import software.amazon.awssdk.services.kinesis.model.{ Record => KinesisRecord }
 import zio.Chunk
+import nl.vroste.zio.kinesis.client.native.FetchMode.Polling
+import nl.vroste.zio.kinesis.client.native.FetchMode.EnhancedFanOut
+import zio.ZManaged
+import nl.vroste.zio.kinesis.client.AdminClient.StreamDescription
+
+sealed trait FetchMode
+object FetchMode {
+
+  /**
+   * Fetches data in a polling manner
+   *
+   * @param batchSize The maximum number of records to retrieve in one call to GetRecords. Note that Kinesis
+   *        defines limits in terms of the maximum size in bytes of this call, so you need to take into account
+   *        the distribution of data size of your records (i.e. avg and max).
+   * @param backoff How long to wait after polling returned no new records
+   */
+  case class Polling(batchSize: Int = 100, backoff: Duration = 1.second) extends FetchMode
+
+  /**
+   * Fetch data using enhanced fanout
+   */
+  case object EnhancedFanOut extends FetchMode
+}
+
+private object EnhancedFanOutFetcher {
+  def shardStream(
+    client: Client,
+    consumer: software.amazon.awssdk.services.kinesis.model.Consumer,
+    shard: Shard,
+    startingPosition: ShardIteratorType
+  ): ZStream[Any, Throwable, ConsumerRecord] =
+    ZStream.unwrap {
+      for {
+        currentPosition <- Ref.make[ShardIteratorType](startingPosition)
+      } yield ZStream
+        .fromEffect(currentPosition.get)
+        .flatMap { pos =>
+          client
+            .subscribeToShard(
+              consumer.consumerARN(),
+              shard.shardId(),
+              pos
+            )
+        }
+        .tap(r => currentPosition.set(ShardIteratorType.AfterSequenceNumber(r.sequenceNumber)))
+        .repeat(Schedule.forever) // Shard subscriptions get canceled after 5 minutes
+    }
+}
+
+private object PollingFetcher {
+  def shardStream(
+    client: Client,
+    streamDescription: StreamDescription,
+    shard: Shard,
+    startingPosition: ShardIteratorType,
+    config: FetchMode.Polling
+  ): ZStream[Clock, Throwable, ConsumerRecord] =
+    ZStream.unwrap {
+      for {
+        delayRef             <- Ref.make[Boolean](false)
+        initialShardIterator <- client.getShardIterator(streamDescription.streamName, shard.shardId(), startingPosition)
+        shardIterator        <- Ref.make[String](initialShardIterator)
+      } yield ZStream.repeatEffectChunkOption {
+        for {
+          _               <- (UIO(println("s${shard.shardId()}: delaying poll")) *> ZIO.sleep(config.backoff)).whenM(delayRef.get)
+          currentIterator <- shardIterator.get
+          response        <- client.getRecords(currentIterator, config.batchSize).asSomeError
+          records          = response.records.asScala.toList
+          _                = println(s"${shard.shardId()}: Got ${records.size} records")
+          _               <- delayRef.set(records.isEmpty)
+          _               <- Option(response.nextShardIterator).map(shardIterator.set).getOrElse(ZIO.fail(None))
+        } yield Chunk.fromIterable(records.map(Consumer.toConsumerRecord(_, shard.shardId())))
+      }
+    }
+
+}
 
 object Consumer {
-  // TODO support lease retrieval and updating
-  // TODO handle new shards
-  // TODO support checkpointing
-  // TODO handle rate limiting constraints?
-  // TODO support KPL extended sequence numbering
   def shardedStream[R, T](
     client: Client,
     adminClient: AdminClient,
     streamName: String,
     applicationName: String,
     deserializer: Deserializer[R, T],
-    batchSize: Int = 100,
-    pollDelay: Duration = 1.second
+    fetchMode: FetchMode = FetchMode.Polling()
   ): ZStream[Clock, Throwable, (String, ZStream[R with Clock, Throwable, Record[T]], Checkpointer)] = {
 
     def toRecord(
@@ -59,38 +129,34 @@ object Consumer {
 
     val currentShards: ZStream[Clock, Throwable, Shard] = client.listShards(streamName)
 
-    def shardStreamFrom(
-      shard: Shard,
-      startingPosition: ShardIteratorType,
-      batchSize: Int,
-      pollInterval: Duration
-    ): ZStream[Clock, Throwable, ConsumerRecord] =
-      ZStream.unwrap {
-        for {
-          delayRef             <- Ref.make[Boolean](false)
-          initialShardIterator <- client.getShardIterator(streamName, shard.shardId(), startingPosition)
-          shardIterator        <- Ref.make[String](initialShardIterator)
-        } yield ZStream.repeatEffectChunkOption {
-          for {
-            _               <- (UIO(println("s${shard.shardId()}: delaying poll")) *> ZIO.sleep(pollInterval)).whenM(delayRef.get)
-            currentIterator <- shardIterator.get
-            response        <- client.getRecords(currentIterator, batchSize).asSomeError
-            records          = response.records.asScala.toList
-            _                = println(s"${shard.shardId()}: Got ${records.size} records")
-            _               <- delayRef.set(records.isEmpty)
-            _               <- Option(response.nextShardIterator).map(shardIterator.set).getOrElse(ZIO.fail(None))
-          } yield Chunk.fromIterable(records.map(toConsumerRecord(_, shard.shardId())))
-        }
+    trait Fetcher {
+      def fetch(shard: Shard, startingPosition: ShardIteratorType): ZStream[Clock, Throwable, ConsumerRecord]
+    }
+
+    def makeFetcher(streamDescription: StreamDescription): ZManaged[Any, Throwable, Fetcher] =
+      fetchMode match {
+        case c @ Polling(batchSize, backoff) =>
+          ZManaged.succeed((shard, startingPosition) =>
+            PollingFetcher.shardStream(client, streamDescription, shard, startingPosition, c)
+          )
+        case EnhancedFanOut                  =>
+          client
+            .createConsumer(streamDescription.streamARN, applicationName)
+            .map(consumer =>
+              (shard, startingPosition) => EnhancedFanOutFetcher.shardStream(client, consumer, shard, startingPosition)
+            )
+
       }
 
     ZStream.unwrapManaged {
       for {
         streamDescription <- adminClient.describeStream(streamName).debug("desribeStream").toManaged_
         _                 <- UIO(println(s"Stream description: ${streamDescription}")).toManaged_
+        fetcher           <- makeFetcher(streamDescription)
       } yield currentShards.map { shard =>
         val startingPosition = ShardIteratorType.TrimHorizon
 
-        val shardStream = shardStreamFrom(shard, startingPosition, batchSize, pollDelay).mapChunksM { chunk =>
+        val shardStream = fetcher.fetch(shard, startingPosition).mapChunksM { chunk =>
           chunk.mapM { case record => toRecord(shard.shardId(), record) }
         }
 
