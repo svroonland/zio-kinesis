@@ -1,4 +1,4 @@
-package nl.vroste.zio.kinesis.client.native
+package nl.vroste.zio.kinesis.client.zionative
 import nl.vroste.zio.kinesis.client.AdminClient.StreamDescription
 import nl.vroste.zio.kinesis.client.Client
 import nl.vroste.zio.kinesis.client.Client.ShardIteratorType

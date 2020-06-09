@@ -1,4 +1,4 @@
-package nl.vroste.zio.kinesis.client.native
+package nl.vroste.zio.kinesis.client.zionative
 import nl.vroste.zio.kinesis.client.AdminClient.StreamDescription
 import nl.vroste.zio.kinesis.client.Client
 import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
@@ -8,7 +8,8 @@ import zio.clock.Clock
 import zio.stream.ZStream
 import zio.duration._
 import scala.jdk.CollectionConverters._
-import nl.vroste.zio.kinesis.client.native.Fetcher
+import nl.vroste.zio.kinesis.client.zionative.Fetcher
+import nl.vroste.zio.kinesis.client.Util
 
 object PollingFetcher {
   import Consumer.retryOnThrottledWithSchedule

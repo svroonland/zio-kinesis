@@ -10,7 +10,7 @@ import zio.stream.{ ZStream, ZTransducer }
 import zio.{ Chunk, ExitCode, Schedule, ZIO }
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio.UIO
-import nl.vroste.zio.kinesis.client.native.FetchMode
+import nl.vroste.zio.kinesis.client.zionative.FetchMode
 
 object ExampleApp extends zio.App {
 
@@ -30,7 +30,7 @@ object ExampleApp extends zio.App {
           _        <- TestUtil.createStreamUnmanaged(streamName, 10)
           _        <- produceRecords(streamName, nrRecords).fork
           _        <- UIO(println("Starting native consumer"))
-          consumer <- native.Consumer
+          consumer <- zionative.Consumer
                         .shardedStream(
                           client,
                           adminClient,

@@ -11,6 +11,5 @@
 
     <logger name="software.amazon.kinesis" level="INFO"/>
     <!-- <logger name="software.amazon.awssdk.request" level="DEBUG"/> -->
-    <!-- <logger name="org.apache.http.wire" level="DEBUG"/> -->
     <!-- <logger name="io.netty" level="DEBUG"/> -->
 </configuration>
