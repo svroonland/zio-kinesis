@@ -100,13 +100,13 @@ object Producer {
              .mapMPar(settings.maxParallelRequests) { batch: PutRecordsBatch =>
                (for {
                  response              <- client
-                               .putRecords(streamName, batch.entries.map(_.r))
+                               .putRecords(streamName, batch.entries.map(_.r).reverse)
                                .retry(scheduleCatchRecoverable && settings.backoffRequests)
 
                  maybeSucceeded         = response
                                     .records()
                                     .asScala
-                                    .zip(batch.entries)
+                                    .zip(batch.entries.reverse)
                  (newFailed, succeeded) = if (response.failedRecordCount() > 0)
                                             maybeSucceeded.partition {
                                               case (result, _) =>
