@@ -10,6 +10,7 @@ import zio.stream.{ ZStream, ZTransducer }
 import zio.{ Chunk, ExitCode, Schedule, ZIO }
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio.UIO
+import nl.vroste.zio.kinesis.client.native.FetchMode
 
 object ExampleApp extends zio.App {
 
@@ -18,6 +19,7 @@ object ExampleApp extends zio.App {
   ): ZIO[zio.ZEnv, Nothing, ExitCode] = {
 
     val streamName = "zio-test-stream-" + UUID.randomUUID().toString
+    val nrRecords  = 20000
 
     (for {
       client      <- Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
@@ -26,7 +28,7 @@ object ExampleApp extends zio.App {
       case (client, adminClient) =>
         for {
           _        <- TestUtil.createStreamUnmanaged(streamName, 10)
-          _        <- produceRecords(streamName, 20000).fork
+          _        <- produceRecords(streamName, nrRecords)
           _        <- UIO(println("Starting native consumer"))
           consumer <- native.Consumer
                         .shardedStream(
@@ -34,15 +36,15 @@ object ExampleApp extends zio.App {
                           adminClient,
                           streamName,
                           applicationName = "testApp-" + UUID.randomUUID().toString(),
-                          deserializer = Serde.asciiString
+                          deserializer = Serde.asciiString,
+                          fetchMode = FetchMode.Polling(1000)
                         )
                         .flatMapPar(Int.MaxValue) {
                           case (shardID, shardStream, checkpointer) =>
                             shardStream
                               .tap(r =>
                                 checkpointer
-                                  .stageOnSuccess(putStrLn(s"Processing record $r"))(r)
-                                  .delay(100.millis)
+                                  .stageOnSuccess(putStrLn(s"Processing record $r").when(false))(r)
                               )
                               .aggregateAsyncWithin(ZTransducer.last, Schedule.fixed(1.second))
                               .mapConcat(_.toList)
@@ -54,10 +56,11 @@ object ExampleApp extends zio.App {
                                 case _: ShutdownException => ZStream.empty
                               }
                         }
+                        .timeout(5.seconds)
                         .runCollect
                         .fork
-          _        <- ZIO.sleep(10.seconds)
-          _        <- consumer.interrupt
+          // _        <- ZIO.sleep(10.seconds)
+          _        <- consumer.join
         } yield ExitCode.success
     }.orDie
   }
@@ -71,14 +74,14 @@ object ExampleApp extends zio.App {
         (1 to nrRecords).map(i => ProducerRecord(s"key$i", s"msg$i"))
       ZStream
         .fromIterable(records)
-        .chunkN(10)
+        .chunkN(500)
         .mapChunksM(
           producer
             .produceChunk(_)
             .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
             .retry(retryOnResourceNotFound)
             .as(Chunk.unit)
-            .delay(1.second)
+          // .delay(1.second)
         )
         .runDrain
     }

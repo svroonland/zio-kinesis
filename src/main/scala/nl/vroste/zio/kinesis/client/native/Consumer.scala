@@ -27,6 +27,10 @@ import nl.vroste.zio.kinesis.client.AdminClient.StreamDescription
 import software.amazon.awssdk.services.kinesis.model.KmsThrottlingException
 import software.amazon.awssdk.services.kinesis.model.ProvisionedThroughputExceededException
 import software.amazon.awssdk.services.kinesis.model.LimitExceededException
+import zio.Queue
+import zio.Promise
+import zio.IO
+import software.amazon.awssdk.services.dynamodb.model.GetRecordsResponse
 
 sealed trait FetchMode
 object FetchMode {
@@ -52,16 +56,13 @@ object FetchMode {
   case object EnhancedFanOut extends FetchMode
 }
 
-object Util {
-  // TODO add jitter
-  def exponentialBackoff(
-    min: Duration,
-    max: Duration,
-    factor: Double = 2.0,
-    maxRecurs: Option[Int] = None
-  ): Schedule[Clock, Throwable, Any] =
-    (Schedule.exponential(min).whileOutput(_ <= max) andThen Schedule.fixed(max)) &&
-      maxRecurs.map(Schedule.recurs).getOrElse(Schedule.forever)
+trait Fetcher {
+  def fetch(shard: Shard, startingPosition: ShardIteratorType): ZStream[Clock, Throwable, ConsumerRecord]
+
+  def shardStreams[R](
+    shards: ZStream[R, Throwable, (Shard, ShardIteratorType)]
+  ): ZStream[R, Throwable, (Shard, ZStream[Clock, Throwable, ConsumerRecord])] =
+    shards.map { case (shard, startingPosition) => (shard, fetch(shard, startingPosition)) }
 }
 
 private object EnhancedFanOutFetcher {
@@ -98,37 +99,47 @@ private object EnhancedFanOutFetcher {
 private object PollingFetcher {
   import Consumer.retryOnThrottledWithSchedule
 
-  def shardStream(
+  def make(
     client: Client,
     streamDescription: StreamDescription,
-    shard: Shard,
-    startingPosition: ShardIteratorType,
     config: FetchMode.Polling
-  ): ZStream[Clock, Throwable, ConsumerRecord] =
-    ZStream.unwrap {
-      for {
-        delayRef             <- Ref.make[Boolean](false)
-        initialShardIterator <- client.getShardIterator(streamDescription.streamName, shard.shardId(), startingPosition)
-        shardIterator        <- Ref.make[String](initialShardIterator)
-      } yield ZStream.repeatEffectChunkOption {
-        for {
-          _               <- (
-                   // UIO(println("s${shard.shardId()}: delaying poll")) *>
-                   ZIO.sleep(config.delay)
-               ).whenM(delayRef.get)
-          currentIterator <- shardIterator.get
-          response        <- client
-                        .getRecords(currentIterator, config.batchSize)
-                        .retry(retryOnThrottledWithSchedule(config.backoff))
-                        .asSomeError
-          records          = response.records.asScala.toList
-          _                = println(s"${shard.shardId()}: Got ${records.size} records")
-          _               <- delayRef.set(records.isEmpty)
-          _               <- Option(response.nextShardIterator).map(shardIterator.set).getOrElse(ZIO.fail(None))
-        } yield Chunk.fromIterable(records.map(Consumer.toConsumerRecord(_, shard.shardId())))
-      }
+  ): ZManaged[Clock, Throwable, Fetcher] =
+    for {
+      // Max 5 calls per second (globally)
+      getShardIterator <-
+        Util.throttledFunction(5, 1.second, (client.getShardIterator _).tupled).map(Function.untupled(_))
+    } yield new Fetcher {
+      override def fetch(
+        shard: Shard,
+        startingPosition: ShardIteratorType
+      ): ZStream[zio.clock.Clock, Throwable, ConsumerRecord] =
+        ZStream.unwrapManaged {
+          for {
+            // Get records can be called up to 5 times per second per shard
+            getRecordsThrottled  <-
+              Util.throttledFunction(5, 1.second, Function.tupled(client.getRecords _)).map(Function.untupled(_))
+            initialShardIterator <-
+              getShardIterator(streamDescription.streamName, shard.shardId(), startingPosition).toManaged_
+            delayRef             <- Ref.make[Boolean](false).toManaged_
+            shardIterator        <- Ref.make[String](initialShardIterator).toManaged_
+          } yield ZStream.repeatEffectChunkOption {
+            for {
+              _               <- (
+                       // UIO(println("s${shard.shardId()}: delaying poll")) *>
+                       ZIO.sleep(config.delay)
+                   ).whenM(delayRef.get)
+              currentIterator <- shardIterator.get
+              response        <- getRecordsThrottled(currentIterator, config.batchSize)
+                            .retry(retryOnThrottledWithSchedule(config.backoff))
+                            .asSomeError
+              records          = response.records.asScala.toList
+              _                = println(s"${shard.shardId()}: Got ${records.size} records")
+              _               <- delayRef.set(records.isEmpty)
+              _               <- Option(response.nextShardIterator).map(shardIterator.set).getOrElse(ZIO.fail(None))
+            } yield Chunk.fromIterable(records.map(Consumer.toConsumerRecord(_, shard.shardId())))
+          }
+        }
     }
-
 }
 
 object Consumer {
@@ -163,25 +174,13 @@ object Consumer {
 
     val currentShards: ZStream[Clock, Throwable, Shard] = client.listShards(streamName)
 
-    trait Fetcher {
-      def fetch(shard: Shard, startingPosition: ShardIteratorType): ZStream[Clock, Throwable, ConsumerRecord]
-
-      def shardStreams[R](
-        shards: ZStream[R, Throwable, (Shard, ShardIteratorType)]
-      ): ZStream[R, Throwable, (Shard, ZStream[Clock, Throwable, ConsumerRecord])] =
-        shards.map { case (shard, startingPosition) => (shard, fetch(shard, startingPosition)) }
-    }
-
-    def makeFetcher(streamDescription: StreamDescription): ZManaged[Any, Throwable, Fetcher] =
+    def makeFetcher(streamDescription: StreamDescription): ZManaged[Clock, Throwable, Fetcher] =
       fetchMode match {
         case c: Polling     =>
-          ZManaged.succeed((shard, startingPosition) =>
-            PollingFetcher.shardStream(client, streamDescription, shard, startingPosition, c)
-          )
+          PollingFetcher.make(client, streamDescription, c)
         case EnhancedFanOut =>
           client
             .createConsumer(streamDescription.streamARN, applicationName)
-            .ensuringFirst(UIO(println("Cleaning up stream consumer")))
             .map(consumer =>
               (shard, startingPosition) => EnhancedFanOutFetcher.shardStream(client, consumer, shard, startingPosition)
             )
@@ -230,4 +229,51 @@ object Consumer {
 
   def retryOnThrottledWithSchedule[R, A](schedule: Schedule[R, Throwable, A]): Schedule[R, Throwable, (Throwable, A)] =
     Schedule.doWhile[Throwable](e => isThrottlingException.lift(e).map(_ => true).getOrElse(false)) && schedule
+
+}
+
+object Util {
+  // TODO add jitter
+  def exponentialBackoff(
+    min: Duration,
+    max: Duration,
+    factor: Double = 2.0,
+    maxRecurs: Option[Int] = None
+  ): Schedule[Clock, Throwable, Any] =
+    (Schedule.exponential(min).whileOutput(_ <= max) andThen Schedule.fixed(max)) &&
+      maxRecurs.map(Schedule.recurs).getOrElse(Schedule.forever)
+
+  /**
+   * Executes calls through a token bucket stream, ensuring a maximum rate of calls
+   *
+   * Allows for bursting
+   *
+    * @param units Maximum number of calls per duration
+   * @param duration Duration for nr of tokens
+   * @return A function that, given an effect, returns an effects that completes with the result of the given effect,
+   *   but possibly delayed because of throttling.
+   */
+  def throttler[R, E, A](units: Long, duration: Duration): ZManaged[Clock, Nothing, ZIO[R, E, A] => ZIO[R, E, A]] =
+    for {
+      requestsQueue <- Queue.unbounded[(IO[E, A], Promise[E, A])].toManaged_
+      stream        <- ZStream
+                  .fromQueueWithShutdown(requestsQueue)
+                  .throttleShape(units, duration, units)(_ => 1)
+                  .mapM { case (effect, promise) => promise.completeWith(effect) }
+                  .runDrain
+                  .forkManaged
+    } yield effect =>
+      for {
+        env     <- ZIO.environment[R]
+        promise <- Promise.make[E, A]
+        _       <- requestsQueue.offer((effect.provide(env), promise))
+        result  <- promise.await
+      } yield result
+
+  def throttledFunction[R, I, E, A](
+    units: Long,
+    duration: Duration,
+    f: I => ZIO[R, E, A]
+  ): ZManaged[Clock, Nothing, I => ZIO[R, E, A]] = throttler[R, E, A](units, duration).map(ff => arg => ff(f(arg)))
+
 }
