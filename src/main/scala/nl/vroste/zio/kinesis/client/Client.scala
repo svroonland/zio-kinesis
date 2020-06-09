@@ -60,7 +60,7 @@ class Client(val kinesisClient: KinesisAsyncClient) {
     streamCreationTimestamp: Option[Instant] = None,
     chunkSize: Int = 10000
   ): ZStream[Clock, Throwable, Shard] =
-    paginatedRequest { token =>
+    paginatedRequest { (token: Option[String]) =>
       val request = ListShardsRequest
         .builder()
         .maxResults(chunkSize)
@@ -299,9 +299,7 @@ object Client {
 private object Util {
   def asZIO[T](f: => CompletableFuture[T]): Task[T] = ZIO.fromCompletionStage(f)
 
-  type Token = String
-
-  def paginatedRequest[R, E, A](fetch: Option[Token] => ZIO[R, E, (A, Option[Token])])(
+  def paginatedRequest[R, E, A, Token](fetch: Option[Token] => ZIO[R, E, (A, Option[Token])])(
     throttling: Schedule[Clock, Any, Int] = Schedule.forever
   ): ZStream[Clock with R, E, A] =
     ZStream.fromEffect(fetch(None)).flatMap {

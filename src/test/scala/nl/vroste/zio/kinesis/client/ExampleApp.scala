@@ -19,7 +19,7 @@ object ExampleApp extends zio.App {
   ): ZIO[zio.ZEnv, Nothing, ExitCode] = {
 
     val streamName = "zio-test-stream-" + UUID.randomUUID().toString
-    val nrRecords  = 20000
+    val nrRecords  = 200
 
     (for {
       client      <- Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
@@ -28,14 +28,15 @@ object ExampleApp extends zio.App {
       case (client, adminClient) =>
         for {
           _        <- TestUtil.createStreamUnmanaged(streamName, 10)
-          _        <- produceRecords(streamName, nrRecords)
+          _        <- produceRecords(streamName, nrRecords).fork
           _        <- UIO(println("Starting native consumer"))
           consumer <- native.Consumer
                         .shardedStream(
                           client,
                           adminClient,
+                          LocalStackDynamicConsumer.dynamoDbClientBuilder.build(),
                           streamName,
-                          applicationName = "testApp-" + UUID.randomUUID().toString(),
+                          applicationName = "testApp-2", // + UUID.randomUUID().toString(),
                           deserializer = Serde.asciiString,
                           fetchMode = FetchMode.Polling(1000)
                         )
@@ -56,7 +57,7 @@ object ExampleApp extends zio.App {
                                 case _: ShutdownException => ZStream.empty
                               }
                         }
-                        .timeout(5.seconds)
+                        // .timeout(5.seconds)
                         .runCollect
                         .fork
           // _        <- ZIO.sleep(10.seconds)
@@ -74,14 +75,14 @@ object ExampleApp extends zio.App {
         (1 to nrRecords).map(i => ProducerRecord(s"key$i", s"msg$i"))
       ZStream
         .fromIterable(records)
-        .chunkN(500)
+        .chunkN(10)
         .mapChunksM(
           producer
             .produceChunk(_)
             .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
             .retry(retryOnResourceNotFound)
             .as(Chunk.unit)
-          // .delay(1.second)
+            .delay(1.second)
         )
         .runDrain
     }

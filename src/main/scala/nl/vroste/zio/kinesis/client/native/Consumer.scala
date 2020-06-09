@@ -17,6 +17,19 @@ import zio._
 import zio.clock.Clock
 import zio.duration._
 import zio.stream.ZStream
+import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
+import software.amazon.awssdk.services.dynamodb.model.CreateTableRequest
+import software.amazon.awssdk.services.dynamodb.model.KeySchemaElement
+import software.amazon.awssdk.services.dynamodb.model.KeyType
+import software.amazon.awssdk.services.dynamodb.model.AttributeDefinition
+import software.amazon.awssdk.services.dynamodb.model.ScalarAttributeType
+import software.amazon.awssdk.services.dynamodb.model.DescribeTableRequest
+import software.amazon.awssdk.services.dynamodb.model.TableStatus
+import software.amazon.awssdk.services.dynamodb.model.ResourceNotFoundException
+import software.amazon.awssdk.services.dynamodb.model.ProvisionedThroughput
+import software.amazon.awssdk.services.dynamodb.model.BillingMode
+import software.amazon.awssdk.services.dynamodb.model.ScanRequest
+import software.amazon.awssdk.services.dynamodb.model.AttributeValue
 
 sealed trait FetchMode
 object FetchMode {
@@ -55,6 +68,7 @@ object Consumer {
   def shardedStream[R, T](
     client: Client,
     adminClient: AdminClient,
+    dynamoClient: DynamoDbAsyncClient,
     streamName: String,
     applicationName: String,
     deserializer: Deserializer[R, T],
@@ -83,15 +97,16 @@ object Consumer {
 
     def makeFetcher(streamDescription: StreamDescription): ZManaged[Clock, Throwable, Fetcher] =
       fetchMode match {
-        case c: Polling     =>
-          PollingFetcher.make(client, streamDescription, c)
-        case EnhancedFanOut =>
-          EnhancedFanOutFetcher.make(client, streamDescription, applicationName)
+        case c: Polling     => PollingFetcher.make(client, streamDescription, c)
+        case EnhancedFanOut => EnhancedFanOutFetcher.make(client, streamDescription, applicationName)
       }
 
     ZStream.unwrapManaged {
       for {
-        streamDescription <- adminClient.describeStream(streamName).debug("desribeStream").toManaged_
+        streamDescription <- adminClient.describeStream(streamName).toManaged_
+        _                 <- DynamoDb.createLeaseTableIfNotExists(dynamoClient, applicationName).toManaged_
+        leases            <- DynamoDb.getLeases(dynamoClient, applicationName).toManaged_
+        _                 <- UIO(println(s"Found ${leases.size} existing leases: " + leases.mkString("\n"))).toManaged_
         fetcher           <- makeFetcher(streamDescription)
       } yield currentShards.map { shard =>
         val startingPosition = ShardIteratorType.TrimHorizon
@@ -133,4 +148,94 @@ object Consumer {
   def retryOnThrottledWithSchedule[R, A](schedule: Schedule[R, Throwable, A]): Schedule[R, Throwable, (Throwable, A)] =
     Schedule.doWhile[Throwable](e => isThrottlingException.lift(e).isDefined) && schedule
 
+}
+
+object DynamoDb {
+  import nl.vroste.zio.kinesis.client.Util.asZIO
+  import scala.jdk.CollectionConverters._
+
+  case class ExtendedSequenceNumber(sequenceNumber: String, subSequenceNumber: Long)
+
+  case class Lease(
+    key: String,
+    owner: String,
+    counter: Long,
+    sequenceNumber: ExtendedSequenceNumber,
+    parentShardIds: Seq[String],
+    pendingCheckpoint: Option[ExtendedSequenceNumber]
+  )
+
+  def createLeaseTableIfNotExists(client: DynamoDbAsyncClient, name: String): ZIO[Clock, Throwable, Unit] =
+    createLeaseTable(client, name)
+      .unlessM(leaseTableExists(client, name))
+
+  // TODO billing mode
+  def createLeaseTable(client: DynamoDbAsyncClient, name: String): ZIO[Clock, Throwable, Unit] = {
+    val keySchema            = List(keySchemaElement("leaseKey", KeyType.HASH))
+    val attributeDefinitions = List(attributeDefinition("leaseKey", ScalarAttributeType.S))
+
+    val request = CreateTableRequest
+      .builder()
+      .tableName(name)
+      .billingMode(BillingMode.PAY_PER_REQUEST)
+      .keySchema(keySchema.asJavaCollection)
+      .attributeDefinitions(attributeDefinitions.asJavaCollection)
+      .build()
+
+    val createTable = UIO(println("Creating lease table")) *> asZIO(client.createTable(request))
+
+    // recursion, yeah!
+    def awaitTableCreated: ZIO[Clock, Throwable, Unit] =
+      leaseTableExists(client, name)
+        .flatMap(awaitTableCreated.delay(10.seconds).unless(_))
+
+    createTable *>
+      awaitTableCreated
+        .timeoutFail(new Exception("Timeout creating lease table"))(10.minute) // I dunno
+  }
+
+  def leaseTableExists(client: DynamoDbAsyncClient, name: String): Task[Boolean] =
+    asZIO(client.describeTable(DescribeTableRequest.builder().tableName(name).build()))
+      .map(_.table().tableStatus() == TableStatus.ACTIVE)
+      .catchSome { case _: ResourceNotFoundException => ZIO.succeed(false) }
+      .tap(exists => UIO(println(s"Lease table ${name} exists? ${exists}")))
+
+  type DynamoDbItem = scala.collection.mutable.Map[String, AttributeValue]
+
+  import nl.vroste.zio.kinesis.client.Util.paginatedRequest
+  def getLeases(client: DynamoDbAsyncClient, tableName: String): ZIO[Clock, Throwable, List[Lease]] =
+    paginatedRequest { (lastItem: Option[DynamoDbItem]) =>
+      val builder     = ScanRequest.builder().tableName(tableName)
+      val scanRequest = lastItem.map(_.asJava).fold(builder)(builder.exclusiveStartKey(_)).build()
+
+      asZIO(client.scan(scanRequest)).map { response =>
+        val items: Chunk[DynamoDbItem] = Chunk.fromIterable(response.items().asScala).map(_.asScala)
+
+        (items, Option(response.lastEvaluatedKey()).map(_.asScala).filter(_.nonEmpty))
+      }
+
+    }(Schedule.forever).flattenChunks.runCollect.map(_.toList.map(toLease))
+
+  private def toLease(item: DynamoDbItem): Lease =
+    Lease(
+      key = item.get("leaseKey").get.s(),
+      owner = item.get("leaseOwner").get.s(),
+      counter = item.get("leaseCounter").get.n().toLong,
+      sequenceNumber = ExtendedSequenceNumber(
+        sequenceNumber = item.get("checkpoint").get.s(),
+        subSequenceNumber = item.get("checkpointSubSequenceNumber").get.n().toLong
+      ),
+      parentShardIds = item.get("parentShardId").get.ss().asScala.toList,
+      pendingCheckpoint = item
+        .get("pendingCheckpoint")
+        .map(_.s())
+        .map(ExtendedSequenceNumber(_, item.get("pendingCheckpointSubSequenceNumber").get.n().toLong))
+    )
+
+  def updateLease(client: String, applicationName: String, shard: String): Task[Lease] = ???
+
+  def keySchemaElement(name: String, keyType: KeyType)                 =
+    KeySchemaElement.builder().attributeName(name).keyType(keyType).build()
+  def attributeDefinition(name: String, attrType: ScalarAttributeType) =
+    AttributeDefinition.builder().attributeName(name).attributeType(attrType).build()
 }

@@ -204,7 +204,7 @@ class AdminClient(val kinesisClient: KinesisAsyncClient) {
     chunkSize: Int = 10,
     backoffSchedule: Schedule[Clock, Throwable, Any] = defaultBackoffSchedule
   ): ZStream[Clock, Throwable, String] =
-    paginatedRequest { token =>
+    paginatedRequest { (token: Option[String]) =>
       val requestBuilder = ListStreamsRequest.builder().limit(chunkSize)
 
       val requestWithToken =
@@ -225,7 +225,7 @@ class AdminClient(val kinesisClient: KinesisAsyncClient) {
     chunkSize: Int = 50,
     backoffSchedule: Schedule[Clock, Throwable, Any] = defaultBackoffSchedule
   ): ZStream[Clock, Throwable, Tag] =
-    paginatedRequest { token =>
+    paginatedRequest { (token: Option[String]) =>
       val requestBuilder = ListTagsForStreamRequest.builder().streamName(streamName).limit(chunkSize)
 
       val requestWithToken =
