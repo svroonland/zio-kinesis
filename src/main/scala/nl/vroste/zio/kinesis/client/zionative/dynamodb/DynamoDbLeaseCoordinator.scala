@@ -1,7 +1,7 @@
 package nl.vroste.zio.kinesis.client.zionative.dynamodb
 
 import nl.vroste.zio.kinesis.client.DynamicConsumer.{ Checkpointer, Record }
-import nl.vroste.zio.kinesis.client.Util.{ asZIO, throttledFunction }
+import nl.vroste.zio.kinesis.client.Util.asZIO
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator
 import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.Lease
 import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbUtil._
@@ -16,6 +16,16 @@ import zio.duration._
 import scala.jdk.CollectionConverters._
 import scala.util.Try
 import scala.util.Failure
+
+object ZioExtensions {
+  implicit class OnSucessSyntax[R, E, A](val zio: ZIO[R, E, A]) extends AnyVal {
+    final def onSuccess(cleanup: A => URIO[R, Any]): ZIO[R, E, A] =
+      zio.onExit {
+        case Exit.Success(a) => cleanup(a)
+        case _               => ZIO.unit
+      }
+  }
+}
 
 /**
  * How it works:
@@ -35,14 +45,14 @@ private class DynamoDbLeaseCoordinator(
   client: DynamoDbAsyncClient,
   applicationName: String,
   currentLeases: Ref[Map[String, Lease]]
-) extends LeaseCoordinator    {
+) extends LeaseCoordinator {
   import DynamoDbLeaseCoordinator._
+  import ZioExtensions.OnSucessSyntax
 
-  def makeCheckpointer(shard: Shard) =
+  override def makeCheckpointer(shard: Shard) =
     for {
       leaseOpt <- currentLeases.get
                     .map(_.get(shard.shardId()))
-      // TODO Create new lease if empty
       lease    <- leaseOpt.map(ZIO.succeed(_)).getOrElse {
                  val lease = Lease(
                    key = shard.shardId(),
@@ -66,12 +76,7 @@ private class DynamoDbLeaseCoordinator(
                        counter = lease.counter + 1,
                        checkpoint = Some(ExtendedSequenceNumber(r.sequenceNumber, r.subSequenceNumber))
                      ) // TODO handle lease lost
-                   ).onExit {
-                     case Exit.Success(_) =>
-                       staged.set(None)
-                     case _               =>
-                       ZIO.unit
-                   }
+                   ).onSuccess(_ => staged.set(None))
                  case None    =>
                    ZIO.unit
                }
@@ -177,6 +182,7 @@ private class DynamoDbLeaseCoordinator(
       .tapError(e => UIO(println(s"Got error creating lease: ${e}")))
   }
 }
+
 object DynamoDbLeaseCoordinator {
 
   case class ExtendedSequenceNumber(sequenceNumber: String, subSequenceNumber: Long)

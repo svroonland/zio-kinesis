@@ -329,9 +329,7 @@ private object Util {
    * @param duration Duration for nr of tokens
    * @return The original function with rate limiting applied, as a managed resource
    */
-  def throttledFunction[R, I, E, A](
-    units: Long,
-    duration: Duration,
+  def throttledFunction[R, I, E, A](units: Long, duration: Duration)(
     f: I => ZIO[R, E, A]
   ): ZManaged[Clock, Nothing, I => ZIO[R, E, A]] =
     for {

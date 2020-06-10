@@ -123,11 +123,6 @@ object Consumer {
     }
   }
 
-  val dummyCheckpointer = new Checkpointer {
-    override def checkpoint: ZIO[zio.blocking.Blocking, Throwable, Unit] = ZIO.unit
-    override def stage(r: Record[_]): zio.UIO[Unit]                      = ZIO.unit
-  }
-
   implicit class ZioDebugExtensions[R, E, A](z: ZIO[R, E, A]) {
     def debug(label: String): ZIO[R, E, A] = (UIO(println(s"${label}")) *> z) <* UIO(println(s"${label} complete"))
   }
