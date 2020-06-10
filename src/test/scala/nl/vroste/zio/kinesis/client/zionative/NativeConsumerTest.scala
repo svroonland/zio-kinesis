@@ -19,11 +19,12 @@ import nl.vroste.zio.kinesis.client.zionative.Consumer
 import nl.vroste.zio.kinesis.client.TestUtil.Layers
 import zio.ZManaged
 import zio.test.Assertion._
+import zio.stream.ZTransducer
+import zio.Schedule
 
 object NativeConsumerTest extends DefaultRunnableSpec {
   /*
   - It must retrieve records from all shards
-  - It must retrieve records in an expected order
   - Support both polling and enhanced fanout
   - Must restart from the given initial start point if no lease yet
   - Must restart from the record after the last checkpointed record for each shard
@@ -32,7 +33,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
   - TODO something about rate limits: maybe if we have multiple consumers active and run into rate limits?
    */
 
-  val streamPrefix = ju.UUID.randomUUID().toString().take(6)
+  def streamPrefix = ju.UUID.randomUUID().toString().take(6)
 
   override def spec =
     suite("ZIO Native Kinesis Stream Consumer")(
@@ -47,16 +48,59 @@ object NativeConsumerTest extends DefaultRunnableSpec {
             records  <-
               Consumer
                 .shardedStream(streamName, "test1", Serde.asciiString, fetchMode = FetchMode.Polling(batchSize = 1000))
-                .flatMapPar(Int.MaxValue) {
-                  case (shard @ _, shardStream, checkpointer @ _) =>
-                    shardStream
-                }
+                .flatMapPar(Int.MaxValue)(_._2)
                 .take(nrRecords.toLong)
                 .runCollect
             shardIds <- ZIO.service[AdminClient].flatMap(_.describeStream(streamName)).map(_.shards.map(_.shardId()))
-            // _ <- produceR
 
           } yield assert(records.map(_.shardId).toSet)(equalTo(shardIds.toSet))
+        }
+      } @@ TestAspect.ignore,
+      testM("continue from the next message after the last checkpoint") {
+        val streamName      = streamPrefix + "testStream-2"
+        val applicationName = streamPrefix + "test2"
+        val nrRecords       = 2000
+        val nrShards        = 5
+
+        withStream(streamName, shards = nrShards) {
+          for {
+            _            <- produceSampleRecords(streamName, nrRecords).fork
+            // Take the first 1000 records
+            recordsPart1 <- Consumer
+                              .shardedStream(
+                                streamName,
+                                applicationName,
+                                Serde.asciiString,
+                                fetchMode = FetchMode.Polling(batchSize = 1000)
+                              )
+                              .flatMapPar(Int.MaxValue) {
+                                case (shard @ _, shardStream, checkpointer) =>
+                                  shardStream
+                                    .tap(checkpointer.stage) // It will automatically checkpoint at stream end
+                              }
+                              .take((nrRecords / 2).toLong)
+                              .runCollect
+
+            // Consume the rest with the same app
+            _            <- putStrLn("Starting second consumer")
+            recordsPart2 <- Consumer
+                              .shardedStream(
+                                streamName,
+                                applicationName,
+                                Serde.asciiString,
+                                fetchMode = FetchMode.Polling(batchSize = 1000)
+                              )
+                              .flatMapPar(Int.MaxValue) {
+                                case (shard @ _, shardStream, checkpointer) =>
+                                  shardStream
+                                    .tap(checkpointer.stage) // It will automatically checkpoint at stream end
+                              }
+                              .take((nrRecords / 2).toLong + 50)
+                              .timeout(2.seconds)
+                              .runCollect
+
+          } yield assert(recordsPart2.size)(equalTo(nrRecords / 2)) &&
+            assert(recordsPart1.map(_.sequenceNumber).toSet)(not(equalTo(recordsPart2.map(_.sequenceNumber).toSet)))
         }
       }
     ).provideSomeLayer(
