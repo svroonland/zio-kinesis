@@ -275,6 +275,8 @@ object Client {
       ZIO.effect(builder.build())
     }.map(new Client(_))
 
+  def fromAsyncClient(client: KinesisAsyncClient): Client = new Client(client)
+
   case class ConsumerRecord(
     sequenceNumber: String,
     approximateArrivalTimestamp: Instant,

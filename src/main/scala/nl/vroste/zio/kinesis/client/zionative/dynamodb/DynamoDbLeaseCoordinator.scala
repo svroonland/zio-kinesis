@@ -199,7 +199,7 @@ object DynamoDbLeaseCoordinator {
   )
 
   def make(client: DynamoDbAsyncClient, applicationName: String): ZManaged[Clock, Throwable, LeaseCoordinator] =
-    ZManaged.fromEffect {
+    ZManaged.make {
       for {
         leases        <- Ref.make[Map[String, Lease]](Map.empty)
         coordinator    = new DynamoDbLeaseCoordinator(client, applicationName, leases)
@@ -208,7 +208,7 @@ object DynamoDbLeaseCoordinator {
         _             <- UIO(println(s"Found ${currentLeases.size} existing leases: " + currentLeases.mkString("\n")))
         _             <- leases.set(currentLeases.map(l => l.key -> l).toMap)
       } yield coordinator
-    }.tap(coordinator => ZManaged.finalizer(coordinator.releaseLeases))
+    }(_.releaseLeases)
 
   private def toLease(item: DynamoDbItem): Try[Lease] =
     Try {

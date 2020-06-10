@@ -309,6 +309,8 @@ object AdminClient {
       ZIO.effect(builder.build())
     }.map(new AdminClient(_))
 
+  def fromAsyncClient(c: KinesisAsyncClient) = new AdminClient(c)
+
   case class DescribeLimitsResponse(shardLimit: Int, openShardCount: Int)
 
   case class StreamDescription(

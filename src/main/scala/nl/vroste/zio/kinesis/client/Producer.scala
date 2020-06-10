@@ -167,7 +167,7 @@ object Producer {
           .flatMap(requests => queue.offerAll(requests) *> ZIO.foreachPar(requests)(_.done.await))
     }
 
-  val maxRecordsPerRequest     = 500             // This is a Kinesis API limitation
+  val maxRecordsPerRequest     = 499             // This is a Kinesis API limitation // TODO because of fold issue, reduced by 1
   val maxPayloadSizePerRequest = 5 * 1024 * 1024 // 5 MB
 
   val recoverableErrorCodes = Set("ProvisionedThroughputExceededException", "InternalFailure", "ServiceUnavailable");

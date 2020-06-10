@@ -60,68 +60,74 @@ trait LeaseCoordinator {
 
 object Consumer {
   def shardedStream[R, T](
-    client: Client,
-    adminClient: AdminClient,
-    dynamoClient: DynamoDbAsyncClient,
     streamName: String,
     applicationName: String,
     deserializer: Deserializer[R, T],
     fetchMode: FetchMode = FetchMode.Polling()
   ): ZStream[
-    Blocking with Clock,
+    Blocking with Clock with Has[Client] with Has[AdminClient] with Has[DynamoDbAsyncClient],
     Throwable,
     (String, ZStream[R with Blocking with Clock, Throwable, Record[T]], Checkpointer)
-  ] = {
-
-    def toRecord(
-      shardId: String,
-      r: ConsumerRecord
-    ): ZIO[R, Throwable, Record[T]] =
-      deserializer.deserialize(r.data.asByteBuffer()).map { data =>
-        Record(
-          shardId,
-          r.sequenceNumber,
-          r.approximateArrivalTimestamp,
-          data,
-          r.partitionKey,
-          r.encryptionType,
-          0,    // r.subSequenceNumber,
-          "",   // r.explicitHashKey,
-          false //r.aggregated,
-        )
-      }
-
-    val currentShards: ZStream[Clock, Throwable, Shard] = client.listShards(streamName)
-
-    def makeFetcher(streamDescription: StreamDescription): ZManaged[Clock, Throwable, Fetcher] =
-      fetchMode match {
-        case c: Polling     => PollingFetcher.make(client, streamDescription, c)
-        case EnhancedFanOut => EnhancedFanOutFetcher.make(client, streamDescription, applicationName)
-      }
-
-    ZStream.unwrapManaged {
+  ] =
+    ZStream.unwrap {
       for {
-        streamDescription <- adminClient.describeStream(streamName).toManaged_
-        leaseCoordinator  <- DynamoDbLeaseCoordinator.make(dynamoClient, applicationName)
-        fetcher           <- makeFetcher(streamDescription)
-      } yield currentShards.mapM { shard =>
-        val startingPosition = ShardIteratorType.TrimHorizon
+        client       <- ZIO.service[Client]
+        adminClient  <- ZIO.service[AdminClient]
+        dynamoClient <- ZIO.service[DynamoDbAsyncClient]
+      } yield {
 
-        val shardStream = fetcher.shardRecordStream(shard, startingPosition).mapChunksM { chunk =>
-          chunk.mapM(record => toRecord(shard.shardId(), record))
+        def toRecord(
+          shardId: String,
+          r: ConsumerRecord
+        ): ZIO[R, Throwable, Record[T]] =
+          deserializer.deserialize(r.data.asByteBuffer()).map { data =>
+            Record(
+              shardId,
+              r.sequenceNumber,
+              r.approximateArrivalTimestamp,
+              data,
+              r.partitionKey,
+              r.encryptionType,
+              0,    // r.subSequenceNumber,
+              "",   // r.explicitHashKey,
+              false //r.aggregated,
+            )
+          }
+
+        val currentShards: ZStream[Clock, Throwable, Shard] = client.listShards(streamName) ++ ZStream.never
+
+        def makeFetcher(streamDescription: StreamDescription): ZManaged[Clock, Throwable, Fetcher] =
+          fetchMode match {
+            case c: Polling     => PollingFetcher.make(client, streamDescription, c)
+            case EnhancedFanOut => EnhancedFanOutFetcher.make(client, streamDescription, applicationName)
+          }
+
+        ZStream.unwrapManaged {
+          for {
+            streamDescription <- adminClient.describeStream(streamName).toManaged_
+            leaseCoordinator  <- DynamoDbLeaseCoordinator.make(dynamoClient, applicationName)
+            fetcher           <- makeFetcher(streamDescription)
+          } yield currentShards.mapMPar(10) { shard => // TODO mapChunksM until mapM is fixed
+            // shards.mapM { shard =>
+            val startingPosition = ShardIteratorType.TrimHorizon
+
+            val shardStream = fetcher.shardRecordStream(shard, startingPosition).mapChunksM { chunk =>
+              chunk.mapM(record => toRecord(shard.shardId(), record))
+            }
+
+            for {
+              checkpointer <- leaseCoordinator.makeCheckpointer(shard)
+              blocking     <- ZIO.environment[Blocking]
+            } yield (
+              shard.shardId(),
+              shardStream.ensuringFirst(checkpointer.checkpoint.orDie.provide(blocking)),
+              checkpointer
+            )
+            // }
+          }
         }
-
-        for {
-          checkpointer <- leaseCoordinator.makeCheckpointer(shard)
-          blocking     <- ZIO.environment[Blocking]
-        } yield (
-          shard.shardId(),
-          shardStream.ensuringFirst(checkpointer.checkpoint.orDie.provide(blocking)),
-          checkpointer
-        )
       }
     }
-  }
 
   implicit class ZioDebugExtensions[R, E, A](z: ZIO[R, E, A]) {
     def debug(label: String): ZIO[R, E, A] = (UIO(println(s"${label}")) *> z) <* UIO(println(s"${label} complete"))
