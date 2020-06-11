@@ -33,6 +33,13 @@ object DynamoDbUtil {
       .value(attributeValue(value))
       .build()
 
+  def deleteAttributeValueUpdate: AttributeValueUpdate =
+    AttributeValueUpdate
+      .builder()
+      .action(AttributeAction.DELETE)
+      .value(null.asInstanceOf[AttributeValue])
+      .build()
+
   object ImplicitConversions {
     implicit def toAttributeValue[T: ClassTag](value: T): AttributeValue =
       attributeValue[T](value)

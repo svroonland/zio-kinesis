@@ -12,15 +12,12 @@ import zio.stream.ZStream
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio.clock.Clock
 import zio.console._
-import zio.duration._
 import nl.vroste.zio.kinesis.client.TestUtil.retryOnResourceNotFound
 import zio.Chunk
 import nl.vroste.zio.kinesis.client.zionative.Consumer
 import nl.vroste.zio.kinesis.client.TestUtil.Layers
 import zio.ZManaged
 import zio.test.Assertion._
-import zio.stream.ZTransducer
-import zio.Schedule
 
 object NativeConsumerTest extends DefaultRunnableSpec {
   /*
@@ -28,6 +25,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
   - Support both polling and enhanced fanout
   - Must restart from the given initial start point if no lease yet
   - Must restart from the record after the last checkpointed record for each shard
+  - Should release leases at shutdown (another worker should aquicre all leases directly without having to steal)
   - Must checkpoint the last staged checkpoint before shutdown
   - Correctly deserialize the records
   - TODO something about rate limits: maybe if we have multiple consumers active and run into rate limits?
@@ -55,7 +53,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
           } yield assert(records.map(_.shardId).toSet)(equalTo(shardIds.toSet))
         }
-      } @@ TestAspect.ignore,
+      }, // @@ TestAspect.ignore,
       testM("continue from the next message after the last checkpoint") {
         val streamName      = streamPrefix + "testStream-2"
         val applicationName = streamPrefix + "test2"
@@ -64,43 +62,40 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
         withStream(streamName, shards = nrShards) {
           for {
-            _            <- produceSampleRecords(streamName, nrRecords).fork
+            _            <- produceSampleRecords(streamName, nrRecords)
             // Take the first 1000 records
             recordsPart1 <- Consumer
-                              .shardedStream(
-                                streamName,
-                                applicationName,
-                                Serde.asciiString,
-                                fetchMode = FetchMode.Polling(batchSize = 1000)
-                              )
+                              .shardedStream(streamName, applicationName, Serde.asciiString)
                               .flatMapPar(Int.MaxValue) {
                                 case (shard @ _, shardStream, checkpointer) =>
-                                  shardStream
-                                    .tap(checkpointer.stage) // It will automatically checkpoint at stream end
+                                  shardStream.map((_, checkpointer))
                               }
+                              .tap {
+                                case (r, checkpointer) => checkpointer.stage(r)
+                              } // It will automatically checkpoint at stream end
+                              .map(_._1)
                               .take((nrRecords / 2).toLong)
                               .runCollect
 
             // Consume the rest with the same app
             _            <- putStrLn("Starting second consumer")
             recordsPart2 <- Consumer
-                              .shardedStream(
-                                streamName,
-                                applicationName,
-                                Serde.asciiString,
-                                fetchMode = FetchMode.Polling(batchSize = 1000)
-                              )
+                              .shardedStream(streamName, applicationName, Serde.asciiString)
                               .flatMapPar(Int.MaxValue) {
-                                case (shard @ _, shardStream, checkpointer) =>
-                                  shardStream
-                                    .tap(checkpointer.stage) // It will automatically checkpoint at stream end
+                                case (shard @ _, shardStream, checkpointer) => shardStream.map((_, checkpointer))
                               }
-                              .take((nrRecords / 2).toLong + 50)
-                              .timeout(2.seconds)
+                              .tap {
+                                case (r, checkpointer) => checkpointer.stage(r)
+                              } // It will automatically checkpoint at stream end
+                              .map(_._1)
+                              .take((nrRecords / 2).toLong)
                               .runCollect
 
-          } yield assert(recordsPart2.size)(equalTo(nrRecords / 2)) &&
-            assert(recordsPart1.map(_.sequenceNumber).toSet)(not(equalTo(recordsPart2.map(_.sequenceNumber).toSet)))
+          } yield assert(recordsPart1.size)(equalTo(nrRecords / 2) ?? "records part 1 size") &&
+            assert(recordsPart2.size)(equalTo(nrRecords / 2) ?? "records part 2 size") &&
+            assert(recordsPart1.map(_.sequenceNumber).toSet)(
+              hasNoneOf(recordsPart2.map(_.sequenceNumber).toSet) ?? "records pt1 not equal to pt2"
+            )
         }
       }
     ).provideSomeLayer(
@@ -127,14 +122,14 @@ object NativeConsumerTest extends DefaultRunnableSpec {
       ZStream
         .fromIterable(records)
         .chunkN(chunkSize)
-        .mapChunksM(
+        .mapChunksM(chunk =>
           producer
-            .produceChunk(_)
+            .produceChunk(chunk)
             .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
             .retry(retryOnResourceNotFound)
             .fork
             .map(fib => Chunk.single(fib))
-          // .tap(_ => ZIO.sleep(1.second))
+        // .tap(_ => ZIO.sleep(1.second))
         )
         .mapMPar(24)(_.join)
         .runDrain

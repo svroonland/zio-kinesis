@@ -20,6 +20,7 @@ import zio.clock.Clock
 import zio.duration._
 import zio.stream.ZStream
 import zio.blocking.Blocking
+import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.ExtendedSequenceNumber
 
 sealed trait FetchMode
 object FetchMode {
@@ -55,7 +56,9 @@ object Fetcher {
 }
 
 trait LeaseCoordinator {
-  def makeCheckpointer(shard: Shard): ZIO[Any, Throwable, Checkpointer]
+  def makeCheckpointer(shard: Shard): Task[Checkpointer]
+
+  def getCheckpointForShard(shard: Shard): UIO[Option[ExtendedSequenceNumber]]
 }
 
 object Consumer {
@@ -63,7 +66,8 @@ object Consumer {
     streamName: String,
     applicationName: String,
     deserializer: Deserializer[R, T],
-    fetchMode: FetchMode = FetchMode.Polling()
+    fetchMode: FetchMode = FetchMode.Polling(),
+    initialStartingPosition: ShardIteratorType = ShardIteratorType.TrimHorizon
   ): ZStream[
     Blocking with Clock with Has[Client] with Has[AdminClient] with Has[DynamoDbAsyncClient],
     Throwable,
@@ -107,23 +111,23 @@ object Consumer {
             streamDescription <- adminClient.describeStream(streamName).toManaged_
             leaseCoordinator  <- DynamoDbLeaseCoordinator.make(dynamoClient, applicationName)
             fetcher           <- makeFetcher(streamDescription)
-          } yield currentShards.mapMPar(10) { shard => // TODO mapChunksM until mapM is fixed
-            // shards.mapM { shard =>
-            val startingPosition = ShardIteratorType.TrimHorizon
-
-            val shardStream = fetcher.shardRecordStream(shard, startingPosition).mapChunksM { chunk =>
-              chunk.mapM(record => toRecord(shard.shardId(), record))
-            }
-
+          } yield currentShards.mapM { shard =>
             for {
-              checkpointer <- leaseCoordinator.makeCheckpointer(shard)
-              blocking     <- ZIO.environment[Blocking]
+              checkpointer        <- leaseCoordinator.makeCheckpointer(shard)
+              blocking            <- ZIO.environment[Blocking]
+              startingPositionOpt <- leaseCoordinator.getCheckpointForShard(shard)
+              startingPosition     = startingPositionOpt
+                                   .map(s => ShardIteratorType.AfterSequenceNumber(s.sequenceNumber))
+                                   .getOrElse(initialStartingPosition)
+              _                   <- UIO(println(s"${shard.shardId} start at ${startingPosition}"))
+              shardStream          = fetcher.shardRecordStream(shard, startingPosition).mapChunksM { chunk =>
+                              chunk.mapM(record => toRecord(shard.shardId(), record))
+                            }
             } yield (
               shard.shardId(),
               shardStream.ensuringFirst(checkpointer.checkpoint.orDie.provide(blocking)),
               checkpointer
             )
-            // }
           }
         }
       }

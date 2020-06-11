@@ -16,9 +16,10 @@ import zio.duration._
 import scala.jdk.CollectionConverters._
 import scala.util.Try
 import scala.util.Failure
+import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.LeaseAlreadyExists
 
 object ZioExtensions {
-  implicit class OnSucessSyntax[R, E, A](val zio: ZIO[R, E, A]) extends AnyVal {
+  implicit class OnSuccessSyntax[R, E, A](val zio: ZIO[R, E, A]) extends AnyVal {
     final def onSuccess(cleanup: A => URIO[R, Any]): ZIO[R, E, A] =
       zio.onExit {
         case Exit.Success(a) => cleanup(a)
@@ -47,7 +48,13 @@ private class DynamoDbLeaseCoordinator(
   currentLeases: Ref[Map[String, Lease]]
 ) extends LeaseCoordinator {
   import DynamoDbLeaseCoordinator._
-  import ZioExtensions.OnSucessSyntax
+  import ZioExtensions.OnSuccessSyntax
+
+  override def getCheckpointForShard(shard: Shard): UIO[Option[ExtendedSequenceNumber]] =
+    for {
+      leaseOpt <- currentLeases.get
+                    .map(_.get(shard.shardId()))
+    } yield leaseOpt.flatMap(_.checkpoint)
 
   override def makeCheckpointer(shard: Shard) =
     for {
@@ -62,7 +69,8 @@ private class DynamoDbLeaseCoordinator(
                    checkpoint = None,
                    parentShardIds = Seq.empty
                  )
-                 createLease(lease) *> currentLeases.update(_ + (lease.key -> lease)).as(lease)
+                 // TODO CreateLease may fail but we should handle that before trying to process the shard
+                 createLease(lease).ignore *> currentLeases.update(_ + (lease.key -> lease)).as(lease)
                }
       staged   <- Ref.make[Option[Record[_]]](None)
     } yield new Checkpointer {
@@ -71,12 +79,15 @@ private class DynamoDbLeaseCoordinator(
           lastStaged <- staged.get
           _          <- lastStaged match {
                  case Some(r) =>
-                   updateCheckpoint(
+                   val newLease =
                      lease.copy(
                        counter = lease.counter + 1,
                        checkpoint = Some(ExtendedSequenceNumber(r.sequenceNumber, r.subSequenceNumber))
-                     ) // TODO handle lease lost
-                   ).onSuccess(_ => staged.set(None))
+                     )
+                   updateCheckpoint(
+                     newLease
+                     // TODO handle lease lost
+                   ).onSuccess(_ => staged.set(None) *> currentLeases.update(_ + (lease.key -> newLease)))
                  case None    =>
                    ZIO.unit
                }
@@ -135,7 +146,30 @@ private class DynamoDbLeaseCoordinator(
         ZIO.foreach(_)(i => ZIO.fromTry(toLease(i))).map(_.toList)
       )
 
-  def releaseLeases: UIO[Unit] = UIO(println("Releasing leases!"))
+  def releaseLeases = currentLeases.get.flatMap(leases => ZIO.foreach(leases.values)(releaseLease)).unit
+
+  def releaseLease(lease: Lease): ZIO[Any, Either[Throwable, ShardLeaseLost.type], Unit] = {
+    import ImplicitConversions.toAttributeValue
+    val request = UpdateItemRequest
+      .builder()
+      .tableName(applicationName)
+      .key(DynamoDbItem("leaseKey" -> lease.key).asJava)
+      .expected(
+        Map(
+          // TODO we need to update these atomically somehow
+          "leaseCounter" -> expectedAttributeValue(lease.counter)
+        ).asJava
+      )
+      .attributeUpdates(Map("leaseOwner" -> deleteAttributeValueUpdate).asJava)
+      .build()
+
+    asZIO(client.updateItem(request)).unit.catchAll {
+      case e: ConditionalCheckFailedException =>
+        ZIO.fail(Right(ShardLeaseLost))
+      case e                                  =>
+        ZIO.fail(Left(e))
+    }.tapError(e => UIO(println(s"Got error releasing lease: ${e}")))
+  }
 
   def updateCheckpoint(lease: Lease) = {
     require(lease.checkpoint.isDefined, "Cannot update checkpoint without Lease.checkpoint property set")
@@ -171,21 +205,26 @@ private class DynamoDbLeaseCoordinator(
       .tapError(e => UIO(println(s"Got error updating checkpoint: ${e}")))
   }
 
-  def createLease(lease: Lease) = {
+  def createLease(lease: Lease): ZIO[Any, Either[Throwable, LeaseAlreadyExists.type], Unit] = {
     val request = PutItemRequest
       .builder()
       .tableName(applicationName)
       .item(toDynamoItem(lease).asJava)
       .build()
 
-    asZIO(client.putItem(request))
+    asZIO(client.putItem(request)).unit
+      .mapError(Left(_))
       .tapError(e => UIO(println(s"Got error creating lease: ${e}")))
   }
 }
 
 object DynamoDbLeaseCoordinator {
 
+  // TODO incorporate in Record
   case class ExtendedSequenceNumber(sequenceNumber: String, subSequenceNumber: Long)
+
+  case object ShardLeaseLost
+  case object LeaseAlreadyExists
 
   // TODO some of these fields are probably optional
   case class Lease(
@@ -208,7 +247,12 @@ object DynamoDbLeaseCoordinator {
         _             <- UIO(println(s"Found ${currentLeases.size} existing leases: " + currentLeases.mkString("\n")))
         _             <- leases.set(currentLeases.map(l => l.key -> l).toMap)
       } yield coordinator
-    }(_.releaseLeases)
+    }(_.releaseLeases.catchAll {
+      case Right(ShardLeaseLost) => // This is fine at shutdown
+        ZIO.unit
+      case Left(e)               =>
+        ZIO.fail(e)
+    }.orDie)
 
   private def toLease(item: DynamoDbItem): Try[Lease] =
     Try {

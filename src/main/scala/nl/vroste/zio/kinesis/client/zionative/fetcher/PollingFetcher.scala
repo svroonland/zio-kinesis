@@ -38,7 +38,7 @@ object PollingFetcher {
                                              .retry(retryOnThrottledWithSchedule(config.backoff))
                                              .asSomeError
                                records          = response.records.asScala.toList
-                               _                = println(s"${shard.shardId()}: Got ${records.size} records")
+                               //  _                = println(s"${shard.shardId()}: Got ${records.size} records")
                                _               <- Option(response.nextShardIterator).map(shardIterator.set).getOrElse(ZIO.fail(None))
                              } yield Chunk.fromIterable(records.map(Consumer.toConsumerRecord(_, shard.shardId())))
                            }.toManaged_
