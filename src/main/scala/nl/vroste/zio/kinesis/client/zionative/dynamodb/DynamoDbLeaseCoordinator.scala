@@ -32,13 +32,14 @@ object ZioExtensions {
  * How it works:
  *
  * - There's a lease table with an item for every shard.
- * - The lease owner is the worker identifier (?)
+ * - The lease owner is the worker identifier (?). No owner means that the previous worked has
+ *   released the lease. The lease should be released when the application shuts down.
  * - The checkpoint is the checkpoint
- * - The lease counter is an atomically updated counter to prevent concurrent changes
+ * - The lease counter is an atomically updated counter to prevent concurrent changes. If it's not
+ *   what expected when updating, another worker has probably stolen the lease.
  * - Owner switches since checkpoint? Not sure what useful for.. TODO
  * - Parent shard IDs: not yet handled TODO
  * - pending checkpoint: not yet supported TODO
- *
  *
  * TODO for now only single worker model checkpointing is supported
  */
@@ -63,7 +64,7 @@ private class DynamoDbLeaseCoordinator(
       lease    <- leaseOpt.map(ZIO.succeed(_)).getOrElse {
                  val lease = Lease(
                    key = shard.shardId(),
-                   owner = workerId,
+                   owner = Some(workerId),
                    counter = 0L,
                    ownerSwitchesSinceCheckpoint = 0L,
                    checkpoint = None,
@@ -79,15 +80,15 @@ private class DynamoDbLeaseCoordinator(
           lastStaged <- staged.get
           _          <- lastStaged match {
                  case Some(r) =>
-                   val newLease =
+                   val updatedLease =
                      lease.copy(
                        counter = lease.counter + 1,
                        checkpoint = Some(ExtendedSequenceNumber(r.sequenceNumber, r.subSequenceNumber))
                      )
                    updateCheckpoint(
-                     newLease
+                     updatedLease
                      // TODO handle lease lost
-                   ).onSuccess(_ => staged.set(None) *> currentLeases.update(_ + (lease.key -> newLease)))
+                   ).onSuccess(_ => staged.set(None) *> currentLeases.update(_ + (lease.key -> updatedLease)))
                  case None    =>
                    ZIO.unit
                }
@@ -146,8 +147,27 @@ private class DynamoDbLeaseCoordinator(
         ZIO.foreach(_)(i => ZIO.fromTry(toLease(i))).map(_.toList)
       )
 
-  def releaseLeases = currentLeases.get.flatMap(leases => ZIO.foreach(leases.values)(releaseLease)).unit
+  def releaseLeases =
+    currentLeases.get
+      .map(_.values)
+      .flatMap(
+        ZIO.foreach(_)(releaseLease(_).catchAll {
+          case Right(ShardLeaseLost) => // This is fine at shutdown
+            ZIO.unit
+          case Left(e)               =>
+            ZIO.fail(e)
+        })
+      )
+      .unit
 
+  /**
+   * Removes the leaseOwner property
+   *
+   * Expects the given lease's counter
+   *
+   * @param lease
+   * @return
+   */
   def releaseLease(lease: Lease): ZIO[Any, Either[Throwable, ShardLeaseLost.type], Unit] = {
     import ImplicitConversions.toAttributeValue
     val request = UpdateItemRequest
@@ -171,6 +191,7 @@ private class DynamoDbLeaseCoordinator(
     }.tapError(e => UIO(println(s"Got error releasing lease: ${e}")))
   }
 
+  // Puts the lease counter to the given lease's counter and expects counter - 1
   def updateCheckpoint(lease: Lease) = {
     require(lease.checkpoint.isDefined, "Cannot update checkpoint without Lease.checkpoint property set")
 
@@ -187,6 +208,7 @@ private class DynamoDbLeaseCoordinator(
       )
       .attributeUpdates(
         Map(
+          "leaseCounter"                 -> putAttributeValueUpdate(lease.counter),
           "checkpoint"                   -> lease.checkpoint
             .map(_.sequenceNumber)
             .map(putAttributeValueUpdate)
@@ -229,7 +251,7 @@ object DynamoDbLeaseCoordinator {
   // TODO some of these fields are probably optional
   case class Lease(
     key: String,
-    owner: String,
+    owner: Option[String],
     counter: Long,
     ownerSwitchesSinceCheckpoint: Long,
     checkpoint: Option[ExtendedSequenceNumber],
@@ -247,18 +269,13 @@ object DynamoDbLeaseCoordinator {
         _             <- UIO(println(s"Found ${currentLeases.size} existing leases: " + currentLeases.mkString("\n")))
         _             <- leases.set(currentLeases.map(l => l.key -> l).toMap)
       } yield coordinator
-    }(_.releaseLeases.catchAll {
-      case Right(ShardLeaseLost) => // This is fine at shutdown
-        ZIO.unit
-      case Left(e)               =>
-        ZIO.fail(e)
-    }.orDie)
+    }(_.releaseLeases.orDie)
 
   private def toLease(item: DynamoDbItem): Try[Lease] =
     Try {
       Lease(
         key = item("leaseKey").s(),
-        owner = item("leaseOwner").s(),
+        owner = item.get("leaseOwner").map(_.s()),
         counter = item("leaseCounter").n().toLong,
         ownerSwitchesSinceCheckpoint = item("ownerSwitchesSinceCheckpoint").n().toLong,
         checkpoint = item
@@ -293,7 +310,7 @@ object DynamoDbLeaseCoordinator {
       "leaseCounter"                 -> lease.counter,
       "checkpoint"                   -> lease.checkpoint.map(_.sequenceNumber).getOrElse(null),
       "checkpointSubSequenceNumber"  -> lease.checkpoint.map(_.subSequenceNumber).getOrElse(null),
-      "ownerSwitchesSinceCheckpoint" -> attributeValue(0L)
+      "ownerSwitchesSinceCheckpoint" -> 0L
     ) ++ (if (lease.parentShardIds.nonEmpty) DynamoDbItem("parentShardIds" -> lease.parentShardIds)
           else DynamoDbItem.empty)
   }

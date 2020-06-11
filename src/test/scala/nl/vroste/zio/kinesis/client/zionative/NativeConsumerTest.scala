@@ -43,17 +43,21 @@ object NativeConsumerTest extends DefaultRunnableSpec {
         withStream(streamName, shards = nrShards) {
           for {
             _        <- produceSampleRecords(streamName, nrRecords).fork
-            records  <-
-              Consumer
-                .shardedStream(streamName, "test1", Serde.asciiString, fetchMode = FetchMode.Polling(batchSize = 1000))
-                .flatMapPar(Int.MaxValue)(_._2)
-                .take(nrRecords.toLong)
-                .runCollect
+            records  <- Consumer
+                         .shardedStream(
+                           streamName,
+                           s"${streamName}-test1",
+                           Serde.asciiString,
+                           fetchMode = FetchMode.Polling(batchSize = 1000)
+                         )
+                         .flatMapPar(Int.MaxValue)(_._2)
+                         .take(nrRecords.toLong)
+                         .runCollect
             shardIds <- ZIO.service[AdminClient].flatMap(_.describeStream(streamName)).map(_.shards.map(_.shardId()))
 
           } yield assert(records.map(_.shardId).toSet)(equalTo(shardIds.toSet))
         }
-      }, // @@ TestAspect.ignore,
+      } @@ TestAspect.ignore,
       testM("continue from the next message after the last checkpoint") {
         val streamName      = streamPrefix + "testStream-2"
         val applicationName = streamPrefix + "test2"
