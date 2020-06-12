@@ -21,6 +21,7 @@ import zio.duration._
 import zio.stream.ZStream
 import zio.blocking.Blocking
 import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.ExtendedSequenceNumber
+import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 
 sealed trait FetchMode
 object FetchMode {
@@ -59,6 +60,13 @@ trait LeaseCoordinator {
   def makeCheckpointer(shard: Shard): Task[Checkpointer]
 
   def getCheckpointForShard(shard: Shard): UIO[Option[ExtendedSequenceNumber]]
+
+  // TODO current shards should probably be a stream or ref or something
+  def acquiredLeases: ZStream[Clock, Throwable, AcquiredLease]
+}
+
+object LeaseCoordinator {
+  case class AcquiredLease(shardId: String, leaseLost: Promise[Nothing, Unit])
 }
 
 object Consumer {
@@ -98,8 +106,6 @@ object Consumer {
             )
           }
 
-        val currentShards: ZStream[Clock, Throwable, Shard] = client.listShards(streamName) ++ ZStream.never
-
         def makeFetcher(streamDescription: StreamDescription): ZManaged[Clock, Throwable, Fetcher] =
           fetchMode match {
             case c: Polling     => PollingFetcher.make(client, streamDescription, c)
@@ -109,25 +115,30 @@ object Consumer {
         ZStream.unwrapManaged {
           for {
             streamDescription <- adminClient.describeStream(streamName).toManaged_
-            leaseCoordinator  <- DynamoDbLeaseCoordinator.make(dynamoClient, applicationName)
             fetcher           <- makeFetcher(streamDescription)
-          } yield currentShards.mapM { shard =>
-            for {
-              checkpointer        <- leaseCoordinator.makeCheckpointer(shard)
-              blocking            <- ZIO.environment[Blocking]
-              startingPositionOpt <- leaseCoordinator.getCheckpointForShard(shard)
-              startingPosition     = startingPositionOpt
-                                   .map(s => ShardIteratorType.AfterSequenceNumber(s.sequenceNumber))
-                                   .getOrElse(initialStartingPosition)
-              _                   <- UIO(println(s"${shard.shardId} start at ${startingPosition}"))
-              shardStream          = fetcher.shardRecordStream(shard, startingPosition).mapChunksM { chunk =>
-                              chunk.mapM(record => toRecord(shard.shardId(), record))
-                            }
-            } yield (
-              shard.shardId(),
-              shardStream.ensuringFirst(checkpointer.checkpoint.orDie.provide(blocking)),
-              checkpointer
-            )
+            currentShards     <- client.listShards(streamName).runCollect.map(_.map(l => (l.shardId(), l)).toMap).toManaged_
+            leaseCoordinator  <- DynamoDbLeaseCoordinator.make(dynamoClient, applicationName, currentShards)
+          } yield leaseCoordinator.acquiredLeases.collect {
+            case AcquiredLease(shardId, leaseLost) if currentShards.contains(shardId) =>
+              (currentShards.get(shardId).get, leaseLost)
+          }.mapM {
+            case (shard, leaseLost) =>
+              for {
+                checkpointer        <- leaseCoordinator.makeCheckpointer(shard)
+                blocking            <- ZIO.environment[Blocking]
+                startingPositionOpt <- leaseCoordinator.getCheckpointForShard(shard)
+                startingPosition     = startingPositionOpt
+                                     .map(s => ShardIteratorType.AfterSequenceNumber(s.sequenceNumber))
+                                     .getOrElse(initialStartingPosition)
+                _                   <- UIO(println(s"${shard.shardId} start at ${startingPosition}"))
+                shardStream          = fetcher.shardRecordStream(shard, startingPosition).mapChunksM { chunk =>
+                                chunk.mapM(record => toRecord(shard.shardId(), record))
+                              }
+              } yield (
+                shard.shardId(),
+                shardStream.ensuringFirst(checkpointer.checkpoint.orDie.provide(blocking)),
+                checkpointer
+              )
           }
         }
       }
