@@ -52,16 +52,38 @@ private class DynamoDbLeaseCoordinator(
   shards: Map[String, Shard]
 ) extends LeaseCoordinator {
 
+  import DynamoDbLeaseCoordinator._
+  import ZioExtensions.OnSuccessSyntax
+
+  def initialLeases =
+    for {
+      leases             <- currentLeases.get
+      shardsWithoutLease  =
+        shards.values.toList.filterNot(shard => leases.values.map(_.key).toList.contains(shard.shardId()))
+      _                  <- UIO(println(s"Creating new leases for shards ${shardsWithoutLease.mkString(",")}"))
+      newlyCreatedLeases <- ZIO.foreach(shardsWithoutLease) { shard =>
+                              val lease = Lease(
+                                key = shard.shardId(),
+                                owner = Some(workerId),
+                                counter = 0L,
+                                ownerSwitchesSinceCheckpoint = 0L,
+                                checkpoint = None,
+                                parentShardIds = Seq.empty
+                              )
+
+                              // TODO CreateLease may fail but we should handle that before trying to process the shard
+                              createLease(lease).ignore *> currentLeases.update(_ + (lease.key -> lease)).as(lease)
+                            }
+      // Claim new leases for the shards we don't have leases for
+    } yield leases.values ++ newlyCreatedLeases
+
   override def acquiredLeases: ZStream[zio.clock.Clock, Throwable, AcquiredLease] =
     ZStream
-      .fromEffect(currentLeases.get.map(_.values))
+      .fromEffect(initialLeases)
       .mapConcat(identity(_))
       .mapM { lease =>
         Promise.make[Nothing, Unit].map(AcquiredLease(lease.key, _))
       }
-
-  import DynamoDbLeaseCoordinator._
-  import ZioExtensions.OnSuccessSyntax
 
   override def getCheckpointForShard(shard: Shard): UIO[Option[ExtendedSequenceNumber]] =
     for {
@@ -71,21 +93,10 @@ private class DynamoDbLeaseCoordinator(
 
   override def makeCheckpointer(shard: Shard) =
     for {
-      leaseOpt <- currentLeases.get
-                    .map(_.get(shard.shardId()))
-      lease    <- leaseOpt.map(ZIO.succeed(_)).getOrElse {
-                 val lease = Lease(
-                   key = shard.shardId(),
-                   owner = Some(workerId),
-                   counter = 0L,
-                   ownerSwitchesSinceCheckpoint = 0L,
-                   checkpoint = None,
-                   parentShardIds = Seq.empty
-                 )
-                 // TODO CreateLease may fail but we should handle that before trying to process the shard
-                 createLease(lease).ignore *> currentLeases.update(_ + (lease.key -> lease)).as(lease)
-               }
-      staged   <- Ref.make[Option[Record[_]]](None)
+      lease  <- currentLeases.get
+                 .map(_.get(shard.shardId()))
+                 .someOrFail(new Exception(s"Worker does not hold lease for shard ${shard.shardId()}"))
+      staged <- Ref.make[Option[Record[_]]](None)
     } yield new Checkpointer {
       override def checkpoint: ZIO[zio.blocking.Blocking, Throwable, Unit] =
         for {
@@ -143,7 +154,7 @@ private class DynamoDbLeaseCoordinator(
       .catchSome { case _: ResourceNotFoundException => ZIO.succeed(false) }
       .tap(exists => UIO(println(s"Lease table ${applicationName} exists? ${exists}")))
 
-  def getLeases: ZIO[Clock, Throwable, List[Lease]] =
+  def getLeasesFromDB: ZIO[Clock, Throwable, List[Lease]] =
     paginatedRequest { (lastItem: Option[DynamoDbItem]) =>
       val builder     = ScanRequest.builder().tableName(applicationName)
       val scanRequest = lastItem.map(_.asJava).fold(builder)(builder.exclusiveStartKey).build()
@@ -281,7 +292,7 @@ object DynamoDbLeaseCoordinator {
         leases        <- Ref.make[Map[String, Lease]](Map.empty)
         coordinator    = new DynamoDbLeaseCoordinator(client, applicationName, leases, shards)
         _             <- coordinator.createLeaseTableIfNotExists
-        currentLeases <- coordinator.getLeases
+        currentLeases <- coordinator.getLeasesFromDB
         _             <- UIO(println(s"Found ${currentLeases.size} existing leases: " + currentLeases.mkString("\n")))
         _             <- leases.set(currentLeases.map(l => l.key -> l).toMap)
       } yield coordinator
