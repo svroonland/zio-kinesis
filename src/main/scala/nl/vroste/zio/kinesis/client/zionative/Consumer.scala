@@ -131,9 +131,14 @@ object Consumer {
                                      .map(s => ShardIteratorType.AfterSequenceNumber(s.sequenceNumber))
                                      .getOrElse(initialStartingPosition)
                 _                   <- UIO(println(s"${shard.shardId} start at ${startingPosition}"))
-                shardStream          = fetcher.shardRecordStream(shard, startingPosition).mapChunksM { chunk =>
-                                chunk.mapM(record => toRecord(shard.shardId(), record))
-                              }
+                shardStream          = (fetcher
+                                  .shardRecordStream(shard, startingPosition)
+                                  .mapChunksM { chunk =>
+                                    chunk.mapM(record => toRecord(shard.shardId(), record))
+                                  }
+                                  .map(Exit.succeed(_)) ++ ZStream.fromEffect(
+                                  leaseLost.await.as(Exit.fail(None))
+                                )).collectWhileSuccess
               } yield (
                 shard.shardId(),
                 shardStream.ensuringFirst(checkpointer.checkpoint.orDie.provide(blocking)),
