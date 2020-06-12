@@ -17,6 +17,8 @@ import scala.jdk.CollectionConverters._
 import scala.util.Try
 import scala.util.Failure
 import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.LeaseAlreadyExists
+import zio.stream.ZStream
+import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 
 object ZioExtensions {
   implicit class OnSuccessSyntax[R, E, A](val zio: ZIO[R, E, A]) extends AnyVal {
@@ -46,8 +48,18 @@ object ZioExtensions {
 private class DynamoDbLeaseCoordinator(
   client: DynamoDbAsyncClient,
   applicationName: String,
-  currentLeases: Ref[Map[String, Lease]]
+  currentLeases: Ref[Map[String, Lease]],
+  shards: Map[String, Shard]
 ) extends LeaseCoordinator {
+
+  override def acquiredLeases: ZStream[zio.clock.Clock, Throwable, AcquiredLease] =
+    ZStream
+      .fromEffect(currentLeases.get.map(_.values))
+      .mapConcat(identity(_))
+      .mapM { lease =>
+        Promise.make[Nothing, Unit].map(AcquiredLease(lease.key, _))
+      }
+
   import DynamoDbLeaseCoordinator._
   import ZioExtensions.OnSuccessSyntax
 
@@ -259,11 +271,15 @@ object DynamoDbLeaseCoordinator {
     pendingCheckpoint: Option[ExtendedSequenceNumber] = None
   )
 
-  def make(client: DynamoDbAsyncClient, applicationName: String): ZManaged[Clock, Throwable, LeaseCoordinator] =
+  def make(
+    client: DynamoDbAsyncClient,
+    applicationName: String,
+    shards: Map[String, Shard]
+  ): ZManaged[Clock, Throwable, LeaseCoordinator] =
     ZManaged.make {
       for {
         leases        <- Ref.make[Map[String, Lease]](Map.empty)
-        coordinator    = new DynamoDbLeaseCoordinator(client, applicationName, leases)
+        coordinator    = new DynamoDbLeaseCoordinator(client, applicationName, leases, shards)
         _             <- coordinator.createLeaseTableIfNotExists
         currentLeases <- coordinator.getLeases
         _             <- UIO(println(s"Found ${currentLeases.size} existing leases: " + currentLeases.mkString("\n")))
