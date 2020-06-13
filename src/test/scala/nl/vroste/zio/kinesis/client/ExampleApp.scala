@@ -4,11 +4,11 @@ import java.util.UUID
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.TestUtil.retryOnResourceNotFound
 import nl.vroste.zio.kinesis.client.serde.Serde
+import software.amazon.kinesis.exceptions.ShutdownException
 import zio.console._
 import zio.duration._
 import zio.stream.{ ZStream, ZTransducer }
 import zio.{ Chunk, ExitCode, Schedule, ZIO }
-import software.amazon.kinesis.exceptions.ShutdownException
 
 object ExampleApp extends zio.App {
 
@@ -19,13 +19,15 @@ object ExampleApp extends zio.App {
     val streamName = "zio-test-stream-" + UUID.randomUUID().toString
 
     for {
-      _ <- TestUtil.createStreamUnmanaged(streamName, 10)
-      _ <- produceRecords(streamName, 20000).fork
-      _ <- LocalStackDynamicConsumer
+      _       <- TestUtil.createStreamUnmanaged(streamName, 10)
+      _       <- produceRecords(streamName, 20000).fork
+      service <- ZIO.service[DynamicConsumer2.Service]
+      _       <- service
              .shardedStream(
                streamName,
                applicationName = "testApp-" + UUID.randomUUID().toString(),
-               deserializer = Serde.asciiString
+               deserializer = Serde.asciiString,
+               isEnhancedFanOut = false
              )
              .flatMapPar(Int.MaxValue) {
                case (shardID, shardStream, checkpointer) =>
@@ -43,12 +45,12 @@ object ExampleApp extends zio.App {
              }
              .runCollect
              .fork
-      _ <- putStrLn("App started")
-      _ <- ZIO.unit.delay(15.seconds)
-      _ <- putStrLn("Exiting app")
+      _       <- putStrLn("App started")
+      _       <- ZIO.unit.delay(15.seconds)
+      _       <- putStrLn("Exiting app")
 
     } yield ExitCode.success
-  }.orDie
+  }.provideCustomLayer(LocalStackDynamicConsumer2.localstackDynamicConsumerLayer).orDie
 
   def produceRecords(streamName: String, nrRecords: Int) =
     (for {
