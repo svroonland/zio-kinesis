@@ -225,7 +225,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
         } yield assert(processed)(equalTo(checkpointed))
       }.provideSomeLayer[Clock with Console with Blocking](LocalStackLayers.dynamicConsumerLayer)
         .provideCustomLayer(Clock.live)
-    } @@ TestAspect.timeout(40.seconds)
+    } @@ TestAspect.timeout(60.seconds)
 
   // TODO check the order of received records is correct
 
