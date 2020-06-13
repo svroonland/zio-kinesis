@@ -8,7 +8,7 @@ import zio.duration._
 object TestUtil {
   def createStream(streamName: String, nrShards: Int): ZManaged[Console, Throwable, Unit] =
     for {
-      adminClient <- AdminClient.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
+      adminClient <- AdminClient.build(LocalStackClients.kinesisAsyncClientBuilder)
       _           <- adminClient
              .createStream(streamName, nrShards)
              .catchSome {
@@ -27,7 +27,7 @@ object TestUtil {
 
   def createStreamUnmanaged(streamName: String, nrShards: Int) =
     AdminClient
-      .build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
+      .build(LocalStackClients.kinesisAsyncClientBuilder)
       .use(
         _.createStream(streamName, nrShards).catchSome {
           case _: ResourceInUseException =>

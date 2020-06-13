@@ -21,7 +21,7 @@ object ExampleApp extends zio.App {
     for {
       _       <- TestUtil.createStreamUnmanaged(streamName, 10)
       _       <- produceRecords(streamName, 20000).fork
-      service <- ZIO.service[DynamicConsumer2.Service]
+      service <- ZIO.service[DynamicConsumer.Service]
       _       <- service
              .shardedStream(
                streamName,
@@ -50,11 +50,11 @@ object ExampleApp extends zio.App {
       _       <- putStrLn("Exiting app")
 
     } yield ExitCode.success
-  }.provideCustomLayer(LocalStackDynamicConsumer2.localstackDynamicConsumerLayer).orDie
+  }.provideCustomLayer(LocalStackLayers.dynamicConsumerLayer).orDie
 
   def produceRecords(streamName: String, nrRecords: Int) =
     (for {
-      client   <- Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
+      client   <- Client.build(LocalStackClients.kinesisAsyncClientBuilder)
       producer <- Producer.make(streamName, client, Serde.asciiString)
     } yield producer).use { producer =>
       val records =

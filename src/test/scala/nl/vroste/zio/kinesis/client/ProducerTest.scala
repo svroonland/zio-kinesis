@@ -25,7 +25,7 @@ object ProducerTest extends DefaultRunnableSpec {
 
         (for {
           _        <- createStream(streamName, 10)
-          client   <- Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
+          client   <- Client.build(LocalStackClients.kinesisAsyncClientBuilder)
           producer <- Producer
                         .make(streamName, client, Serde.asciiString, ProducerSettings(bufferSize = 32768))
                         .provideLayer(Clock.live)
@@ -50,7 +50,7 @@ object ProducerTest extends DefaultRunnableSpec {
         val streamName = "zio-test-stream-not-existing"
 
         (for {
-          client   <- Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
+          client   <- Client.build(LocalStackClients.kinesisAsyncClientBuilder)
           producer <- Producer
                         .make(streamName, client, Serde.asciiString, ProducerSettings(bufferSize = 32768))
                         .provideLayer(Clock.live)

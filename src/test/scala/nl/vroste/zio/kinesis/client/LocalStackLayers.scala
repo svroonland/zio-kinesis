@@ -17,7 +17,7 @@ import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.awssdk.utils.AttributeMap
 import zio.{ Has, ZIO, ZLayer, ZManaged }
 
-object LocalStackDynamicConsumer2 {
+object LocalStackLayers {
 
   private val region: Region          = Region.of("us-east-1")
   private val kinesisUri: URI         = URI.create("http://localhost:4568")
@@ -79,7 +79,7 @@ object LocalStackDynamicConsumer2 {
       )
     })
 
-  val localstackDynamicConsumerLayer: ZLayer[Any, Throwable, Has[DynamicConsumer2.Service]] =
-    kinesisAsyncClientLayer ++ dynamoDbClientLayer ++ cloudWatchClientLayer >>> DynamicConsumer2Live.layer
+  val dynamicConsumerLayer: ZLayer[Any, Throwable, Has[DynamicConsumer.Service]] =
+    kinesisAsyncClientLayer ++ dynamoDbClientLayer ++ cloudWatchClientLayer >>> DynamicConsumerLive.layer
 
 }

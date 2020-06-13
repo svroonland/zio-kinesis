@@ -25,13 +25,13 @@ import zio.stream.ZStream
 
 import scala.jdk.CollectionConverters._
 
-object DynamicConsumer2Live {
+object DynamicConsumerLive {
   val layer: ZLayer[Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[DynamoDbAsyncClient], Nothing, Has[
-    DynamicConsumer2.Service
+    DynamicConsumer.Service
   ]] =
-    ZLayer.fromServices[KinesisAsyncClient, CloudWatchAsyncClient, DynamoDbAsyncClient, DynamicConsumer2.Service] {
+    ZLayer.fromServices[KinesisAsyncClient, CloudWatchAsyncClient, DynamoDbAsyncClient, DynamicConsumer.Service] {
       (kinesisAsyncClient, cloudWatchAsyncClient, dynamoDbAsyncClient) =>
-        new DynamicConsumer2.Service {
+        new DynamicConsumer.Service {
           override def shardedStream[R, T](
             streamName: String,
             applicationName: String,

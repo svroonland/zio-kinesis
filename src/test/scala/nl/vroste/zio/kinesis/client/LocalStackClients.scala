@@ -1,10 +1,7 @@
 package nl.vroste.zio.kinesis.client
 
 import java.net.URI
-import java.util.UUID
 
-import nl.vroste.zio.kinesis.client.serde.Deserializer
-import nl.vroste.zio.kinesis.client.DynamicConsumer.Checkpointer
 import software.amazon.awssdk.auth.credentials.{
   AwsBasicCredentials,
   AwsCredentialsProvider,
@@ -18,11 +15,8 @@ import software.amazon.awssdk.services.cloudwatch.{ CloudWatchAsyncClient, Cloud
 import software.amazon.awssdk.services.dynamodb.{ DynamoDbAsyncClient, DynamoDbAsyncClientBuilder }
 import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyncClientBuilder }
 import software.amazon.awssdk.utils.AttributeMap
-import zio.UIO
-import zio.blocking.Blocking
-import zio.stream.ZStream
 
-object LocalStackDynamicConsumer {
+object LocalStackClients {
 
   private val region: Region          = Region.of("us-east-1")
   private val kinesisUri: URI         = URI.create("http://localhost:4568")
@@ -67,28 +61,5 @@ object LocalStackDynamicConsumer {
       .credentialsProvider(credsProvider)
       .region(region)
       .endpointOverride(cloudwatchUri)
-
-  def shardedStream[R, T](
-    streamName: String,
-    applicationName: String,
-    deserializer: Deserializer[R, T],
-    workerIdentifier: String = UUID.randomUUID().toString,
-    requestShutdown: UIO[Unit] = UIO.never
-  ): ZStream[
-    Blocking with R,
-    Throwable,
-    (String, ZStream[Blocking, Throwable, DynamicConsumer.Record[T]], Checkpointer)
-  ] =
-    DynamicConsumer.shardedStream(
-      streamName,
-      applicationName,
-      deserializer,
-      kinesisAsyncClientBuilder,
-      cloudWatchClientBuilder,
-      dynamoDbClientBuilder,
-      isEnhancedFanOut = false,
-      workerIdentifier = workerIdentifier,
-      requestShutdown = requestShutdown
-    )
 
 }
