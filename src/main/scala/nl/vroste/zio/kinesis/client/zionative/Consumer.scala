@@ -75,7 +75,8 @@ object Consumer {
     applicationName: String,
     deserializer: Deserializer[R, T],
     fetchMode: FetchMode = FetchMode.Polling(),
-    initialStartingPosition: ShardIteratorType = ShardIteratorType.TrimHorizon
+    initialStartingPosition: ShardIteratorType = ShardIteratorType.TrimHorizon,
+    workerId: String = "worker1"
   ): ZStream[
     Blocking with Clock with Has[Client] with Has[AdminClient] with Has[DynamoDbAsyncClient],
     Throwable,
@@ -117,7 +118,7 @@ object Consumer {
             streamDescription <- adminClient.describeStream(streamName).toManaged_
             fetcher           <- makeFetcher(streamDescription)
             currentShards     <- client.listShards(streamName).runCollect.map(_.map(l => (l.shardId(), l)).toMap).toManaged_
-            leaseCoordinator  <- DynamoDbLeaseCoordinator.make(dynamoClient, applicationName, currentShards)
+            leaseCoordinator  <- DynamoDbLeaseCoordinator.make(dynamoClient, applicationName, workerId, currentShards)
           } yield leaseCoordinator.acquiredLeases.collect {
             case AcquiredLease(shardId, leaseLost) if currentShards.contains(shardId) =>
               (currentShards.get(shardId).get, leaseLost)
