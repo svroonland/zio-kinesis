@@ -4,6 +4,7 @@ import java.util.UUID
 
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.serde.Serde
+import software.amazon.kinesis.exceptions.ShutdownException
 import zio._
 import zio.blocking.Blocking
 import zio.clock.Clock
@@ -35,8 +36,7 @@ object DynamicConsumerTest2 extends DefaultRunnableSpec {
 
           _ <- putStrLn("Starting dynamic consumer")
           _ <- (for {
-                   service <- ZIO
-                                .service[DynamicConsumer2.Service]
+                   service <- ZIO.service[DynamicConsumer2.Service]
                    _       <- service
                           .shardedStream(
                             streamName,
@@ -63,10 +63,106 @@ object DynamicConsumerTest2 extends DefaultRunnableSpec {
       }
     }
 
+  def testConsume2 =
+    testM("support multiple parallel consumers on the same Kinesis stream") {
+
+      val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
+      val applicationName = "zio-test-" + UUID.randomUUID().toString
+
+      val nrRecords = 80
+
+      def streamConsumer(
+        workerIdentifier: String,
+        activeConsumers: Ref[Set[String]]
+      ): ZStream[Console with Blocking, Throwable, (String, String)] = {
+        val checkpointDivisor = 1
+
+        def handler(shardId: String, r: DynamicConsumer.Record[String]) =
+          for {
+            id <- ZIO.fiberId
+            _  <- putStrLn(s"Consumer $workerIdentifier on fiber $id got record $r on shard $shardId")
+            // Simulate some effectful processing
+            _  <- sleep(50.millis)
+          } yield ()
+
+        (for {
+          service <- ZStream.service[DynamicConsumer2.Service]
+          stream  <- ZStream
+                      .fromEffect(putStrLn(s"Starting consumer $workerIdentifier"))
+                      .flatMap(_ =>
+                        service
+                          .shardedStream(
+                            streamName,
+                            applicationName = applicationName,
+                            deserializer = Serde.asciiString,
+                            workerIdentifier = applicationName + "-" + workerIdentifier,
+                            isEnhancedFanOut = false
+                          )
+                          .flatMapPar(Int.MaxValue) {
+                            case (shardId, shardStream, checkpointer @ _) =>
+                              shardStream.zipWithIndex.tap {
+                                case (r: DynamicConsumer.Record[String], sequenceNumberForShard: Long) =>
+                                  checkpointer.stageOnSuccess(handler(shardId, r))(r).as(r) <*
+                                    (putStrLn(
+                                      s"Checkpointing at offset ${sequenceNumberForShard} in consumer ${workerIdentifier}, shard ${shardId}"
+                                    ) *> checkpointer.checkpoint)
+                                      .when(sequenceNumberForShard % checkpointDivisor == checkpointDivisor - 1)
+                                      .tapError(_ =>
+                                        putStrLn(
+                                          s"Failed to checkpoint in consumer ${workerIdentifier}, shard ${shardId}"
+                                        )
+                                      )
+                              }.as((workerIdentifier, shardId))
+                                // Background and a bit delayed so we get a chance to actually emit some records
+                                .tap(_ => (sleep(1.second) *> activeConsumers.update(_ + workerIdentifier)).fork)
+                                .ensuring(putStrLn(s"Shard $shardId completed for consumer $workerIdentifier"))
+                                .catchSome {
+                                  case _: ShutdownException => // This will be thrown when the shard lease has been stolen
+                                    // Abort the stream when we no longer have the lease
+                                    ZStream.empty
+                                }
+                          }
+                      )
+
+        } yield stream)
+          .provideSomeLayer[Console with Blocking](LocalStackDynamicConsumer2.localstackDynamicConsumerLayer)
+      }
+
+      (Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder) <* createStream(streamName, 10)).use {
+        client =>
+          val records =
+            (1 to nrRecords).map(i => ProducerRecord(s"key$i", s"msg$i"))
+          for {
+            _                     <- putStrLn("Putting records")
+            _                     <- ZStream
+                   .fromIterable(1 to nrRecords)
+                   .schedule(Schedule.spaced(250.millis))
+                   .mapM { _ =>
+                     client
+                       .putRecords(streamName, Serde.asciiString, records)
+                       .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
+                       .retry(retryOnResourceNotFound)
+                   }
+                   .provideSomeLayer(Clock.live)
+                   .runDrain
+                   .fork
+
+            _                     <- putStrLn("Starting dynamic consumers")
+            activeConsumers       <- Ref.make[Set[String]](Set.empty)
+            allConsumersGotAShard <- awaitRefPredicate(activeConsumers)(_ == Set("1", "2"))
+            _                     <- (streamConsumer("1", activeConsumers)
+                     merge delayStream(streamConsumer("2", activeConsumers), 5.seconds))
+                   .interruptWhen(allConsumersGotAShard.join)
+                   .runCollect
+          } yield assertCompletes
+      }
+    }
+
   override def spec =
     suite("DynamicConsumer2")(
-      testConsume1
-    ) @@ timeout(30.seconds) @@ sequential
+      testConsume1,
+      testConsume2
+    ) @@ timeout(5.minute) @@ sequential
 
   def sleep(d: Duration) = ZIO.sleep(d).provideLayer(Clock.live)
 
