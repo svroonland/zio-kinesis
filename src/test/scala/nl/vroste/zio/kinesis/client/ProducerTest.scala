@@ -45,7 +45,7 @@ object ProducerTest extends DefaultRunnableSpec {
             } yield assertCompletes
           )
         }.untraced.provideLayer(Clock.live ++ Console.live)
-      } @@ timeout(2.minute),
+      } @@ timeout(2.minute) @@ ignore,
       testM("fail when attempting to produce to a stream that does not exist") {
         val streamName = "zio-test-stream-not-existing"
 
@@ -59,6 +59,6 @@ object ProducerTest extends DefaultRunnableSpec {
           producer
             .produceChunk(Chunk.fromIterable(records)) *> putStrLn(s"Chunk completed")
         }.run.map(r => assert(r)(fails(isSubtype[KinesisException](anything))))
-      } @@ timeout(1.minute)
+      } @@ timeout(1.minute) @@ ignore
     ) @@ sequential
 }
