@@ -60,7 +60,7 @@ object Fetcher {
 }
 
 trait LeaseCoordinator {
-  def makeCheckpointer(shard: Shard): Task[Checkpointer]
+  def makeCheckpointer(shard: Shard): ZIO[Clock, Throwable, Checkpointer]
 
   def getCheckpointForShard(shard: Shard): UIO[Option[ExtendedSequenceNumber]]
 
@@ -136,7 +136,7 @@ object Consumer {
                 startingPosition     = startingPositionOpt
                                      .map(s => ShardIteratorType.AfterSequenceNumber(s.sequenceNumber))
                                      .getOrElse(initialStartingPosition)
-                _                   <- UIO(println(s"${shard.shardId} start at ${startingPosition}"))
+                // _                   <- UIO(println(s"${shard.shardId} start at ${startingPosition}"))
                 shardStream          = (fetcher
                                   .shardRecordStream(shard, startingPosition)
                                   .mapChunksM { chunk =>

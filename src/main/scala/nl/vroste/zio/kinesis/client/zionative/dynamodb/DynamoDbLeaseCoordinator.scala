@@ -54,6 +54,9 @@ case class State(
       })
     )
 
+  def updateLeases(leases: List[Lease]): State =
+    copy(currentLeases = leases.map(l => l.key -> l).toMap)
+
   def getLease(shardId: String): Option[Lease] =
     currentLeases.get(shardId)
 
@@ -132,6 +135,30 @@ private class DynamoDbLeaseCoordinator(
         _             = println(s"$workerId Going to steal ${nrLeasesToSteal} leases: ${leasesToSteal.mkString(",")}")
       } yield leasesToSteal
     } else ZIO.succeed(List.empty)
+  }
+
+  /**
+   * If our application does not checkpoint, we still need to periodically renew leases, otherwise other workers
+   * will think ours are expired
+   */
+  val renewLeases = ()
+
+  /**
+   * For lease taking to work properly, we need to have the latest state of leases
+   *
+   * Also if other workers have taken our leases and we haven't yet checkpointed, we can find out proactively
+   */
+  val refreshLeases = {
+    for {
+      _                          <- UIO(println("Refreshing leases"))
+      leases                     <- table.getLeasesFromDB
+      previousHeldLeases         <- state.getAndUpdate(_.updateLeases(leases)).map(_.heldLeases)
+      leasesOwnedAccordingToDB    = leases.collect { case l if l.owner.contains(workerId) => l.key }.toSet
+      leasesOwnedAccordingToState = previousHeldLeases.keySet
+      lostLeases                  = leasesOwnedAccordingToState -- leasesOwnedAccordingToDB
+      _                          <- UIO(println(s"Lost leases ${lostLeases.mkString(",")}")).when(lostLeases.nonEmpty)
+      _                          <- ZIO.foreach_(lostLeases)(leaseLost)
+    } yield ()
   }
 
   /**
@@ -249,13 +276,14 @@ private class DynamoDbLeaseCoordinator(
   override def makeCheckpointer(shard: Shard) =
     for {
       staged <- Ref.make[Option[Record[_]]](None)
+      clock  <- ZIO.environment[Clock]
     } yield new Checkpointer {
       override def checkpoint: ZIO[zio.blocking.Blocking, Either[Throwable, ShardLeaseLost.type], Unit] =
         for {
           lastStaged        <- staged.get
           heldLease         <- state.get
                          .map(_.heldLeases.get(shard.shardId()))
-                         .someOrFail(Left(new Exception(s"Worker does not hold lease for shard ${shard.shardId()}")))
+                         .someOrFail(Right(ShardLeaseLost))
           (lease, completed) = heldLease
           _                 <- lastStaged match {
                  case Some(r) =>
@@ -268,7 +296,7 @@ private class DynamoDbLeaseCoordinator(
                      .updateCheckpoint(updatedLease)
                      .catchAll {
                        case _: ConditionalCheckFailedException =>
-                         leaseLost(lease.key) *>
+                         leaseLost(lease.key) *> refreshLeases.mapError(Left(_)).provide(clock).fork *>
                            ZIO.fail(Right(ShardLeaseLost))
                        case e                                  =>
                          ZIO.fail(Left(e))
@@ -311,7 +339,7 @@ private class DynamoDbLeaseCoordinator(
           s.getHeldLease(shard)
             .map {
               case (lease, completed) =>
-                (completed.succeed(()).unit, s.releaseLease(lease).updateLease(lease))
+                (completed.succeed(()).unit, s.releaseLease(lease).updateLease(lease.copy(owner = None)))
             }
             .getOrElse((UIO.unit, s))
       )
@@ -577,6 +605,6 @@ object DynamoDbLeaseCoordinator {
 
       } yield coordinator
     }(_.releaseLeases.orDie)
-      .tap(_.stealLeases.repeat(Schedule.fixed(5.seconds)).forkManaged)
+      .tap(c => (c.refreshLeases *> c.stealLeases).repeat(Schedule.fixed(5.seconds)).delay(5.seconds).forkManaged)
 
 }
