@@ -15,9 +15,13 @@ import zio.console._
 import nl.vroste.zio.kinesis.client.TestUtil.retryOnResourceNotFound
 import zio.Chunk
 import nl.vroste.zio.kinesis.client.zionative.Consumer
+import zio.duration._
 import nl.vroste.zio.kinesis.client.TestUtil.Layers
 import zio.ZManaged
 import zio.test.Assertion._
+import zio.UIO
+import zio.Schedule
+import zio.stream.ZTransducer
 
 object NativeConsumerTest extends DefaultRunnableSpec {
   /*
@@ -29,6 +33,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
   - Must checkpoint the last staged checkpoint before shutdown
   - Correctly deserialize the records
   - TODO something about rate limits: maybe if we have multiple consumers active and run into rate limits?
+  - Two works must be able to start up concurrently (not sure what the assertion would be)
    */
 
   def streamPrefix = ju.UUID.randomUUID().toString().take(6)
@@ -42,7 +47,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
         withStream(streamName, shards = nrShards) {
           for {
-            _        <- produceSampleRecords(streamName, nrRecords).fork
+            _        <- produceSampleRecords(streamName, nrRecords, chunkSize = 200).fork
             records  <- Consumer
                          .shardedStream(
                            streamName,
@@ -51,13 +56,14 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                            fetchMode = FetchMode.Polling(batchSize = 1000)
                          )
                          .flatMapPar(Int.MaxValue)(_._2)
+                         //  .tap(r => UIO(println(s"Got record on shard ${r.shardId}")))
                          .take(nrRecords.toLong)
                          .runCollect
             shardIds <- ZIO.service[AdminClient].flatMap(_.describeStream(streamName)).map(_.shards.map(_.shardId()))
 
           } yield assert(records.map(_.shardId).toSet)(equalTo(shardIds.toSet))
         }
-      } @@ TestAspect.ignore,
+      },
       testM("continue from the next message after the last checkpoint") {
         val streamName      = streamPrefix + "testStream-2"
         val applicationName = streamPrefix + "test2"
@@ -101,6 +107,55 @@ object NativeConsumerTest extends DefaultRunnableSpec {
               hasNoneOf(recordsPart2.map(_.sequenceNumber).toSet) ?? "records pt1 not equal to pt2"
             )
         }
+      },
+      testM("worker steals leases from other worker until they both have an equal share") {
+        val streamName      = streamPrefix + "testStream-3"
+        val applicationName = streamPrefix + "test3"
+        val nrRecords       = 2000
+        val nrShards        = 5
+
+        withStream(streamName, shards = nrShards) {
+          for {
+            _        <- produceSampleRecords(streamName, nrRecords, chunkSize = 10, throttle = Some(1.second)).fork
+            consumer1 = Consumer
+                          .shardedStream(streamName, applicationName, Serde.asciiString, workerId = "worker1")
+                          .flatMapPar(Int.MaxValue) {
+                            case (shard @ _, shardStream, checkpointer) =>
+                              shardStream
+                                .tap(r => UIO(println(s"Worker 1 got record on shard ${r.shardId}")))
+                                .tap(checkpointer.stage)
+                                .aggregateAsyncWithin(ZTransducer.collectAllN(20), Schedule.fixed(1.second))
+                                .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
+                                .tap(_ => checkpointer.checkpoint)
+                                .catchAll {
+                                  case Right(ShardLeaseLost) =>
+                                    ZStream.empty
+                                  case Left(e)               => ZStream.fail(e)
+                                }
+                                .mapConcat(identity(_))
+                          }
+            consumer2 = Consumer
+                          .shardedStream(streamName, applicationName, Serde.asciiString, workerId = "worker2")
+                          .flatMapPar(Int.MaxValue) {
+                            case (shard @ _, shardStream, checkpointer) =>
+                              shardStream
+                                .tap(r => UIO(println(s"Worker 2 got record on shard ${r.shardId}")))
+                                .tap(checkpointer.stage)
+                                .aggregateAsyncWithin(ZTransducer.collectAllN(20), Schedule.fixed(1.second))
+                                .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
+                                .tap(_ => checkpointer.checkpoint)
+                                .catchAll {
+                                  case Right(ShardLeaseLost) =>
+                                    ZStream.empty
+                                  case Left(e)               => ZStream.fail(e)
+                                }
+                                .mapConcat(identity(_))
+                          }
+
+            _        <- consumer1.merge(ZStream.unwrap(ZIO.sleep(10.seconds).as(consumer2))).runCollect
+
+          } yield assertCompletes
+        }
       }
     ).provideSomeLayer(
       (Layers.kinesisAsyncClient >>> (Layers.adminClient ++ Layers.client)).orDie ++ zio.test.environment.testEnvironment ++ Clock.live ++ Layers.dynamo.orDie
@@ -115,7 +170,8 @@ object NativeConsumerTest extends DefaultRunnableSpec {
   def produceSampleRecords(
     streamName: String,
     nrRecords: Int,
-    chunkSize: Int = 100
+    chunkSize: Int = 100,
+    throttle: Option[Duration] = None
   ): ZIO[Has[Client] with Clock, Throwable, Unit] =
     (for {
       client   <- ZIO.service[Client].toManaged_
@@ -133,7 +189,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
             .retry(retryOnResourceNotFound)
             .fork
             .map(fib => Chunk.single(fib))
-        // .tap(_ => ZIO.sleep(1.second))
+            .tap(_ => throttle.map(ZIO.sleep(_)).getOrElse(UIO.unit))
         )
         .mapMPar(24)(_.join)
         .runDrain

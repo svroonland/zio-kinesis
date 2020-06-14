@@ -2,7 +2,7 @@ package nl.vroste.zio.kinesis.client.zionative
 
 import nl.vroste.zio.kinesis.client.AdminClient.StreamDescription
 import nl.vroste.zio.kinesis.client.Client.{ ConsumerRecord, ShardIteratorType }
-import nl.vroste.zio.kinesis.client.DynamicConsumer.{ Checkpointer, Record }
+import nl.vroste.zio.kinesis.client.DynamicConsumer.Record
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.{ EnhancedFanOut, Polling }
 import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator
@@ -22,6 +22,9 @@ import zio.stream.ZStream
 import zio.blocking.Blocking
 import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.ExtendedSequenceNumber
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
+import zio.random.Random
+
+case object ShardLeaseLost
 
 sealed trait FetchMode
 object FetchMode {
@@ -63,6 +66,8 @@ trait LeaseCoordinator {
 
   // TODO current shards should probably be a stream or ref or something
   def acquiredLeases: ZStream[Clock, Throwable, AcquiredLease]
+
+  def releaseLease(shardId: String): Task[Unit]
 }
 
 object LeaseCoordinator {
@@ -78,7 +83,7 @@ object Consumer {
     initialStartingPosition: ShardIteratorType = ShardIteratorType.TrimHorizon,
     workerId: String = "worker1"
   ): ZStream[
-    Blocking with Clock with Has[Client] with Has[AdminClient] with Has[DynamoDbAsyncClient],
+    Blocking with Clock with Random with Has[Client] with Has[AdminClient] with Has[DynamoDbAsyncClient],
     Throwable,
     (String, ZStream[R with Blocking with Clock, Throwable, Record[T]], Checkpointer)
   ] =
@@ -142,7 +147,10 @@ object Consumer {
                                 )).collectWhileSuccess
               } yield (
                 shard.shardId(),
-                shardStream.ensuringFirst(checkpointer.checkpoint.orDie.provide(blocking)),
+                shardStream.ensuringFirst(
+                  checkpointer.checkpoint.ignore.provide(blocking) *>
+                    leaseCoordinator.releaseLease(shard.shardId()).ignore
+                ),
                 checkpointer
               )
           }

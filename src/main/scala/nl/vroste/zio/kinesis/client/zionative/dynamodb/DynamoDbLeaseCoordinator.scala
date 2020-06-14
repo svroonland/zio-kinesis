@@ -1,8 +1,10 @@
 package nl.vroste.zio.kinesis.client.zionative.dynamodb
 
-import nl.vroste.zio.kinesis.client.DynamicConsumer.{ Checkpointer, Record }
+import nl.vroste.zio.kinesis.client.DynamicConsumer.Record
 import nl.vroste.zio.kinesis.client.Util.asZIO
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator
+import nl.vroste.zio.kinesis.client.zionative.Checkpointer
+import nl.vroste.zio.kinesis.client.zionative.ShardLeaseLost
 import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.Lease
 import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbUtil._
 import nl.vroste.zio.kinesis.client.Util.paginatedRequest
@@ -20,8 +22,8 @@ import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.
 import zio.stream.ZStream
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.UnableToClaimLease
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.ShardLeaseLost
 import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.ExtendedSequenceNumber
+import zio.random.Random
 
 object ZioExtensions {
   implicit class OnSuccessSyntax[R, E, A](val zio: ZIO[R, E, A]) extends AnyVal {
@@ -31,6 +33,43 @@ object ZioExtensions {
         case _               => ZIO.unit
       }
   }
+}
+
+/**
+ *
+ * @param currentLeases Latest known state of all leases
+ * @param heldLeases Leases held by this worker including a completion signal
+ * @param shards List of all of the stream's shards
+ */
+case class State(
+  currentLeases: Map[String, Lease],
+  heldLeases: Map[String, (Lease, Promise[Nothing, Unit])],
+  shards: Map[String, Shard]
+) {
+  def updateLease(lease: Lease): State =
+    copy(
+      currentLeases = currentLeases + (lease.key -> lease),
+      heldLeases = heldLeases ++ (heldLeases.collect {
+        case (shard, (_, completed)) if shard == lease.key => (shard, (lease, completed))
+      })
+    )
+
+  def getLease(shardId: String): Option[Lease] =
+    currentLeases.get(shardId)
+
+  def getHeldLease(shardId: String): Option[(Lease, Promise[Nothing, Unit])] =
+    heldLeases.get(shardId)
+
+  def holdLease(lease: Lease, completed: Promise[Nothing, Unit]): State =
+    copy(heldLeases = heldLeases + (lease.key -> (lease, completed)))
+
+  def releaseLease(lease: Lease): State                                 =
+    copy(heldLeases = heldLeases - lease.key)
+
+}
+
+object State {
+  val empty = State(Map.empty, Map.empty, Map.empty)
 }
 
 /**
@@ -52,106 +91,173 @@ private class DynamoDbLeaseCoordinator(
   table: LeaseTable,
   applicationName: String,
   workerId: String,
-  currentLeases: Ref[Map[String, Lease]],
-  heldLeases: Ref[Map[String, (Lease, Promise[Nothing, Unit])]],
-  shards: Map[String, Shard]
+  state: Ref[State],
+  acquiredLeasesQueue: Queue[(Lease, Promise[Nothing, Unit])]
 ) extends LeaseCoordinator {
 
   import DynamoDbLeaseCoordinator._
   import ZioExtensions.OnSuccessSyntax
+  import zio.random.shuffle
+
+  /**
+   *
+   *
+   * @param nr Number of leases to steal at once
+   * @param period
+   * @param leaseExpirationTime
+   */
+  case class LeaseCoordinationSettings(
+    leasesToSteal: Int,
+    period: Duration = 30.seconds,
+    leaseExpirationTime: Duration = 1.minute
+  )
+
+  def leasesToSteal(state: State) = {
+
+    val allLeases      = state.currentLeases.values.toList
+    val shards         = state.shards
+    val leasesByWorker = allLeases.groupBy(_.owner)
+    val ourLeases      = state.heldLeases.values.map(_._1).toList
+    val allWorkers     = allLeases.map(_.owner).collect { case Some(owner) => owner }.toSet ++ Set(workerId)
+    val nrLeasesToHave = Math.floor(shards.size * 1.0 / (allWorkers.size * 1.0)).toInt
+    println(
+      s"Worker $workerId has ${ourLeases.size}, we would like to have ${nrLeasesToHave}/${allLeases.size} leases (${allWorkers.size} workers)"
+    )
+    if (ourLeases.size < nrLeasesToHave) {
+      val nrLeasesToSteal = nrLeasesToHave - ourLeases.size
+      // Steal leases
+      for {
+        otherLeases  <- shuffle(allLeases.filterNot(_.owner == workerId))
+        leasesToSteal = otherLeases.take(nrLeasesToSteal)
+        _             = println(s"$workerId Going to steal ${nrLeasesToSteal} leases: ${leasesToSteal.mkString(",")}")
+      } yield leasesToSteal
+    } else ZIO.succeed(List.empty)
+  }
+
+  /**
+   * A single round of lease stealing
+   *
+   * - First take expired leases (TODO)
+   * - Then take X leases from the most loaded worked
+   */
+  val stealLeases =
+    for {
+      _             <- UIO(println("Stealing leases"))
+      state         <- state.get
+      toSteal       <- leasesToSteal(state)
+      claimedLeases <- ZIO
+                         .foreach(toSteal) { lease =>
+                           table.claimLease(lease.copy(owner = Some(workerId)).increaseCounter).asSome.catchAll {
+                             case Right(UnableToClaimLease) =>
+                               UIO(
+                                 println(
+                                   s"$workerId Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
+                                 )
+                               ).as(None)
+                             case Left(e)                   =>
+                               ZIO.fail(e)
+
+                           }
+                         }
+                         .map(_.flatten)
+      _             <- ZIO.foreach_(claimedLeases)(registerNewAcquiredLease)
+    } yield ()
+
+  // Puts it in the state and the queue
+  private def registerNewAcquiredLease(lease: Lease): UIO[Unit] =
+    for {
+      _         <- UIO(println(s"$workerId Acquired lease: ${lease}"))
+      completed <- Promise.make[Nothing, Unit]
+      _         <- state.update(_.updateLease(lease).holdLease(lease, completed))
+      _         <- acquiredLeasesQueue.offer(lease -> completed)
+    } yield ()
 
   /**
    * Claims all available leases for the current shards (no owner or not existent)
-   *
-    * @return List of leases + signal for lease lost
    */
-  def initialLeases: Task[List[(Lease, Promise[Nothing, Unit])]] =
+  def initializeLeases: Task[Unit] =
     for {
-      allLeases         <- currentLeases.get
+      state                       <- state.get
+      allLeases                    = state.currentLeases
       // Claim new leases for the shards the database doesn't have leases for
-      shardsWithoutLease =
-        shards.values.toList.filterNot(shard => allLeases.values.map(_.key).toList.contains(shard.shardId()))
-      _                 <- UIO(println(s"No leases exist yet for these shards, creating: ${shardsWithoutLease.mkString(",")}"))
-      _                 <- ZIO.foreach(shardsWithoutLease) { shard =>
-             val lease = Lease(
-               key = shard.shardId(),
-               owner = Some(workerId),
-               counter = 0L,
-               ownerSwitchesSinceCheckpoint = 0L,
-               checkpoint = None,
-               parentShardIds = Seq.empty
+      shardsWithoutLease           =
+        state.shards.values.toList.filterNot(shard => allLeases.values.map(_.key).toList.contains(shard.shardId()))
+      _                           <- UIO(
+             println(
+               s"No leases exist yet for these shards, creating: ${shardsWithoutLease.map(_.shardId()).mkString(",")}"
              )
+           )
+      leasesForShardsWithoutLease <- ZIO
+                                       .foreach(shardsWithoutLease) { shard =>
+                                         val lease = Lease(
+                                           key = shard.shardId(),
+                                           owner = Some(workerId),
+                                           counter = 0L,
+                                           ownerSwitchesSinceCheckpoint = 0L,
+                                           checkpoint = None,
+                                           parentShardIds = Seq.empty
+                                         )
 
-             (table.createLease(lease) *> currentLeases.update(_ + (lease.key -> lease)).as(lease)).catchAll {
-               case Right(LeaseAlreadyExists) =>
-                 UIO(
-                   println(
-                     s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
-                   )
-                 )
-               case Left(e)                   =>
-                 ZIO.fail(e)
-             }
-           }
+                                         table.createLease(lease).as(Some(lease)).catchAll {
+                                           case Right(LeaseAlreadyExists) =>
+                                             UIO(
+                                               println(
+                                                 s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
+                                               )
+                                             ).as(None)
+                                           case Left(e)                   =>
+                                             ZIO.fail(e)
+                                         }
+                                       }
+                                       .map(_.flatten)
       // Claim leases without owner
-      claimableLeases    = allLeases.filter { case (key, lease) => lease.owner.isEmpty }
-      leasesToSteal      = {
-        val allWorkers     = allLeases.values.map(_.owner).collect { case Some(owner) => owner }.toSet ++ Set(workerId)
-        val nrLeasesToHave = Math.floor(shards.size * 1.0 / (allWorkers.size * 1.0))
-      }
-      _                 <- UIO(println(s"Claim of leases without owner for shards ${claimableLeases.mkString(",")}"))
+      // TODO we can also claim leases that have expired (worker crashed before releasing)
+      claimableLeases              = allLeases.filter { case (key, lease) => lease.owner.isEmpty }
+      _                           <- UIO(println(s"Claim of leases without owner for shards ${claimableLeases.mkString(",")}"))
       // _                 <- UIO(println(s"Stealing leases ${leasesToSteal.mkString(",")}"))
-      _                 <- ZIO.foreach(claimableLeases) { // ++ leasesToSteal) {
-             case (key, lease) =>
-               table
-                 .claimLease(lease.copy(owner = Some(workerId)))
-                 .flatMap { updatedLease =>
-                   currentLeases.update(_ + (lease.key -> updatedLease)).as(updatedLease)
-                 }
-                 .catchAll {
-                   case Right(UnableToClaimLease) =>
-                     UIO(
-                       println(
-                         s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
-                       )
-                     )
-                   case Left(e)                   =>
-                     ZIO.fail(e)
-                 }
-           }
-      claimedLeases     <- currentLeases.get.map(_.values.toList.filter(_.owner.contains(workerId)))
-      newHeldLeases     <- ZIO.foreach(claimedLeases)(lease => Promise.make[Nothing, Unit].map(lease.key -> (lease, _)))
-      _                 <- heldLeases.set(newHeldLeases.toMap)
-      newAllLeases      <- currentLeases.get
-      _                  = println(s"Claimed ${newHeldLeases.size}/${newAllLeases.size} leases for worker ${workerId}")
+      claimedLeases               <- ZIO
+                         .foreach(claimableLeases) {
+                           case (key, lease) =>
+                             table
+                               .claimLease(lease.copy(owner = Some(workerId)).increaseCounter)
+                               .asSome
+                               .catchAll {
+                                 case Right(UnableToClaimLease) =>
+                                   UIO(
+                                     println(
+                                       s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
+                                     )
+                                   ).as(None)
+                                 case Left(e)                   =>
+                                   ZIO.fail(e)
+                               }
+                         }
+                         .map(_.flatten)
+      _                           <- ZIO.foreach_(leasesForShardsWithoutLease ++ claimedLeases)(registerNewAcquiredLease)
+    } yield ()
 
-    } yield newHeldLeases.toMap.values.toList
-
-  override def acquiredLeases: ZStream[zio.clock.Clock, Throwable, AcquiredLease] =
+  override def acquiredLeases: ZStream[zio.clock.Clock, Throwable, AcquiredLease]       =
     ZStream
-      .fromEffect(initialLeases)
-      .mapConcat(identity(_))
-      .map {
-        case (lease, complete) => AcquiredLease(lease.key, complete)
-      } ++ ZStream.never // To prevent stream from closing
+      .fromQueue(acquiredLeasesQueue)
+      .map { case (lease, complete) => AcquiredLease(lease.key, complete) }
 
   override def getCheckpointForShard(shard: Shard): UIO[Option[ExtendedSequenceNumber]] =
     for {
-      leaseOpt <- currentLeases.get
-                    .map(_.get(shard.shardId()))
+      leaseOpt <- state.get.map(_.currentLeases.get(shard.shardId()))
     } yield leaseOpt.flatMap(_.checkpoint)
 
   override def makeCheckpointer(shard: Shard) =
     for {
-      lease  <- currentLeases.get
-                 .map(_.get(shard.shardId()))
-                 .someOrFail(new Exception(s"Worker does not hold lease for shard ${shard.shardId()}"))
       staged <- Ref.make[Option[Record[_]]](None)
     } yield new Checkpointer {
-      override def checkpoint: ZIO[zio.blocking.Blocking, Throwable, Unit] =
+      override def checkpoint: ZIO[zio.blocking.Blocking, Either[Throwable, ShardLeaseLost.type], Unit] =
         for {
-          lastStaged <- staged.get
-          _          <- lastStaged match {
+          lastStaged        <- staged.get
+          heldLease         <- state.get
+                         .map(_.heldLeases.get(shard.shardId()))
+                         .someOrFail(Left(new Exception(s"Worker does not hold lease for shard ${shard.shardId()}")))
+          (lease, completed) = heldLease
+          _                 <- lastStaged match {
                  case Some(r) =>
                    val updatedLease =
                      lease.copy(
@@ -159,11 +265,15 @@ private class DynamoDbLeaseCoordinator(
                        checkpoint = Some(ExtendedSequenceNumber(r.sequenceNumber, r.subSequenceNumber))
                      )
                    table
-                     .updateCheckpoint(
-                       updatedLease
-                       // TODO handle lease lost
-                     )
-                     .onSuccess(_ => staged.set(None) *> currentLeases.update(_ + (lease.key -> updatedLease)))
+                     .updateCheckpoint(updatedLease)
+                     .catchAll {
+                       case _: ConditionalCheckFailedException =>
+                         leaseLost(lease.key) *>
+                           ZIO.fail(Right(ShardLeaseLost))
+                       case e                                  =>
+                         ZIO.fail(Left(e))
+                     }
+                     .onSuccess(_ => staged.set(None) *> state.update(_.updateLease(updatedLease)))
                  case None    =>
                    ZIO.unit
                }
@@ -172,18 +282,42 @@ private class DynamoDbLeaseCoordinator(
       override def stage(r: Record[_]): zio.UIO[Unit] = staged.set(Some(r))
     }
 
-  def releaseLeases =
-    currentLeases.get
-      .map(_.values)
-      .flatMap(
-        ZIO.foreach(_)(table.releaseLease(_).catchAll {
-          case Right(ShardLeaseLost) => // This is fine at shutdown
-            ZIO.unit
-          case Left(e)               =>
-            ZIO.fail(e)
-        })
+  def releaseLeases: Task[Unit] =
+    state.get
+      .map(_.heldLeases.values)
+      .flatMap(ZIO.foreach_(_)(releaseLease))
+
+  def releaseLease(shard: String) =
+    state.get.flatMap(
+      _.getHeldLease(shard).map(releaseLease).getOrElse(ZIO.unit)
+    )
+
+  private def releaseLease: ((Lease, Promise[Nothing, Unit])) => Task[Unit] = {
+    case (lease, completed) =>
+      val updatedLease = lease.copy(owner = None).increaseCounter
+
+      table.releaseLease(updatedLease).catchAll {
+        case Right(ShardLeaseLost) => // This is fine at shutdown
+          ZIO.unit
+        case Left(e)               =>
+          ZIO.fail(e)
+      } *> completed.succeed(()) *> state.update(_.updateLease(updatedLease).releaseLease(updatedLease))
+  }
+
+  private def leaseLost(shard: String): ZIO[Any, Nothing, Unit] =
+    state
+      .modify(
+        s => // If there is a held lease, we remove it from the state and complete the promise, otherwise nothing is changed
+          s.getHeldLease(shard)
+            .map {
+              case (lease, completed) =>
+                (completed.succeed(()).unit, s.releaseLease(lease).updateLease(lease))
+            }
+            .getOrElse((UIO.unit, s))
       )
-      .unit
+      .flatten
+  // state.update(_.releaseLease(updatedLease).updateLease(updatedLease))
+
 }
 
 class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
@@ -241,7 +375,7 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
   /**
    * Removes the leaseOwner property
    *
-   * Expects the given lease's counter
+   * Expects the given lease's counter - 1
    *
    * @param lease
    * @return
@@ -256,7 +390,7 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
       .expected(
         Map(
           // TODO we need to update these atomically somehow
-          "leaseCounter" -> expectedAttributeValue(lease.counter)
+          "leaseCounter" -> expectedAttributeValue(lease.counter - 1)
         ).asJava
       )
       .attributeUpdates(Map("leaseOwner" -> deleteAttributeValueUpdate).asJava)
@@ -267,7 +401,7 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
         ZIO.fail(Right(ShardLeaseLost))
       case e                                  =>
         ZIO.fail(Left(e))
-    }.tapError(e => UIO(println(s"Got error releasing lease: ${e}")))
+    }.tapError(e => UIO(println(s"Got error releasing lease ${lease.key}: ${e}")))
   }
 
   // Returns the updated lease
@@ -287,7 +421,7 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
       .expected(
         Map(
           // TODO we need to update these atomically somehow
-          "leaseCounter" -> expectedAttributeValue(lease.counter)
+          "leaseCounter" -> expectedAttributeValue(lease.counter - 1)
         ).asJava
       )
       .attributeUpdates(
@@ -347,13 +481,11 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
   }
 
   def createLease(lease: Lease): ZIO[Any, Either[Throwable, LeaseAlreadyExists.type], Unit] = {
-    println(s"Creating lease ${lease}")
     val request = PutItemRequest
       .builder()
       .tableName(applicationName)
       .item(toDynamoItem(lease).asJava)
       .build()
-    println(request)
 
     asZIO(client.putItem(request)).unit
       .mapError(Left(_))
@@ -362,7 +494,6 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
 
   private def toLease(item: DynamoDbItem): Try[Lease] =
     Try {
-      println(s"Deserializing ${item}")
       Lease(
         key = item("leaseKey").s(),
         owner = item.get("leaseOwner").map(_.s()),
@@ -411,11 +542,9 @@ object DynamoDbLeaseCoordinator {
   // TODO incorporate in Record
   case class ExtendedSequenceNumber(sequenceNumber: String, subSequenceNumber: Long)
 
-  case object ShardLeaseLost
   case object LeaseAlreadyExists
   case object UnableToClaimLease
 
-  // TODO some of these fields are probably optional
   case class Lease(
     key: String,
     owner: Option[String],
@@ -424,24 +553,30 @@ object DynamoDbLeaseCoordinator {
     checkpoint: Option[ExtendedSequenceNumber],
     parentShardIds: Seq[String],
     pendingCheckpoint: Option[ExtendedSequenceNumber] = None
-  )
+  ) {
+    def increaseCounter: Lease = copy(counter = counter + 1)
+  }
 
   def make(
     client: DynamoDbAsyncClient,
     applicationName: String,
     workerId: String,
     shards: Map[String, Shard]
-  ): ZManaged[Clock, Throwable, LeaseCoordinator] =
+  ): ZManaged[Clock with Random, Throwable, LeaseCoordinator] =
     ZManaged.make {
+      val table = new LeaseTable(client, applicationName)
       for {
-        heldLeases    <- Ref.make[Map[String, (Lease, Promise[Nothing, Unit])]](Map.empty)
-        table          = new LeaseTable(client, applicationName)
-        _             <- table.createLeaseTableIfNotExists
-        currentLeases <- table.getLeasesFromDB
-        leases        <- Ref.make[Map[String, Lease]](currentLeases.map(l => l.key -> l).toMap)
-        coordinator    = new DynamoDbLeaseCoordinator(table, applicationName, workerId, leases, heldLeases, shards)
-        _             <- UIO(println(s"Found ${currentLeases.size} existing leases: " + currentLeases.mkString("\n")))
+        _              <- table.createLeaseTableIfNotExists
+        currentLeases  <- table.getLeasesFromDB
+        leases          = currentLeases.map(l => l.key -> l).toMap
+        state          <- Ref.make[State](State(leases, Map.empty, shards))
+        acquiredLeases <- Queue.unbounded[(Lease, Promise[Nothing, Unit])]
+        coordinator     = new DynamoDbLeaseCoordinator(table, applicationName, workerId, state, acquiredLeases)
+        _              <- UIO(println(s"Found ${currentLeases.size} existing leases: " + currentLeases.mkString("\n")))
+        _              <- coordinator.initializeLeases
+
       } yield coordinator
     }(_.releaseLeases.orDie)
+      .tap(_.stealLeases.repeat(Schedule.fixed(5.seconds)).forkManaged)
 
 }

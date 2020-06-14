@@ -8,11 +8,11 @@ import zio.console._
 import zio.duration._
 import zio.stream.{ ZStream, ZTransducer }
 import zio.{ Chunk, ExitCode, Schedule, ZIO }
-import software.amazon.kinesis.exceptions.ShutdownException
 import zio.UIO
 import nl.vroste.zio.kinesis.client.zionative.FetchMode
 import nl.vroste.zio.kinesis.client.zionative.Consumer
 import TestUtil.Layers
+import nl.vroste.zio.kinesis.client.zionative.ShardLeaseLost
 
 object ExampleApp extends zio.App {
 
@@ -43,12 +43,14 @@ object ExampleApp extends zio.App {
                           )
                           .aggregateAsyncWithin(ZTransducer.last, Schedule.fixed(1.second))
                           .mapConcat(_.toList)
+                          .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
                           .tap { _ =>
                             putStrLn(s"Checkpointing ${shardID}") *> checkpointer.checkpoint
                           }
-                          .catchSome {
-                            // This happens when the lease for the shard is lost. Best we can do is end the stream.
-                            case _: ShutdownException => ZStream.empty
+                          .catchAll {
+                            case Right(ShardLeaseLost) =>
+                              ZStream.empty
+                            case Left(e)               => ZStream.fail(e)
                           }
                     }
                     // .timeout(5.seconds)
