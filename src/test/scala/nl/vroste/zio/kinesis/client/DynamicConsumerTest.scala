@@ -207,20 +207,20 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
       (Client.build(LocalStackClients.kinesisAsyncClientBuilder) <* createStream(streamName, 2)).use { client =>
         for {
-          producing <- ZStream
-                         .fromIterable(1 to nrBatches)
-                         .schedule(Schedule.spaced(250.millis))
-                         .mapM { _ =>
-                           client
-                             .putRecords(streamName, Serde.asciiString, records)
-                             .tap(_ => putStrLn(s"Put ${records.size} records on stream"))
-                             .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
-                             .retry(retryOnResourceNotFound)
-//                                   .provideSomeLayer[Console](Clock.live)
-                         }
-                         .runDrain
-                         .tap(_ => ZIO(println("PRODUCING RECORDS DONE")))
-                         .forkAs("RecordProducing")
+          /* producing */ _ <- ZStream
+                                 .fromIterable(1 to nrBatches)
+                                 .schedule(Schedule.spaced(250.millis))
+                                 .mapM { _ =>
+                                   client
+                                     .putRecords(streamName, Serde.asciiString, records)
+                                     .tap(_ => putStrLn(s"Put ${records.size} records on stream"))
+                                     .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
+                                     .retry(retryOnResourceNotFound)
+                                     .provideSomeLayer[Console](Clock.live)
+                                 }
+                                 .runDrain
+                                 .tap(_ => ZIO(println("PRODUCING RECORDS DONE")))
+//                                 .forkAs("RecordProducing")
 
 //          interrupted               <- Promise
 //                           .make[Nothing, Unit]
@@ -230,7 +230,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
           _                         <- streamConsumer( /*interrupted, */ lastProcessedRecords, lastCheckpointedRecords)
                  .take(2L)
                  .runCollect
-          _                         <- producing.interrupt
+//          _                         <- producing.interrupt
           (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
         } yield assertCompletes //assert(processed)(equalTo(checkpointed))
       }.provideSomeLayer[Clock with Console with Blocking](LocalStackLayers.dynamicConsumerLayer)
