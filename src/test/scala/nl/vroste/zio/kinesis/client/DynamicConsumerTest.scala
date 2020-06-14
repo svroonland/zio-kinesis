@@ -239,9 +239,9 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
   override def spec =
     suite("DynamicConsumer")(
-      testConsume1 @@ ignore,
+      testConsume1,
       testConsume2 @@ ignore,
-      testCheckpointAtShutdown
+      testCheckpointAtShutdown @@ ignore
     ) @@ timeout(5.minute) @@ sequential
 
   def sleep(d: Duration) = ZIO.sleep(d).provideLayer(Clock.live)
