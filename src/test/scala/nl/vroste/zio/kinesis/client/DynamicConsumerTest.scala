@@ -230,9 +230,9 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
   // TODO check the order of received records is correct
 
   override def spec =
-    suite("DynamicConsumer2")(
-      testConsume1,
-      testConsume2,
+    suite("DynamicConsumer")(
+//      testConsume1,
+//      testConsume2,
       testCheckpointAtShutdown
     ) @@ timeout(5.minute) @@ sequential
 
