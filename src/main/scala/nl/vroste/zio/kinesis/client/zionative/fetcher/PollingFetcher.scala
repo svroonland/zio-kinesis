@@ -10,6 +10,7 @@ import zio.duration._
 import scala.jdk.CollectionConverters._
 import nl.vroste.zio.kinesis.client.zionative.Fetcher
 import nl.vroste.zio.kinesis.client.Util.throttledFunction
+import zio.Schedule
 
 object PollingFetcher {
   import Consumer.retryOnThrottledWithSchedule
@@ -34,12 +35,16 @@ object PollingFetcher {
           pollWithDelay <- makePollWithDelayIfNoResult(config.delay) {
                              for {
                                currentIterator <- shardIterator.get
-                               response        <- getRecordsThrottled((currentIterator, config.batchSize))
-                                             .retry(retryOnThrottledWithSchedule(config.backoff))
-                                             .asSomeError
-                               records          = response.records.asScala.toList
+                               response        <-
+                                 getRecordsThrottled((currentIterator, config.batchSize))
+                                   .retry(retryOnThrottledWithSchedule(config.backoff))
+                                   .asSomeError
+                                   .retry(
+                                     Schedule.fixed(100.millis) && Schedule.recurs(3)
+                                   ) // There is a race condition in kinesalite, see https://github.com/mhart/kinesalite/issues/25
+                               records = response.records.asScala.toList
                                //  _                = println(s"${shard.shardId()}: Got ${records.size} records")
-                               _               <- Option(response.nextShardIterator).map(shardIterator.set).getOrElse(ZIO.fail(None))
+                               _      <- Option(response.nextShardIterator).map(shardIterator.set).getOrElse(ZIO.fail(None))
                              } yield Chunk.fromIterable(records.map(Consumer.toConsumerRecord(_, shard.shardId())))
                            }.toManaged_
         } yield ZStream.repeatEffectChunkOption(pollWithDelay)
