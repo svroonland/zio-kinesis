@@ -10,7 +10,7 @@ import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.console._
 import zio.duration._
-import zio.stream.{ ZStream, ZTransducer }
+import zio.stream.ZStream
 import zio.test.TestAspect._
 import zio.test._
 
@@ -171,7 +171,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 //        interrupted: Promise[Nothing, Unit],
         lastProcessedRecords: Ref[Map[String, String]],
         lastCheckpointedRecords: Ref[Map[String, String]]
-      ): ZStream[Console with Blocking with Clock, Throwable, DynamicConsumer.Record[String]] =
+      ): ZStream[Console with Blocking, Throwable, DynamicConsumer.Record[String]] =
         (for {
           service <- ZStream.service[DynamicConsumer.Service]
           stream  <- service
@@ -190,11 +190,11 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                             // .tap(r => putStrLn(s"Shard ${shardId} got record ${r.data}"))
                             // It's important that the checkpointing is always done before flattening the stream, otherwise
                             // we cannot guarantee that the KCL has not yet shutdown the record processor and taken away the lease
-                            .aggregateAsyncWithin(
-                              ZTransducer.last, // TODO we need to make sure that in our test this thing has some records buffered after shutdown request
-                              Schedule.fixed(1.seconds)
-                            )
-                            .mapConcat(_.toList)
+                            //                            .aggregateAsyncWithin(
+                            //                              ZTransducer.last, // TODO we need to make sure that in our test this thing has some records buffered after shutdown request
+                            //                              Schedule.fixed(1.seconds)
+                            //                            )
+                            //                            .mapConcat(_.toList)
                             .tap { r =>
                               putStrLn(s"Shard ${r.shardId}: checkpointing for record $r") *>
                                 checkpointer.checkpoint
