@@ -159,51 +159,51 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
   def testCheckpointAtShutdown =
     testM("checkpoint for the last processed record at stream shutdown") {
-      val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
-      val applicationName = "zio-test-" + UUID.randomUUID().toString
+      val streamName = "zio-test-stream-" + UUID.randomUUID().toString
+//      val applicationName = "zio-test-" + UUID.randomUUID().toString
 
       val batchSize = 100
       val nrBatches = 2 //100
       val records   =
         (1 to batchSize).map(i => ProducerRecord(s"key$i", s"msg$i"))
 
-      def streamConsumer(
-//        interrupted: Promise[Nothing, Unit],
-        lastProcessedRecords: Ref[Map[String, String]],
-        lastCheckpointedRecords: Ref[Map[String, String]]
-      ): ZStream[Console with Blocking, Throwable, DynamicConsumer.Record[String]] =
-        (for {
-          service <- ZStream.service[DynamicConsumer.Service]
-          stream  <- service
-                      .shardedStream(
-                        streamName,
-                        applicationName = applicationName,
-                        deserializer = Serde.asciiString,
-                        isEnhancedFanOut = false
-//                        requestShutdown = interrupted.await.tap(_ => UIO(println("Interrupting shardedStream")))
-                      )
-                      .flatMapPar(Int.MaxValue) {
-                        case (shardId, shardStream, checkpointer @ _) =>
-                          shardStream
-                            .tap(record => lastProcessedRecords.update(_ + (shardId -> record.sequenceNumber)))
-                            .tap(checkpointer.stage)
-                            // .tap(r => putStrLn(s"Shard ${shardId} got record ${r.data}"))
-                            // It's important that the checkpointing is always done before flattening the stream, otherwise
-                            // we cannot guarantee that the KCL has not yet shutdown the record processor and taken away the lease
-                            //                            .aggregateAsyncWithin(
-                            //                              ZTransducer.last, // TODO we need to make sure that in our test this thing has some records buffered after shutdown request
-                            //                              Schedule.fixed(1.seconds)
-                            //                            )
-                            //                            .mapConcat(_.toList)
-                            .tap { r =>
-                              putStrLn(s"Shard ${r.shardId}: checkpointing for record $r") *>
-                                checkpointer.checkpoint
-                                  .tapError(e => ZIO(println(s"Checkpointing failed: ${e}")))
-                                  .tap(_ => lastCheckpointedRecords.update(_ + (shardId -> r.sequenceNumber)))
-                                  .tap(_ => ZIO(println(s"Checkpointing for shard ${r.shardId} done")))
-                            }
-                      }
-        } yield stream).provideSomeLayer[Console with Blocking](LocalStackLayers.dynamicConsumerLayer ++ Clock.live)
+//      def streamConsumer(
+////        interrupted: Promise[Nothing, Unit],
+//        lastProcessedRecords: Ref[Map[String, String]],
+//        lastCheckpointedRecords: Ref[Map[String, String]]
+//      ): ZStream[Console with Blocking, Throwable, DynamicConsumer.Record[String]] =
+//        (for {
+//          service <- ZStream.service[DynamicConsumer.Service]
+//          stream  <- service
+//                      .shardedStream(
+//                        streamName,
+//                        applicationName = applicationName,
+//                        deserializer = Serde.asciiString,
+//                        isEnhancedFanOut = false
+////                        requestShutdown = interrupted.await.tap(_ => UIO(println("Interrupting shardedStream")))
+//                      )
+//                      .flatMapPar(Int.MaxValue) {
+//                        case (shardId, shardStream, checkpointer @ _) =>
+//                          shardStream
+//                            .tap(record => lastProcessedRecords.update(_ + (shardId -> record.sequenceNumber)))
+//                            .tap(checkpointer.stage)
+//                            // .tap(r => putStrLn(s"Shard ${shardId} got record ${r.data}"))
+//                            // It's important that the checkpointing is always done before flattening the stream, otherwise
+//                            // we cannot guarantee that the KCL has not yet shutdown the record processor and taken away the lease
+//                            //                            .aggregateAsyncWithin(
+//                            //                              ZTransducer.last, // TODO we need to make sure that in our test this thing has some records buffered after shutdown request
+//                            //                              Schedule.fixed(1.seconds)
+//                            //                            )
+//                            //                            .mapConcat(_.toList)
+//                            .tap { r =>
+//                              putStrLn(s"Shard ${r.shardId}: checkpointing for record $r") *>
+//                                checkpointer.checkpoint
+//                                  .tapError(e => ZIO(println(s"Checkpointing failed: ${e}")))
+//                                  .tap(_ => lastCheckpointedRecords.update(_ + (shardId -> r.sequenceNumber)))
+//                                  .tap(_ => ZIO(println(s"Checkpointing for shard ${r.shardId} done")))
+//                            }
+//                      }
+//        } yield stream).provideSomeLayer[Console with Blocking](LocalStackLayers.dynamicConsumerLayer ++ Clock.live)
 
       (Client.build(LocalStackClients.kinesisAsyncClientBuilder) <* createStream(streamName, 2)).use { client =>
         for {
@@ -225,13 +225,13 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 //          interrupted               <- Promise
 //                           .make[Nothing, Unit]
 //                           .tap(p => (putStrLn("INTERRUPTING") *> p.succeed(())).delay(19.seconds + 333.millis).fork)
-          lastProcessedRecords      <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
-          lastCheckpointedRecords   <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
-          _                         <- streamConsumer( /*interrupted, */ lastProcessedRecords, lastCheckpointedRecords)
-                 .take(2L)
-                 .runCollect
+//          lastProcessedRecords    <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
+//          lastCheckpointedRecords <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
+//          _                         <- streamConsumer( /*interrupted, */ lastProcessedRecords, lastCheckpointedRecords)
+//                 .take(2L)
+//                 .runCollect
 //          _                         <- producing.interrupt
-          (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
+//          (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
         } yield assertCompletes //assert(processed)(equalTo(checkpointed))
       } //.provideSomeLayer[Clock with Console with Blocking](LocalStackLayers.dynamicConsumerLayer)
         .provideCustomLayer(Clock.live)
