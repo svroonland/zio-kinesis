@@ -13,6 +13,7 @@ import nl.vroste.zio.kinesis.client.zionative.FetchMode
 import nl.vroste.zio.kinesis.client.zionative.Consumer
 import TestUtil.Layers
 import nl.vroste.zio.kinesis.client.zionative.ShardLeaseLost
+import zio.logging.slf4j.Slf4jLogger
 
 object ExampleApp extends zio.App {
 
@@ -60,8 +61,10 @@ object ExampleApp extends zio.App {
       _        <- consumer.join
     } yield ExitCode.success
   }.orDie.provideCustomLayer(
-    (Layers.kinesisAsyncClient >>> (Layers.adminClient ++ Layers.client)).orDie ++ Layers.dynamo.orDie
+    (Layers.kinesisAsyncClient >>> (Layers.adminClient ++ Layers.client)).orDie ++ Layers.dynamo.orDie ++ loggingEnv
   )
+
+  val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some("ExampleApp"))
 
   def produceRecords(streamName: String, nrRecords: Int) =
     (for {

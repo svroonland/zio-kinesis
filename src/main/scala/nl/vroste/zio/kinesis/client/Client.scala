@@ -299,7 +299,7 @@ object Client {
 }
 
 private object Util {
-  def asZIO[T](f: => CompletableFuture[T]): Task[T] = ZIO.fromCompletionStage(f)
+  def asZIO[T](f: => CompletableFuture[T]): Task[T] = ZIO.fromCompletionStage(f).refailWithTrace
 
   def paginatedRequest[R, E, A, Token](fetch: Option[Token] => ZIO[R, E, (A, Option[Token])])(
     throttling: Schedule[Clock, Any, Int] = Schedule.forever

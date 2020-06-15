@@ -23,6 +23,7 @@ import zio.blocking.Blocking
 import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.ExtendedSequenceNumber
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import zio.random.Random
+import zio.logging.Logging
 
 case object ShardLeaseLost
 
@@ -60,14 +61,14 @@ object Fetcher {
 }
 
 trait LeaseCoordinator {
-  def makeCheckpointer(shard: Shard): ZIO[Clock, Throwable, Checkpointer]
+  def makeCheckpointer(shard: Shard): ZIO[Clock with Logging, Throwable, Checkpointer]
 
   def getCheckpointForShard(shard: Shard): UIO[Option[ExtendedSequenceNumber]]
 
   // TODO current shards should probably be a stream or ref or something
   def acquiredLeases: ZStream[Clock, Throwable, AcquiredLease]
 
-  def releaseLease(shardId: String): Task[Unit]
+  def releaseLease(shardId: String): ZIO[Logging, Throwable, Unit]
 }
 
 object LeaseCoordinator {
@@ -83,9 +84,9 @@ object Consumer {
     initialStartingPosition: ShardIteratorType = ShardIteratorType.TrimHorizon,
     workerId: String = "worker1"
   ): ZStream[
-    Blocking with Clock with Random with Has[Client] with Has[AdminClient] with Has[DynamoDbAsyncClient],
+    Blocking with Clock with Random with Has[Client] with Has[AdminClient] with Has[DynamoDbAsyncClient] with Logging,
     Throwable,
-    (String, ZStream[R with Blocking with Clock, Throwable, Record[T]], Checkpointer)
+    (String, ZStream[R with Blocking with Clock with Logging, Throwable, Record[T]], Checkpointer)
   ] =
     ZStream.unwrap {
       for {

@@ -22,6 +22,10 @@ import zio.test.Assertion._
 import zio.UIO
 import zio.Schedule
 import zio.stream.ZTransducer
+import zio.ZLayer
+import zio.logging.log
+import zio.logging.slf4j.Slf4jLogger
+// import zio.logging.LogAnnotation
 
 object NativeConsumerTest extends DefaultRunnableSpec {
   /*
@@ -56,7 +60,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                            fetchMode = FetchMode.Polling(batchSize = 1000)
                          )
                          .flatMapPar(Int.MaxValue)(_._2)
-                         //  .tap(r => UIO(println(s"Got record on shard ${r.shardId}")))
+                         .tap(r => UIO(println(s"Got record on shard ${r.shardId}")))
                          .take(nrRecords.toLong)
                          .runCollect
             shardIds <- ZIO.service[AdminClient].flatMap(_.describeStream(streamName)).map(_.shards.map(_.shardId()))
@@ -111,7 +115,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
       testM("worker steals leases from other worker until they both have an equal share") {
         val streamName      = streamPrefix + "testStream-3"
         val applicationName = streamPrefix + "test3"
-        val nrRecords       = 2000
+        val nrRecords       = 20000
         val nrShards        = 5
 
         withStream(streamName, shards = nrShards) {
@@ -122,11 +126,13 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                           .flatMapPar(Int.MaxValue) {
                             case (shard @ _, shardStream, checkpointer) =>
                               shardStream
-                                .tap(r => UIO(println(s"Worker 1 got record on shard ${r.shardId}")))
+                              // .tap(r => UIO(println(s"Worker 1 got record on shard ${r.shardId}")))
                                 .tap(checkpointer.stage)
                                 .aggregateAsyncWithin(ZTransducer.collectAllN(20), Schedule.fixed(1.second))
                                 .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-                                .tap(_ => checkpointer.checkpoint)
+                                .tap(_ =>
+                                  log.info(s"Worker 1 checkpointing for shard ${shard}") *> checkpointer.checkpoint
+                                )
                                 .catchAll {
                                   case Right(ShardLeaseLost) =>
                                     ZStream.empty
@@ -139,11 +145,13 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                           .flatMapPar(Int.MaxValue) {
                             case (shard @ _, shardStream, checkpointer) =>
                               shardStream
-                                .tap(r => UIO(println(s"Worker 2 got record on shard ${r.shardId}")))
+                              // .tap(r => UIO(println(s"Worker 2 got record on shard ${r.shardId}")))
                                 .tap(checkpointer.stage)
                                 .aggregateAsyncWithin(ZTransducer.collectAllN(20), Schedule.fixed(1.second))
                                 .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-                                .tap(_ => checkpointer.checkpoint)
+                                .tap(_ =>
+                                  UIO(println(s"Worker 2 checkpointing for shard ${shard}")) *> checkpointer.checkpoint
+                                )
                                 .catchAll {
                                   case Right(ShardLeaseLost) =>
                                     ZStream.empty
@@ -158,7 +166,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
         }
       }
     ).provideSomeLayer(
-      (Layers.kinesisAsyncClient >>> (Layers.adminClient ++ Layers.client)).orDie ++ zio.test.environment.testEnvironment ++ Clock.live ++ Layers.dynamo.orDie
+      ((Layers.kinesisAsyncClient >>> (Layers.adminClient ++ Layers.client)).orDie ++ zio.test.environment.testEnvironment ++ Clock.live ++ Layers.dynamo.orDie) >>> (ZLayer.identity ++ loggingEnv)
     )
 
   def withStream[R, A](name: String, shards: Int)(f: ZIO[R, Throwable, A]): ZIO[Has[AdminClient] with R, Throwable, A] =
@@ -166,6 +174,8 @@ object NativeConsumerTest extends DefaultRunnableSpec {
       client <- ZManaged.service[AdminClient]
       _      <- client.createStream(name, shards).toManaged(_ => client.deleteStream(name).orDie)
     } yield ()).use_(f)
+
+  val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some("NativeConsumerTest"))
 
   def produceSampleRecords(
     streamName: String,

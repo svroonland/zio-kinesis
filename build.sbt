@@ -22,7 +22,7 @@ inThisBuild(
     crossScalaVersions := allScala,
     parallelExecution in Test := false,
     cancelable in Global := true,
-    fork in Test := false,
+    fork in Test := true,
     fork in run := true,
     publishMavenStyle := true,
     publishArtifact in Test :=
@@ -31,8 +31,7 @@ inThisBuild(
     test in assembly := {},
     target in assembly := file(baseDirectory.value + "/../bin/"),
     assemblyMergeStrategy in assembly := {
-      case PathList("META-INF", xs @ _*)       => MergeStrategy.discard
-      case n if n.startsWith("reference.conf") => MergeStrategy.concat
+      case PathList("META-INF", xs @ _*)       => MergeStrategy.discard case n if n.startsWith("reference.conf") => MergeStrategy.concat
       case _                                   => MergeStrategy.first
     },
     bintrayOrganization := Some("vroste"),
@@ -46,11 +45,13 @@ name := "zio-kinesis"
 scalafmtOnCompile := true
 
 libraryDependencies ++= Seq(
-  // "dev.zio"                %% "zio-streams"                 % "1.0.0-RC20+37-e9124af6-SNAPSHOT",
-  "dev.zio"                %% "zio-streams"                 % "1.0.0-RC20",
+  "dev.zio"                %% "zio-streams"                 % "1.0.0-RC20+37-e9124af6-SNAPSHOT",
+  // "dev.zio"                %% "zio-streams"                 % "1.0.0-RC20",
   "dev.zio"                %% "zio-test"                    % "1.0.0-RC20" % "test",
   "dev.zio"                %% "zio-test-sbt"                % "1.0.0-RC20" % "test",
   "dev.zio"                %% "zio-interop-reactivestreams" % "1.0.3.5-RC10",
+  "dev.zio" %% "zio-logging" % "0.3.1",
+  "dev.zio" %% "zio-logging-slf4j" % "0.3.1",
   "software.amazon.awssdk"  % "kinesis"                     % "2.13.31",
   "ch.qos.logback"          % "logback-classic"             % "1.2.3",
   "software.amazon.kinesis" % "amazon-kinesis-client"       % "2.2.10",

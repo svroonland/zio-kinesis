@@ -14,6 +14,7 @@ import software.amazon.awssdk.services.kinesis.model.Shard
 import zio._
 import zio.clock.Clock
 import zio.duration._
+import zio.logging._
 
 import scala.jdk.CollectionConverters._
 import scala.util.Try
@@ -47,6 +48,10 @@ case class State(
   shards: Map[String, Shard]
 ) {
   def updateLease(lease: Lease): State =
+    // require(
+    //   currentLeases.get(lease.key).forall(_.counter == lease.counter - 1),
+    //   s"Unexpected lease counter while updating lease ${lease}"
+    // )
     copy(
       currentLeases = currentLeases + (lease.key -> lease),
       heldLeases = heldLeases ++ (heldLeases.collect {
@@ -150,13 +155,15 @@ private class DynamoDbLeaseCoordinator(
    */
   val refreshLeases = {
     for {
-      _                          <- UIO(println("Refreshing leases"))
+      _                          <- log.info("Refreshing leases")
       leases                     <- table.getLeasesFromDB
       previousHeldLeases         <- state.getAndUpdate(_.updateLeases(leases)).map(_.heldLeases)
       leasesOwnedAccordingToDB    = leases.collect { case l if l.owner.contains(workerId) => l.key }.toSet
       leasesOwnedAccordingToState = previousHeldLeases.keySet
       lostLeases                  = leasesOwnedAccordingToState -- leasesOwnedAccordingToDB
-      _                          <- UIO(println(s"Lost leases ${lostLeases.mkString(",")}")).when(lostLeases.nonEmpty)
+      _                          <- log.info(s"${workerId} Leases in DB: ${leasesOwnedAccordingToDB.mkString(",")}")
+      _                          <- log.info(s"${workerId} Leases in State: ${leasesOwnedAccordingToState.mkString(",")}")
+      _                          <- log.info(s"${workerId} Lost leases ${lostLeases.mkString(",")}").when(lostLeases.nonEmpty)
       _                          <- ZIO.foreach_(lostLeases)(leaseLost)
     } yield ()
   }
@@ -169,18 +176,19 @@ private class DynamoDbLeaseCoordinator(
    */
   val stealLeases =
     for {
-      _             <- UIO(println("Stealing leases"))
+      _             <- log.info("Stealing leases")
       state         <- state.get
       toSteal       <- leasesToSteal(state)
       claimedLeases <- ZIO
                          .foreach(toSteal) { lease =>
-                           table.claimLease(lease.copy(owner = Some(workerId)).increaseCounter).asSome.catchAll {
+                           val updatedLease = lease.claim(workerId)
+                           table.claimLease(updatedLease).as(Some(updatedLease)).catchAll {
                              case Right(UnableToClaimLease) =>
-                               UIO(
-                                 println(
+                               log
+                                 .info(
                                    s"$workerId Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
                                  )
-                               ).as(None)
+                                 .as(None)
                              case Left(e)                   =>
                                ZIO.fail(e)
 
@@ -191,9 +199,9 @@ private class DynamoDbLeaseCoordinator(
     } yield ()
 
   // Puts it in the state and the queue
-  private def registerNewAcquiredLease(lease: Lease): UIO[Unit] =
+  private def registerNewAcquiredLease(lease: Lease): ZIO[Logging, Nothing, Unit] =
     for {
-      _         <- UIO(println(s"$workerId Acquired lease: ${lease}"))
+      _         <- log.info(s"$workerId Acquired lease: ${lease}")
       completed <- Promise.make[Nothing, Unit]
       _         <- state.update(_.updateLease(lease).holdLease(lease, completed))
       _         <- acquiredLeasesQueue.offer(lease -> completed)
@@ -202,17 +210,15 @@ private class DynamoDbLeaseCoordinator(
   /**
    * Claims all available leases for the current shards (no owner or not existent)
    */
-  def initializeLeases: Task[Unit] =
+  def initializeLeases: ZIO[Logging, Throwable, Unit] =
     for {
       state                       <- state.get
       allLeases                    = state.currentLeases
       // Claim new leases for the shards the database doesn't have leases for
       shardsWithoutLease           =
         state.shards.values.toList.filterNot(shard => allLeases.values.map(_.key).toList.contains(shard.shardId()))
-      _                           <- UIO(
-             println(
-               s"No leases exist yet for these shards, creating: ${shardsWithoutLease.map(_.shardId()).mkString(",")}"
-             )
+      _                           <- log.info(
+             s"No leases exist yet for these shards, creating: ${shardsWithoutLease.map(_.shardId()).mkString(",")}"
            )
       leasesForShardsWithoutLease <- ZIO
                                        .foreach(shardsWithoutLease) { shard =>
@@ -227,11 +233,11 @@ private class DynamoDbLeaseCoordinator(
 
                                          table.createLease(lease).as(Some(lease)).catchAll {
                                            case Right(LeaseAlreadyExists) =>
-                                             UIO(
-                                               println(
+                                             log
+                                               .info(
                                                  s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
                                                )
-                                             ).as(None)
+                                               .as(None)
                                            case Left(e)                   =>
                                              ZIO.fail(e)
                                          }
@@ -240,21 +246,21 @@ private class DynamoDbLeaseCoordinator(
       // Claim leases without owner
       // TODO we can also claim leases that have expired (worker crashed before releasing)
       claimableLeases              = allLeases.filter { case (key, lease) => lease.owner.isEmpty }
-      _                           <- UIO(println(s"Claim of leases without owner for shards ${claimableLeases.mkString(",")}"))
-      // _                 <- UIO(println(s"Stealing leases ${leasesToSteal.mkString(",")}"))
+      _                           <- log.info(s"Claim of leases without owner for shards ${claimableLeases.mkString(",")}")
       claimedLeases               <- ZIO
                          .foreach(claimableLeases) {
                            case (key, lease) =>
+                             val updatedLease = lease.claim(workerId)
                              table
-                               .claimLease(lease.copy(owner = Some(workerId)).increaseCounter)
-                               .asSome
+                               .claimLease(updatedLease)
+                               .as(Some(updatedLease))
                                .catchAll {
                                  case Right(UnableToClaimLease) =>
-                                   UIO(
-                                     println(
+                                   log
+                                     .info(
                                        s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
                                      )
-                                   ).as(None)
+                                     .as(None)
                                  case Left(e)                   =>
                                    ZIO.fail(e)
                                }
@@ -276,10 +282,11 @@ private class DynamoDbLeaseCoordinator(
   override def makeCheckpointer(shard: Shard) =
     for {
       staged <- Ref.make[Option[Record[_]]](None)
-      clock  <- ZIO.environment[Clock]
+      clock  <- ZIO.environment[Clock with Logging]
+      // logging <- ZIO.environment[Logging]
     } yield new Checkpointer {
       override def checkpoint: ZIO[zio.blocking.Blocking, Either[Throwable, ShardLeaseLost.type], Unit] =
-        for {
+        (for {
           lastStaged        <- staged.get
           heldLease         <- state.get
                          .map(_.heldLeases.get(shard.shardId()))
@@ -296,7 +303,9 @@ private class DynamoDbLeaseCoordinator(
                      .updateCheckpoint(updatedLease)
                      .catchAll {
                        case _: ConditionalCheckFailedException =>
-                         leaseLost(lease.key) *> refreshLeases.mapError(Left(_)).provide(clock).fork *>
+                         leaseLost(lease.key) *> refreshLeases
+                           .mapError(Left(_))
+                           .fork *>
                            ZIO.fail(Right(ShardLeaseLost))
                        case e                                  =>
                          ZIO.fail(Left(e))
@@ -305,22 +314,22 @@ private class DynamoDbLeaseCoordinator(
                  case None    =>
                    ZIO.unit
                }
-        } yield ()
+        } yield ()).provide(clock)
 
       override def stage(r: Record[_]): zio.UIO[Unit] = staged.set(Some(r))
     }
 
-  def releaseLeases: Task[Unit] =
+  def releaseLeases: ZIO[Logging, Throwable, Unit] =
     state.get
       .map(_.heldLeases.values)
       .flatMap(ZIO.foreach_(_)(releaseLease))
 
-  def releaseLease(shard: String) =
+  override def releaseLease(shard: String) =
     state.get.flatMap(
       _.getHeldLease(shard).map(releaseLease).getOrElse(ZIO.unit)
     )
 
-  private def releaseLease: ((Lease, Promise[Nothing, Unit])) => Task[Unit] = {
+  private def releaseLease: ((Lease, Promise[Nothing, Unit])) => ZIO[Logging, Throwable, Unit] = {
     case (lease, completed) =>
       val updatedLease = lease.copy(owner = None).increaseCounter
 
@@ -344,17 +353,16 @@ private class DynamoDbLeaseCoordinator(
             .getOrElse((UIO.unit, s))
       )
       .flatten
-  // state.update(_.releaseLease(updatedLease).updateLease(updatedLease))
 
 }
 
 class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
 
-  def createLeaseTableIfNotExists: ZIO[Clock, Throwable, Unit] =
+  def createLeaseTableIfNotExists: ZIO[Clock with Logging, Throwable, Unit] =
     createLeaseTable.unlessM(leaseTableExists)
 
   // TODO billing mode
-  def createLeaseTable: ZIO[Clock, Throwable, Unit] = {
+  def createLeaseTable: ZIO[Clock with Logging, Throwable, Unit] = {
     val keySchema            = List(keySchemaElement("leaseKey", KeyType.HASH))
     val attributeDefinitions = List(attributeDefinition("leaseKey", ScalarAttributeType.S))
 
@@ -366,10 +374,10 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
       .attributeDefinitions(attributeDefinitions.asJavaCollection)
       .build()
 
-    val createTable = UIO(println("Creating lease table")) *> asZIO(client.createTable(request))
+    val createTable = log.info("Creating lease table") *> asZIO(client.createTable(request))
 
     // recursion, yeah!
-    def awaitTableCreated: ZIO[Clock, Throwable, Unit] =
+    def awaitTableCreated: ZIO[Clock with Logging, Throwable, Unit] =
       leaseTableExists
         .flatMap(awaitTableCreated.delay(10.seconds).unless(_))
 
@@ -378,11 +386,11 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
         .timeoutFail(new Exception("Timeout creating lease table"))(10.minute) // I dunno
   }
 
-  def leaseTableExists: Task[Boolean] =
+  def leaseTableExists: ZIO[Logging, Throwable, Boolean] =
     asZIO(client.describeTable(DescribeTableRequest.builder().tableName(applicationName).build()))
       .map(_.table().tableStatus() == TableStatus.ACTIVE)
       .catchSome { case _: ResourceNotFoundException => ZIO.succeed(false) }
-      .tap(exists => UIO(println(s"Lease table ${applicationName} exists? ${exists}")))
+      .tap(exists => log.info(s"Lease table ${applicationName} exists? ${exists}"))
 
   def getLeasesFromDB: ZIO[Clock, Throwable, List[Lease]] =
     paginatedRequest { (lastItem: Option[DynamoDbItem]) =>
@@ -408,7 +416,7 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
    * @param lease
    * @return
    */
-  def releaseLease(lease: Lease): ZIO[Any, Either[Throwable, ShardLeaseLost.type], Unit] = {
+  def releaseLease(lease: Lease): ZIO[Logging, Either[Throwable, ShardLeaseLost.type], Unit] = {
     import ImplicitConversions.toAttributeValue
     println(s"Releasing lease: ${lease}")
     val request = UpdateItemRequest
@@ -426,21 +434,15 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
 
     asZIO(client.updateItem(request)).unit.catchAll {
       case e: ConditionalCheckFailedException =>
+        log.error("Check failed", Cause.fail(e))
         ZIO.fail(Right(ShardLeaseLost))
       case e                                  =>
         ZIO.fail(Left(e))
-    }.tapError(e => UIO(println(s"Got error releasing lease ${lease.key}: ${e}")))
+    }.tapError(e => log.info(s"Got error releasing lease ${lease.key}: ${e}"))
   }
 
   // Returns the updated lease
-  def claimLease(lease: Lease): ZIO[Any, Either[Throwable, UnableToClaimLease.type], Lease] = {
-    println(s"Claim lease: ${lease}")
-    val updatedLease =
-      lease.copy(
-        counter = lease.counter + 1,
-        ownerSwitchesSinceCheckpoint = 1L // Is this how this field is used?
-      )
-
+  def claimLease(lease: Lease): ZIO[Logging, Either[Throwable, UnableToClaimLease.type], Unit] = {
     import ImplicitConversions.toAttributeValue
     val request = UpdateItemRequest
       .builder()
@@ -454,9 +456,9 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
       )
       .attributeUpdates(
         Map(
-          "leaseOwner"                   -> putAttributeValueUpdate(updatedLease.owner.get),
-          "leaseCounter"                 -> putAttributeValueUpdate(updatedLease.counter),
-          "ownerSwitchesSinceCheckpoint" -> putAttributeValueUpdate(updatedLease.ownerSwitchesSinceCheckpoint)
+          "leaseOwner"                   -> putAttributeValueUpdate(lease.owner.get),
+          "leaseCounter"                 -> putAttributeValueUpdate(lease.counter),
+          "ownerSwitchesSinceCheckpoint" -> putAttributeValueUpdate(lease.ownerSwitchesSinceCheckpoint)
         ).asJava
       )
       .build()
@@ -466,15 +468,13 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
         ZIO.fail(Right(UnableToClaimLease))
       case e                                  =>
         ZIO.fail(Left(e))
-    }.tapError(e => UIO(println(s"Got error claiming lease: ${e}")))
-      .as(updatedLease)
+    }.tapError(e => log.info(s"Got error claiming lease: ${e}")).unit
 
   }
 
   // Puts the lease counter to the given lease's counter and expects counter - 1
   def updateCheckpoint(lease: Lease) = {
     require(lease.checkpoint.isDefined, "Cannot update checkpoint without Lease.checkpoint property set")
-    println(s"Update checkpoint: ${lease}")
 
     import ImplicitConversions.toAttributeValue
 
@@ -505,10 +505,10 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
       .build()
 
     asZIO(client.updateItem(request))
-      .tapError(e => UIO(println(s"Got error updating checkpoint: ${e}")))
+      .tapError(e => log.info(s"Got error updating checkpoint: ${e}"))
   }
 
-  def createLease(lease: Lease): ZIO[Any, Either[Throwable, LeaseAlreadyExists.type], Unit] = {
+  def createLease(lease: Lease): ZIO[Logging, Either[Throwable, LeaseAlreadyExists.type], Unit] = {
     val request = PutItemRequest
       .builder()
       .tableName(applicationName)
@@ -517,7 +517,7 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
 
     asZIO(client.putItem(request)).unit
       .mapError(Left(_))
-      .tapError(e => UIO(println(s"Got error creating lease: ${e}")))
+      .tapError(e => log.info(s"Got error creating lease: ${e}"))
   }
 
   private def toLease(item: DynamoDbItem): Try[Lease] =
@@ -583,6 +583,9 @@ object DynamoDbLeaseCoordinator {
     pendingCheckpoint: Option[ExtendedSequenceNumber] = None
   ) {
     def increaseCounter: Lease = copy(counter = counter + 1)
+
+    def claim(owner: String): Lease =
+      copy(owner = Some(owner), counter = counter + 1, ownerSwitchesSinceCheckpoint = ownerSwitchesSinceCheckpoint + 1)
   }
 
   def make(
@@ -590,21 +593,28 @@ object DynamoDbLeaseCoordinator {
     applicationName: String,
     workerId: String,
     shards: Map[String, Shard]
-  ): ZManaged[Clock with Random, Throwable, LeaseCoordinator] =
+  ): ZManaged[Clock with Random with Logging, Throwable, LeaseCoordinator] =
     ZManaged.make {
       val table = new LeaseTable(client, applicationName)
-      for {
-        _              <- table.createLeaseTableIfNotExists
-        currentLeases  <- table.getLeasesFromDB
-        leases          = currentLeases.map(l => l.key -> l).toMap
-        state          <- Ref.make[State](State(leases, Map.empty, shards))
-        acquiredLeases <- Queue.unbounded[(Lease, Promise[Nothing, Unit])]
-        coordinator     = new DynamoDbLeaseCoordinator(table, applicationName, workerId, state, acquiredLeases)
-        _              <- UIO(println(s"Found ${currentLeases.size} existing leases: " + currentLeases.mkString("\n")))
-        _              <- coordinator.initializeLeases
-
-      } yield coordinator
+      log.locally(LogAnnotation.Name(s"worker-${workerId}" :: Nil)) {
+        for {
+          _              <- table.createLeaseTableIfNotExists
+          currentLeases  <- table.getLeasesFromDB
+          leases          = currentLeases.map(l => l.key -> l).toMap
+          state          <- Ref.make[State](State(leases, Map.empty, shards))
+          acquiredLeases <- Queue.unbounded[(Lease, Promise[Nothing, Unit])]
+          coordinator     = new DynamoDbLeaseCoordinator(table, applicationName, workerId, state, acquiredLeases)
+          _              <- log.info(s"Found ${currentLeases.size} existing leases: " + currentLeases.mkString("\n"))
+          _              <- coordinator.initializeLeases *> coordinator.stealLeases
+        } yield coordinator
+      }
     }(_.releaseLeases.orDie)
-      .tap(c => (c.refreshLeases *> c.stealLeases).repeat(Schedule.fixed(5.seconds)).delay(5.seconds).forkManaged)
+      .tap(c =>
+        log
+          .locally(LogAnnotation.Name(s"worker-${workerId}" :: Nil))(c.refreshLeases *> c.stealLeases)
+          .repeat(Schedule.fixed(5.seconds))
+          .delay(5.seconds)
+          .forkManaged
+      )
 
 }
