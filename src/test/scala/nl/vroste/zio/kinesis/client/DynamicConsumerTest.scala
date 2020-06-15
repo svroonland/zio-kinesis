@@ -203,7 +203,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                                   .tap(_ => ZIO(println(s"Checkpointing for shard ${r.shardId} done")))
                             }
                       }
-        } yield stream).provideSomeLayer[Console with Blocking with Clock](LocalStackLayers.dynamicConsumerLayer)
+        } yield stream).provideSomeLayer[Console with Blocking](LocalStackLayers.dynamicConsumerLayer ++ Clock.live)
 
       (Client.build(LocalStackClients.kinesisAsyncClientBuilder) <* createStream(streamName, 2)).use { client =>
         for {
