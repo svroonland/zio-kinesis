@@ -233,7 +233,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 //          _                         <- producing.interrupt
           (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
         } yield assertCompletes //assert(processed)(equalTo(checkpointed))
-      }.provideSomeLayer[Clock with Console with Blocking](LocalStackLayers.dynamicConsumerLayer)
+      } //.provideSomeLayer[Clock with Console with Blocking](LocalStackLayers.dynamicConsumerLayer)
         .provideCustomLayer(Clock.live)
     } @@ TestAspect.timeout(30.seconds)
 
