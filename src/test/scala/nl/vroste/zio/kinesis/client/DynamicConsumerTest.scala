@@ -10,7 +10,8 @@ import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.console._
 import zio.duration._
-import zio.stream.ZStream
+import zio.stream.{ ZStream, ZTransducer }
+import zio.test.Assertion.equalTo
 import zio.test.TestAspect._
 import zio.test._
 
@@ -163,140 +164,77 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
       val applicationName = "zio-test-" + UUID.randomUUID().toString
 
       val batchSize = 100
-      val nrBatches = 2 //100
+      val nrBatches = 100
       val records   =
         (1 to batchSize).map(i => ProducerRecord(s"key$i", s"msg$i"))
 
       def streamConsumer(
-        workerIdentifier: String,
-        activeConsumers: Ref[Set[String]]
-      ): ZStream[Console with Blocking, Throwable, (String, String)] = {
-        val checkpointDivisor = 1
-
-        def handler(shardId: String, r: DynamicConsumer.Record[String]) =
-          for {
-            id <- ZIO.fiberId
-            _  <- putStrLn(s"Consumer $workerIdentifier on fiber $id got record $r on shard $shardId")
-            // Simulate some effectful processing
-            _  <- sleep(50.millis)
-          } yield ()
-
+        interrupted: Promise[Nothing, Unit],
+        lastProcessedRecords: Ref[Map[String, String]],
+        lastCheckpointedRecords: Ref[Map[String, String]]
+      ): ZStream[Console with Blocking with Clock, Throwable, DynamicConsumer.Record[String]] =
         (for {
           service <- ZStream.service[DynamicConsumer.Service]
-          stream  <- ZStream
-                      .fromEffect(putStrLn(s"Starting consumer $workerIdentifier"))
-                      .flatMap(_ =>
-                        service
-                          .shardedStream(
-                            streamName,
-                            applicationName = applicationName,
-                            deserializer = Serde.asciiString,
-                            workerIdentifier = applicationName + "-" + workerIdentifier,
-                            isEnhancedFanOut = false
-                          )
-                          .flatMapPar(Int.MaxValue) {
-                            case (shardId, shardStream, checkpointer @ _) =>
-                              shardStream.zipWithIndex.tap {
-                                case (r: DynamicConsumer.Record[String], sequenceNumberForShard: Long) =>
-                                  checkpointer.stageOnSuccess(handler(shardId, r))(r).as(r) <*
-                                    (putStrLn(
-                                      s"Checkpointing at offset ${sequenceNumberForShard} in consumer ${workerIdentifier}, shard ${shardId}"
-                                    ) *> checkpointer.checkpoint)
-                                      .when(sequenceNumberForShard % checkpointDivisor == checkpointDivisor - 1)
-                                      .tapError(_ =>
-                                        putStrLn(
-                                          s"Failed to checkpoint in consumer ${workerIdentifier}, shard ${shardId}"
-                                        )
-                                      )
-                              }.as((workerIdentifier, shardId))
-                                // Background and a bit delayed so we get a chance to actually emit some records
-                                .tap(_ => (sleep(1.second) *> activeConsumers.update(_ + workerIdentifier)).fork)
-                                .ensuring(putStrLn(s"Shard $shardId completed for consumer $workerIdentifier"))
-                                .catchSome {
-                                  case _: ShutdownException => // This will be thrown when the shard lease has been stolen
-                                    // Abort the stream when we no longer have the lease
-                                    ZStream.empty
-                                }
-                          }
+          stream  <- service
+                      .shardedStream(
+                        streamName,
+                        applicationName = applicationName,
+                        deserializer = Serde.asciiString,
+                        isEnhancedFanOut = false,
+                        requestShutdown = interrupted.await.tap(_ => UIO(println("Interrupting shardedStream")))
                       )
-
-        } yield stream)
-          .provideSomeLayer[Console with Blocking](LocalStackLayers.dynamicConsumerLayer)
-      }
-
-//      def streamConsumer(
-////        interrupted: Promise[Nothing, Unit],
-//        lastProcessedRecords: Ref[Map[String, String]],
-//        lastCheckpointedRecords: Ref[Map[String, String]]
-//      ): ZStream[Console with Blocking, Throwable, DynamicConsumer.Record[String]] =
-//        (for {
-//          service <- ZStream.service[DynamicConsumer.Service]
-//          stream  <- service
-//                      .shardedStream(
-//                        streamName,
-//                        applicationName = applicationName,
-//                        deserializer = Serde.asciiString,
-//                        isEnhancedFanOut = false
-////                        requestShutdown = interrupted.await.tap(_ => UIO(println("Interrupting shardedStream")))
-//                      )
-//                      .flatMapPar(Int.MaxValue) {
-//                        case (shardId, shardStream, checkpointer @ _) =>
-//                          shardStream
-//                            .tap(record => lastProcessedRecords.update(_ + (shardId -> record.sequenceNumber)))
-//                            .tap(checkpointer.stage)
-//                            // .tap(r => putStrLn(s"Shard ${shardId} got record ${r.data}"))
-//                            // It's important that the checkpointing is always done before flattening the stream, otherwise
-//                            // we cannot guarantee that the KCL has not yet shutdown the record processor and taken away the lease
-//                            //                            .aggregateAsyncWithin(
-//                            //                              ZTransducer.last, // TODO we need to make sure that in our test this thing has some records buffered after shutdown request
-//                            //                              Schedule.fixed(1.seconds)
-//                            //                            )
-//                            //                            .mapConcat(_.toList)
-//                            .tap { r =>
-//                              putStrLn(s"Shard ${r.shardId}: checkpointing for record $r") *>
-//                                checkpointer.checkpoint
-//                                  .tapError(e => ZIO(println(s"Checkpointing failed: ${e}")))
-//                                  .tap(_ => lastCheckpointedRecords.update(_ + (shardId -> r.sequenceNumber)))
-//                                  .tap(_ => ZIO(println(s"Checkpointing for shard ${r.shardId} done")))
-//                            }
-//                      }
-//        } yield stream).provideSomeLayer[Console with Blocking](LocalStackLayers.dynamicConsumerLayer ++ Clock.live)
+                      .flatMapPar(Int.MaxValue) {
+                        case (shardId, shardStream, checkpointer @ _) =>
+                          shardStream
+                            .tap(record => lastProcessedRecords.update(_ + (shardId -> record.sequenceNumber)))
+                            .tap(checkpointer.stage)
+                            // .tap(r => putStrLn(s"Shard ${shardId} got record ${r.data}"))
+                            // It's important that the checkpointing is always done before flattening the stream, otherwise
+                            // we cannot guarantee that the KCL has not yet shutdown the record processor and taken away the lease
+                            .aggregateAsyncWithin(
+                              ZTransducer.last, // TODO we need to make sure that in our test this thing has some records buffered after shutdown request
+                              Schedule.fixed(1.seconds)
+                            )
+                            .mapConcat(_.toList)
+                            .tap { r =>
+                              putStrLn(s"Shard ${r.shardId}: checkpointing for record $r") *>
+                                checkpointer.checkpoint
+                                  .tapError(e => ZIO(println(s"Checkpointing failed: ${e}")))
+                                  .tap(_ => lastCheckpointedRecords.update(_ + (shardId -> r.sequenceNumber)))
+                                  .tap(_ => ZIO(println(s"Checkpointing for shard ${r.shardId} done")))
+                            }
+                      }
+        } yield stream).provideLayer(
+          Console.live ++ Blocking.live ++ Clock.live ++ LocalStackLayers.dynamicConsumerLayer
+        )
 
       (Client.build(LocalStackClients.kinesisAsyncClientBuilder) <* createStream(streamName, 2)).use { client =>
         for {
-          /* producing */ _ <- ZStream
-                                 .fromIterable(1 to nrBatches)
-                                 .schedule(Schedule.spaced(250.millis))
-                                 .mapM { _ =>
-                                   client
-                                     .putRecords(streamName, Serde.asciiString, records)
-                                     .tap(_ => putStrLn(s"Put ${records.size} records on stream"))
-                                     .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
-                                     .retry(retryOnResourceNotFound)
-                                     .provideSomeLayer[Console](Clock.live)
-                                 }
-                                 .runDrain
-                                 .tap(_ => ZIO(println("PRODUCING RECORDS DONE")))
-//                                 .forkAs("RecordProducing")
+          producing                 <- ZStream
+                         .fromIterable(1 to nrBatches)
+                         .schedule(Schedule.spaced(250.millis))
+                         .mapM { _ =>
+                           client
+                             .putRecords(streamName, Serde.asciiString, records)
+                             //                             .tap(_ => putStrLn("Put records on stream"))
+                             .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
+                             .retry(retryOnResourceNotFound)
+                         }
+                         .runDrain
+                         .tap(_ => ZIO(println("PRODUCING RECORDS DONE")))
+                         .forkAs("RecordProducing")
 
-//          interrupted               <- Promise
-//                           .make[Nothing, Unit]
-//                           .tap(p => (putStrLn("INTERRUPTING") *> p.succeed(())).delay(19.seconds + 333.millis).fork)
-//          lastProcessedRecords    <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
-//          lastCheckpointedRecords <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
-          activeConsumers <- Ref.make[Set[String]](Set.empty)
-          _               <- streamConsumer("consumer1", activeConsumers)
-                 .take(2L)
-                 .runCollect
-//          _               <- streamConsumer( /*interrupted, */ lastProcessedRecords, lastCheckpointedRecords)
-//                 .take(2L)
-//                 .runCollect
-//          _                         <- producing.interrupt
-//          (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
-        } yield assertCompletes //assert(processed)(equalTo(checkpointed))
-      } //.provideSomeLayer[Clock with Console with Blocking](LocalStackLayers.dynamicConsumerLayer)
-        .provideCustomLayer(Clock.live)
-    } @@ TestAspect.timeout(30.seconds)
+          interrupted               <- Promise
+                           .make[Nothing, Unit]
+                           .tap(p => (putStrLn("INTERRUPTING") *> p.succeed(())).delay(19.seconds + 333.millis).fork)
+          lastProcessedRecords      <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
+          lastCheckpointedRecords   <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
+          _                         <- streamConsumer(interrupted, lastProcessedRecords, lastCheckpointedRecords).runCollect
+          _                         <- producing.interrupt
+          (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
+        } yield assert(processed)(equalTo(checkpointed))
+      }.provideCustomLayer(Clock.live)
+    } @@ TestAspect.timeout(40.seconds)
 
   // TODO check the order of received records is correct
 
