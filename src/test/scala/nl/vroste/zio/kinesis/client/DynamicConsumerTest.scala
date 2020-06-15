@@ -172,7 +172,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
         interrupted: Promise[Nothing, Unit],
         lastProcessedRecords: Ref[Map[String, String]],
         lastCheckpointedRecords: Ref[Map[String, String]]
-      ): ZStream[Console with Blocking with Clock, Throwable, DynamicConsumer.Record[String]] =
+      ): ZStream[Any, Throwable, DynamicConsumer.Record[String]] =
         (for {
           service <- ZStream.service[DynamicConsumer.Service]
           stream  <- service
@@ -229,6 +229,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                            .tap(p => (putStrLn("INTERRUPTING") *> p.succeed(())).delay(19.seconds + 333.millis).fork)
           lastProcessedRecords      <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
           lastCheckpointedRecords   <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
+          _                         <- putStrLn("ABOUT TO START CONSUMER")
           _                         <- streamConsumer(interrupted, lastProcessedRecords, lastCheckpointedRecords).runCollect
           _                         <- producing.interrupt
           (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
