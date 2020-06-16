@@ -11,7 +11,6 @@ import zio.clock.Clock
 import zio.console._
 import zio.duration._
 import zio.stream.{ ZStream, ZTransducer }
-import zio.test.Assertion.equalTo
 import zio.test.TestAspect._
 import zio.test._
 
@@ -197,7 +196,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                             )
                             .mapConcat(_.toList)
                             .tap { r =>
-                              putStrLn(s"Shard ${r.shardId}: checkpointing for record $r") *>
+                              putStrLn(s"Shard ${r.shardId}: checkpointing for record $r $interrupted") *>
                                 checkpointer.checkpoint
                                   .tapError(e => ZIO(println(s"Checkpointing failed: ${e}")))
                                   .tap(_ => lastCheckpointedRecords.update(_ + (shardId -> r.sequenceNumber)))
@@ -230,20 +229,62 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
           lastProcessedRecords      <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
           lastCheckpointedRecords   <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
           _                         <- putStrLn("ABOUT TO START CONSUMER")
-          _                         <- streamConsumer(interrupted, lastProcessedRecords, lastCheckpointedRecords).runCollect
+          _                         <- streamConsumer(interrupted, lastProcessedRecords, lastCheckpointedRecords).take(2L).runCollect
           _                         <- producing.interrupt
           (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
-        } yield assert(processed)(equalTo(checkpointed))
+        } yield assert(processed)(Assertion.equalTo(checkpointed))
       }.provideCustomLayer(Clock.live)
     } @@ TestAspect.timeout(40.seconds)
 
   // TODO check the order of received records is correct
 
+  def testCheckpointAtShutdown2 =
+    testM("checkpoint for the last processed record at stream shutdown 2") {
+      val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
+      val applicationName = "zio-test-" + UUID.randomUUID().toString
+      val batchSize       = 100
+      val nrBatches       = 100
+      val records         =
+        (1 to batchSize).map(i => ProducerRecord(s"key$i", s"msg$i"))
+
+//      def stream =
+//        for {
+//          service <- ZStream.service[DynamicConsumer.Service]
+//          stream  <- service
+//                      .shardedStream(
+//                        streamName,
+//                        applicationName = applicationName,
+//                        deserializer = Serde.asciiString,
+//                        isEnhancedFanOut = false
+//                      )
+//                      .flatMapPar(Int.MaxValue) {
+//                        case (shardId, shardStream, checkpointer @ _) =>
+//                          ZStream.empty
+//                      }
+//        } yield stream
+
+      (Client.build(LocalStackClients.kinesisAsyncClientBuilder) <* createStream(streamName, 2)).use { client =>
+        for {
+          _ <- putStrLn(s"TODO $client $applicationName $nrBatches $records")
+          _ <- putStrLn("Putting records")
+          _ <- client
+                 .putRecords(
+                   streamName,
+                   Serde.asciiString,
+                   Seq(ProducerRecord("key1", "msg1"), ProducerRecord("key2", "msg2"))
+                 )
+                 .retry(retryOnResourceNotFound)
+                 .provideLayer(Clock.live)
+        } yield assertCompletes
+      }
+    }
+
   override def spec =
     suite("DynamicConsumer")(
       testConsume1 @@ ignore,
       testConsume2 @@ ignore,
-      testCheckpointAtShutdown
+      testCheckpointAtShutdown @@ ignore,
+      testCheckpointAtShutdown2
     ) @@ timeout(5.minute) @@ sequential
 
   def sleep(d: Duration) = ZIO.sleep(d).provideLayer(Clock.live)
