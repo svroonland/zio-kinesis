@@ -296,6 +296,28 @@ object Client {
     case class AfterSequenceNumber(sequenceNumber: String) extends ShardIteratorType
     case class AtTimestamp(timestamp: Instant)             extends ShardIteratorType
   }
+
+  // Accessor methods
+  def listShards(
+    streamName: String,
+    streamCreationTimestamp: Option[Instant] = None,
+    chunkSize: Int = 10000
+  ): ZStream[Clock with Has[Client], Throwable, Shard] =
+    ZStream.unwrap {
+      ZIO.service[Client].map(_.listShards(streamName, streamCreationTimestamp, chunkSize))
+    }
+
+  def getShardIterator(streamName: String, shardId: String, iteratorType: ShardIteratorType): ClientTask[String] =
+    withClient(_.getShardIterator(streamName, shardId, iteratorType))
+
+  def getRecords(shardIterator: String, limit: Int): ClientTask[GetRecordsResponse] =
+    withClient(_.getRecords(shardIterator, limit))
+
+  type ClientTask[A] = ZIO[Has[Client], Throwable, A]
+
+  private def withClient[R, E, A](f: Client => ZIO[R, E, A]): ZIO[Has[Client] with R, E, A] =
+    ZIO.service[Client].flatMap(f)
+
 }
 
 private object Util {

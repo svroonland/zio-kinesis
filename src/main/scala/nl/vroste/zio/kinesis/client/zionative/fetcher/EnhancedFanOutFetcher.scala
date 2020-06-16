@@ -7,14 +7,15 @@ import zio.{ Ref, Schedule, ZIO, ZManaged }
 import zio.clock.Clock
 import zio.stream.ZStream
 import zio.duration._
+import zio.Has
 
 object EnhancedFanOutFetcher {
   def make(
-    client: Client,
     streamDescription: StreamDescription,
     applicationName: String
-  ): ZManaged[Clock, Throwable, Fetcher] =
+  ): ZManaged[Clock with Has[Client], Throwable, Fetcher] =
     for {
+      client   <- ZIO.service[Client].toManaged_
       consumer <- client.createConsumer(streamDescription.streamARN, applicationName)
     } yield Fetcher { (shard, startingPosition) =>
       ZStream.unwrap {

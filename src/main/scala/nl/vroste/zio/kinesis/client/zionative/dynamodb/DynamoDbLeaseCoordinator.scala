@@ -25,6 +25,8 @@ import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.UnableToClaimLease
 import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.ExtendedSequenceNumber
 import zio.random.Random
+import ch.qos.logback.core.net.server.Client
+import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent
 
 object ZioExtensions {
   implicit class OnSuccessSyntax[R, E, A](val zio: ZIO[R, E, A]) extends AnyVal {
@@ -100,7 +102,8 @@ private class DynamoDbLeaseCoordinator(
   applicationName: String,
   workerId: String,
   state: Ref[State],
-  acquiredLeasesQueue: Queue[(Lease, Promise[Nothing, Unit])]
+  acquiredLeasesQueue: Queue[(Lease, Promise[Nothing, Unit])],
+  emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit
 ) extends LeaseCoordinator {
 
   import DynamoDbLeaseCoordinator._
@@ -182,7 +185,9 @@ private class DynamoDbLeaseCoordinator(
       claimedLeases <- ZIO
                          .foreach(toSteal) { lease =>
                            val updatedLease = lease.claim(workerId)
-                           table.claimLease(updatedLease).as(Some(updatedLease)).catchAll {
+                           (table.claimLease(updatedLease).as(Some(updatedLease)) <* emitDiagnostic(
+                             DiagnosticEvent.LeaseStolen(lease.key, lease.owner.get)
+                           )).catchAll {
                              case Right(UnableToClaimLease) =>
                                log
                                  .info(
@@ -205,6 +210,7 @@ private class DynamoDbLeaseCoordinator(
       completed <- Promise.make[Nothing, Unit]
       _         <- state.update(_.updateLease(lease).holdLease(lease, completed))
       _         <- acquiredLeasesQueue.offer(lease -> completed)
+      _         <- emitDiagnostic(DiagnosticEvent.LeaseAcquired(lease.key))
     } yield ()
 
   /**
@@ -294,23 +300,21 @@ private class DynamoDbLeaseCoordinator(
           (lease, completed) = heldLease
           _                 <- lastStaged match {
                  case Some(r) =>
-                   val updatedLease =
-                     lease.copy(
-                       counter = lease.counter + 1,
-                       checkpoint = Some(ExtendedSequenceNumber(r.sequenceNumber, r.subSequenceNumber))
-                     )
-                   table
-                     .updateCheckpoint(updatedLease)
-                     .catchAll {
-                       case _: ConditionalCheckFailedException =>
-                         leaseLost(lease.key) *> refreshLeases
-                           .mapError(Left(_))
-                           .fork *>
-                           ZIO.fail(Right(ShardLeaseLost))
-                       case e                                  =>
-                         ZIO.fail(Left(e))
-                     }
-                     .onSuccess(_ => staged.set(None) *> state.update(_.updateLease(updatedLease)))
+                   val checkpoint   = ExtendedSequenceNumber(r.sequenceNumber, r.subSequenceNumber)
+                   val updatedLease = lease.copy(counter = lease.counter + 1, checkpoint = Some(checkpoint))
+
+                   (table
+                     .updateCheckpoint(updatedLease) <* emitDiagnostic(
+                     DiagnosticEvent.Checkpoint(shard.shardId(), checkpoint)
+                   )).catchAll {
+                     case _: ConditionalCheckFailedException =>
+                       leaseLost(lease.key) *> refreshLeases
+                         .mapError(Left(_))
+                         .fork *>
+                         ZIO.fail(Right(ShardLeaseLost))
+                     case e                                  =>
+                       ZIO.fail(Left(e))
+                   }.onSuccess(_ => staged.set(None) *> state.update(_.updateLease(updatedLease)))
                  case None    =>
                    ZIO.unit
                }
@@ -326,7 +330,9 @@ private class DynamoDbLeaseCoordinator(
 
   override def releaseLease(shard: String) =
     state.get.flatMap(
-      _.getHeldLease(shard).map(releaseLease).getOrElse(ZIO.unit)
+      _.getHeldLease(shard)
+        .map(releaseLease(_) *> emitDiagnostic(DiagnosticEvent.LeaseReleased(shard)))
+        .getOrElse(ZIO.unit)
     )
 
   private def releaseLease: ((Lease, Promise[Nothing, Unit])) => ZIO[Logging, Throwable, Unit] = {
@@ -348,7 +354,10 @@ private class DynamoDbLeaseCoordinator(
           s.getHeldLease(shard)
             .map {
               case (lease, completed) =>
-                (completed.succeed(()).unit, s.releaseLease(lease).updateLease(lease.copy(owner = None)))
+                (
+                  completed.succeed(()) *> emitDiagnostic(DiagnosticEvent.ShardLeaseLost(shard)),
+                  s.releaseLease(lease).updateLease(lease.copy(owner = None))
+                )
             }
             .getOrElse((UIO.unit, s))
       )
@@ -589,21 +598,22 @@ object DynamoDbLeaseCoordinator {
   }
 
   def make(
-    client: DynamoDbAsyncClient,
     applicationName: String,
     workerId: String,
-    shards: Map[String, Shard]
-  ): ZManaged[Clock with Random with Logging, Throwable, LeaseCoordinator] =
+    shards: Map[String, Shard],
+    emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit
+  ): ZManaged[Clock with Random with Logging with Has[DynamoDbAsyncClient], Throwable, LeaseCoordinator] =
     ZManaged.make {
-      val table = new LeaseTable(client, applicationName)
       log.locally(LogAnnotation.Name(s"worker-${workerId}" :: Nil)) {
         for {
+          table          <- ZIO.service[DynamoDbAsyncClient].map(new LeaseTable(_, applicationName))
           _              <- table.createLeaseTableIfNotExists
           currentLeases  <- table.getLeasesFromDB
           leases          = currentLeases.map(l => l.key -> l).toMap
           state          <- Ref.make[State](State(leases, Map.empty, shards))
           acquiredLeases <- Queue.unbounded[(Lease, Promise[Nothing, Unit])]
-          coordinator     = new DynamoDbLeaseCoordinator(table, applicationName, workerId, state, acquiredLeases)
+          coordinator     =
+            new DynamoDbLeaseCoordinator(table, applicationName, workerId, state, acquiredLeases, emitDiagnostic)
           _              <- log.info(s"Found ${currentLeases.size} existing leases: " + currentLeases.mkString("\n"))
           _              <- coordinator.initializeLeases *> coordinator.stealLeases
         } yield coordinator

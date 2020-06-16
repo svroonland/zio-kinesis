@@ -11,23 +11,26 @@ import scala.jdk.CollectionConverters._
 import nl.vroste.zio.kinesis.client.zionative.Fetcher
 import nl.vroste.zio.kinesis.client.Util.throttledFunction
 import zio.Schedule
+import zio.Has
+import zio.UIO
 
 object PollingFetcher {
   import Consumer.retryOnThrottledWithSchedule
 
   def make(
-    client: Client,
     streamDescription: StreamDescription,
-    config: FetchMode.Polling
-  ): ZManaged[Clock, Throwable, Fetcher] =
+    config: FetchMode.Polling,
+    emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit
+  ): ZManaged[Clock with Has[Client], Throwable, Fetcher] =
     for {
       // Max 5 calls per second (globally)
-      getShardIterator <- throttledFunction(5, 1.second)((client.getShardIterator _).tupled)
+      getShardIterator <- throttledFunction(5, 1.second)((Client.getShardIterator _).tupled)
+      env              <- ZIO.environment[Has[Client] with Clock].toManaged_
     } yield Fetcher { (shard, startingPosition) =>
       ZStream.unwrapManaged {
         for {
           // GetRecords can be called up to 5 times per second per shard
-          getRecordsThrottled  <- throttledFunction(5, 1.second)((client.getRecords _).tupled)
+          getRecordsThrottled  <- throttledFunction(5, 1.second)((Client.getRecords _).tupled)
           initialShardIterator <-
             getShardIterator((streamDescription.streamName, shard.shardId(), startingPosition)).toManaged_
           shardIterator        <- Ref.make[String](initialShardIterator).toManaged_
@@ -45,10 +48,17 @@ object PollingFetcher {
                                records = response.records.asScala.toList
                                //  _                = println(s"${shard.shardId()}: Got ${records.size} records")
                                _      <- Option(response.nextShardIterator).map(shardIterator.set).getOrElse(ZIO.fail(None))
+                               _      <- emitDiagnostic(
+                                      DiagnosticEvent.PollComplete(
+                                        shard.shardId(),
+                                        records.size,
+                                        response.millisBehindLatest().toLong.millis
+                                      )
+                                    )
                              } yield Chunk.fromIterable(records.map(Consumer.toConsumerRecord(_, shard.shardId())))
                            }.toManaged_
         } yield ZStream.repeatEffectChunkOption(pollWithDelay)
-      }
+      }.provide(env)
     }
 
   /**

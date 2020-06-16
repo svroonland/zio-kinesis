@@ -23,21 +23,26 @@ import zio.UIO
 import zio.Schedule
 import zio.stream.ZTransducer
 import zio.ZLayer
-import zio.logging.log
+// import zio.logging.log
 import zio.logging.slf4j.Slf4jLogger
+import zio.Ref
+import zio.Promise
 // import zio.logging.LogAnnotation
 
 object NativeConsumerTest extends DefaultRunnableSpec {
   /*
-  - It must retrieve records from all shards
-  - Support both polling and enhanced fanout
-  - Must restart from the given initial start point if no lease yet
-  - Must restart from the record after the last checkpointed record for each shard
-  - Should release leases at shutdown (another worker should aquicre all leases directly without having to steal)
-  - Must checkpoint the last staged checkpoint before shutdown
-  - Correctly deserialize the records
-  - TODO something about rate limits: maybe if we have multiple consumers active and run into rate limits?
-  - Two works must be able to start up concurrently (not sure what the assertion would be)
+  - [X] It must retrieve records from all shards
+  - [ ] Support both polling and enhanced fanout
+  - [X] Must restart from the given initial start point if no lease yet
+  - [X] Must restart from the record after the last checkpointed record for each shard
+  - [ ] Should release leases at shutdown (another worker should aquicre all leases directly without having to steal)
+  - [ ] Must checkpoint the last staged checkpoint before shutdown
+  - [ ] Correctly deserialize the records
+  - [ ] something about rate limits: maybe if we have multiple consumers active and run into rate limits?
+  - [X] Steal an equal share of leases from another worker
+  - [ ] Two workers must be able to start up concurrently (not sure what the assertion would be)
+  - [ ] When one of two workers fail, the other must take over (TODO how to simulate crashing worker)
+  - [ ] When one of two workers stops gracefully, the other must take over the shards
    */
 
   def streamPrefix = ju.UUID.randomUUID().toString().take(6)
@@ -51,16 +56,17 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
         withStream(streamName, shards = nrShards) {
           for {
-            _        <- produceSampleRecords(streamName, nrRecords, chunkSize = 200).fork
+            _        <- produceSampleRecords(streamName, nrRecords, chunkSize = 200, throttle = Some(100.millis))
             records  <- Consumer
                          .shardedStream(
                            streamName,
                            s"${streamName}-test1",
                            Serde.asciiString,
-                           fetchMode = FetchMode.Polling(batchSize = 1000)
+                           fetchMode = FetchMode.Polling(batchSize = 1000),
+                           emitDiagnostic = ev => UIO(println(ev))
                          )
                          .flatMapPar(Int.MaxValue)(_._2)
-                         .tap(r => UIO(println(s"Got record on shard ${r.shardId}")))
+                         //  .tap(r => UIO(println(s"Got record on shard ${r.shardId}")))
                          .take(nrRecords.toLong)
                          .runCollect
             shardIds <- ZIO.service[AdminClient].flatMap(_.describeStream(streamName)).map(_.shards.map(_.shardId()))
@@ -120,49 +126,64 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
         withStream(streamName, shards = nrShards) {
           for {
-            _        <- produceSampleRecords(streamName, nrRecords, chunkSize = 10, throttle = Some(1.second)).fork
-            consumer1 = Consumer
-                          .shardedStream(streamName, applicationName, Serde.asciiString, workerId = "worker1")
+            _                          <- produceSampleRecords(streamName, nrRecords, chunkSize = 10, throttle = Some(1.second)).fork
+            shardsProcessedByConsumer2 <- Ref.make[Set[String]](Set.empty)
+            shardCompletedByConsumer1  <- Promise.make[Nothing, String]
+            consumer1                   = Consumer
+                          .shardedStream(
+                            streamName,
+                            applicationName,
+                            Serde.asciiString,
+                            workerId = "worker1",
+                            emitDiagnostic = ev => UIO(println("worker1: " + ev))
+                          )
                           .flatMapPar(Int.MaxValue) {
-                            case (shard @ _, shardStream, checkpointer) =>
+                            case (shard, shardStream, checkpointer) =>
                               shardStream
                               // .tap(r => UIO(println(s"Worker 1 got record on shard ${r.shardId}")))
                                 .tap(checkpointer.stage)
                                 .aggregateAsyncWithin(ZTransducer.collectAllN(20), Schedule.fixed(1.second))
                                 .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-                                .tap(_ =>
-                                  log.info(s"Worker 1 checkpointing for shard ${shard}") *> checkpointer.checkpoint
-                                )
+                                .tap(_ => checkpointer.checkpoint)
                                 .catchAll {
                                   case Right(ShardLeaseLost) =>
                                     ZStream.empty
                                   case Left(e)               => ZStream.fail(e)
                                 }
                                 .mapConcat(identity(_))
+                                .ensuring(shardCompletedByConsumer1.succeed(shard))
                           }
-            consumer2 = Consumer
-                          .shardedStream(streamName, applicationName, Serde.asciiString, workerId = "worker2")
+            consumer2                   = Consumer
+                          .shardedStream(
+                            streamName,
+                            applicationName,
+                            Serde.asciiString,
+                            workerId = "worker2",
+                            emitDiagnostic = ev => UIO(println("worker2: " + ev))
+                          )
                           .flatMapPar(Int.MaxValue) {
-                            case (shard @ _, shardStream, checkpointer) =>
-                              shardStream
-                              // .tap(r => UIO(println(s"Worker 2 got record on shard ${r.shardId}")))
-                                .tap(checkpointer.stage)
-                                .aggregateAsyncWithin(ZTransducer.collectAllN(20), Schedule.fixed(1.second))
-                                .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-                                .tap(_ =>
-                                  UIO(println(s"Worker 2 checkpointing for shard ${shard}")) *> checkpointer.checkpoint
-                                )
-                                .catchAll {
-                                  case Right(ShardLeaseLost) =>
-                                    ZStream.empty
-                                  case Left(e)               => ZStream.fail(e)
-                                }
-                                .mapConcat(identity(_))
+                            case (shard, shardStream, checkpointer) =>
+                              ZStream.fromEffect(shardsProcessedByConsumer2.update(_ + shard)) *>
+                                shardStream
+                                // .tap(r => UIO(println(s"Worker 2 got record on shard ${r.shardId}")))
+                                  .tap(checkpointer.stage)
+                                  .aggregateAsyncWithin(ZTransducer.collectAllN(20), Schedule.fixed(1.second))
+                                  .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
+                                  .tap(_ => checkpointer.checkpoint)
+                                  .catchAll {
+                                    case Right(ShardLeaseLost) =>
+                                      ZStream.empty
+                                    case Left(e)               => ZStream.fail(e)
+                                  }
+                                  .mapConcat(identity(_))
                           }
 
-            _        <- consumer1.merge(ZStream.unwrap(ZIO.sleep(10.seconds).as(consumer2))).runCollect
+            fib                        <- consumer1.merge(ZStream.unwrap(ZIO.sleep(5.seconds).as(consumer2))).runCollect.fork
+            completedShard             <- shardCompletedByConsumer1.await
+            shardsConsumer2            <- shardsProcessedByConsumer2.get
+            _                          <- fib.interrupt
 
-          } yield assertCompletes
+          } yield assert(shardsConsumer2)(contains(completedShard))
         }
       }
     ).provideSomeLayer(

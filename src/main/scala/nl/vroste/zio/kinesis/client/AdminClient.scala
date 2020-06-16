@@ -11,6 +11,7 @@ import zio.interop.reactivestreams._
 import zio.stream.ZStream
 
 import scala.jdk.CollectionConverters._
+import zio.Has
 
 /**
  * Client for administrative operations
@@ -361,4 +362,13 @@ object AdminClient {
 
   private[client] val defaultBackoffSchedule: Schedule[Clock, Any, Any] = Schedule.exponential(200.millis) && Schedule
     .recurs(5)
+
+  // Accessors
+  def describeStream(
+    streamName: String,
+    shardLimit: Int = 100,
+    exclusiveStartShardId: Option[String] = None
+  ): ZIO[Has[AdminClient], Throwable, StreamDescription] =
+    ZIO.service[AdminClient].flatMap(_.describeStream(streamName, shardLimit, exclusiveStartShardId))
+
 }
