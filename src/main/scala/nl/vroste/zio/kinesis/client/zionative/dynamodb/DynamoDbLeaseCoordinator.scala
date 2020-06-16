@@ -23,7 +23,7 @@ import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.
 import zio.stream.ZStream
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.UnableToClaimLease
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.ExtendedSequenceNumber
+import nl.vroste.zio.kinesis.client.zionative.ExtendedSequenceNumber
 import zio.random.Random
 import ch.qos.logback.core.net.server.Client
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent
@@ -132,7 +132,7 @@ private class DynamoDbLeaseCoordinator(
     val allWorkers     = allLeases.map(_.owner).collect { case Some(owner) => owner }.toSet ++ Set(workerId)
     val nrLeasesToHave = Math.floor(shards.size * 1.0 / (allWorkers.size * 1.0)).toInt
     println(
-      s"Worker $workerId has ${ourLeases.size}, we would like to have ${nrLeasesToHave}/${allLeases.size} leases (${allWorkers.size} workers)"
+      s"We have ${ourLeases.size}, we would like to have ${nrLeasesToHave}/${allLeases.size} leases (${allWorkers.size} workers)"
     )
     if (ourLeases.size < nrLeasesToHave) {
       val nrLeasesToSteal = nrLeasesToHave - ourLeases.size
@@ -140,7 +140,7 @@ private class DynamoDbLeaseCoordinator(
       for {
         otherLeases  <- shuffle(allLeases.filterNot(_.owner == workerId))
         leasesToSteal = otherLeases.take(nrLeasesToSteal)
-        _             = println(s"$workerId Going to steal ${nrLeasesToSteal} leases: ${leasesToSteal.mkString(",")}")
+        _            <- log.info(s"Going to steal ${nrLeasesToSteal} leases: ${leasesToSteal.mkString(",")}")
       } yield leasesToSteal
     } else ZIO.succeed(List.empty)
   }
@@ -210,7 +210,7 @@ private class DynamoDbLeaseCoordinator(
       completed <- Promise.make[Nothing, Unit]
       _         <- state.update(_.updateLease(lease).holdLease(lease, completed))
       _         <- acquiredLeasesQueue.offer(lease -> completed)
-      _         <- emitDiagnostic(DiagnosticEvent.LeaseAcquired(lease.key))
+      _         <- emitDiagnostic(DiagnosticEvent.LeaseAcquired(lease.key, lease.checkpoint))
     } yield ()
 
   /**
@@ -427,7 +427,6 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
    */
   def releaseLease(lease: Lease): ZIO[Logging, Either[Throwable, ShardLeaseLost.type], Unit] = {
     import ImplicitConversions.toAttributeValue
-    println(s"Releasing lease: ${lease}")
     val request = UpdateItemRequest
       .builder()
       .tableName(applicationName)
@@ -575,9 +574,6 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
 }
 
 object DynamoDbLeaseCoordinator {
-
-  // TODO incorporate in Record
-  case class ExtendedSequenceNumber(sequenceNumber: String, subSequenceNumber: Long)
 
   case object LeaseAlreadyExists
   case object UnableToClaimLease
