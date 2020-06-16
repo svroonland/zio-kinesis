@@ -24,20 +24,7 @@ import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import zio.random.Random
 import zio.logging.Logging
 
-sealed trait DiagnosticEvent
-
-object DiagnosticEvent {
-  case class PollComplete(shardId: String, nrRecords: Int, behindLatest: Duration)      extends DiagnosticEvent
-  case class ShardLeaseLost(shardId: String)                                            extends DiagnosticEvent
-  case class LeaseAcquired(shardId: String, checkpoint: Option[ExtendedSequenceNumber]) extends DiagnosticEvent
-  case class LeaseReleased(shardId: String)                                             extends DiagnosticEvent
-  case class LeaseStolen(shardId: String, previousOwner: String)                        extends DiagnosticEvent
-  case class Checkpoint(shardId: String, checkpoint: ExtendedSequenceNumber)            extends DiagnosticEvent
-}
-
 case class ExtendedSequenceNumber(sequenceNumber: String, subSequenceNumber: Long)
-
-case object ShardLeaseLost
 
 sealed trait FetchMode
 object FetchMode {

@@ -56,7 +56,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
         withStream(streamName, shards = nrShards) {
           for {
-            _        <- produceSampleRecords(streamName, nrRecords, chunkSize = 200, throttle = Some(100.millis))
+            _        <- produceSampleRecords(streamName, nrRecords, chunkSize = 200, throttle = Some(2000.millis))
             records  <- Consumer
                          .shardedStream(
                            streamName,

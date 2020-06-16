@@ -149,7 +149,7 @@ private class DynamoDbLeaseCoordinator(
    * If our application does not checkpoint, we still need to periodically renew leases, otherwise other workers
    * will think ours are expired
    */
-  val renewLeases = ()
+  val renewLeases = ZIO.unit
 
   /**
    * For lease taking to work properly, we need to have the latest state of leases
@@ -617,7 +617,7 @@ object DynamoDbLeaseCoordinator {
     }(_.releaseLeases.orDie)
       .tap(c =>
         log
-          .locally(LogAnnotation.Name(s"worker-${workerId}" :: Nil))(c.refreshLeases *> c.stealLeases)
+          .locally(LogAnnotation.Name(s"worker-${workerId}" :: Nil))(c.refreshLeases *> c.renewLeases *> c.stealLeases)
           .repeat(Schedule.fixed(5.seconds))
           .delay(5.seconds)
           .forkManaged

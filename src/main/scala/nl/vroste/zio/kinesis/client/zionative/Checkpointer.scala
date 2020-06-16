@@ -8,6 +8,11 @@ import zio.Exit
 import nl.vroste.zio.kinesis.client.zionative.ShardLeaseLost
 
 /**
+ * Error indicating that while checkpointing it was discovered that the lease for a shard was stolen
+ */
+case object ShardLeaseLost
+
+/**
  * Staging area for checkpoints
  *
  * Guarantees that the last staged record is checkpointed upon stream shutdown / interruption

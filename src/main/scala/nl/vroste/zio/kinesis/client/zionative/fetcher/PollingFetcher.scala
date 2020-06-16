@@ -30,6 +30,7 @@ object PollingFetcher {
       ZStream.unwrapManaged {
         for {
           // GetRecords can be called up to 5 times per second per shard
+          // TODO we probably also want some minimum interval here to prevent frequent polls with only a few records
           getRecordsThrottled  <- throttledFunction(5, 1.second)((Client.getRecords _).tupled)
           initialShardIterator <-
             getShardIterator((streamDescription.streamName, shard.shardId(), startingPosition)).toManaged_
@@ -37,22 +38,25 @@ object PollingFetcher {
 
           pollWithDelay <- makePollWithDelayIfNoResult(config.delay) {
                              for {
-                               currentIterator <- shardIterator.get
-                               response        <-
+                               currentIterator      <- shardIterator.get
+                               responseWithDuration <-
                                  getRecordsThrottled((currentIterator, config.batchSize))
                                    .retry(retryOnThrottledWithSchedule(config.backoff))
                                    .asSomeError
                                    .retry(
                                      Schedule.fixed(100.millis) && Schedule.recurs(3)
                                    ) // There is a race condition in kinesalite, see https://github.com/mhart/kinesalite/issues/25
-                               records = response.records.asScala.toList
+                                   .timed
+                               (duration, response)  = responseWithDuration
+                               records               = response.records.asScala.toList
                                //  _                = println(s"${shard.shardId()}: Got ${records.size} records")
-                               _      <- Option(response.nextShardIterator).map(shardIterator.set).getOrElse(ZIO.fail(None))
-                               _      <- emitDiagnostic(
+                               _                    <- Option(response.nextShardIterator).map(shardIterator.set).getOrElse(ZIO.fail(None))
+                               _                    <- emitDiagnostic(
                                       DiagnosticEvent.PollComplete(
                                         shard.shardId(),
                                         records.size,
-                                        response.millisBehindLatest().toLong.millis
+                                        response.millisBehindLatest().toLong.millis,
+                                        duration
                                       )
                                     )
                              } yield Chunk.fromIterable(records.map(Consumer.toConsumerRecord(_, shard.shardId())))
