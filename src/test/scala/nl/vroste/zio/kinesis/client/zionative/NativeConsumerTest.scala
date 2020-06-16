@@ -27,6 +27,8 @@ import zio.ZLayer
 import zio.logging.slf4j.Slf4jLogger
 import zio.Ref
 import zio.Promise
+import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
+import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.ShardLeaseLost
 // import zio.logging.LogAnnotation
 
 object NativeConsumerTest extends DefaultRunnableSpec {
@@ -124,7 +126,17 @@ object NativeConsumerTest extends DefaultRunnableSpec {
         val nrRecords       = 20000
         val nrShards        = 5
 
+        import zio.logging._
+
         withStream(streamName, shards = nrShards) {
+
+          def onDiagnostic(worker: String) =
+            (ev: DiagnosticEvent) =>
+              ev match {
+                case _: PollComplete => UIO.unit
+                case _               => log.info(s"${worker}: ${ev}").provideLayer(loggingEnv)
+              }
+
           for {
             _                          <- produceSampleRecords(streamName, nrRecords, chunkSize = 10, throttle = Some(1.second)).fork
             shardsProcessedByConsumer2 <- Ref.make[Set[String]](Set.empty)
@@ -135,7 +147,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                             applicationName,
                             Serde.asciiString,
                             workerId = "worker1",
-                            emitDiagnostic = ev => UIO(println("worker1: " + ev))
+                            emitDiagnostic = onDiagnostic("worker1")
                           )
                           .flatMapPar(Int.MaxValue) {
                             case (shard, shardStream, checkpointer) =>
@@ -146,9 +158,9 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                 .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
                                 .tap(_ => checkpointer.checkpoint)
                                 .catchAll {
-                                  case Right(ShardLeaseLost) =>
+                                  case Right(_) =>
                                     ZStream.empty
-                                  case Left(e)               => ZStream.fail(e)
+                                  case Left(e)  => ZStream.fail(e)
                                 }
                                 .mapConcat(identity(_))
                                 .ensuring(shardCompletedByConsumer1.succeed(shard))
@@ -159,7 +171,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                             applicationName,
                             Serde.asciiString,
                             workerId = "worker2",
-                            emitDiagnostic = ev => UIO(println("worker2: " + ev))
+                            emitDiagnostic = onDiagnostic("worker2")
                           )
                           .flatMapPar(Int.MaxValue) {
                             case (shard, shardStream, checkpointer) =>
@@ -171,14 +183,14 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                   .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
                                   .tap(_ => checkpointer.checkpoint)
                                   .catchAll {
-                                    case Right(ShardLeaseLost) =>
+                                    case Right(_) =>
                                       ZStream.empty
-                                    case Left(e)               => ZStream.fail(e)
+                                    case Left(e)  => ZStream.fail(e)
                                   }
                                   .mapConcat(identity(_))
                           }
 
-            fib                        <- consumer1.merge(ZStream.unwrap(ZIO.sleep(5.seconds).as(consumer2))).runCollect.fork
+            fib                        <- consumer1.merge(ZStream.unwrap(ZIO.sleep(20.seconds).as(consumer2))).runCollect.fork
             completedShard             <- shardCompletedByConsumer1.await
             shardsConsumer2            <- shardsProcessedByConsumer2.get
             _                          <- fib.interrupt
