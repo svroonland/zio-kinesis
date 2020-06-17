@@ -223,7 +223,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
           interrupted               <- Promise
                            .make[Nothing, Unit]
-                           .tap(p => (putStrLn("INTERRUPTING") *> p.succeed(())).delay(19.seconds + 333.millis).fork)
+                           .tap(p => (putStrLn("INTERRUPTING") *> p.succeed(())).delay(40.seconds + 333.millis).fork)
           lastProcessedRecords      <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
           lastCheckpointedRecords   <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
           _                         <- putStrLn("ABOUT TO START CONSUMER")
