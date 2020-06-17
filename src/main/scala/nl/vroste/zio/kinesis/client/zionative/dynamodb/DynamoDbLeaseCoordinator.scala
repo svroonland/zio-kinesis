@@ -28,6 +28,10 @@ import zio.random.Random
 import ch.qos.logback.core.net.server.Client
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent
 import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.LeaseObsolete
+import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.LeaseCommand
+import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.LeaseCommand.StealLease
+import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.LeaseCommand.UpdateCheckpoint
+import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.LeaseCommand.RenewLease
 
 object ZioExtensions {
   implicit class OnSuccessSyntax[R, E, A](val zio: ZIO[R, E, A]) extends AnyVal {
@@ -105,12 +109,70 @@ private class DynamoDbLeaseCoordinator(
   workerId: String,
   state: Ref[State],
   acquiredLeasesQueue: Queue[(Lease, Promise[Nothing, Unit])],
-  emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit
+  emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit,
+  commandQueue: Queue[LeaseCommand]
 ) extends LeaseCoordinator {
 
   import DynamoDbLeaseCoordinator._
   import ZioExtensions.OnSuccessSyntax
   import zio.random.shuffle
+
+  val runloop = ZStream
+    .fromQueue(commandQueue)
+    .groupByKey(_.shard) {
+      case (shard, x) =>
+        x.mapM {
+          _ match {
+            case UpdateCheckpoint(shard, checkpoint, done) =>
+              (for {
+                heldleaseWithComplete <- state.get
+                                           .map(_.heldLeases.get(shard))
+                                           .someOrFail(Right(ShardLeaseLost): Either[Throwable, ShardLeaseLost.type])
+                (lease, _)             = heldleaseWithComplete
+                updatedLease           = lease.copy(counter = lease.counter + 1, checkpoint = Some(checkpoint))
+                _                     <- (table
+                         .updateCheckpoint(updatedLease) <* emitDiagnostic(
+                         DiagnosticEvent.Checkpoint(shard, checkpoint)
+                       )).catchAll {
+                       case _: ConditionalCheckFailedException =>
+                         //  leaseLost(lease.key) *> refreshLeases
+                         //    .mapError(Left(_))
+                         //    .fork *>
+                         ZIO.fail(Right(ShardLeaseLost))
+                       case e                                  =>
+                         ZIO.fail(Left(e))
+                     }.onSuccess(_ => state.update(_.updateLease(updatedLease)))
+              } yield ()).foldM(done.fail(_), done.succeed(_))
+
+            case RenewLease(shard, done)                   =>
+              state.get.map(_.getLease(shard)).map {
+                case Some(lease) =>
+                  val updatedLease = lease.increaseCounter
+                  (for {
+                    _ <- table.renewLease(updatedLease)
+                    // Checkpointer may have already updated our lease
+                    _ <- state.updateSome {
+                           case s
+                               if s.currentLeases
+                                 .get(updatedLease.key)
+                                 .exists(_.counter == updatedLease.counter - 1) =>
+                             s.updateLease(updatedLease)
+                         }
+                    _ <- emitDiagnostic(DiagnosticEvent.LeaseRenewed(updatedLease.key))
+                  } yield Some(updatedLease)).catchAll {
+                    // Either it was stolen or our checkpointer updated it as well (also updating the lease counter)
+                    case Right(LeaseObsolete) =>
+                      log.info(s"Unable to renew lease for shard, lease counter was obsolete") *>
+                        ZIO.succeed(())
+                    case Left(e)              => ZIO.fail(e)
+                  }.foldM(done.fail(_), done.succeed(_))
+                case None        =>
+                  ZIO.unit
+              }
+          }
+        }
+
+    }
 
   /**
    *
@@ -153,29 +215,10 @@ private class DynamoDbLeaseCoordinator(
    */
   // TODO lease renewal interferes with checkpointing
   val renewLeases = for {
-    _             <- log.info("Renewing leases")
-    heldLeases    <- state.get.map(_.heldLeases.values.map(_._1))
-    updatedLeases <- ZIO
-                       .foreachPar(heldLeases) { lease =>
-                         val updatedLease = lease.increaseCounter
-                         (for {
-                           _ <- table.renewLease(updatedLease)
-                           // Checkpointer may have already updated our lease
-                           _ <- state.updateSome {
-                                  case s
-                                      if s.currentLeases
-                                        .get(updatedLease.key)
-                                        .exists(_.counter == updatedLease.counter - 1) =>
-                                    s.updateLease(updatedLease)
-                                }
-                           _ <- emitDiagnostic(DiagnosticEvent.LeaseRenewed(updatedLease.key))
-                         } yield Some(updatedLease)).catchSome {
-                           // Either it was stolen or our checkpointer updated it as well (also updating the lease counter)
-                           case Right(LeaseObsolete) =>
-                             ZIO.succeed(None)
-                         }
-                       }
-                       .map(_.flatten)
+    _          <- log.info("Renewing leases")
+    heldLeases <- state.get.map(_.heldLeases.keySet)
+    _          <- ZIO
+           .foreach_(heldLeases)(shard => processCommand(LeaseCommand.RenewLease(shard, _)))
   } yield ()
 
   /**
@@ -311,6 +354,14 @@ private class DynamoDbLeaseCoordinator(
       leaseOpt <- state.get.map(_.currentLeases.get(shard.shardId()))
     } yield leaseOpt.flatMap(_.checkpoint)
 
+  private def processCommand[E, A](makeCommand: Promise[E, A] => LeaseCommand): IO[E, A] =
+    for {
+      promise <- Promise.make[E, A]
+      command  = makeCommand(promise)
+      _       <- commandQueue.offer(command)
+      result  <- promise.await
+    } yield result
+
   override def makeCheckpointer(shard: Shard) =
     for {
       staged <- Ref.make[Option[Record[_]]](None)
@@ -319,32 +370,16 @@ private class DynamoDbLeaseCoordinator(
     } yield new Checkpointer {
       override def checkpoint: ZIO[zio.blocking.Blocking, Either[Throwable, ShardLeaseLost.type], Unit] =
         (for {
-          lastStaged        <- staged.get
-          heldLease         <- state.get
-                         .map(_.heldLeases.get(shard.shardId()))
-                         .someOrFail(Right(ShardLeaseLost))
-          (lease, completed) = heldLease
-          _                 <- lastStaged match {
+          lastStaged <- staged.get
+          _          <- lastStaged match {
                  case Some(r) =>
-                   val checkpoint   = ExtendedSequenceNumber(r.sequenceNumber, r.subSequenceNumber)
-                   val updatedLease = lease.copy(counter = lease.counter + 1, checkpoint = Some(checkpoint))
+                   val checkpoint = ExtendedSequenceNumber(r.sequenceNumber, r.subSequenceNumber)
 
-                   (table
-                     .updateCheckpoint(updatedLease) <* emitDiagnostic(
-                     DiagnosticEvent.Checkpoint(shard.shardId(), checkpoint)
-                   )).catchAll {
-                     case _: ConditionalCheckFailedException =>
-                       leaseLost(lease.key) *> refreshLeases
-                         .mapError(Left(_))
-                         .fork *>
-                         ZIO.fail(Right(ShardLeaseLost))
-                     case e                                  =>
-                       ZIO.fail(Left(e))
-                   }.onSuccess(_ => staged.set(None) *> state.update(_.updateLease(updatedLease)))
-                 case None    =>
-                   ZIO.unit
+                   processCommand(LeaseCommand.UpdateCheckpoint(shard.shardId(), checkpoint, _))
+                     .onSuccess(_ => staged.set(None))
+                 case None    => UIO.unit
                }
-        } yield ()).provide(clock)
+        } yield ())
 
       override def stage(r: Record[_]): zio.UIO[Unit] = staged.set(Some(r))
     }
@@ -634,6 +669,26 @@ object DynamoDbLeaseCoordinator {
   case object UnableToClaimLease
   case object LeaseObsolete
 
+  /**
+   * Commands relating to leases that need to be executed non-concurrently per lease, because
+   * they may interfere with eachother
+   **/
+  sealed trait LeaseCommand {
+    val shard: String
+  }
+
+  object LeaseCommand {
+    case class RefreshLease(shard: String, done: Promise[Nothing, Unit]) extends LeaseCommand
+    case class RenewLease(shard: String, done: Promise[Throwable, Unit]) extends LeaseCommand
+    // case class StealLease(shard: String, done: Promise[Nothing, Unit])   extends Command
+    case class UpdateCheckpoint(
+      shard: String,
+      checkpoint: ExtendedSequenceNumber,
+      done: Promise[Either[Throwable, ShardLeaseLost.type], Unit]
+    ) extends LeaseCommand
+
+  }
+
   case class Lease(
     key: String,
     owner: Option[String],
@@ -662,15 +717,25 @@ object DynamoDbLeaseCoordinator {
           _              <- table.createLeaseTableIfNotExists
           currentLeases  <- table.getLeasesFromDB
           leases          = currentLeases.map(l => l.key -> l).toMap
+          _              <- log.info(s"Found ${currentLeases.size} existing leases: " + currentLeases.mkString("\n"))
           state          <- Ref.make[State](State(leases, Map.empty, shards))
           acquiredLeases <- Queue.unbounded[(Lease, Promise[Nothing, Unit])]
-          coordinator     =
-            new DynamoDbLeaseCoordinator(table, applicationName, workerId, state, acquiredLeases, emitDiagnostic)
-          _              <- log.info(s"Found ${currentLeases.size} existing leases: " + currentLeases.mkString("\n"))
-          _              <- coordinator.initializeLeases *> coordinator.stealLeases
+          commandQueue   <- Queue.unbounded[LeaseCommand]
+
+          coordinator = new DynamoDbLeaseCoordinator(
+                          table,
+                          applicationName,
+                          workerId,
+                          state,
+                          acquiredLeases,
+                          emitDiagnostic,
+                          commandQueue
+                        )
         } yield coordinator
       }
     }(_.releaseLeases.orDie)
+      .tap(_.runloop.runDrain.forkManaged)
+      .tap(c => (c.initializeLeases *> c.stealLeases).toManaged_)
       .tap(c =>
         log
           .locally(LogAnnotation.Name(s"worker-${workerId}" :: Nil))(c.refreshLeases *> c.renewLeases *> c.stealLeases)
