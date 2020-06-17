@@ -229,7 +229,8 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
           lastProcessedRecords      <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
           lastCheckpointedRecords   <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
           _                         <- putStrLn("ABOUT TO START CONSUMER")
-          _                         <- streamConsumer(interrupted, lastProcessedRecords, lastCheckpointedRecords).take(2L).runCollect
+          _                         <- streamConsumer(interrupted, lastProcessedRecords, lastCheckpointedRecords).runCollect.fork
+          _                         <- ZIO.unit.delay(30.seconds)
           _                         <- producing.interrupt
           (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
         } yield assert(processed)(Assertion.equalTo(checkpointed))
@@ -281,10 +282,10 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
   override def spec =
     suite("DynamicConsumer")(
-      testConsume1,
-      testConsume2,
-      testCheckpointAtShutdown @@ ignore,
-      testCheckpointAtShutdown2
+      testConsume1 @@ ignore,
+      testConsume2 @@ ignore,
+      testCheckpointAtShutdown,
+      testCheckpointAtShutdown2 @@ ignore
     ) @@ timeout(5.minute) @@ sequential
 
   def sleep(d: Duration) = ZIO.sleep(d).provideLayer(Clock.live)

@@ -11,8 +11,11 @@ import zio.clock.Clock
 import zio.console._
 import zio.duration._
 import zio.stream.{ ZStream, ZTransducer }
-import zio.{ Chunk, ExitCode, Schedule, ZIO }
+import zio.{ Chunk, ExitCode, Promise, Schedule, UIO, ZIO }
 
+/*
+ * Example application that requests an orderly stream shutdown from the outside.
+ */
 object ExampleApp2 extends zio.App {
 
   override def run(
@@ -22,16 +25,18 @@ object ExampleApp2 extends zio.App {
     val streamName = "zio-test-stream-" + UUID.randomUUID().toString
 
     for {
-      _ <- TestUtil.createStreamUnmanaged(streamName, 10)
-      _ <- produceRecords(streamName, 20000).fork
-      _ <- (for {
+      _           <- TestUtil.createStreamUnmanaged(streamName, 10)
+      _           <- produceRecords(streamName, 20000).fork
+      interrupted <- Promise.make[Nothing, Unit]
+      _           <- (for {
                service <- ZStream.service[DynamicConsumer.Service]
                stream  <- service
                            .shardedStream(
                              streamName,
                              applicationName = "testApp-" + UUID.randomUUID().toString(),
                              deserializer = Serde.asciiString,
-                             isEnhancedFanOut = false
+                             isEnhancedFanOut = false,
+                             requestShutdown = interrupted.await.tap(_ => UIO(println("Interrupting shardedStream")))
                            )
                            .flatMapPar(Int.MaxValue) {
                              case (shardID, shardStream, checkpointer) =>
@@ -56,9 +61,10 @@ object ExampleApp2 extends zio.App {
              .provideSomeLayer[Clock with Console with Blocking](LocalStackLayers.dynamicConsumerLayer)
              .runCollect
              .fork
-      _ <- putStrLn("App started")
-      _ <- ZIO.unit.delay(15.seconds)
-      _ <- putStrLn("Exiting app")
+      _           <- putStrLn("App started")
+      _           <- ZIO.unit.delay(15.seconds) *> interrupted.succeed(())
+      _           <- ZIO.unit.delay(10.seconds) // wait for normal KCL shutdown to complete
+      _           <- putStrLn("Exiting app")
 
     } yield ExitCode.success
   }.orDie
