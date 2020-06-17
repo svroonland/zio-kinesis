@@ -240,8 +240,8 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
   override def spec =
     suite("DynamicConsumer")(
-      testConsume1,
-      testConsume2,
+      // testConsume1,
+      // testConsume2,
       testCheckpointAtShutdown
     ) @@ timeout(5.minute) @@ sequential
 
