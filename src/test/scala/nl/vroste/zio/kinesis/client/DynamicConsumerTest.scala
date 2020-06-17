@@ -171,7 +171,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
         interrupted: Promise[Nothing, Unit],
         lastProcessedRecords: Ref[Map[String, String]],
         lastCheckpointedRecords: Ref[Map[String, String]]
-      ): ZStream[Any, Throwable, DynamicConsumer.Record[String]] =
+      ) = // : ZStream[Any, Throwable, DynamicConsumer.Record[String]] =
         (for {
           service <- ZStream.service[DynamicConsumer.Service]
           stream  <- service
@@ -203,9 +203,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                                   .tap(_ => ZIO(println(s"Checkpointing for shard ${r.shardId} done")))
                             }
                       }
-        } yield stream).provideLayer(
-          Console.live ++ Blocking.live ++ Clock.live ++ LocalStackLayers.dynamicConsumerLayer
-        )
+        } yield stream)
 
       (Client.build(LocalStackClients.kinesisAsyncClientBuilder) <* createStream(streamName, 2)).use { client =>
         for {
@@ -233,7 +231,9 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
           _                         <- producing.interrupt
           (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
         } yield assert(processed)(Assertion.equalTo(checkpointed))
-      }.provideCustomLayer(Clock.live)
+      }.provideCustomLayer(
+        Console.live ++ Blocking.live ++ Clock.live ++ LocalStackLayers.dynamicConsumerLayer
+      )
     } @@ TestAspect.timeout(70.seconds)
 
   // TODO check the order of received records is correct
