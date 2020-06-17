@@ -207,28 +207,31 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
       (Client.build(LocalStackClients.kinesisAsyncClientBuilder) <* createStream(streamName, 2)).use { client =>
         for {
-          producing                 <- ZStream
-                         .fromIterable(1 to nrBatches)
-                         .schedule(Schedule.spaced(2.seconds))
-                         .mapM { _ =>
-                           client
-                             .putRecords(streamName, Serde.asciiString, records)
-                             .tap(_ => putStrLn("Put records on stream"))
-                             .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
-                             .retry(retryOnResourceNotFound)
-                         }
-                         .runDrain
-                         .tap(_ => ZIO(println("PRODUCING RECORDS DONE")))
-                         .forkAs("RecordProducing")
-
           interrupted               <- Promise
                            .make[Nothing, Unit]
-                           .tap(p => (putStrLn("INTERRUPTING") *> p.succeed(())).delay(40.seconds + 333.millis).fork)
+                           .tap(p => (putStrLn("INTERRUPTING") *> p.succeed(())).delay(30.seconds).fork)
+
           lastProcessedRecords      <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
           lastCheckpointedRecords   <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
           _                         <- putStrLn("ABOUT TO START CONSUMER")
-          _                         <- streamConsumer(interrupted, lastProcessedRecords, lastCheckpointedRecords).runCollect
-          _                         <- producing.interrupt
+          consumer                  <- streamConsumer(interrupted, lastProcessedRecords, lastCheckpointedRecords).runCollect.fork
+          _                         <- ZIO.sleep(10.seconds)                    // Give the consumer some time to start
+          producer                  <- ZStream
+                        .fromIterable(1 to nrBatches)
+                        .schedule(Schedule.spaced(2.seconds))
+                        .interruptWhen(interrupted)
+                        .mapM { _ =>
+                          client
+                            .putRecords(streamName, Serde.asciiString, records)
+                            .tap(_ => putStrLn("Put records on stream"))
+                            .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
+                            .retry(retryOnResourceNotFound)
+                        }
+                        .runDrain
+                        .tap(_ => ZIO(println("PRODUCING RECORDS DONE")))
+                        .forkAs("RecordProducing")
+          _                         <- consumer.join
+          _                         <- producer.join
           (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
         } yield assert(processed)(Assertion.equalTo(checkpointed))
       }.provideCustomLayer(
