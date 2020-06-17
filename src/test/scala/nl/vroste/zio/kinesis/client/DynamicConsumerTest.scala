@@ -209,11 +209,11 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
         for {
           producing                 <- ZStream
                          .fromIterable(1 to nrBatches)
-                         .schedule(Schedule.spaced(250.millis))
+                         .schedule(Schedule.spaced(2.seconds))
                          .mapM { _ =>
                            client
                              .putRecords(streamName, Serde.asciiString, records)
-                             //                             .tap(_ => putStrLn("Put records on stream"))
+                                                         .tap(_ => putStrLn("Put records on stream"))
                              .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
                              .retry(retryOnResourceNotFound)
                          }
