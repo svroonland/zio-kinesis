@@ -213,7 +213,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                          .mapM { _ =>
                            client
                              .putRecords(streamName, Serde.asciiString, records)
-                                                         .tap(_ => putStrLn("Put records on stream"))
+                             .tap(_ => putStrLn("Put records on stream"))
                              .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
                              .retry(retryOnResourceNotFound)
                          }
