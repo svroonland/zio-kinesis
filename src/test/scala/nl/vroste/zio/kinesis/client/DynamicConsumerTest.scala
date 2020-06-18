@@ -166,7 +166,8 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
           interrupted               <- Promise
                            .make[Nothing, Unit]
-                           .tap(p => (putStrLn("INTERRUPTING") *> p.succeed(())).delay(10.seconds + 333.millis).fork)
+//                           .tap(_ => putStrLn("INTERRUPTING"))
+//                           .tap(p => (putStrLn("INTERRUPTING") *> p.succeed(())).delay(10.seconds + 333.millis).fork)
           lastProcessedRecords      <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
           lastCheckpointedRecords   <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
           _                         <- LocalStackDynamicConsumer
@@ -181,6 +182,12 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                      shardStream
                        .tap(record => lastProcessedRecords.update(_ + (shardId -> record.sequenceNumber)))
                        .tap(checkpointer.stage)
+                       .tap(_ =>
+                         for {
+                           recs <- lastProcessedRecords.get
+                           _    <- ZIO.when(recs.size == 2)(putStrLn("INTERRUPTING") *> interrupted.succeed(()))
+                         } yield ()
+                       )
                        // .tap(r => putStrLn(s"Shard ${shardId} got record ${r.data}"))
                        // It's important that the checkpointing is always done before flattening the stream, otherwise
                        // we cannot guarantee that the KCL has not yet shutdown the record processor and taken away the lease
