@@ -144,7 +144,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
       val applicationName = "zio-test-" + UUID.randomUUID().toString
 
       val batchSize = 100
-      val nrBatches = 100
+      val nrBatches = 10
       val records   =
         (1 to batchSize).map(i => ProducerRecord(s"key$i", s"msg$i"))
 
@@ -166,7 +166,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
           interrupted               <- Promise
                            .make[Nothing, Unit]
-                           .tap(p => (putStrLn("INTERRUPTING") *> p.succeed(())).delay(19.seconds + 333.millis).fork)
+                           .tap(p => (putStrLn("INTERRUPTING") *> p.succeed(())).delay(10.seconds + 333.millis).fork)
           lastProcessedRecords      <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
           lastCheckpointedRecords   <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
           _                         <- LocalStackDynamicConsumer
@@ -210,7 +210,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
     suite("DynamicConsumer")(
       testConsume1,
       testConsume2,
-      testCheckpointAtShutdown @@ ignore
+      testCheckpointAtShutdown
     ) @@ timeout(5.minute) @@ sequential
 
   def sleep(d: Duration) = ZIO.sleep(d).provideLayer(Clock.live)
