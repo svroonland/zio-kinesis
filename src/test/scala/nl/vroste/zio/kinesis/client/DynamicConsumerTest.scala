@@ -144,7 +144,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
       val applicationName = "zio-test-" + UUID.randomUUID().toString
 
       val batchSize = 100
-      val nrBatches = 10
+      val nrBatches = 2
       val records   =
         (1 to batchSize).map(i => ProducerRecord(s"key$i", s"msg$i"))
 
@@ -208,8 +208,8 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
   override def spec =
     suite("DynamicConsumer")(
-      testConsume1,
-      testConsume2,
+      testConsume1 @@ ignore,
+      testConsume2 @@ ignore,
       testCheckpointAtShutdown
     ) @@ timeout(5.minute) @@ sequential
 
