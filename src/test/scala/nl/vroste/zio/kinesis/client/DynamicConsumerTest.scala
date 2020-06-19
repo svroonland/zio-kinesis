@@ -171,7 +171,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
         interrupted: Promise[Nothing, Unit],
         lastProcessedRecords: Ref[Map[String, String]],
         lastCheckpointedRecords: Ref[Map[String, String]]
-      ) = // : ZStream[Any, Throwable, DynamicConsumer.Record[String]] =
+      ): ZStream[Any, Throwable, DynamicConsumer.Record[String]] =
         (for {
           service <- ZStream.service[DynamicConsumer.Service]
           stream  <- service
@@ -203,48 +203,46 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                                   .tap(_ => ZIO(println(s"Checkpointing for shard ${r.shardId} done")))
                             }
                       }
-        } yield stream)
+        } yield stream).provideLayer(
+          Console.live ++ Blocking.live ++ Clock.live ++ LocalStackLayers.dynamicConsumerLayer
+        )
 
       (Client.build(LocalStackClients.kinesisAsyncClientBuilder) <* createStream(streamName, 2)).use { client =>
         for {
+          producing                 <- ZStream
+                         .fromIterable(1 to nrBatches)
+                         .schedule(Schedule.spaced(250.millis))
+                         .mapM { _ =>
+                           client
+                             .putRecords(streamName, Serde.asciiString, records)
+                             //                             .tap(_ => putStrLn("Put records on stream"))
+                             .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
+                             .retry(retryOnResourceNotFound)
+                         }
+                         .runDrain
+                         .tap(_ => ZIO(println("PRODUCING RECORDS DONE")))
+                         .forkAs("RecordProducing")
+
           interrupted               <- Promise
                            .make[Nothing, Unit]
-                           .tap(p => (putStrLn("INTERRUPTING") *> p.succeed(())).delay(30.seconds).fork)
-
+                           .tap(p => (putStrLn("INTERRUPTING") *> p.succeed(())).delay(19.seconds + 333.millis).fork)
           lastProcessedRecords      <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
           lastCheckpointedRecords   <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
           _                         <- putStrLn("ABOUT TO START CONSUMER")
-          consumer                  <- streamConsumer(interrupted, lastProcessedRecords, lastCheckpointedRecords).runCollect.fork
-          _                         <- ZIO.sleep(10.seconds)                    // Give the consumer some time to start
-          producer                  <- ZStream
-                        .fromIterable(1 to nrBatches)
-                        .schedule(Schedule.spaced(2.seconds))
-                        .interruptWhen(interrupted)
-                        .mapM { _ =>
-                          client
-                            .putRecords(streamName, Serde.asciiString, records)
-                            .tap(_ => putStrLn("Put records on stream"))
-                            .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
-                            .retry(retryOnResourceNotFound)
-                        }
-                        .runDrain
-                        .tap(_ => ZIO(println("PRODUCING RECORDS DONE")))
-                        .forkAs("RecordProducing")
-          _                         <- consumer.join
-          _                         <- producer.join
+          _                         <- streamConsumer(interrupted, lastProcessedRecords, lastCheckpointedRecords).runCollect.fork
+          _                         <- ZIO.unit.delay(30.seconds)
+          _                         <- producing.interrupt
           (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
         } yield assert(processed)(Assertion.equalTo(checkpointed))
-      }.provideCustomLayer(
-        Console.live ++ Blocking.live ++ Clock.live ++ LocalStackLayers.dynamicConsumerLayer
-      )
-    } @@ TestAspect.timeout(70.seconds)
+      }.provideCustomLayer(Clock.live)
+    } @@ TestAspect.timeout(40.seconds)
 
   // TODO check the order of received records is correct
 
   override def spec =
     suite("DynamicConsumer")(
-      // testConsume1,
-      // testConsume2,
+      testConsume1,
+      testConsume2,
       testCheckpointAtShutdown
     ) @@ timeout(5.minute) @@ sequential
 
