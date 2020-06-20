@@ -218,34 +218,40 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
           Console.live ++ Blocking.live ++ Clock.live ++ LocalStackLayers.dynamicConsumerLayer
         )
 
-      (Client.build(LocalStackClients.kinesisAsyncClientBuilder) <* createStream(streamName, 2)).use { client =>
-        for {
-          producing                 <- ZStream
-                         .fromIterable(1 to nrBatches)
-                         .schedule(Schedule.spaced(250.millis))
-                         .mapM { _ =>
-                           client
-                             .putRecords(streamName, Serde.asciiString, records)
-                             //                             .tap(_ => putStrLn("Put records on stream"))
-                             .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
-                             .retry(retryOnResourceNotFound)
-                         }
-                         .runDrain
-                         .tap(_ => ZIO(println("PRODUCING RECORDS DONE")))
-                         .forkAs("RecordProducing")
+      createStream(streamName, 2)
+        .provideSomeLayer[Console](createStreamLayers)
+        .use { _ =>
+          for {
+            producing                 <- ZStream
+                           .fromIterable(1 to nrBatches)
+                           .schedule(Schedule.spaced(250.millis))
+                           .mapM { _ =>
+                             ZIO
+                               .accessM[Client2](
+                                 _.get
+                                   .putRecords(streamName, Serde.asciiString, records)
+                               )
+                               //                             .tap(_ => putStrLn("Put records on stream"))
+                               .tapError(e => putStrLn(s"error: $e"))
+                               .retry(retryOnResourceNotFound)
+                           }
+                           .runDrain
+                           .tap(_ => ZIO(println("PRODUCING RECORDS DONE")))
+                           .forkAs("RecordProducing")
 
-          interrupted               <- Promise
-                           .make[Nothing, Unit]
-                           .tap(p => (putStrLn("INTERRUPTING") *> p.succeed(())).delay(19.seconds + 333.millis).fork)
-          lastProcessedRecords      <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
-          lastCheckpointedRecords   <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
-          _                         <- putStrLn("ABOUT TO START CONSUMER")
-          _                         <- streamConsumer(interrupted, lastProcessedRecords, lastCheckpointedRecords).runCollect.fork
-          _                         <- ZIO.unit.delay(30.seconds)
-          _                         <- producing.interrupt
-          (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
-        } yield assert(processed)(Assertion.equalTo(checkpointed))
-      }.provideCustomLayer(Clock.live)
+            interrupted               <- Promise
+                             .make[Nothing, Unit]
+                             .tap(p => (putStrLn("INTERRUPTING") *> p.succeed(())).delay(19.seconds + 333.millis).fork)
+            lastProcessedRecords      <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
+            lastCheckpointedRecords   <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
+            _                         <- putStrLn("ABOUT TO START CONSUMER")
+            _                         <- streamConsumer(interrupted, lastProcessedRecords, lastCheckpointedRecords).runCollect.fork
+            _                         <- ZIO.unit.delay(30.seconds)
+            _                         <- producing.interrupt
+            (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
+          } yield assert(processed)(Assertion.equalTo(checkpointed))
+        }
+        .provideCustomLayer(Clock.live ++ (LocalStackLayers.kinesisAsyncClientLayer >>> Client2Live.layer))
     } @@ TestAspect.timeout(40.seconds)
 
   // TODO check the order of received records is correct
