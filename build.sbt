@@ -47,9 +47,9 @@ scalafmtOnCompile := true
 
 libraryDependencies ++= Seq(
   // "dev.zio"                %% "zio-streams"                 % "1.0.0-RC20+37-e9124af6-SNAPSHOT",
-  "dev.zio"                %% "zio-streams"                 % "1.0.0-RC20",
-  "dev.zio"                %% "zio-test"                    % "1.0.0-RC20" % "test",
-  "dev.zio"                %% "zio-test-sbt"                % "1.0.0-RC20" % "test",
+  "dev.zio"                %% "zio-streams"                 % "1.0.0-RC21",
+  "dev.zio"                %% "zio-test"                    % "1.0.0-RC21" % "test",
+  "dev.zio"                %% "zio-test-sbt"                % "1.0.0-RC21" % "test",
   "dev.zio"                %% "zio-interop-reactivestreams" % "1.0.3.5-RC10",
   "software.amazon.awssdk"  % "kinesis"                     % "2.13.31",
   "ch.qos.logback"          % "logback-classic"             % "1.2.3",
