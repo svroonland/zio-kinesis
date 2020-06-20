@@ -33,7 +33,8 @@ object ExampleApp extends zio.App {
                       streamName,
                       applicationName = "testApp-2", // + UUID.randomUUID().toString(),
                       deserializer = Serde.asciiString,
-                      fetchMode = FetchMode.Polling(1000)
+                      fetchMode = FetchMode.Polling(1000),
+                      emitDiagnostic = ev => UIO(println(ev))
                     )
                     .flatMapPar(Int.MaxValue) {
                       case (shardID, shardStream, checkpointer) =>

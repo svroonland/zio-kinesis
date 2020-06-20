@@ -130,10 +130,9 @@ private class DynamoDbLeaseCoordinator(
 
     def doUpdateCheckpoint(
       shard: String,
-      checkpoint: ExtendedSequenceNumber,
-      done: Promise[Either[Throwable, ShardLeaseLost.type], Unit]
+      checkpoint: ExtendedSequenceNumber
     ) =
-      (for {
+      for {
         heldleaseWithComplete  <- state.get
                                    .map(_.heldLeases.get(shard))
                                    .someOrFail(Right(ShardLeaseLost): Either[Throwable, ShardLeaseLost.type])
@@ -149,14 +148,14 @@ private class DynamoDbLeaseCoordinator(
                case e                                  =>
                  ZIO.fail(Left(e))
              }.onSuccess(_ => state.update(_.updateLease(updatedLease)))
-      } yield ()).foldM(done.fail, done.succeed)
+      } yield ()
 
     // Lease renewal increases the counter only. May detect that lease was stolen
-    def doRenewLease(shard: String, done: Promise[Throwable, Unit]) =
-      state.get.map(_.getHeldLease(shard)).map {
+    def doRenewLease(shard: String) =
+      state.get.map(_.getHeldLease(shard)).flatMap {
         case Some((lease, leaseCompleted)) =>
           val updatedLease = lease.increaseCounter
-          (for {
+          for {
             _ <- table.renewLease(updatedLease).catchAll {
                    // This means the lease was updated by another worker
                    case Right(LeaseObsolete) =>
@@ -166,9 +165,9 @@ private class DynamoDbLeaseCoordinator(
                  }
             _ <- state.update(_.updateLease(updatedLease))
             _ <- emitDiagnostic(DiagnosticEvent.LeaseRenewed(updatedLease.key))
-          } yield ()).foldM(done.fail, done.succeed)
+          } yield ()
         case None                          =>
-          done.fail(new Exception(s"Unknown lease for shard ${shard}! This indicates a programming error"))
+          ZIO.fail(new Exception(s"Unknown lease for shard ${shard}! This indicates a programming error"))
       }
 
     def doRefreshLease(lease: Lease, done: Promise[Nothing, Unit]): UIO[Unit] =
@@ -182,8 +181,8 @@ private class DynamoDbLeaseCoordinator(
                // This is our held lease that was stolen by another worker
                case (Some(previousLease), Some((_, leaseCompleted))) if previousLease.counter != lease.counter =>
                  leaseLost(lease, leaseCompleted)
-               // We found a new lease
-               case (None, _)                                                                                  =>
+               // Update of a lease that we do not hold or have not yet seen
+               case _                                                                                          =>
                  state.update(_.updateLease(lease))
              }
       } yield ()
@@ -194,35 +193,13 @@ private class DynamoDbLeaseCoordinator(
         case (shard @ _, command) =>
           command.mapM {
             case UpdateCheckpoint(shard, checkpoint, done) =>
-              doUpdateCheckpoint(shard, checkpoint, done)
+              doUpdateCheckpoint(shard, checkpoint).foldM(done.fail, done.succeed)
             case RenewLease(shard, done)                   =>
-              doRenewLease(shard, done)
+              doRenewLease(shard).foldM(done.fail, done.succeed)
             case RefreshLease(lease, done)                 =>
-              doRefreshLease(lease, done)
+              doRefreshLease(lease, done).tap(done.succeed) // Cannot fail
           }
       }
-  }
-
-  def leasesToSteal(state: State) = {
-
-    val allLeases      = state.currentLeases.values.toList
-    val shards         = state.shards
-//    val leasesByWorker = allLeases.groupBy(_.owner)
-    val ourLeases      = state.heldLeases.values.map(_._1).toList
-    val allWorkers     = allLeases.map(_.owner).collect { case Some(owner) => owner }.toSet ++ Set(workerId)
-    val nrLeasesToHave = Math.floor(shards.size * 1.0 / (allWorkers.size * 1.0)).toInt
-    println(
-      s"We have ${ourLeases.size}, we would like to have ${nrLeasesToHave}/${allLeases.size} leases (${allWorkers.size} workers)"
-    )
-    if (ourLeases.size < nrLeasesToHave) {
-      val nrLeasesToSteal = nrLeasesToHave - ourLeases.size
-      // Steal leases
-      for {
-        otherLeases  <- shuffle(allLeases.filterNot(_.owner.contains(workerId)))
-        leasesToSteal = otherLeases.take(nrLeasesToSteal)
-        _            <- log.info(s"Going to steal ${nrLeasesToSteal} leases: ${leasesToSteal.mkString(",")}")
-      } yield leasesToSteal
-    } else ZIO.succeed(List.empty)
   }
 
   /**
@@ -250,6 +227,29 @@ private class DynamoDbLeaseCoordinator(
     } yield ()
   }
 
+  def leasesToSteal(state: State) = {
+
+    val allLeases      = state.currentLeases.values.toList
+    val shards         = state.shards
+    // TODO steal from the most busy worker
+//    val leasesByWorker = allLeases.groupBy(_.owner)
+    val ourLeases      = state.heldLeases.values.map(_._1).toList
+    val allWorkers     = allLeases.map(_.owner).collect { case Some(owner) => owner }.toSet ++ Set(workerId)
+    val nrLeasesToHave = Math.floor(shards.size * 1.0 / (allWorkers.size * 1.0)).toInt
+    println(
+      s"We have ${ourLeases.size}, we would like to have ${nrLeasesToHave}/${allLeases.size} leases (${allWorkers.size} workers)"
+    )
+    if (ourLeases.size < nrLeasesToHave) {
+      val nrLeasesToSteal = nrLeasesToHave - ourLeases.size
+      // Steal leases
+      for {
+        otherLeases  <- shuffle(allLeases.filter(_.owner.forall(_ != workerId)))
+        leasesToSteal = otherLeases.take(nrLeasesToSteal)
+        _            <- log.info(s"Going to steal ${nrLeasesToSteal} leases: ${leasesToSteal.mkString(",")}")
+      } yield leasesToSteal
+    } else ZIO.succeed(List.empty)
+  }
+
   /**
    * A single round of lease stealing
    *
@@ -264,19 +264,19 @@ private class DynamoDbLeaseCoordinator(
       claimedLeases <- ZIO
                          .foreachPar(toSteal) { lease =>
                            val updatedLease = lease.claim(workerId)
-                           (table.claimLease(updatedLease).as(Some(updatedLease)) <* emitDiagnostic(
-                             DiagnosticEvent.LeaseStolen(lease.key, lease.owner.get)
-                           )).catchAll {
-                             case Right(UnableToClaimLease) =>
-                               log
-                                 .info(
-                                   s"$workerId Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
-                                 )
-                                 .as(None)
-                             case Left(e)                   =>
-                               ZIO.fail(e)
+                             (table.claimLease(updatedLease).as(Some(updatedLease)) <* emitDiagnostic(
+                               DiagnosticEvent.LeaseStolen(lease.key, lease.owner.get)
+                             )).catchAll {
+                               case Right(UnableToClaimLease) =>
+                                 log
+                                   .info(
+                                     s"$workerId Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
+                                   )
+                                   .as(None)
+                               case Left(e)                   =>
+                                 ZIO.fail(e)
 
-                           }
+                             }
                          }
                          .map(_.flatten)
       _             <- ZIO.foreach_(claimedLeases)(registerNewAcquiredLease)
@@ -329,7 +329,9 @@ private class DynamoDbLeaseCoordinator(
                                        .map(_.flatten)
       // Claim leases without owner
       // TODO we can also claim leases that have expired (worker crashed before releasing)
-      claimableLeases              = allLeases.filter { case (key @ _, lease) => lease.owner.isEmpty }
+      claimableLeases              = allLeases.filter {
+                          case (key @ _, lease) => lease.owner.isEmpty || lease.owner.contains(workerId)
+                        }
       _                           <- log.info(s"Claim of leases without owner for shards ${claimableLeases.mkString(",")}")
       // TODO this might be somewhat redundant with lease stealing
       claimedLeases               <- ZIO
