@@ -3,6 +3,7 @@ package nl.vroste.zio.kinesis.client
 import java.util.UUID
 
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
+import nl.vroste.zio.kinesis.client.Client2.Client2
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio._
@@ -17,50 +18,57 @@ import zio.test._
 object DynamicConsumerTest extends DefaultRunnableSpec {
   import TestUtil._
 
+  private val createStreamLayers = LocalStackLayers.kinesisAsyncClientLayer >>> AdminClient2Live.layer
+
   def testConsume1 =
     testM("consume records produced on all shards produced on the stream") {
       val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
       val applicationName = "zio-test-" + UUID.randomUUID().toString
 
-      (Client.build(LocalStackClients.kinesisAsyncClientBuilder) <* createStream(streamName, 2)).use { client =>
-        (for {
-          _ <- putStrLn("Putting records")
-          _ <- client
-                 .putRecords(
-                   streamName,
-                   Serde.asciiString,
-                   Seq(ProducerRecord("key1", "msg1"), ProducerRecord("key2", "msg2"))
+      createStream2(streamName, 2)
+        .provideSomeLayer[Console](createStreamLayers)
+        .use { _ =>
+          (for {
+            _ <- putStrLn("Putting records")
+            _ <- ZIO
+                   .accessM[Client2](
+                     _.get
+                       .putRecords(
+                         streamName,
+                         Serde.asciiString,
+                         Seq(ProducerRecord("key1", "msg1"), ProducerRecord("key2", "msg2"))
+                       )
+                   )
+                   .retry(retryOnResourceNotFound)
+                   .provideLayer(Clock.live ++ (LocalStackLayers.kinesisAsyncClientLayer >>> Client2Live.layer))
+
+            _ <- putStrLn("Starting dynamic consumer")
+            _ <- (for {
+                     service <- ZIO.service[DynamicConsumer.Service]
+                     _       <- service
+                            .shardedStream(
+                              streamName,
+                              applicationName = applicationName,
+                              deserializer = Serde.asciiString,
+                              isEnhancedFanOut = false
+                            )
+                            .flatMapPar(Int.MaxValue) {
+                              case (shardId @ _, shardStream, checkpointer) =>
+                                shardStream.tap(r =>
+                                  putStrLn(s"Got record $r") *> checkpointer
+                                    .checkpointNow(r)
+                                    .retry(Schedule.exponential(100.millis))
+                                )
+                            }
+                            .take(2)
+                            .runCollect
+                   } yield ()).provideSomeLayer[Clock with Blocking with Console](
+                   LocalStackLayers.dynamicConsumerLayer
                  )
-                 .retry(retryOnResourceNotFound)
-                 .provideLayer(Clock.live)
 
-          _ <- putStrLn("Starting dynamic consumer")
-          _ <- (for {
-                   service <- ZIO.service[DynamicConsumer.Service]
-                   _       <- service
-                          .shardedStream(
-                            streamName,
-                            applicationName = applicationName,
-                            deserializer = Serde.asciiString,
-                            isEnhancedFanOut = false
-                          )
-                          .flatMapPar(Int.MaxValue) {
-                            case (shardId @ _, shardStream, checkpointer) =>
-                              shardStream.tap(r =>
-                                putStrLn(s"Got record $r") *> checkpointer
-                                  .checkpointNow(r)
-                                  .retry(Schedule.exponential(100.millis))
-                              )
-                          }
-                          .take(2)
-                          .runCollect
-                 } yield ()).provideSomeLayer[Clock with Blocking with Console](
-                 LocalStackLayers.dynamicConsumerLayer
-               )
-
-        } yield assertCompletes)
-      // TODO this assertion doesn't do what the test says
-      }
+          } yield assertCompletes)
+        // TODO this assertion doesn't do what the test says
+        }
     }
 
   def testConsume2 =

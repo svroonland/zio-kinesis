@@ -14,7 +14,7 @@ import zio.{ Chunk, Has, Schedule, Task, ZLayer }
 
 import scala.jdk.CollectionConverters._
 
-class AdminClient2Live {
+object AdminClient2Live {
   val layer: ZLayer[Has[KinesisAsyncClient], Throwable, AdminClient2] =
     ZLayer.fromService[KinesisAsyncClient, AdminClient2.Service] { kinesisClient =>
       new AdminClient2.Service {

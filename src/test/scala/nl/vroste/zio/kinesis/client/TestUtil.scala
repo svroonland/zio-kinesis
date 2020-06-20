@@ -1,11 +1,33 @@
 package nl.vroste.zio.kinesis.client
+
+import nl.vroste.zio.kinesis.client.AdminClient2.AdminClient2
 import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException }
 import zio.clock.Clock
-import zio.{ Schedule, ZIO, ZManaged }
 import zio.console.{ putStrLn, Console }
 import zio.duration._
+import zio.{ Schedule, ZIO, ZManaged }
 
 object TestUtil {
+
+  def createStream2(streamName: String, nrShards: Int): ZManaged[Console with AdminClient2, Throwable, Unit] =
+    for {
+      adminClient <- ZManaged.service[AdminClient2.Service]
+      _           <- adminClient
+             .createStream(streamName, nrShards)
+             .catchSome {
+               case _: ResourceInUseException =>
+                 putStrLn("Stream already exists")
+             }
+             .toManaged { _ =>
+               adminClient
+                 .deleteStream(streamName, enforceConsumerDeletion = true)
+                 .catchSome {
+                   case _: ResourceNotFoundException => ZIO.unit
+                 }
+                 .orDie
+             }
+    } yield ()
+
   def createStream(streamName: String, nrShards: Int): ZManaged[Console, Throwable, Unit] =
     for {
       adminClient <- AdminClient.build(LocalStackClients.kinesisAsyncClientBuilder)
