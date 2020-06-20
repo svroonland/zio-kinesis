@@ -136,7 +136,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
           .provideSomeLayer[Console with Blocking](LocalStackLayers.dynamicConsumerLayer)
       }
 
-      (Client.build(LocalStackClients.kinesisAsyncClientBuilder) <* createStream(streamName, 10)).use { client =>
+      createStream(streamName, 10).provideSomeLayer[Console](createStreamLayers).use { _ =>
         val records =
           (1 to nrRecords).map(i => ProducerRecord(s"key$i", s"msg$i"))
         for {
@@ -145,12 +145,15 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                  .fromIterable(1 to nrRecords)
                  .schedule(Schedule.spaced(250.millis))
                  .mapM { _ =>
-                   client
-                     .putRecords(streamName, Serde.asciiString, records)
+                   ZIO
+                     .accessM[Client2](
+                       _.get
+                         .putRecords(streamName, Serde.asciiString, records)
+                     )
                      .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
                      .retry(retryOnResourceNotFound)
                  }
-                 .provideSomeLayer(Clock.live)
+                 .provideSomeLayer(Clock.live ++ (LocalStackLayers.kinesisAsyncClientLayer >>> Client2Live.layer))
                  .runDrain
                  .fork
 
