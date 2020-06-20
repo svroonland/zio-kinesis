@@ -33,7 +33,10 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
       .attributeDefinitions(attributeDefinitions.asJavaCollection)
       .build()
 
-    val createTable = log.info("Creating lease table") *> asZIO(client.createTable(request))
+    val createTable = log.info("Creating lease table") *> asZIO(client.createTable(request)).unit.catchSome {
+      // Another worker may have created the table between this worker checking if it exists and attempting to create it
+      case _: ResourceInUseException => ZIO.unit
+    }
 
     // recursion, yeah!
     def awaitTableCreated: ZIO[Clock with Logging, Throwable, Unit] =
@@ -56,6 +59,7 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
       val builder     = ScanRequest.builder().tableName(applicationName)
       val scanRequest = lastItem.map(_.asJava).fold(builder)(builder.exclusiveStartKey).build()
 
+      println("getLeasesFromDB")
       asZIO(client.scan(scanRequest)).map { response =>
         val items: Chunk[DynamoDbItem] = Chunk.fromIterable(response.items().asScala).map(_.asScala)
 
@@ -200,11 +204,15 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
       .builder()
       .tableName(applicationName)
       .item(toDynamoItem(lease).asJava)
+      .conditionExpression("attribute_not_exists(leaseKey)")
       .build()
 
-    asZIO(client.putItem(request)).unit
-      .mapError(Left(_))
-      .tapError(e => log.error(s"Got error creating lease: ${e}"))
+    asZIO(client.putItem(request)).unit.mapError {
+      case _: ConditionalCheckFailedException =>
+        Right(LeaseAlreadyExists)
+      case e                                  =>
+        Left(e)
+    }
   }
 
   private def toLease(item: DynamoDbItem): Try[Lease] =

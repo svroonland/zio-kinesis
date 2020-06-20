@@ -9,6 +9,8 @@ import java.{ util => ju }
 import nl.vroste.zio.kinesis.client.Producer
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import zio.stream.ZStream
+
+import zio.logging.log
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio.clock.Clock
 import zio.console._
@@ -29,6 +31,9 @@ import zio.Ref
 import zio.Promise
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.ShardLeaseLost
+import nl.vroste.zio.kinesis.client.zionative.dynamodb.LeaseTable
+import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
+import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 // import zio.logging.LogAnnotation
 
 object NativeConsumerTest extends DefaultRunnableSpec {
@@ -37,8 +42,8 @@ object NativeConsumerTest extends DefaultRunnableSpec {
   - [ ] Support both polling and enhanced fanout
   - [X] Must restart from the given initial start point if no lease yet
   - [X] Must restart from the record after the last checkpointed record for each shard
-  - [ ] Should release leases at shutdown (another worker should aquicre all leases directly without having to steal)
-  - [ ] Must checkpoint the last staged checkpoint before shutdown
+  - [X] Should release leases at shutdown (another worker should aquicre all leases directly without having to steal)
+  - [X] Must checkpoint the last staged checkpoint before shutdown
   - [ ] Correctly deserialize the records
   - [ ] something about rate limits: maybe if we have multiple consumers active and run into rate limits?
   - [X] Steal an equal share of leases from another worker
@@ -58,7 +63,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
         withStream(streamName, shards = nrShards) {
           for {
-            _        <- produceSampleRecords(streamName, nrRecords, chunkSize = 200, throttle = Some(2000.millis))
+            _        <- produceSampleRecords(streamName, nrRecords, chunkSize = 200, throttle = Some(2000.millis)).fork
             records  <- Consumer
                          .shardedStream(
                            streamName,
@@ -76,48 +81,98 @@ object NativeConsumerTest extends DefaultRunnableSpec {
           } yield assert(records.map(_.shardId).toSet)(equalTo(shardIds.toSet))
         }
       },
-      testM("continue from the next message after the last checkpoint") {
+      testM("release leases at shutdown") {
         val streamName      = streamPrefix + "testStream-2"
         val applicationName = streamPrefix + "test2"
-        val nrRecords       = 2000
+        val nrRecords       = 200
         val nrShards        = 5
 
         withStream(streamName, shards = nrShards) {
           for {
-            _            <- produceSampleRecords(streamName, nrRecords)
-            // Take the first 1000 records
-            recordsPart1 <- Consumer
-                              .shardedStream(streamName, applicationName, Serde.asciiString)
-                              .flatMapPar(Int.MaxValue) {
-                                case (shard @ _, shardStream, checkpointer) =>
-                                  shardStream.map((_, checkpointer))
-                              }
-                              .tap {
-                                case (r, checkpointer) => checkpointer.stage(r)
-                              } // It will automatically checkpoint at stream end
-                              .map(_._1)
-                              .take((nrRecords / 2).toLong)
-                              .runCollect
+            _      <- produceSampleRecords(streamName, nrRecords)
+            _      <- Consumer
+                   .shardedStream(streamName, applicationName, Serde.asciiString)
+                   .flatMapPar(Int.MaxValue) {
+                     case (shard @ _, shardStream, checkpointer) =>
+                       shardStream.map((_, checkpointer))
+                   }
+                   .tap { case (r, checkpointer) => checkpointer.stage(r) }
+                   .map(_._1)
+                   .take(nrRecords.toLong)
+                   .runDrain
 
-            // Consume the rest with the same app
-            _            <- putStrLn("Starting second consumer")
-            recordsPart2 <- Consumer
-                              .shardedStream(streamName, applicationName, Serde.asciiString)
-                              .flatMapPar(Int.MaxValue) {
-                                case (shard @ _, shardStream, checkpointer) => shardStream.map((_, checkpointer))
-                              }
-                              .tap {
-                                case (r, checkpointer) => checkpointer.stage(r)
-                              } // It will automatically checkpoint at stream end
-                              .map(_._1)
-                              .take((nrRecords / 2).toLong)
-                              .runCollect
+            table  <- ZIO.service[DynamoDbAsyncClient].map(new LeaseTable(_, applicationName))
+            leases <- table.getLeasesFromDB
+          } yield assert(leases)(forall(hasField("owner", _.owner, isNone)))
+        }
+      },
+      testM("checkpoint the last staged record at shutdown") {
+        val streamName      = streamPrefix + "testStream-2"
+        val applicationName = streamPrefix + "test2"
+        val nrRecords       = 200
+        val nrShards        = 5
 
-          } yield assert(recordsPart1.size)(equalTo(nrRecords / 2) ?? "records part 1 size") &&
-            assert(recordsPart2.size)(equalTo(nrRecords / 2) ?? "records part 2 size") &&
-            assert(recordsPart1.map(_.sequenceNumber).toSet)(
-              hasNoneOf(recordsPart2.map(_.sequenceNumber).toSet) ?? "records pt1 not equal to pt2"
-            )
+        withStream(streamName, shards = nrShards) {
+          for {
+            producedShardsAndSequence <- produceSampleRecords(streamName, nrRecords)
+            records                   <- Consumer
+                         .shardedStream(streamName, applicationName, Serde.asciiString)
+                         .flatMapPar(Int.MaxValue) {
+                           case (shard @ _, shardStream, checkpointer) =>
+                             shardStream
+                               .tap(checkpointer.stage)
+                         }
+                         .take(nrRecords.toLong)
+                         .runCollect
+            lastSeqNrByShard           = records.groupBy(_.shardId).view.mapValues(_.last)
+            table                     <- ZIO.service[DynamoDbAsyncClient].map(new LeaseTable(_, applicationName))
+            leases                    <- table.getLeasesFromDB
+            checkpoints                = leases.collect {
+                            case l if l.checkpoint.isDefined => l.key -> l.checkpoint.get.sequenceNumber
+                          }.toMap
+            expectedCheckpoints        =
+              producedShardsAndSequence.groupBy(_.shardId).view.mapValues(_.last.sequenceNumber).toMap
+
+          } yield assert(checkpoints)(Assertion.hasSameElements(expectedCheckpoints))
+        }
+      },
+      testM("continue from the next message after the last checkpoint") {
+        val streamName      = streamPrefix + "testStream-2"
+        val applicationName = streamPrefix + "test2"
+        val nrRecords       = 200
+        val nrShards        = 5
+
+        withStream(streamName, shards = nrShards) {
+          for {
+            _ <- produceSampleRecords(streamName, nrRecords)
+            _ <- Consumer
+                   .shardedStream(streamName, applicationName, Serde.asciiString)
+                   .flatMapPar(Int.MaxValue) {
+                     case (shard @ _, shardStream, checkpointer) =>
+                       shardStream.map((_, checkpointer))
+                   }
+                   .tap {
+                     case (r, checkpointer) => checkpointer.stage(r)
+                   } // It will automatically checkpoint at stream end
+                   .take(nrRecords.toLong)
+                   .runDrain
+
+            _ <- produceSampleRecords(streamName, 1, indexStart = nrRecords + 3) // Something arbitrary
+
+            // TODO improveee test: this could also pass with shard iterator LATEST or something
+            firstRecord <- Consumer
+                             .shardedStream(streamName, applicationName, Serde.asciiString)
+                             .flatMapPar(Int.MaxValue) {
+                               case (shard @ _, shardStream, checkpointer) => shardStream.map((_, checkpointer))
+                             }
+                             .tap {
+                               case (r, checkpointer) => checkpointer.stage(r)
+                             } // It will automatically checkpoint at stream end
+                             .map(_._1)
+                             .take(1)
+                             .runHead
+
+          } yield assert(firstRecord)(isSome(hasField("key", _.partitionKey, equalTo(s"key${nrRecords + 3}"))))
         }
       },
       testM("worker steals leases from other worker until they both have an equal share") {
@@ -126,21 +181,13 @@ object NativeConsumerTest extends DefaultRunnableSpec {
         val nrRecords       = 20000
         val nrShards        = 5
 
-        import zio.logging._
-
         withStream(streamName, shards = nrShards) {
-
-          def onDiagnostic(worker: String) =
-            (ev: DiagnosticEvent) =>
-              ev match {
-                case _: PollComplete => UIO.unit
-                case _               => log.info(s"${worker}: ${ev}").provideLayer(loggingEnv)
-              }
 
           for {
             _                          <- produceSampleRecords(streamName, nrRecords, chunkSize = 10, throttle = Some(1.second)).fork
             shardsProcessedByConsumer2 <- Ref.make[Set[String]](Set.empty)
             shardCompletedByConsumer1  <- Promise.make[Nothing, String]
+            shardStartedByConsumer2    <- Promise.make[Nothing, Unit]
             consumer1                   = Consumer
                           .shardedStream(
                             streamName,
@@ -175,7 +222,9 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                           )
                           .flatMapPar(Int.MaxValue) {
                             case (shard, shardStream, checkpointer) =>
-                              ZStream.fromEffect(shardsProcessedByConsumer2.update(_ + shard)) *>
+                              ZStream.fromEffect(
+                                shardStartedByConsumer2.succeed(()) *> shardsProcessedByConsumer2.update(_ + shard)
+                              ) *>
                                 shardStream
                                 // .tap(r => UIO(println(s"Worker 2 got record on shard ${r.shardId}")))
                                   .tap(checkpointer.stage)
@@ -192,15 +241,91 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
             fib                        <- consumer1.merge(ZStream.unwrap(ZIO.sleep(20.seconds).as(consumer2))).runCollect.fork
             completedShard             <- shardCompletedByConsumer1.await
+            _                          <- shardStartedByConsumer2.await
             shardsConsumer2            <- shardsProcessedByConsumer2.get
             _                          <- fib.interrupt
 
           } yield assert(shardsConsumer2)(contains(completedShard))
         }
+      },
+      testM("workers should be able to start concurrently") {
+        val streamName      = streamPrefix + "testStream-3"
+        val applicationName = streamPrefix + "test3"
+        val nrRecords       = 20000
+        val nrShards        = 5
+
+        withStream(streamName, shards = nrShards) {
+
+          for {
+            _                          <- produceSampleRecords(streamName, nrRecords, chunkSize = 10, throttle = Some(1.second)).fork
+            shardsProcessedByConsumer2 <- Ref.make[Set[String]](Set.empty)
+
+            // Spin up two workers, let them fight a bit over leases until things have stabilized
+            consumer1 = Consumer
+                          .shardedStream(
+                            streamName,
+                            applicationName,
+                            Serde.asciiString,
+                            workerId = "worker1",
+                            emitDiagnostic = onDiagnostic("worker1")
+                          )
+                          .flatMapPar(Int.MaxValue) {
+                            case (shard @ _, shardStream, checkpointer) =>
+                              shardStream
+                                .tap(checkpointer.stage)
+                                .aggregateAsyncWithin(ZTransducer.collectAllN(20), Schedule.fixed(1.second))
+                                .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
+                                .tap(_ => checkpointer.checkpoint)
+                                .catchAll {
+                                  case Right(_) =>
+                                    ZStream.empty
+                                  case Left(e)  => ZStream.fail(e)
+                                }
+                                .mapConcat(identity(_))
+                                .ensuring(UIO(println(s"Shard stream worker 2 ${shard} completed")))
+                            // .ensuring(shardCompletedByConsumer1.succeed(shard))
+                          }
+                          .take(20)
+            consumer2 = Consumer
+                          .shardedStream(
+                            streamName,
+                            applicationName,
+                            Serde.asciiString,
+                            workerId = "worker2",
+                            emitDiagnostic = onDiagnostic("worker2")
+                          )
+                          .flatMapPar(Int.MaxValue) {
+                            case (shard, shardStream, checkpointer) =>
+                              ZStream.fromEffect(shardsProcessedByConsumer2.update(_ + shard)) *>
+                                shardStream
+                                // .tap(r => UIO(println(s"Worker 2 got record on shard ${r.shardId}")))
+                                  .tap(checkpointer.stage)
+                                  .aggregateAsyncWithin(ZTransducer.collectAllN(20), Schedule.fixed(1.second))
+                                  .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
+                                  .tap(_ => checkpointer.checkpoint)
+                                  .catchAll {
+                                    case Right(_) =>
+                                      ZStream.empty
+                                    case Left(e)  => ZStream.fail(e)
+                                  }
+                                  .mapConcat(identity(_))
+                                  .ensuring(UIO(println(s"Shard stream worker 2 ${shard} completed")))
+                          }
+                          .take(20)
+
+            _        <- consumer1.merge(consumer2).runCollect
+          } yield assertCompletes
+        }
       }
-    ).provideSomeLayer(
-      ((Layers.kinesisAsyncClient >>> (Layers.adminClient ++ Layers.client)).orDie ++ zio.test.environment.testEnvironment ++ Clock.live ++ Layers.dynamo.orDie) >>> (ZLayer.identity ++ loggingEnv)
-    )
+    ).provideSomeLayer(env)
+
+  val env =
+    ((Layers.kinesisAsyncClient >>>
+      (Layers.adminClient ++ Layers.client)).orDie ++
+      zio.test.environment.testEnvironment ++
+      Clock.live ++
+      Layers.dynamo.orDie) >>>
+      (ZLayer.identity ++ loggingEnv)
 
   def withStream[R, A](name: String, shards: Int)(f: ZIO[R, Throwable, A]): ZIO[Has[AdminClient] with R, Throwable, A] =
     (for {
@@ -214,14 +339,15 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     streamName: String,
     nrRecords: Int,
     chunkSize: Int = 100,
-    throttle: Option[Duration] = None
-  ): ZIO[Has[Client] with Clock, Throwable, Unit] =
+    throttle: Option[Duration] = None,
+    indexStart: Int = 0
+  ): ZIO[Has[Client] with Clock, Throwable, Chunk[ProduceResponse]] =
     (for {
       client   <- ZIO.service[Client].toManaged_
       producer <- Producer.make(streamName, client, Serde.asciiString)
     } yield producer).use { producer =>
       val records =
-        (1 to nrRecords).map(i => ProducerRecord(s"key$i", s"msg$i"))
+        (indexStart to (nrRecords + indexStart)).map(i => ProducerRecord(s"key$i", s"msg$i"))
       ZStream
         .fromIterable(records)
         .chunkN(chunkSize)
@@ -235,7 +361,15 @@ object NativeConsumerTest extends DefaultRunnableSpec {
             .tap(_ => throttle.map(ZIO.sleep(_)).getOrElse(UIO.unit))
         )
         .mapMPar(24)(_.join)
-        .runDrain
+        .mapConcatChunk(Chunk.fromIterable)
+        .runCollect
     }
+
+  def onDiagnostic(worker: String) =
+    (ev: DiagnosticEvent) =>
+      ev match {
+        case _: PollComplete => UIO.unit
+        case _               => log.info(s"${worker}: ${ev}").provideLayer(loggingEnv)
+      }
 
 }

@@ -144,7 +144,7 @@ object Consumer {
             shard.shardId(),
             shardStream.ensuringFirst(
               checkpointer.checkpoint.ignore.provide(blocking) *>
-                leaseCoordinator.releaseLease(shard.shardId()).ignore
+                leaseCoordinator.releaseLease(shard.shardId()).orDie
             ),
             checkpointer
           )
