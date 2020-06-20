@@ -3,11 +3,10 @@ package nl.vroste.zio.kinesis.client
 import java.time.Instant
 import java.util.concurrent.CompletableFuture
 
-import nl.vroste.zio.kinesis.client.serde.{ Deserializer, Serializer }
+import nl.vroste.zio.kinesis.client.serde.Serializer
 import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.core.async.SdkPublisher
-import software.amazon.awssdk.services.kinesis.model._
-import software.amazon.awssdk.services.kinesis.model.{ ShardIteratorType => JIteratorType }
+import software.amazon.awssdk.services.kinesis.model.{ ShardIteratorType => JIteratorType, _ }
 import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyncClientBuilder }
 import zio._
 import zio.clock.Clock
@@ -313,9 +312,11 @@ object Client {
   def getRecords(shardIterator: String, limit: Int): ClientTask[GetRecordsResponse] =
     withClient(_.getRecords(shardIterator, limit))
 
-  type ClientTask[A] = ZIO[Has[Client], Throwable, A]
+  type ClientTask[+A] = ZIO[Has[Client], Throwable, A]
 
-  private def withClient[R, E, A](f: Client => ZIO[R, E, A]): ZIO[Has[Client] with R, E, A] =
+  private def withClient[R, R1 >: R, E, E1 <: E, A, A1 <: A](
+    f: Client => ZIO[R1, E1, A1]
+  ): ZIO[Has[Client] with R, E, A] =
     ZIO.service[Client].flatMap(f)
 
 }
@@ -358,13 +359,13 @@ private object Util {
   ): ZManaged[Clock, Nothing, I => ZIO[R, E, A]] =
     for {
       requestsQueue <- Queue.unbounded[(IO[E, A], Promise[E, A])].toManaged_
-      stream        <- ZStream
-                  .fromQueueWithShutdown(requestsQueue)
-                  .throttleShape(units, duration, units)(_ => 1)
-                  .mapM { case (effect, promise) => promise.complete(effect) }
-                  .runDrain
-                  .forkManaged
-    } yield input =>
+      _             <- ZStream
+             .fromQueueWithShutdown(requestsQueue)
+             .throttleShape(units, duration, units)(_ => 1)
+             .mapM { case (effect, promise) => promise.complete(effect) }
+             .runDrain
+             .forkManaged
+    } yield (input: I) =>
       for {
         env     <- ZIO.environment[R]
         promise <- Promise.make[E, A]

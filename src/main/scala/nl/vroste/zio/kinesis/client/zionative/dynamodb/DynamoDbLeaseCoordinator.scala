@@ -1,13 +1,18 @@
 package nl.vroste.zio.kinesis.client.zionative.dynamodb
 
 import nl.vroste.zio.kinesis.client.DynamicConsumer.Record
-import nl.vroste.zio.kinesis.client.Util.asZIO
-import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator
-import nl.vroste.zio.kinesis.client.zionative.Checkpointer
-import nl.vroste.zio.kinesis.client.zionative.ShardLeaseLost
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.Lease
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbUtil._
-import nl.vroste.zio.kinesis.client.Util.paginatedRequest
+import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
+import nl.vroste.zio.kinesis.client.zionative._
+import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.{ Lease, LeaseCommand }
+import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.LeaseCommand.{
+  RenewLease,
+  UpdateCheckpoint
+}
+import nl.vroste.zio.kinesis.client.zionative.dynamodb.LeaseTable.{
+  LeaseAlreadyExists,
+  LeaseObsolete,
+  UnableToClaimLease
+}
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
 import software.amazon.awssdk.services.dynamodb.model._
 import software.amazon.awssdk.services.kinesis.model.Shard
@@ -15,23 +20,8 @@ import zio._
 import zio.clock.Clock
 import zio.duration._
 import zio.logging._
-
-import scala.jdk.CollectionConverters._
-import scala.util.Try
-import scala.util.Failure
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.LeaseAlreadyExists
-import zio.stream.ZStream
-import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.UnableToClaimLease
-import nl.vroste.zio.kinesis.client.zionative.ExtendedSequenceNumber
 import zio.random.Random
-import ch.qos.logback.core.net.server.Client
-import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.LeaseObsolete
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.LeaseCommand
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.LeaseCommand.StealLease
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.LeaseCommand.UpdateCheckpoint
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.LeaseCommand.RenewLease
+import zio.stream.ZStream
 
 object ZioExtensions {
   implicit class OnSuccessSyntax[R, E, A](val zio: ZIO[R, E, A]) extends AnyVal {
@@ -77,7 +67,7 @@ case class State(
     heldLeases.get(shardId)
 
   def holdLease(lease: Lease, completed: Promise[Nothing, Unit]): State =
-    copy(heldLeases = heldLeases + (lease.key -> (lease, completed)))
+    copy(heldLeases = heldLeases + (lease.key -> (lease -> completed)))
 
   def releaseLease(lease: Lease): State                                 =
     copy(heldLeases = heldLeases - lease.key)
@@ -105,7 +95,6 @@ object State {
  */
 private class DynamoDbLeaseCoordinator(
   table: LeaseTable,
-  applicationName: String,
   workerId: String,
   state: Ref[State],
   acquiredLeasesQueue: Queue[(Lease, Promise[Nothing, Unit])],
@@ -120,78 +109,62 @@ private class DynamoDbLeaseCoordinator(
   val runloop = ZStream
     .fromQueue(commandQueue)
     .groupByKey(_.shard) {
-      case (shard, x) =>
+      case (shard @ _, x) =>
         x.mapM {
-          _ match {
-            case UpdateCheckpoint(shard, checkpoint, done) =>
-              (for {
-                heldleaseWithComplete <- state.get
-                                           .map(_.heldLeases.get(shard))
-                                           .someOrFail(Right(ShardLeaseLost): Either[Throwable, ShardLeaseLost.type])
-                (lease, _)             = heldleaseWithComplete
-                updatedLease           = lease.copy(counter = lease.counter + 1, checkpoint = Some(checkpoint))
-                _                     <- (table
-                         .updateCheckpoint(updatedLease) <* emitDiagnostic(
-                         DiagnosticEvent.Checkpoint(shard, checkpoint)
-                       )).catchAll {
-                       case _: ConditionalCheckFailedException =>
-                         //  leaseLost(lease.key) *> refreshLeases
-                         //    .mapError(Left(_))
-                         //    .fork *>
-                         ZIO.fail(Right(ShardLeaseLost))
-                       case e                                  =>
-                         ZIO.fail(Left(e))
-                     }.onSuccess(_ => state.update(_.updateLease(updatedLease)))
-              } yield ()).foldM(done.fail(_), done.succeed(_))
+          case UpdateCheckpoint(shard, checkpoint, done) =>
+            (for {
+              heldleaseWithComplete <- state.get
+                                         .map(_.heldLeases.get(shard))
+                                         .someOrFail(Right(ShardLeaseLost): Either[Throwable, ShardLeaseLost.type])
+              (lease, _)             = heldleaseWithComplete
+              updatedLease           = lease.copy(counter = lease.counter + 1, checkpoint = Some(checkpoint))
+              _                     <- (table
+                       .updateCheckpoint(updatedLease) <* emitDiagnostic(
+                       DiagnosticEvent.Checkpoint(shard, checkpoint)
+                     )).catchAll {
+                     case _: ConditionalCheckFailedException =>
+                       //  leaseLost(lease.key) *> refreshLeases
+                       //    .mapError(Left(_))
+                       //    .fork *>
+                       ZIO.fail(Right(ShardLeaseLost))
+                     case e                                  =>
+                       ZIO.fail(Left(e))
+                   }.onSuccess(_ => state.update(_.updateLease(updatedLease)))
+            } yield ()).foldM(done.fail, done.succeed)
 
-            case RenewLease(shard, done)                   =>
-              state.get.map(_.getLease(shard)).map {
-                case Some(lease) =>
-                  val updatedLease = lease.increaseCounter
-                  (for {
-                    _ <- table.renewLease(updatedLease)
-                    // Checkpointer may have already updated our lease
-                    _ <- state.updateSome {
-                           case s
-                               if s.currentLeases
-                                 .get(updatedLease.key)
-                                 .exists(_.counter == updatedLease.counter - 1) =>
-                             s.updateLease(updatedLease)
-                         }
-                    _ <- emitDiagnostic(DiagnosticEvent.LeaseRenewed(updatedLease.key))
-                  } yield Some(updatedLease)).catchAll {
-                    // Either it was stolen or our checkpointer updated it as well (also updating the lease counter)
-                    case Right(LeaseObsolete) =>
-                      log.info(s"Unable to renew lease for shard, lease counter was obsolete") *>
-                        ZIO.succeed(())
-                    case Left(e)              => ZIO.fail(e)
-                  }.foldM(done.fail(_), done.succeed(_))
-                case None        =>
-                  ZIO.unit
-              }
-          }
+          case RenewLease(shard, done)                   =>
+            state.get.map(_.getLease(shard)).map {
+              case Some(lease) =>
+                val updatedLease = lease.increaseCounter
+                (for {
+                  _ <- table.renewLease(updatedLease)
+                  // Checkpointer may have already updated our lease
+                  _ <- state.updateSome {
+                         case s
+                             if s.currentLeases
+                               .get(updatedLease.key)
+                               .exists(_.counter == updatedLease.counter - 1) =>
+                           s.updateLease(updatedLease)
+                       }
+                  _ <- emitDiagnostic(DiagnosticEvent.LeaseRenewed(updatedLease.key))
+                } yield Some(updatedLease)).catchAll {
+                  // Either it was stolen or our checkpointer updated it as well (also updating the lease counter)
+                  case Right(LeaseObsolete) =>
+                    log.info(s"Unable to renew lease for shard, lease counter was obsolete").unit
+                  case Left(e)              => ZIO.fail(e)
+                }.unit.foldM(done.fail, done.succeed)
+              case None        =>
+                ZIO.unit
+            }
         }
 
     }
-
-  /**
-   *
-   *
-   * @param nr Number of leases to steal at once
-   * @param period
-   * @param leaseExpirationTime
-   */
-  case class LeaseCoordinationSettings(
-    leasesToSteal: Int,
-    period: Duration = 30.seconds,
-    leaseExpirationTime: Duration = 1.minute
-  )
 
   def leasesToSteal(state: State) = {
 
     val allLeases      = state.currentLeases.values.toList
     val shards         = state.shards
-    val leasesByWorker = allLeases.groupBy(_.owner)
+//    val leasesByWorker = allLeases.groupBy(_.owner)
     val ourLeases      = state.heldLeases.values.map(_._1).toList
     val allWorkers     = allLeases.map(_.owner).collect { case Some(owner) => owner }.toSet ++ Set(workerId)
     val nrLeasesToHave = Math.floor(shards.size * 1.0 / (allWorkers.size * 1.0)).toInt
@@ -202,7 +175,7 @@ private class DynamoDbLeaseCoordinator(
       val nrLeasesToSteal = nrLeasesToHave - ourLeases.size
       // Steal leases
       for {
-        otherLeases  <- shuffle(allLeases.filterNot(_.owner == workerId))
+        otherLeases  <- shuffle(allLeases.filterNot(_.owner.contains(workerId)))
         leasesToSteal = otherLeases.take(nrLeasesToSteal)
         _            <- log.info(s"Going to steal ${nrLeasesToSteal} leases: ${leasesToSteal.mkString(",")}")
       } yield leasesToSteal
@@ -213,7 +186,6 @@ private class DynamoDbLeaseCoordinator(
    * If our application does not checkpoint, we still need to periodically renew leases, otherwise other workers
    * will think ours are expired
    */
-  // TODO lease renewal interferes with checkpointing
   val renewLeases = for {
     _          <- log.info("Renewing leases")
     heldLeases <- state.get.map(_.heldLeases.keySet)
@@ -320,11 +292,11 @@ private class DynamoDbLeaseCoordinator(
                                        .map(_.flatten)
       // Claim leases without owner
       // TODO we can also claim leases that have expired (worker crashed before releasing)
-      claimableLeases              = allLeases.filter { case (key, lease) => lease.owner.isEmpty }
+      claimableLeases              = allLeases.filter { case (key @ _, lease) => lease.owner.isEmpty }
       _                           <- log.info(s"Claim of leases without owner for shards ${claimableLeases.mkString(",")}")
       claimedLeases               <- ZIO
                          .foreachPar(claimableLeases) {
-                           case (key, lease) =>
+                           case (key @ _, lease) =>
                              val updatedLease = lease.claim(workerId)
                              table
                                .claimLease(updatedLease)
@@ -365,7 +337,7 @@ private class DynamoDbLeaseCoordinator(
   override def makeCheckpointer(shard: Shard) =
     for {
       staged <- Ref.make[Option[Record[_]]](None)
-      clock  <- ZIO.environment[Clock with Logging]
+//      clock  <- ZIO.environment[Clock with Logging]
       // logging <- ZIO.environment[Logging]
     } yield new Checkpointer {
       override def checkpoint: ZIO[zio.blocking.Blocking, Either[Throwable, ShardLeaseLost.type], Unit] =
@@ -426,248 +398,7 @@ private class DynamoDbLeaseCoordinator(
 
 }
 
-class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
-
-  def createLeaseTableIfNotExists: ZIO[Clock with Logging, Throwable, Unit] =
-    createLeaseTable.unlessM(leaseTableExists)
-
-  // TODO billing mode
-  def createLeaseTable: ZIO[Clock with Logging, Throwable, Unit] = {
-    val keySchema            = List(keySchemaElement("leaseKey", KeyType.HASH))
-    val attributeDefinitions = List(attributeDefinition("leaseKey", ScalarAttributeType.S))
-
-    val request = CreateTableRequest
-      .builder()
-      .tableName(applicationName)
-      .billingMode(BillingMode.PAY_PER_REQUEST)
-      .keySchema(keySchema.asJavaCollection)
-      .attributeDefinitions(attributeDefinitions.asJavaCollection)
-      .build()
-
-    val createTable = log.info("Creating lease table") *> asZIO(client.createTable(request))
-
-    // recursion, yeah!
-    def awaitTableCreated: ZIO[Clock with Logging, Throwable, Unit] =
-      leaseTableExists
-        .flatMap(awaitTableCreated.delay(10.seconds).unless(_))
-
-    createTable *>
-      awaitTableCreated
-        .timeoutFail(new Exception("Timeout creating lease table"))(10.minute) // I dunno
-  }
-
-  def leaseTableExists: ZIO[Logging, Throwable, Boolean] =
-    asZIO(client.describeTable(DescribeTableRequest.builder().tableName(applicationName).build()))
-      .map(_.table().tableStatus() == TableStatus.ACTIVE)
-      .catchSome { case _: ResourceNotFoundException => ZIO.succeed(false) }
-      .tap(exists => log.info(s"Lease table ${applicationName} exists? ${exists}"))
-
-  def getLeasesFromDB: ZIO[Clock, Throwable, List[Lease]] =
-    paginatedRequest { (lastItem: Option[DynamoDbItem]) =>
-      val builder     = ScanRequest.builder().tableName(applicationName)
-      val scanRequest = lastItem.map(_.asJava).fold(builder)(builder.exclusiveStartKey).build()
-
-      asZIO(client.scan(scanRequest)).map { response =>
-        val items: Chunk[DynamoDbItem] = Chunk.fromIterable(response.items().asScala).map(_.asScala)
-
-        (items, Option(response.lastEvaluatedKey()).map(_.asScala).filter(_.nonEmpty))
-      }
-
-    }(Schedule.forever).flattenChunks.runCollect
-      .flatMap(
-        ZIO.foreach(_)(i => ZIO.fromTry(toLease(i))).map(_.toList)
-      )
-
-  /**
-   * Removes the leaseOwner property
-   *
-   * Expects the given lease's counter - 1
-   *
-   * @param lease
-   * @return
-   */
-  def releaseLease(lease: Lease): ZIO[Logging, Either[Throwable, ShardLeaseLost.type], Unit] = {
-    import ImplicitConversions.toAttributeValue
-    val request = UpdateItemRequest
-      .builder()
-      .tableName(applicationName)
-      .key(DynamoDbItem("leaseKey" -> lease.key).asJava)
-      .expected(
-        Map(
-          // TODO we need to update these atomically somehow
-          "leaseCounter" -> expectedAttributeValue(lease.counter - 1)
-        ).asJava
-      )
-      .attributeUpdates(Map("leaseOwner" -> deleteAttributeValueUpdate).asJava)
-      .build()
-
-    asZIO(client.updateItem(request)).unit.catchAll {
-      case e: ConditionalCheckFailedException =>
-        log.error("Check failed", Cause.fail(e))
-        ZIO.fail(Right(ShardLeaseLost))
-      case e                                  =>
-        ZIO.fail(Left(e))
-    }.tapError(e => log.info(s"Got error releasing lease ${lease.key}: ${e}"))
-  }
-
-  // Returns the updated lease
-  def claimLease(lease: Lease): ZIO[Logging, Either[Throwable, UnableToClaimLease.type], Unit] = {
-    import ImplicitConversions.toAttributeValue
-    val request = UpdateItemRequest
-      .builder()
-      .tableName(applicationName)
-      .key(DynamoDbItem("leaseKey" -> lease.key).asJava)
-      .expected(
-        Map(
-          // TODO we need to update these atomically somehow
-          "leaseCounter" -> expectedAttributeValue(lease.counter - 1)
-        ).asJava
-      )
-      .attributeUpdates(
-        Map(
-          "leaseOwner"                   -> putAttributeValueUpdate(lease.owner.get),
-          "leaseCounter"                 -> putAttributeValueUpdate(lease.counter),
-          "ownerSwitchesSinceCheckpoint" -> putAttributeValueUpdate(lease.ownerSwitchesSinceCheckpoint)
-        ).asJava
-      )
-      .build()
-
-    asZIO(client.updateItem(request))
-      .tapError(e => log.warn(s"Got error claiming lease: ${e}"))
-      .unit
-      .catchAll {
-        case e: ConditionalCheckFailedException =>
-          ZIO.fail(Right(UnableToClaimLease))
-        case e                                  =>
-          ZIO.fail(Left(e))
-      }
-
-  }
-
-  // Puts the lease counter to the given lease's counter and expects counter - 1
-  def updateCheckpoint(lease: Lease) = {
-    require(lease.checkpoint.isDefined, "Cannot update checkpoint without Lease.checkpoint property set")
-
-    import ImplicitConversions.toAttributeValue
-
-    val request = UpdateItemRequest
-      .builder()
-      .tableName(applicationName)
-      .key(DynamoDbItem("leaseKey" -> lease.key).asJava)
-      .expected(
-        Map(
-          "leaseCounter" -> expectedAttributeValue(lease.counter - 1)
-        ).asJava
-      )
-      .attributeUpdates(
-        Map(
-          "leaseCounter"                 -> putAttributeValueUpdate(lease.counter),
-          "checkpoint"                   -> lease.checkpoint
-            .map(_.sequenceNumber)
-            .map(putAttributeValueUpdate)
-            .getOrElse(putAttributeValueUpdate(null)),
-          "checkpointSubSequenceNumber"  -> lease.checkpoint
-            .map(_.subSequenceNumber)
-            .map(putAttributeValueUpdate)
-            .getOrElse(putAttributeValueUpdate(0L)),
-          "ownerSwitchesSinceCheckpoint" -> putAttributeValueUpdate(0L)
-          // TODO reset pending checkpoint
-        ).asJava
-      )
-      .build()
-
-    asZIO(client.updateItem(request))
-      .tapError(e => log.warn(s"Got error updating checkpoint: ${e}"))
-  }
-
-  def renewLease(lease: Lease): ZIO[Logging, Either[Throwable, LeaseObsolete.type], Unit] = {
-    import ImplicitConversions.toAttributeValue
-
-    val request = UpdateItemRequest
-      .builder()
-      .tableName(applicationName)
-      .key(DynamoDbItem("leaseKey" -> lease.key).asJava)
-      .expected(
-        Map(
-          "leaseCounter" -> expectedAttributeValue(lease.counter - 1)
-        ).asJava
-      )
-      .attributeUpdates(Map("leaseCounter" -> putAttributeValueUpdate(lease.counter)).asJava)
-      .build()
-
-    asZIO(client.updateItem(request))
-      .tapError(e => log.warn(s"Got error updating lease: ${e}"))
-      .unit
-      .catchAll {
-        case e: ConditionalCheckFailedException =>
-          ZIO.fail(Right(LeaseObsolete))
-        case e                                  =>
-          ZIO.fail(Left(e))
-      }
-  }
-
-  def createLease(lease: Lease): ZIO[Logging, Either[Throwable, LeaseAlreadyExists.type], Unit] = {
-    val request = PutItemRequest
-      .builder()
-      .tableName(applicationName)
-      .item(toDynamoItem(lease).asJava)
-      .build()
-
-    asZIO(client.putItem(request)).unit
-      .mapError(Left(_))
-      .tapError(e => log.error(s"Got error creating lease: ${e}"))
-  }
-
-  private def toLease(item: DynamoDbItem): Try[Lease] =
-    Try {
-      Lease(
-        key = item("leaseKey").s(),
-        owner = item.get("leaseOwner").map(_.s()),
-        counter = item("leaseCounter").n().toLong,
-        ownerSwitchesSinceCheckpoint = item("ownerSwitchesSinceCheckpoint").n().toLong,
-        checkpoint = item
-          .get("checkpoint")
-          .filterNot(_.nul())
-          .map(_.s())
-          .map(
-            ExtendedSequenceNumber(
-              _,
-              subSequenceNumber = item("checkpointSubSequenceNumber").n().toLong
-            )
-          ),
-        parentShardIds = item.get("parentShardIds").map(_.ss().asScala.toList).getOrElse(List.empty),
-        pendingCheckpoint = item
-          .get("pendingCheckpoint")
-          .map(_.s())
-          .map(ExtendedSequenceNumber(_, item("pendingCheckpointSubSequenceNumber").n().toLong))
-      )
-    }.recoverWith {
-      case e =>
-        println(s"Error deserializing lease: ${item} ${e}")
-        Failure(e)
-    }
-
-  import scala.collection.{ mutable => mut }
-
-  private def toDynamoItem(lease: Lease): DynamoDbItem = {
-    import DynamoDbUtil.ImplicitConversions.toAttributeValue
-    DynamoDbItem(
-      "leaseKey"                     -> lease.key,
-      "leaseCounter"                 -> lease.counter,
-      "checkpoint"                   -> lease.checkpoint.map(_.sequenceNumber).getOrElse(null),
-      "checkpointSubSequenceNumber"  -> lease.checkpoint.map(_.subSequenceNumber).getOrElse(null),
-      "ownerSwitchesSinceCheckpoint" -> 0L
-    ) ++ (if (lease.parentShardIds.nonEmpty) DynamoDbItem("parentShardIds" -> lease.parentShardIds)
-          else DynamoDbItem.empty) ++
-      lease.owner.fold(DynamoDbItem.empty)(owner => DynamoDbItem("leaseOwner" -> owner))
-  }
-}
-
 object DynamoDbLeaseCoordinator {
-
-  case object LeaseAlreadyExists
-  case object UnableToClaimLease
-  case object LeaseObsolete
 
   /**
    * Commands relating to leases that need to be executed non-concurrently per lease, because
@@ -724,7 +455,6 @@ object DynamoDbLeaseCoordinator {
 
           coordinator = new DynamoDbLeaseCoordinator(
                           table,
-                          applicationName,
                           workerId,
                           state,
                           acquiredLeases,

@@ -21,6 +21,7 @@ import zio.duration._
 import zio.stream.ZStream
 import zio.blocking.Blocking
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
+import nl.vroste.zio.kinesis.client.zionative.fetcher.{ EnhancedFanOutFetcher, PollingFetcher }
 import zio.random.Random
 import zio.logging.Logging
 

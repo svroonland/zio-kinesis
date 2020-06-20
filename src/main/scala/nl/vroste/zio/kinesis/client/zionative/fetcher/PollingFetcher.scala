@@ -1,18 +1,14 @@
-package nl.vroste.zio.kinesis.client.zionative
+package nl.vroste.zio.kinesis.client.zionative.fetcher
 import nl.vroste.zio.kinesis.client.AdminClient.StreamDescription
 import nl.vroste.zio.kinesis.client.Client
-import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
-import software.amazon.awssdk.services.kinesis.model.Shard
-import zio.{ Chunk, Ref, ZIO, ZManaged }
-import zio.clock.Clock
-import zio.stream.ZStream
-import zio.duration._
-import scala.jdk.CollectionConverters._
-import nl.vroste.zio.kinesis.client.zionative.Fetcher
 import nl.vroste.zio.kinesis.client.Util.throttledFunction
-import zio.Schedule
-import zio.Has
-import zio.UIO
+import nl.vroste.zio.kinesis.client.zionative.{ Consumer, DiagnosticEvent, FetchMode, Fetcher }
+import zio.clock.Clock
+import zio.duration._
+import zio.stream.ZStream
+import zio._
+
+import scala.jdk.CollectionConverters._
 
 object PollingFetcher {
   import Consumer.retryOnThrottledWithSchedule

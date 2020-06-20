@@ -5,7 +5,6 @@ import zio.blocking.Blocking
 import nl.vroste.zio.kinesis.client.DynamicConsumer.Record
 import zio.UIO
 import zio.Exit
-import nl.vroste.zio.kinesis.client.zionative.ShardLeaseLost
 
 /**
  * Error indicating that while checkpointing it was discovered that the lease for a shard was stolen
