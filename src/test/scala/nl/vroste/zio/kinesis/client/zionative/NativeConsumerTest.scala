@@ -336,7 +336,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
           } yield assertCompletes
         }
       }
-    ).provideSomeLayer(env)
+    ).provideSomeLayer(env) @@ TestAspect.timed @@ TestAspect.sequential
 
   val env =
     ((Layers.kinesisAsyncClient >>>

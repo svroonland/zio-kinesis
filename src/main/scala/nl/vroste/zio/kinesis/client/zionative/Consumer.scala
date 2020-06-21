@@ -129,40 +129,36 @@ object Consumer {
               case AcquiredLease(shardId, leaseLost) if currentShards.contains(shardId) =>
                 (currentShards.get(shardId).get, leaseLost)
             }.mapMPar(10) { // TODO config var: max shard starts or something
-                case (shard, leaseLost) =>
-                  for {
-                    _                   <- log.info(s"Initializing for shard ${shard.shardId()}")
-                    checkpointer        <- leaseCoordinator.makeCheckpointer(shard)
-                    blocking            <- ZIO.environment[Blocking]
-                    startingPositionOpt <- leaseCoordinator.getCheckpointForShard(shard)
-                    startingPosition     = startingPositionOpt
-                                         .map(s => ShardIteratorType.AfterSequenceNumber(s.sequenceNumber))
-                                         .getOrElse(initialStartingPosition)
-                    stop                 = ZStream.fromEffect(leaseLost.await).as(Exit.fail(None))
-                    shardStream          = (stop merge fetcher
-                                      .shardRecordStream(shard, startingPosition)
-                                      .mapChunksM { chunk => // mapM is slow
-                                        chunk.mapM(record => toRecord(shard.shardId(), record))
-                                      }
-                                      .map(Exit.succeed(_))).collectWhileSuccess
-                  } yield (
-                    shard.shardId(),
-                    shardStream.ensuringFirst {
-                      checkpointer.checkpointAndRelease.catchAll {
-                        case Left(e)               => ZIO.fail(e)
-                        case Right(ShardLeaseLost) => ZIO.unit // This is fine during shutdown
-                      }.orDie
-                        .provide(blocking)
-                    },
-                    checkpointer
-                  )
-              }
+              case (shard, leaseLost) =>
+                for {
+                  _                   <- log.info(s"Initializing for shard ${shard.shardId()}")
+                  checkpointer        <- leaseCoordinator.makeCheckpointer(shard)
+                  blocking            <- ZIO.environment[Blocking]
+                  startingPositionOpt <- leaseCoordinator.getCheckpointForShard(shard)
+                  startingPosition     = startingPositionOpt
+                                       .map(s => ShardIteratorType.AfterSequenceNumber(s.sequenceNumber))
+                                       .getOrElse(initialStartingPosition)
+                  stop                 = ZStream.fromEffect(leaseLost.await).as(Exit.fail(None))
+                  shardStream          = (stop merge fetcher
+                                    .shardRecordStream(shard, startingPosition)
+                                    .mapChunksM { chunk => // mapM is slow
+                                      chunk.mapM(record => toRecord(shard.shardId(), record))
+                                    }
+                                    .map(Exit.succeed(_))).collectWhileSuccess
+                } yield (
+                  shard.shardId(),
+                  shardStream.ensuringFirst {
+                    checkpointer.checkpointAndRelease.catchAll {
+                      case Left(e)               => ZIO.fail(e)
+                      case Right(ShardLeaseLost) => ZIO.unit // This is fine during shutdown
+                    }.orDie
+                      .provide(blocking)
+                  },
+                  checkpointer
+                )
+            }
         }
     }
-  }
-
-  implicit class ZioDebugExtensions[R, E, A](z: ZIO[R, E, A]) {
-    def debug(label: String): ZIO[R, E, A] = (UIO(println(s"${label}")) *> z) <* UIO(println(s"${label} complete"))
   }
 
   def toConsumerRecord(record: KinesisRecord, shardId: String): ConsumerRecord =

@@ -188,7 +188,6 @@ private class DynamoDbLeaseCoordinator(
     def doRefreshLease(lease: Lease, done: Promise[Nothing, Unit]): UIO[Unit] =
       for {
         currentState <- state.get
-        _            <- UIO(println(s"doRefreshLease for ${lease}"))
         shardId       = lease.key
         _            <- (currentState.getLease(shardId), currentState.getHeldLease(shardId)) match {
                // This is one of our held leases, we expect it to be unchanged
@@ -197,8 +196,7 @@ private class DynamoDbLeaseCoordinator(
                // This is our held lease that was stolen by another worker
                case (Some(previousLease), Some((_, leaseCompleted)))                         =>
                  if (previousLease.counter != lease.counter && previousLease.owner != lease.owner)
-                   UIO(println(s"doRefreshLease for ${lease}: LOST")) *>
-                     leaseLost(lease, leaseCompleted)
+                   leaseLost(lease, leaseCompleted)
                  else
                    // We have ourselves updated this lease by eg checkpointing or renewing
                    ZIO.unit

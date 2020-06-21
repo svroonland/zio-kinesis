@@ -59,7 +59,6 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
       val builder     = ScanRequest.builder().tableName(applicationName)
       val scanRequest = lastItem.map(_.asJava).fold(builder)(builder.exclusiveStartKey).build()
 
-      println("getLeasesFromDB")
       asZIO(client.scan(scanRequest)).map { response =>
         val items: Chunk[DynamoDbItem] = Chunk.fromIterable(response.items().asScala).map(_.asScala)
 
@@ -111,7 +110,6 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
       .key(DynamoDbItem("leaseKey" -> lease.key).asJava)
       .expected(
         Map(
-          // TODO we need to update these atomically somehow
           "leaseCounter" -> expectedAttributeValue(lease.counter - 1)
         ).asJava
       )
@@ -164,7 +162,6 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
             .map(putAttributeValueUpdate)
             .getOrElse(putAttributeValueUpdate(0L)),
           "ownerSwitchesSinceCheckpoint" -> putAttributeValueUpdate(0L)
-          // TODO reset pending checkpoint
         ).asJava
       )
       .build()
