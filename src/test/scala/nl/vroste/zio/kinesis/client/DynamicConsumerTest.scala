@@ -136,7 +136,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
           .provideSomeLayer[Console with Blocking](LocalStackLayers.dynamicConsumerLayer)
       }
 
-      createStream(streamName, 10).provideSomeLayer[Console](createStreamLayers).use { _ =>
+      createStream2(streamName, 10).provideSomeLayer[Console](createStreamLayers).use { _ =>
         val records =
           (1 to nrRecords).map(i => ProducerRecord(s"key$i", s"msg$i"))
         for {
@@ -218,7 +218,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
           Console.live ++ Blocking.live ++ Clock.live ++ LocalStackLayers.dynamicConsumerLayer
         )
 
-      createStream(streamName, 2)
+      createStream2(streamName, 2)
         .provideSomeLayer[Console](createStreamLayers)
         .use { _ =>
           for {

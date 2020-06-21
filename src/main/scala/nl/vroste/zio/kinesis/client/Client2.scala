@@ -3,7 +3,7 @@ package nl.vroste.zio.kinesis.client
 import java.time.Instant
 
 import nl.vroste.zio.kinesis.client.serde.{ Deserializer, Serializer }
-import software.amazon.awssdk.services.kinesis.model.{ Consumer, PutRecordResponse, PutRecordsResponse, Shard }
+import software.amazon.awssdk.services.kinesis.model._
 import zio.clock.Clock
 import zio.stream.ZStream
 import zio.{ Has, Task, ZIO, ZManaged }
@@ -94,5 +94,6 @@ object Client2 {
       records: Iterable[ProducerRecord[T]]
     ): ZIO[R, Throwable, PutRecordsResponse]
 
+    def putRecords(streamName: String, entries: List[PutRecordsRequestEntry]): Task[PutRecordsResponse]
   }
 }
