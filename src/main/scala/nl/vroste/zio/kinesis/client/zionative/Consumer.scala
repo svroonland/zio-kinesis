@@ -120,6 +120,7 @@ object Consumer {
           ZManaged.unwrap(AdminClient.describeStream(streamName).map(makeFetcher)),
           for {
             currentShards    <- Client.listShards(streamName).runCollect.map(_.map(l => (l.shardId(), l)).toMap).toManaged_
+            _                <- ZManaged.die(new Exception("No shards in stream!")).when(currentShards.isEmpty)
             leaseCoordinator <- DynamoDbLeaseCoordinator.make(applicationName, workerId, currentShards, emitDiagnostic)
           } yield (currentShards, leaseCoordinator)
         )(_ -> _)
@@ -131,7 +132,6 @@ object Consumer {
             }.mapMPar(10) { // TODO config var: max shard starts or something
               case (shard, leaseLost) =>
                 for {
-                  _                   <- log.info(s"Initializing for shard ${shard.shardId()}")
                   checkpointer        <- leaseCoordinator.makeCheckpointer(shard)
                   blocking            <- ZIO.environment[Blocking]
                   startingPositionOpt <- leaseCoordinator.getCheckpointForShard(shard)

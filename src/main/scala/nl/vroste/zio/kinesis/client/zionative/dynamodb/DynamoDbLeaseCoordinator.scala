@@ -273,14 +273,14 @@ private class DynamoDbLeaseCoordinator(
   }
 
   def leasesToSteal(state: State) = {
+    // TODO something with shards that don't have a lease yet
 
     val allLeases      = state.currentLeases.values.toList
-    val shards         = state.shards
     // TODO steal from the most busy worker
 //    val leasesByWorker = allLeases.groupBy(_.owner)
     val ourLeases      = state.heldLeases.values.map(_._1).toList
     val allWorkers     = allLeases.map(_.owner).collect { case Some(owner) => owner }.toSet ++ Set(workerId)
-    val nrLeasesToHave = Math.floor(shards.size * 1.0 / (allWorkers.size * 1.0)).toInt
+    val nrLeasesToHave = Math.floor(allLeases.size * 1.0 / (allWorkers.size * 1.0)).toInt
     println(
       s"We have ${ourLeases.size}, we would like to have ${nrLeasesToHave}/${allLeases.size} leases (${allWorkers.size} workers)"
     )
@@ -343,6 +343,10 @@ private class DynamoDbLeaseCoordinator(
     for {
       state             <- state.get
       allLeases          = state.currentLeases
+      _                  =
+        println(
+          s"Initializing. Shards: ${state.shards.values.map(_.shardId()).mkString(",")}, found leases: ${allLeases.mkString(",")}"
+        )
       // Claim new leases for the shards the database doesn't have leases for
       shardsWithoutLease =
         state.shards.values.toList.filterNot(shard => allLeases.values.map(_.key).toList.contains(shard.shardId()))
