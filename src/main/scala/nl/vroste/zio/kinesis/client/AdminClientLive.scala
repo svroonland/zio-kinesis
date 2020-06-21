@@ -2,7 +2,7 @@ package nl.vroste.zio.kinesis.client
 
 import java.time.Instant
 
-import nl.vroste.zio.kinesis.client.AdminClient2.AdminClient2
+import nl.vroste.zio.kinesis.client.AdminClient.AdminClient
 import nl.vroste.zio.kinesis.client.Util.{ asZIO, paginatedRequest }
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.awssdk.services.kinesis.model._
@@ -14,11 +14,11 @@ import zio.{ Chunk, Has, Schedule, Task, ZLayer }
 
 import scala.jdk.CollectionConverters._
 
-object AdminClient2Live {
-  val layer: ZLayer[Has[KinesisAsyncClient], Throwable, AdminClient2] =
-    ZLayer.fromService[KinesisAsyncClient, AdminClient2.Service] { kinesisClient =>
-      new AdminClient2.Service {
-        import AdminClient2._
+object AdminClientLive {
+  val layer: ZLayer[Has[KinesisAsyncClient], Throwable, AdminClient] =
+    ZLayer.fromService[KinesisAsyncClient, AdminClient.Service] { kinesisClient =>
+      new AdminClient.Service {
+        import AdminClient._
         def addTagsToStream(streamName: String, tags: Map[String, String]): Task[Unit] = {
           val request = AddTagsToStreamRequest.builder().streamName(streamName).tags(tags.asJava).build()
           asZIO(kinesisClient.addTagsToStream(request)).unit

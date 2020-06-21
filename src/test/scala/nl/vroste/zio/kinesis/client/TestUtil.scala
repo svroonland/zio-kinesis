@@ -1,6 +1,6 @@
 package nl.vroste.zio.kinesis.client
 
-import nl.vroste.zio.kinesis.client.AdminClient2.AdminClient2
+import nl.vroste.zio.kinesis.client.AdminClient.AdminClient
 import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException }
 import zio.clock.Clock
 import zio.console.{ putStrLn, Console }
@@ -9,9 +9,9 @@ import zio.{ Schedule, ZIO, ZManaged }
 
 object TestUtil {
 
-  def createStream(streamName: String, nrShards: Int): ZManaged[Console with AdminClient2, Throwable, Unit] =
+  def createStream(streamName: String, nrShards: Int): ZManaged[Console with AdminClient, Throwable, Unit] =
     for {
-      adminClient <- ZManaged.service[AdminClient2.Service]
+      adminClient <- ZManaged.service[AdminClient.Service]
       _           <- adminClient
              .createStream(streamName, nrShards)
              .catchSome {
@@ -28,9 +28,9 @@ object TestUtil {
              }
     } yield ()
 
-  def createStreamUnmanaged(streamName: String, nrShards: Int): ZIO[Console with AdminClient2, Throwable, Unit] =
+  def createStreamUnmanaged(streamName: String, nrShards: Int): ZIO[Console with AdminClient, Throwable, Unit] =
     for {
-      adminClient <- ZIO.service[AdminClient2.Service]
+      adminClient <- ZIO.service[AdminClient.Service]
       _           <- adminClient.createStream(streamName, nrShards).catchSome {
              case _: ResourceInUseException =>
                putStrLn("Stream already exists")

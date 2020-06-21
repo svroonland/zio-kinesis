@@ -8,8 +8,8 @@ import zio.stream.ZStream
 import zio.{ Has, Schedule, Task }
 import zio.duration._
 
-object AdminClient2 {
-  type AdminClient2 = Has[Service]
+object AdminClient {
+  type AdminClient = Has[Service]
 
   trait Service {
     def addTagsToStream(streamName: String, tags: Map[String, String]): Task[Unit]
