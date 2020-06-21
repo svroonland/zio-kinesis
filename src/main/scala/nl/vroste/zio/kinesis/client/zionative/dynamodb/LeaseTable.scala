@@ -17,8 +17,8 @@ import scala.util.{ Failure, Try }
 class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
   import LeaseTable._
 
-  def createLeaseTableIfNotExists: ZIO[Clock with Logging, Throwable, Unit] =
-    createLeaseTable.unlessM(leaseTableExists)
+  def createLeaseTableIfNotExists: ZIO[Clock with Logging, Throwable, Boolean] =
+    leaseTableExists.flatMap(exists => if (exists) ZIO.succeed(true) else createLeaseTable.as(false))
 
   // TODO billing mode
   def createLeaseTable: ZIO[Clock with Logging, Throwable, Unit] = {
@@ -87,7 +87,6 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
       .key(DynamoDbItem("leaseKey" -> lease.key).asJava)
       .expected(
         Map(
-          // TODO we need to update these atomically somehow
           "leaseCounter" -> expectedAttributeValue(lease.counter - 1)
         ).asJava
       )
@@ -154,6 +153,7 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
       )
       .attributeUpdates(
         Map(
+          "leaseOwner"                   -> lease.owner.map(putAttributeValueUpdate(_)).getOrElse(deleteAttributeValueUpdate),
           "leaseCounter"                 -> putAttributeValueUpdate(lease.counter),
           "checkpoint"                   -> lease.checkpoint
             .map(_.sequenceNumber)

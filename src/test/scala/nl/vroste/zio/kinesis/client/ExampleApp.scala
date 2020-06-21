@@ -14,6 +14,7 @@ import nl.vroste.zio.kinesis.client.zionative.Consumer
 import TestUtil.Layers
 import nl.vroste.zio.kinesis.client.zionative.ShardLeaseLost
 import zio.logging.slf4j.Slf4jLogger
+import zio.logging.log
 
 object ExampleApp extends zio.App {
 
@@ -22,7 +23,7 @@ object ExampleApp extends zio.App {
   ): ZIO[zio.ZEnv, Nothing, ExitCode] = {
 
     val streamName = "zio-test-stream-" + UUID.randomUUID().toString
-    val nrRecords  = 200
+    val nrRecords  = 20000
 
     for {
       _        <- TestUtil.createStreamUnmanaged(streamName, 10)
@@ -31,10 +32,10 @@ object ExampleApp extends zio.App {
       consumer <- Consumer
                     .shardedStream(
                       streamName,
-                      applicationName = "testApp-2", // + UUID.randomUUID().toString(),
+                      applicationName = "testApp-2" + UUID.randomUUID().toString(),
                       deserializer = Serde.asciiString,
                       fetchMode = FetchMode.Polling(1000),
-                      emitDiagnostic = ev => UIO(println(ev))
+                      emitDiagnostic = ev => log.info(ev.toString()).provideLayer(loggingEnv)
                     )
                     .flatMapPar(Int.MaxValue) {
                       case (shardID, shardStream, checkpointer) =>
@@ -51,6 +52,7 @@ object ExampleApp extends zio.App {
                           }
                           .catchAll {
                             case Right(ShardLeaseLost) =>
+                              println(s"Lost lease for shard ${shardID}")
                               ZStream.empty
                             case Left(e)               => ZStream.fail(e)
                           }
@@ -58,8 +60,9 @@ object ExampleApp extends zio.App {
                     // .timeout(5.seconds)
                     .runCollect
                     .fork
-      // _        <- ZIO.sleep(10.seconds)
-      _        <- consumer.join
+      _        <- ZIO.sleep(10.seconds)
+      _         = println("Interrupting app")
+      _        <- consumer.interrupt
     } yield ExitCode.success
   }.orDie.provideCustomLayer(
     (Layers.kinesisAsyncClient >>> (Layers.adminClient ++ Layers.client)).orDie ++ Layers.dynamo.orDie ++ loggingEnv
@@ -76,7 +79,7 @@ object ExampleApp extends zio.App {
         (1 to nrRecords).map(i => ProducerRecord(s"key$i", s"msg$i"))
       ZStream
         .fromIterable(records)
-        .chunkN(10)
+        .chunkN(200)
         .mapChunksM(
           producer
             .produceChunk(_)

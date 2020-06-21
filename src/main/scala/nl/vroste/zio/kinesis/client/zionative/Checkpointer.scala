@@ -48,6 +48,8 @@ trait Checkpointer {
    */
   def checkpoint: ZIO[Blocking, Either[Throwable, ShardLeaseLost.type], Unit]
 
+  private[client] def checkpointAndRelease: ZIO[Blocking, Either[Throwable, ShardLeaseLost.type], Unit]
+
   /**
    * Immediately checkpoint this record
    */

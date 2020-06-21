@@ -45,7 +45,6 @@ object PollingFetcher {
                                    .timed
                                (duration, response)  = responseWithDuration
                                records               = response.records.asScala.toList
-                               //  _                = println(s"${shard.shardId()}: Got ${records.size} records")
                                _                    <- Option(response.nextShardIterator).map(shardIterator.set).getOrElse(ZIO.fail(None))
                                _                    <- emitDiagnostic(
                                       DiagnosticEvent.PollComplete(

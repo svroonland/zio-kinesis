@@ -20,6 +20,7 @@ import zio.clock.Clock
 import zio.duration._
 import zio.stream.ZStream
 import zio.blocking.Blocking
+import zio.logging.log
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative.fetcher.{ EnhancedFanOutFetcher, PollingFetcher }
 import zio.random.Random
@@ -114,41 +115,50 @@ object Consumer {
       }
 
     ZStream.unwrapManaged {
-      for {
-        streamDescription <- AdminClient.describeStream(streamName).toManaged_
-        fetcher           <- makeFetcher(streamDescription)
-        currentShards     <- Client.listShards(streamName).runCollect.map(_.map(l => (l.shardId(), l)).toMap).toManaged_
-        leaseCoordinator  <- DynamoDbLeaseCoordinator.make(applicationName, workerId, currentShards, emitDiagnostic)
-      } yield leaseCoordinator.acquiredLeases.collect {
-        case AcquiredLease(shardId, leaseLost) if currentShards.contains(shardId) =>
-          (currentShards.get(shardId).get, leaseLost)
-      }.mapM {
-        case (shard, leaseLost) =>
+      ZManaged
+        .mapParN(
+          ZManaged.unwrap(AdminClient.describeStream(streamName).map(makeFetcher)),
           for {
-            checkpointer        <- leaseCoordinator.makeCheckpointer(shard)
-            blocking            <- ZIO.environment[Blocking]
-            startingPositionOpt <- leaseCoordinator.getCheckpointForShard(shard)
-            startingPosition     = startingPositionOpt
-                                 .map(s => ShardIteratorType.AfterSequenceNumber(s.sequenceNumber))
-                                 .getOrElse(initialStartingPosition)
-            // _                   <- UIO(println(s"${shard.shardId} start at ${startingPosition}"))
-            shardStream          = (fetcher
-                              .shardRecordStream(shard, startingPosition)
-                              .mapChunksM { chunk =>
-                                chunk.mapM(record => toRecord(shard.shardId(), record))
-                              }
-                              .map(Exit.succeed(_)) ++ ZStream.fromEffect(
-                              leaseLost.await.as(Exit.fail(None))
-                            )).collectWhileSuccess
-          } yield (
-            shard.shardId(),
-            shardStream.ensuringFirst(
-              checkpointer.checkpoint.ignore.provide(blocking) *>
-                leaseCoordinator.releaseLease(shard.shardId()).orDie
-            ),
-            checkpointer
-          )
-      }
+            currentShards    <- Client.listShards(streamName).runCollect.map(_.map(l => (l.shardId(), l)).toMap).toManaged_
+            leaseCoordinator <- DynamoDbLeaseCoordinator.make(applicationName, workerId, currentShards, emitDiagnostic)
+          } yield (currentShards, leaseCoordinator)
+        )(_ -> _)
+        .map {
+          case (fetcher, (currentShards, leaseCoordinator)) =>
+            leaseCoordinator.acquiredLeases.collect {
+              case AcquiredLease(shardId, leaseLost) if currentShards.contains(shardId) =>
+                (currentShards.get(shardId).get, leaseLost)
+            }.mapMPar(10) { // TODO config var: max shard starts or something
+                case (shard, leaseLost) =>
+                  for {
+                    _                   <- log.info(s"Initializing for shard ${shard.shardId()}")
+                    checkpointer        <- leaseCoordinator.makeCheckpointer(shard)
+                    blocking            <- ZIO.environment[Blocking]
+                    startingPositionOpt <- leaseCoordinator.getCheckpointForShard(shard)
+                    startingPosition     = startingPositionOpt
+                                         .map(s => ShardIteratorType.AfterSequenceNumber(s.sequenceNumber))
+                                         .getOrElse(initialStartingPosition)
+                    stop                 = ZStream.fromEffect(leaseLost.await).as(Exit.fail(None))
+                    shardStream          = (stop merge fetcher
+                                      .shardRecordStream(shard, startingPosition)
+                                      .mapChunksM { chunk => // mapM is slow
+                                        chunk.mapM(record => toRecord(shard.shardId(), record))
+                                      }
+                                      .map(Exit.succeed(_))).collectWhileSuccess
+                  } yield (
+                    shard.shardId(),
+                    shardStream.ensuringFirst {
+                      // UIO(println(s"Doing checkpoint and release in ensuring for shard ${shard.shardId()}")) *>
+                      checkpointer.checkpointAndRelease
+                        .tapError(e => UIO(println(s"Error during checkpointing at shutdown: ${e}")))
+                        .ignore
+                        .provide(blocking)
+                    },
+                    checkpointer
+                  )
+              }
+              .ensuringFirst(log.error("Main stream stopped"))
+        }
     }
   }
 
