@@ -47,7 +47,16 @@ object TestUtil {
              }
     } yield ()
 
-  def createStreamUnmanaged(streamName: String, nrShards: Int) =
+  def createStreamUnmanaged2(streamName: String, nrShards: Int): ZIO[Console with AdminClient2, Throwable, Unit] =
+    for {
+      adminClient <- ZIO.service[AdminClient2.Service]
+      _           <- adminClient.createStream(streamName, nrShards).catchSome {
+             case _: ResourceInUseException =>
+               putStrLn("Stream already exists")
+           }
+    } yield ()
+
+  def createStreamUnmanaged(streamName: String, nrShards: Int): ZIO[Console, Throwable, Unit] =
     AdminClient
       .build(LocalStackClients.kinesisAsyncClientBuilder)
       .use(

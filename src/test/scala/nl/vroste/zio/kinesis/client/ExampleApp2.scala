@@ -15,7 +15,8 @@ import zio.stream.{ ZStream, ZTransducer }
  * Example application that requests an orderly stream shutdown from the outside.
  */
 object ExampleApp2 extends zio.App {
-  private val clientLayer = LocalStackLayers.kinesisAsyncClientLayer >>> ClientLive.layer
+  private val clientLayer      = LocalStackLayers.kinesisAsyncClientLayer >>> ClientLive.layer
+  private val adminClientLayer = LocalStackLayers.kinesisAsyncClientLayer >>> AdminClient2Live.layer
 
   override def run(
     args: List[String]
@@ -24,7 +25,7 @@ object ExampleApp2 extends zio.App {
     val streamName = "zio-test-stream-" + UUID.randomUUID().toString
 
     for {
-      _           <- TestUtil.createStreamUnmanaged(streamName, 10)
+      _           <- TestUtil.createStreamUnmanaged2(streamName, 10)
       _           <- produceRecords(streamName, 20000).fork
       interrupted <- Promise.make[Nothing, Unit]
       _           <- (for {
@@ -63,7 +64,7 @@ object ExampleApp2 extends zio.App {
       _           <- putStrLn("Exiting app")
 
     } yield ExitCode.success
-  }.provideCustomLayer(clientLayer ++ LocalStackLayers.dynamicConsumerLayer).orDie
+  }.provideCustomLayer(adminClientLayer ++ clientLayer ++ LocalStackLayers.dynamicConsumerLayer).orDie
 
   def produceRecords(streamName: String, nrRecords: Int) =
     (for {
