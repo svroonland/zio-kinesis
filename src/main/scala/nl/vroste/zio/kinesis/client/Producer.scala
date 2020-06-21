@@ -1,7 +1,7 @@
 package nl.vroste.zio.kinesis.client
 import java.time.Instant
 
-import nl.vroste.zio.kinesis.client.Client.ProducerRecord
+import nl.vroste.zio.kinesis.client.Client2.ProducerRecord
 import nl.vroste.zio.kinesis.client.Client2.Client2
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.serde.Serializer

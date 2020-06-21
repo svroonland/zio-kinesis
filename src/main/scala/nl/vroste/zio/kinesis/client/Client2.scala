@@ -1,15 +1,15 @@
 package nl.vroste.zio.kinesis.client
 
 import java.time.Instant
+import java.util.concurrent.CompletableFuture
 
 import nl.vroste.zio.kinesis.client.serde.{ Deserializer, Serializer }
 import software.amazon.awssdk.services.kinesis.model._
 import zio.clock.Clock
 import zio.stream.ZStream
-import zio.{ Has, Task, ZIO, ZManaged }
+import zio.{ Has, Schedule, Task, ZIO, ZManaged }
 
 object Client2 {
-  import Client._
 
   type Client2 = Has[Service]
   trait Service {
@@ -96,4 +96,43 @@ object Client2 {
 
     def putRecords(streamName: String, entries: List[PutRecordsRequestEntry]): Task[PutRecordsResponse]
   }
+
+  case class ConsumerRecord[T](
+    sequenceNumber: String,
+    approximateArrivalTimestamp: Instant,
+    data: T,
+    partitionKey: String,
+    encryptionType: EncryptionType,
+    shardID: String
+  )
+
+  case class ProducerRecord[T](partitionKey: String, data: T)
+
+  sealed trait ShardIteratorType
+  object ShardIteratorType {
+    case object Latest                                     extends ShardIteratorType
+    case object TrimHorizon                                extends ShardIteratorType
+    case class AtSequenceNumber(sequenceNumber: String)    extends ShardIteratorType
+    case class AfterSequenceNumber(sequenceNumber: String) extends ShardIteratorType
+    case class AtTimestamp(timestamp: Instant)             extends ShardIteratorType
+  }
+
+}
+
+private object Util {
+  def asZIO[T](f: => CompletableFuture[T]): Task[T] = ZIO.fromCompletionStage(f)
+
+  type Token = String
+
+  def paginatedRequest[R, E, A](fetch: Option[Token] => ZIO[R, E, (A, Option[Token])])(
+    throttling: Schedule[Clock, Any, Int] = Schedule.forever
+  ): ZStream[Clock with R, E, A] =
+    ZStream.fromEffect(fetch(None)).flatMap {
+      case (results, nextTokenOpt) =>
+        ZStream.succeed(results) ++ (nextTokenOpt match {
+          case None            => ZStream.empty
+          case Some(nextToken) =>
+            ZStream.paginateM[R, E, A, Token](nextToken)(token => fetch(Some(token))).scheduleElements(throttling)
+        })
+    }
 }

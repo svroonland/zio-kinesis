@@ -17,7 +17,7 @@ import zio._
 import scala.jdk.CollectionConverters._
 
 object Client2Live {
-  import Client._
+  import Client2._
   import Util._
 
   val layer: ZLayer[Has[KinesisAsyncClient], Throwable, Client2] =
