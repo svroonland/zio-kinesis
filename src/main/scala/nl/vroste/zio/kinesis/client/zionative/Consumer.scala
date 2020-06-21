@@ -157,7 +157,6 @@ object Consumer {
                     checkpointer
                   )
               }
-              .ensuringFirst(log.error("Main stream stopped"))
         }
     }
   }
