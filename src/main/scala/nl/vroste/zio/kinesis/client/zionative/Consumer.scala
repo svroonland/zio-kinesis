@@ -148,10 +148,10 @@ object Consumer {
                   } yield (
                     shard.shardId(),
                     shardStream.ensuringFirst {
-                      // UIO(println(s"Doing checkpoint and release in ensuring for shard ${shard.shardId()}")) *>
-                      checkpointer.checkpointAndRelease
-                        .tapError(e => UIO(println(s"Error during checkpointing at shutdown: ${e}")))
-                        .ignore
+                      checkpointer.checkpointAndRelease.catchAll {
+                        case Left(e)               => ZIO.fail(e)
+                        case Right(ShardLeaseLost) => ZIO.unit // This is fine during shutdown
+                      }.orDie
                         .provide(blocking)
                     },
                     checkpointer
