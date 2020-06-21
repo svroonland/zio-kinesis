@@ -548,7 +548,7 @@ object DynamoDbLeaseCoordinator {
     }(_.releaseLeases.orDie).tap { c =>
       // Do all initalization in parallel
       for {
-        _ <- logNamed(s"worker-${workerId}")(c.initializeLeases).forkManaged
+        _ <- logNamed(s"worker-${workerId}")(c.initializeLeases *> c.stealLeases).forkManaged
         _ <- logNamed(s"worker-${workerId}")(c.runloop.runDrain).forkManaged
         _ <- logNamed(s"worker-${workerId}") {
                (c.refreshLeases *> c.renewLeases *> c.stealLeases)
