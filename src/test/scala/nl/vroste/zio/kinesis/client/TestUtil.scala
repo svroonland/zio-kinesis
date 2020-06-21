@@ -28,25 +28,6 @@ object TestUtil {
              }
     } yield ()
 
-  def createStream(streamName: String, nrShards: Int): ZManaged[Console, Throwable, Unit] =
-    for {
-      adminClient <- AdminClient.build(LocalStackClients.kinesisAsyncClientBuilder)
-      _           <- adminClient
-             .createStream(streamName, nrShards)
-             .catchSome {
-               case _: ResourceInUseException =>
-                 putStrLn("Stream already exists")
-             }
-             .toManaged { _ =>
-               adminClient
-                 .deleteStream(streamName, enforceConsumerDeletion = true)
-                 .catchSome {
-                   case _: ResourceNotFoundException => ZIO.unit
-                 }
-                 .orDie
-             }
-    } yield ()
-
   def createStreamUnmanaged2(streamName: String, nrShards: Int): ZIO[Console with AdminClient2, Throwable, Unit] =
     for {
       adminClient <- ZIO.service[AdminClient2.Service]
