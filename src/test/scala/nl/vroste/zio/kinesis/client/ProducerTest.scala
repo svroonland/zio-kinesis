@@ -16,6 +16,8 @@ import zio.{ Chunk, ZIO }
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
 
+  private val clientLayer = LocalStackLayers.kinesisAsyncClientLayer >>> Client2Live.layer
+
   def spec =
     suite("Producer")(
       testM("produce records to Kinesis successfully and efficiently") {
@@ -25,10 +27,9 @@ object ProducerTest extends DefaultRunnableSpec {
 
         (for {
           _        <- createStream(streamName, 10)
-          client   <- Client.build(LocalStackClients.kinesisAsyncClientBuilder)
           producer <- Producer
-                        .make(streamName, client, Serde.asciiString, ProducerSettings(bufferSize = 32768))
-                        .provideLayer(Clock.live)
+                        .make2(streamName, Serde.asciiString, ProducerSettings(bufferSize = 32768))
+                        .provideLayer(Clock.live ++ clientLayer)
         } yield producer).use { producer =>
           (
             for {
@@ -50,10 +51,9 @@ object ProducerTest extends DefaultRunnableSpec {
         val streamName = "zio-test-stream-not-existing"
 
         (for {
-          client   <- Client.build(LocalStackClients.kinesisAsyncClientBuilder)
           producer <- Producer
-                        .make(streamName, client, Serde.asciiString, ProducerSettings(bufferSize = 32768))
-                        .provideLayer(Clock.live)
+                        .make2(streamName, Serde.asciiString, ProducerSettings(bufferSize = 32768))
+                        .provideLayer(Clock.live ++ clientLayer)
         } yield producer).use { producer =>
           val records = (1 to 10).map(j => ProducerRecord(s"key$j", s"message$j-$j"))
           producer

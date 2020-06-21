@@ -6,14 +6,14 @@ import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.TestUtil.retryOnResourceNotFound
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.kinesis.exceptions.ShutdownException
-import zio.blocking.Blocking
-import zio.clock.Clock
 import zio.console._
 import zio.duration._
 import zio.stream.{ ZStream, ZTransducer }
 import zio.{ Chunk, ExitCode, Schedule, ZIO }
 
 object ExampleApp extends zio.App {
+
+  private val clientLayer = LocalStackLayers.kinesisAsyncClientLayer >>> Client2Live.layer
 
   override def run(
     args: List[String]
@@ -52,21 +52,17 @@ object ExampleApp extends zio.App {
                                        .flatMap(_ => ZStream.empty)
                                  }
                            }
-             } yield stream)
-             .provideSomeLayer[Clock with Console with Blocking](LocalStackLayers.dynamicConsumerLayer)
-             .runCollect
-             .fork
+             } yield stream).runCollect.fork
       _ <- putStrLn("App started")
       _ <- ZIO.unit.delay(15.seconds)
       _ <- putStrLn("Exiting app")
 
     } yield ExitCode.success
-  }.orDie
+  }.provideCustomLayer(clientLayer ++ LocalStackLayers.dynamicConsumerLayer).orDie
 
   def produceRecords(streamName: String, nrRecords: Int) =
     (for {
-      client   <- Client.build(LocalStackClients.kinesisAsyncClientBuilder)
-      producer <- Producer.make(streamName, client, Serde.asciiString)
+      producer <- Producer.make2(streamName, Serde.asciiString)
     } yield producer).use { producer =>
       val records =
         (1 to nrRecords).map(i => ProducerRecord(s"key$i", s"msg$i"))

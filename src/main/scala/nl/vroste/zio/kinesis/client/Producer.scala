@@ -2,6 +2,7 @@ package nl.vroste.zio.kinesis.client
 import java.time.Instant
 
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
+import nl.vroste.zio.kinesis.client.Client2.Client2
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.serde.Serializer
 import software.amazon.awssdk.core.SdkBytes
@@ -77,6 +78,96 @@ final case class ProducerSettings(
 )
 
 object Producer {
+  def make2[R, T](
+    streamName: String,
+    serializer: Serializer[R, T],
+    settings: ProducerSettings = ProducerSettings()
+  ): ZManaged[R with Clock with Client2, Throwable, Producer[T]] =
+    for {
+      client <- ZManaged.service[Client2.Service]
+      env    <- ZIO.environment[R with Clock].toManaged_
+      queue  <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
+
+      failedQueue <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
+
+      // Failed records get precedence)
+      _ <- (ZStream.fromQueue(failedQueue) merge ZStream.fromQueue(queue))
+           // Buffer records up to maxBufferDuration or up to the Kinesis PutRecords request limit
+             .aggregateAsyncWithin(
+               ZTransducer.fold(PutRecordsBatch.empty)(_.isWithinLimits)(_.add(_)),
+               Schedule.spaced(settings.maxBufferDuration)
+             )
+             // Several putRecords requests in parallel
+             .mapMPar(settings.maxParallelRequests) { batch: PutRecordsBatch =>
+               (for {
+                 response              <- client
+                               .putRecords(streamName, batch.entries.map(_.r))
+                               .retry(scheduleCatchRecoverable && settings.backoffRequests)
+
+                 maybeSucceeded         = response
+                                    .records()
+                                    .asScala
+                                    .zip(batch.entries)
+                 (newFailed, succeeded) = if (response.failedRecordCount() > 0)
+                                            maybeSucceeded.partition {
+                                              case (result, _) =>
+                                                result.errorCode() != null && recoverableErrorCodes.contains(
+                                                  result.errorCode()
+                                                )
+                                            }
+                                          else
+                                            (Seq.empty, maybeSucceeded)
+
+                 // TODO backoff for shard limit stuff
+                 _                     <- failedQueue
+                        .offerAll(newFailed.map(_._2))
+                        .delay(settings.failedDelay)
+                        .fork // TODO should be per shard
+                 _                     <- ZIO.foreach(succeeded) {
+                        case (response, request) =>
+                          request.done.succeed(ProduceResponse(response.shardId(), response.sequenceNumber()))
+                      }
+               } yield ()).catchAll { case NonFatal(e) => ZIO.foreach_(batch.entries.map(_.done))(_.fail(e)) }
+             }
+             .runDrain
+             .toManaged_
+             .fork
+    } yield new Producer[T] {
+      override def produce(r: ProducerRecord[T]): Task[ProduceResponse] =
+        for {
+          now      <- zio.clock.currentDateTime.provide(env)
+          done     <- Promise.make[Throwable, ProduceResponse]
+          data     <- serializer.serialize(r.data).provide(env)
+          entry     = PutRecordsRequestEntry
+                    .builder()
+                    .partitionKey(r.partitionKey)
+                    .data(SdkBytes.fromByteBuffer(data))
+                    .build()
+          request   = ProduceRequest(entry, done, now.toInstant)
+          _        <- queue.offer(request)
+          response <- done.await
+        } yield response
+
+      override def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[List[ProduceResponse]] =
+        zio.clock.currentDateTime
+          .provide(env)
+          .flatMap { now =>
+            ZIO
+              .foreach(chunk.toList) { r =>
+                for {
+                  done <- Promise.make[Throwable, ProduceResponse]
+                  data <- serializer.serialize(r.data).provide(env)
+                  entry = PutRecordsRequestEntry
+                            .builder()
+                            .partitionKey(r.partitionKey)
+                            .data(SdkBytes.fromByteBuffer(data))
+                            .build()
+                } yield ProduceRequest(entry, done, now.toInstant)
+              }
+          }
+          .flatMap(requests => queue.offerAll(requests) *> ZIO.foreachPar(requests)(_.done.await))
+    }
+
   def make[R, T](
     streamName: String,
     client: Client,
