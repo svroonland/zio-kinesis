@@ -27,7 +27,7 @@ object ProducerTest extends DefaultRunnableSpec {
         val streamName = "zio-test-stream-" + UUID.randomUUID().toString
 
         (for {
-          _        <- createStream2(streamName, 10)
+          _        <- createStream(streamName, 10)
           producer <- Producer
                         .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 32768))
 

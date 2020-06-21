@@ -23,7 +23,7 @@ object ExampleApp extends zio.App {
     val streamName = "zio-test-stream-" + UUID.randomUUID().toString
 
     for {
-      _ <- TestUtil.createStreamUnmanaged2(streamName, 10)
+      _ <- TestUtil.createStreamUnmanaged(streamName, 10)
       _ <- produceRecords(streamName, 20000).fork
       _ <- (for {
                service <- ZStream.service[DynamicConsumer.Service]

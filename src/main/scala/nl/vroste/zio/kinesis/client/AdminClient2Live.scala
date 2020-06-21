@@ -18,7 +18,7 @@ object AdminClient2Live {
   val layer: ZLayer[Has[KinesisAsyncClient], Throwable, AdminClient2] =
     ZLayer.fromService[KinesisAsyncClient, AdminClient2.Service] { kinesisClient =>
       new AdminClient2.Service {
-        import AdminClient._
+        import AdminClient2._
         def addTagsToStream(streamName: String, tags: Map[String, String]): Task[Unit] = {
           val request = AddTagsToStreamRequest.builder().streamName(streamName).tags(tags.asJava).build()
           asZIO(kinesisClient.addTagsToStream(request)).unit

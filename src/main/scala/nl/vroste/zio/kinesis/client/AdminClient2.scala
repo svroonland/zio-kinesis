@@ -6,12 +6,12 @@ import software.amazon.awssdk.services.kinesis.model._
 import zio.clock.Clock
 import zio.stream.ZStream
 import zio.{ Has, Schedule, Task }
+import zio.duration._
 
 object AdminClient2 {
   type AdminClient2 = Has[Service]
 
   trait Service {
-    import AdminClient._
     def addTagsToStream(streamName: String, tags: Map[String, String]): Task[Unit]
 
     def removeTagsFromStream(streamName: String, tagKeys: List[String]): Task[Unit]
@@ -83,4 +83,55 @@ object AdminClient2 {
     ): Task[UpdateShardCountResponse]
 
   }
+
+  case class DescribeLimitsResponse(shardLimit: Int, openShardCount: Int)
+
+  case class StreamDescription(
+    streamName: String,
+    streamARN: String,
+    streamStatus: StreamStatus,
+    shards: List[Shard],
+    hasMoreShards: Boolean,
+    retentionPeriodHours: Int,
+    streamCreationTimestamp: Instant,
+    enhancedMonitoring: List[EnhancedMetrics],
+    encryptionType: EncryptionType,
+    keyId: String
+  )
+
+  case class StreamDescriptionSummary(
+    streamName: String,
+    streamARN: String,
+    streamStatus: StreamStatus,
+    retentionPeriodHours: Int,
+    streamCreationTimestamp: Instant,
+    enhancedMonitoring: List[EnhancedMetrics],
+    encryptionType: EncryptionType,
+    keyId: String,
+    openShardCount: Int,
+    consumerCount: Int
+  )
+
+  case class ConsumerDescription(
+    consumerName: String,
+    consumerARN: String,
+    consumerStatus: ConsumerStatus,
+    consumerCreationTimestamp: Instant,
+    streamARN: String
+  )
+
+  case class EnhancedMonitoringStatus(
+    streamName: String,
+    currentShardLevelMetrics: List[MetricsName],
+    desiredShardLevelMetrics: List[MetricsName]
+  )
+
+  case class UpdateShardCountResponse(streamName: String, currentShardCount: Int, targetShardCount: Int)
+
+  private[client] val retryOnLimitExceeded = Schedule.doWhile[Throwable] {
+    case _: LimitExceededException => true; case _ => false
+  }
+
+  private[client] val defaultBackoffSchedule: Schedule[Clock, Any, Any] = Schedule.exponential(200.millis) && Schedule
+    .recurs(5)
 }

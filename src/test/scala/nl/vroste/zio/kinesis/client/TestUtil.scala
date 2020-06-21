@@ -9,7 +9,7 @@ import zio.{ Schedule, ZIO, ZManaged }
 
 object TestUtil {
 
-  def createStream2(streamName: String, nrShards: Int): ZManaged[Console with AdminClient2, Throwable, Unit] =
+  def createStream(streamName: String, nrShards: Int): ZManaged[Console with AdminClient2, Throwable, Unit] =
     for {
       adminClient <- ZManaged.service[AdminClient2.Service]
       _           <- adminClient
@@ -28,7 +28,7 @@ object TestUtil {
              }
     } yield ()
 
-  def createStreamUnmanaged2(streamName: String, nrShards: Int): ZIO[Console with AdminClient2, Throwable, Unit] =
+  def createStreamUnmanaged(streamName: String, nrShards: Int): ZIO[Console with AdminClient2, Throwable, Unit] =
     for {
       adminClient <- ZIO.service[AdminClient2.Service]
       _           <- adminClient.createStream(streamName, nrShards).catchSome {
