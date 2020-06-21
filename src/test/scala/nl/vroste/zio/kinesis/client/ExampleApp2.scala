@@ -2,7 +2,7 @@ package nl.vroste.zio.kinesis.client
 
 import java.util.UUID
 
-import nl.vroste.zio.kinesis.client.Client2.ProducerRecord
+import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.TestUtil.retryOnResourceNotFound
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.kinesis.exceptions.ShutdownException
@@ -15,7 +15,7 @@ import zio.stream.{ ZStream, ZTransducer }
  * Example application that requests an orderly stream shutdown from the outside.
  */
 object ExampleApp2 extends zio.App {
-  private val clientLayer = LocalStackLayers.kinesisAsyncClientLayer >>> Client2Live.layer
+  private val clientLayer = LocalStackLayers.kinesisAsyncClientLayer >>> ClientLive.layer
 
   override def run(
     args: List[String]

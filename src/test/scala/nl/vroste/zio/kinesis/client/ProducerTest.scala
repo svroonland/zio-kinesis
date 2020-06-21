@@ -2,7 +2,7 @@ package nl.vroste.zio.kinesis.client
 
 import java.util.UUID
 
-import nl.vroste.zio.kinesis.client.Client2.ProducerRecord
+import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.awssdk.services.kinesis.model.KinesisException
 import zio.clock.Clock
@@ -16,7 +16,7 @@ import zio.{ Chunk, ZIO }
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
 
-  private val clientLayer = LocalStackLayers.kinesisAsyncClientLayer >>> Client2Live.layer
+  private val clientLayer = LocalStackLayers.kinesisAsyncClientLayer >>> ClientLive.layer
 
   def spec =
     suite("Producer")(

@@ -2,8 +2,8 @@ package nl.vroste.zio.kinesis.client
 
 import java.util.UUID
 
-import nl.vroste.zio.kinesis.client.Client2.ProducerRecord
-import nl.vroste.zio.kinesis.client.Client2.Client2
+import nl.vroste.zio.kinesis.client.Client.ProducerRecord
+import nl.vroste.zio.kinesis.client.Client.Client
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio._
@@ -31,7 +31,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
           (for {
             _ <- putStrLn("Putting records")
             _ <- ZIO
-                   .accessM[Client2](
+                   .accessM[Client](
                      _.get
                        .putRecords(
                          streamName,
@@ -40,7 +40,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                        )
                    )
                    .retry(retryOnResourceNotFound)
-                   .provideLayer(Clock.live ++ (LocalStackLayers.kinesisAsyncClientLayer >>> Client2Live.layer))
+                   .provideLayer(Clock.live ++ (LocalStackLayers.kinesisAsyncClientLayer >>> ClientLive.layer))
 
             _ <- putStrLn("Starting dynamic consumer")
             _ <- (for {
@@ -146,14 +146,14 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                  .schedule(Schedule.spaced(250.millis))
                  .mapM { _ =>
                    ZIO
-                     .accessM[Client2](
+                     .accessM[Client](
                        _.get
                          .putRecords(streamName, Serde.asciiString, records)
                      )
                      .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
                      .retry(retryOnResourceNotFound)
                  }
-                 .provideSomeLayer(Clock.live ++ (LocalStackLayers.kinesisAsyncClientLayer >>> Client2Live.layer))
+                 .provideSomeLayer(Clock.live ++ (LocalStackLayers.kinesisAsyncClientLayer >>> ClientLive.layer))
                  .runDrain
                  .fork
 
@@ -227,7 +227,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                            .schedule(Schedule.spaced(250.millis))
                            .mapM { _ =>
                              ZIO
-                               .accessM[Client2](
+                               .accessM[Client](
                                  _.get
                                    .putRecords(streamName, Serde.asciiString, records)
                                )
@@ -251,7 +251,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
             (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
           } yield assert(processed)(Assertion.equalTo(checkpointed))
         }
-        .provideCustomLayer(Clock.live ++ (LocalStackLayers.kinesisAsyncClientLayer >>> Client2Live.layer))
+        .provideCustomLayer(Clock.live ++ (LocalStackLayers.kinesisAsyncClientLayer >>> ClientLive.layer))
     } @@ TestAspect.timeout(40.seconds)
 
   // TODO check the order of received records is correct

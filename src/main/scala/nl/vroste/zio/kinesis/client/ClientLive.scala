@@ -2,27 +2,26 @@ package nl.vroste.zio.kinesis.client
 
 import java.time.Instant
 
-import nl.vroste.zio.kinesis.client.Client2.Client2
 import nl.vroste.zio.kinesis.client.serde.{ Deserializer, Serializer }
 import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.core.async.SdkPublisher
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.awssdk.services.kinesis.model.{ ShardIteratorType => JIteratorType, _ }
+import zio._
 import zio.clock.Clock
 import zio.duration._
 import zio.interop.reactivestreams._
 import zio.stream.ZStream
-import zio._
 
 import scala.jdk.CollectionConverters._
 
-object Client2Live {
-  import Client2._
+object ClientLive {
+  import Client._
   import Util._
 
-  val layer: ZLayer[Has[KinesisAsyncClient], Throwable, Client2] =
-    ZLayer.fromService[KinesisAsyncClient, Client2.Service] { kinesisClient =>
-      new Client2.Service {
+  val layer: ZLayer[Has[KinesisAsyncClient], Throwable, Client] =
+    ZLayer.fromService[KinesisAsyncClient, Client.Service] { kinesisClient =>
+      new Client.Service {
 
         /**
          * Registers a stream consumer for use during the lifetime of the managed resource

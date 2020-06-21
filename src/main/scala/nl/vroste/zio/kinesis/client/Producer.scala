@@ -1,8 +1,8 @@
 package nl.vroste.zio.kinesis.client
 import java.time.Instant
 
-import nl.vroste.zio.kinesis.client.Client2.ProducerRecord
-import nl.vroste.zio.kinesis.client.Client2.Client2
+import nl.vroste.zio.kinesis.client.Client.ProducerRecord
+import nl.vroste.zio.kinesis.client.Client.Client
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.serde.Serializer
 import software.amazon.awssdk.core.SdkBytes
@@ -82,9 +82,9 @@ object Producer {
     streamName: String,
     serializer: Serializer[R, T],
     settings: ProducerSettings = ProducerSettings()
-  ): ZManaged[R with Clock with Client2, Throwable, Producer[T]] =
+  ): ZManaged[R with Clock with Client, Throwable, Producer[T]] =
     for {
-      client <- ZManaged.service[Client2.Service]
+      client <- ZManaged.service[Client.Service]
       env    <- ZIO.environment[R with Clock].toManaged_
       queue  <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
 

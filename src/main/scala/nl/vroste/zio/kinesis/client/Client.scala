@@ -9,9 +9,9 @@ import zio.clock.Clock
 import zio.stream.ZStream
 import zio.{ Has, Schedule, Task, ZIO, ZManaged }
 
-object Client2 {
+object Client {
 
-  type Client2 = Has[Service]
+  type Client = Has[Service]
   trait Service {
 
     /**
