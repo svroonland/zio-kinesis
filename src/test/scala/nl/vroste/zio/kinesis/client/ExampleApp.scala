@@ -62,7 +62,7 @@ object ExampleApp extends zio.App {
 
   def produceRecords(streamName: String, nrRecords: Int) =
     (for {
-      producer <- Producer.make2(streamName, Serde.asciiString)
+      producer <- Producer.make(streamName, Serde.asciiString)
     } yield producer).use { producer =>
       val records =
         (1 to nrRecords).map(i => ProducerRecord(s"key$i", s"msg$i"))

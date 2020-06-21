@@ -28,7 +28,7 @@ object ProducerTest extends DefaultRunnableSpec {
         (for {
           _        <- createStream(streamName, 10)
           producer <- Producer
-                        .make2(streamName, Serde.asciiString, ProducerSettings(bufferSize = 32768))
+                        .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 32768))
                         .provideLayer(Clock.live ++ clientLayer)
         } yield producer).use { producer =>
           (
@@ -52,7 +52,7 @@ object ProducerTest extends DefaultRunnableSpec {
 
         (for {
           producer <- Producer
-                        .make2(streamName, Serde.asciiString, ProducerSettings(bufferSize = 32768))
+                        .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 32768))
                         .provideLayer(Clock.live ++ clientLayer)
         } yield producer).use { producer =>
           val records = (1 to 10).map(j => ProducerRecord(s"key$j", s"message$j-$j"))
