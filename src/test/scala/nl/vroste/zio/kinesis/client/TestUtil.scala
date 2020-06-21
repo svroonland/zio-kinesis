@@ -56,16 +56,6 @@ object TestUtil {
            }
     } yield ()
 
-  def createStreamUnmanaged(streamName: String, nrShards: Int): ZIO[Console, Throwable, Unit] =
-    AdminClient
-      .build(LocalStackClients.kinesisAsyncClientBuilder)
-      .use(
-        _.createStream(streamName, nrShards).catchSome {
-          case _: ResourceInUseException =>
-            putStrLn("Stream already exists")
-        }
-      )
-
   val retryOnResourceNotFound: Schedule[Clock, Throwable, ((Throwable, Int), Duration)] =
     Schedule.doWhile[Throwable] {
       case _: ResourceNotFoundException => true

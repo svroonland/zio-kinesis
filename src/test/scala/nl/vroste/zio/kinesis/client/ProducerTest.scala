@@ -16,7 +16,8 @@ import zio.{ Chunk, ZIO }
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
 
-  private val clientLayer = LocalStackLayers.kinesisAsyncClientLayer >>> ClientLive.layer
+  private val clientLayer      = LocalStackLayers.kinesisAsyncClientLayer >>> ClientLive.layer
+  private val adminClientLayer = LocalStackLayers.kinesisAsyncClientLayer >>> AdminClient2Live.layer
 
   def spec =
     suite("Producer")(
@@ -26,7 +27,7 @@ object ProducerTest extends DefaultRunnableSpec {
         val streamName = "zio-test-stream-" + UUID.randomUUID().toString
 
         (for {
-          _        <- createStream(streamName, 10)
+          _        <- createStream2(streamName, 10).provideSomeLayer[Console](adminClientLayer)
           producer <- Producer
                         .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 32768))
                         .provideLayer(Clock.live ++ clientLayer)
