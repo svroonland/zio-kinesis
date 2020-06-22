@@ -14,6 +14,7 @@ import zio.{ Tag => _, _ }
 import scala.jdk.CollectionConverters._
 
 object AdminClientLive {
+
   val layer: ZLayer[Has[KinesisAsyncClient], Throwable, AdminClient] =
     ZLayer.fromService[KinesisAsyncClient, AdminClient.Service] { kinesisClient =>
       new AdminClient.Service {
