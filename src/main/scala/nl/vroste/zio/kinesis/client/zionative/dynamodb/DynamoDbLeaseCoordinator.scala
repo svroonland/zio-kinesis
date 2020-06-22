@@ -557,6 +557,12 @@ object DynamoDbLeaseCoordinator {
     val ourLeases = allLeases.filter(_.owner.contains(workerId))
 
     val nrLeasesToTake = target - ourLeases.size
+
+    // We may already own some leases
+    // println(
+    // s"We have ${ourLeases.size}, we would like to have ${target}/${allLeases.size} leases (${allWorkers.size} workers), we need ${nrLeasesToTake} more"
+    // )
+
     if (nrLeasesToTake > 0)
       for {
         leasesWithoutOwner <- shuffle(allLeases.filter(_.owner.isEmpty)).map(_.take(nrLeasesToTake))
@@ -583,12 +589,7 @@ object DynamoDbLeaseCoordinator {
   ): ZIO[Random with Logging, Nothing, List[Lease]] = {
     val leasesByWorker = allLeases.groupBy(_.owner).collect { case (Some(owner), leases) => owner -> leases }.toMap
     val ourLeases      = allLeases.filter(_.owner.contains(workerId))
-    val allWorkers     = allLeases.map(_.owner).collect { case Some(owner) => owner }.toSet ++ Set(
-      workerId
-    ) // We may already own some leases
-    // println(
-    // s"We have ${ourLeases.size}, we would like to have ${target}/${allLeases.size} leases (${allWorkers.size} workers)"
-    // )
+    val allWorkers     = allLeases.map(_.owner).collect { case Some(owner) => owner }.toSet ++ Set(workerId)
     // println(s"Planning to steal ${nrLeasesToSteal} leases")
 
     // From busiest to least busy
@@ -619,10 +620,7 @@ object DynamoDbLeaseCoordinator {
       .filter(_._2 > 0)
     // println(s"Going to steal from workers ${nrLeasesToStealByWorker}")
 
-    // Candidate leases
-    val candidatesByWorker = allLeases.filter(_.owner.forall(_ != workerId))
-
-    // Steal leases
+    // From each worker that we want to take some leases, randomize the leases to reduce contention
     for {
       leasesToStealByWorker <- ZIO.foreach(nrLeasesToStealByWorker) {
                                  case (worker, nrLeasesToTake) =>
