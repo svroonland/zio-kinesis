@@ -41,14 +41,14 @@ object LeaseStealingTest extends DefaultRunnableSpec {
         checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.const(1))) { leases =>
           assertM(leasesToTake(leases, workerId(1)))(isEmpty)
         }
-      }, // @@ TestAspect.ignore,
+      },                        // @@ TestAspect.ignore,
       testM("steals some leases when its not the only worker") {
         checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.const(1))) { leases =>
           assertM(leasesToTake(leases, workerId(2)))(isNonEmpty)
         }
-      }, // @@ TestAspect.ignore,
-      testM("steals leases if it has less than its equal share") {
-        checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10), allOwned = true)) {
+      },                        // @@ TestAspect.ignore,
+      testM("takes leases if it has less than its equal share") {
+        checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10), allOwned = false)) {
           leases =>
             // {
             // val leases = List(Lease("shard-0",Some("worker-2"),1,0,None,List(),None), Lease("shard-1",Some("worker-2"),1,0,None,List(),None))
@@ -66,11 +66,26 @@ object LeaseStealingTest extends DefaultRunnableSpec {
               toSteal <- DynamoDbLeaseCoordinator.leasesToTake(leases, workerId(1))
             } yield assert(toSteal.size)(equalTo(expectedToSteal))
         }
-      }, //  @@ TestAspect.ignore,
+      },                        //  @@ TestAspect.ignore,
+      testM("takes unclaimed leases first") {
+        checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10), allOwned = false)) { leases =>
+          for {
+            toTake          <- DynamoDbLeaseCoordinator.leasesToTake(leases, workerId(1))
+            fromOtherWorkers = toTake.dropWhile(_.owner.isEmpty)
+          } yield assert(fromOtherWorkers)(forall(hasField("owner", _.owner, isNone)))
+        }
+      },                        //  @@ TestAspect.ignore,
+      testM("steals leases randomly to reduce contention for the same lease") {
+        checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10), allOwned = true)) { leases =>
+          for {
+            toSteal1 <- DynamoDbLeaseCoordinator.leasesToTake(leases, workerId(1))
+            toSteal2 <- DynamoDbLeaseCoordinator.leasesToTake(leases, workerId(1))
+          } yield assert(toSteal1)(not(equalTo(toSteal2))) || assert(toSteal1)(hasSize(isLessThanEqualTo(1)))
+        }
+      } @@ TestAspect.flaky(3), // Randomness is randomly not-random
       testM("steals from the busiest workers first") {
         checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10))) {
           leases =>
-            println(s"Beginning check with ${leases.size} leases")
             val leasesByWorker = leases
               .groupBy(_.owner)
               .collect { case (Some(owner), leases) => owner -> leases }
