@@ -48,7 +48,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
   - [ ] Correctly deserialize the records
   - [ ] something about rate limits: maybe if we have multiple consumers active and run into rate limits?
   - [X] Steal an equal share of leases from another worker
-  - [ ] Two workers must be able to start up concurrently (not sure what the assertion would be)
+  - [X] Two workers must be able to start up concurrently
   - [ ] When one of two workers fail, the other must take over (TODO how to simulate crashing worker)
   - [ ] When one of two workers stops gracefully, the other must take over the shards
   - [ ] Restart a shard stream when the user has ended it

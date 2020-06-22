@@ -20,7 +20,7 @@ import zio._
 import zio.clock.Clock
 import zio.duration._
 import zio.logging._
-import zio.random.Random
+import zio.random.{ shuffle, Random }
 import zio.stream.ZStream
 import scala.util.control.NoStackTrace
 import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.LeaseCommand.RefreshLease
@@ -36,6 +36,7 @@ object ZioExtensions {
   }
 }
 
+// TODO use
 case class LeaseCoordinationSettings(
   renewalInterval: Duration = 5.seconds,
   refreshInterval: Duration = 30.seconds,
@@ -119,7 +120,6 @@ private class DynamoDbLeaseCoordinator(
 
   import DynamoDbLeaseCoordinator._
   import ZioExtensions.OnSuccessSyntax
-  import zio.random.shuffle
 
   /**
    * Operations that update a held lease will interfere unless we run them sequentially for each shard
@@ -272,28 +272,8 @@ private class DynamoDbLeaseCoordinator(
     } yield ()
   }
 
-  def leasesToSteal(state: State) = {
-    // TODO something with shards that don't have a lease yet
-
-    val allLeases      = state.currentLeases.values.toList
-    // TODO steal from the most busy worker
-//    val leasesByWorker = allLeases.groupBy(_.owner)
-    val ourLeases      = state.heldLeases.values.map(_._1).toList
-    val allWorkers     = allLeases.map(_.owner).collect { case Some(owner) => owner }.toSet ++ Set(workerId)
-    val nrLeasesToHave = Math.floor(allLeases.size * 1.0 / (allWorkers.size * 1.0)).toInt
-    println(
-      s"We have ${ourLeases.size}, we would like to have ${nrLeasesToHave}/${allLeases.size} leases (${allWorkers.size} workers)"
-    )
-    if (ourLeases.size < nrLeasesToHave) {
-      val nrLeasesToSteal = nrLeasesToHave - ourLeases.size
-      // Steal leases
-      for {
-        otherLeases  <- shuffle(allLeases.filter(_.owner.forall(_ != workerId)))
-        leasesToSteal = otherLeases.take(nrLeasesToSteal)
-        _            <- log.info(s"Going to steal ${nrLeasesToSteal} leases: ${leasesToSteal.mkString(",")}")
-      } yield leasesToSteal
-    } else ZIO.succeed(List.empty)
-  }
+  def leasesToSteal(state: State): ZIO[Random with Logging, Nothing, List[Lease]] =
+    DynamoDbLeaseCoordinator.leasesToSteal(state.currentLeases.values.toList, workerId)
 
   /**
    * A single round of lease stealing
@@ -563,5 +543,64 @@ object DynamoDbLeaseCoordinator {
 
   def logNamed[R, E, A](name: String)(f: ZIO[R, E, A]): ZIO[Logging with R, E, A] =
     log.locally(LogAnnotation.Name(name :: Nil))(f)
+
+  def leasesToSteal(allLeases: List[Lease], workerId: String): ZIO[Random with Logging, Nothing, List[Lease]] = {
+    // TODO something with shards that don't have a lease yet
+    val leasesByWorker = allLeases.groupBy(_.owner).collect { case (Some(owner), leases) => owner -> leases }.toMap
+    val ourLeases      = allLeases.filter(_.owner.contains(workerId))
+    val allWorkers     = allLeases.map(_.owner).collect { case Some(owner) => owner }.toSet ++ Set(
+      workerId
+    ) // We may already own some leases
+    val target = Math.floor(allLeases.size * 1.0 / (allWorkers.size * 1.0)).toInt
+    // println(
+    // s"We have ${ourLeases.size}, we would like to have ${target}/${allLeases.size} leases (${allWorkers.size} workers)"
+    // )
+    if (ourLeases.size < target) {
+      val nrLeasesToSteal = target - ourLeases.size
+      // println(s"Planning to steal ${nrLeasesToSteal} leases")
+
+      // From busiest to least busy
+      val nrLeasesByWorker  = allWorkers
+        .map(worker => worker -> allLeases.count(_.owner.contains(worker)))
+        .toMap
+        .view
+        .filterKeys(_ != workerId)
+        .toList
+        .sortBy {
+          case (worker, nrLeases) => (nrLeases * -1, worker)
+        } // Sort desc by nr of leases and then asc by worker ID for deterministic sort order
+      // println(s"Nr Leases by worker: ${nrLeasesByWorker}")
+      val spilloverByWorker = nrLeasesByWorker.map {
+        case (worker, nrLeases) => worker -> Math.max(0, nrLeases - target)
+      }
+      // println(s"Spillover: ${spilloverByWorker}")
+
+      // Determine how many leases to take from each worker
+      val nrLeasesToStealByWorker = spilloverByWorker
+        .foldLeft((nrLeasesToSteal, Map.empty[String, Int])) {
+          case ((leasesToStealLeft, nrByWorker), (worker, spillover)) =>
+            val toTake = Math.min(spillover, leasesToStealLeft)
+
+            (leasesToStealLeft - toTake, nrByWorker + (worker -> toTake))
+        }
+        ._2
+        .filter(_._2 > 0)
+      // println(s"Going to steal from workers ${nrLeasesToStealByWorker}")
+
+      // Candidate leases
+      val candidatesByWorker = allLeases.filter(_.owner.forall(_ != workerId))
+
+      // Steal leases
+      for {
+        leasesToStealByWorker <- ZIO.foreach(nrLeasesToStealByWorker) {
+                                   case (worker, nrLeasesToTake) =>
+                                     shuffle(leasesByWorker.get(worker).getOrElse(List.empty))
+                                       .map(_.take(nrLeasesToTake))
+                                 }
+        leasesToSteal          = leasesToStealByWorker.flatten
+        _                     <- log.info(s"Going to steal ${nrLeasesToSteal} leases: ${leasesToSteal.mkString(",")}")
+      } yield leasesToSteal
+    } else ZIO.succeed(List.empty)
+  }
 
 }
