@@ -17,7 +17,7 @@ import zio.test._
 object DynamicConsumerTest extends DefaultRunnableSpec {
   import TestUtil._
 
-  private val createStreamLayers = LocalStackLayers.kinesisAsyncClientLayer >>> AdminClientLive.layer
+  private val createStreamLayers = LocalStackLayers.kinesisAsyncClientLayer >>> AdminClient.live
 
   def testConsume1 =
     testM("consume records produced on all shards produced on the stream") {

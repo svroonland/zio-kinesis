@@ -2,13 +2,19 @@ package nl.vroste.zio.kinesis.client
 
 import java.time.Instant
 
+import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.awssdk.services.kinesis.model._
 import zio.clock.Clock
 import zio.duration._
 import zio.stream.ZStream
-import zio.{ Schedule, Task }
+import zio.{ Has, Schedule, Task, ZLayer }
 
 object AdminClient {
+
+  val live: ZLayer[Has[KinesisAsyncClient], Throwable, AdminClient] =
+    ZLayer.fromService[KinesisAsyncClient, AdminClient.Service] { kinesisClient =>
+      new AdminClientLive(kinesisClient)
+    }
 
   /**
    * Client for administrative operations

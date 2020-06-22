@@ -17,7 +17,7 @@ object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
 
   private val clientLayer      = LocalStackLayers.kinesisAsyncClientLayer >>> ClientLive.layer
-  private val adminClientLayer = LocalStackLayers.kinesisAsyncClientLayer >>> AdminClientLive.layer
+  private val adminClientLayer = LocalStackLayers.kinesisAsyncClientLayer >>> AdminClient.live
 
   def spec =
     suite("Producer")(
