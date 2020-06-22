@@ -37,12 +37,16 @@ object ZioExtensions {
   }
 }
 
-// TODO use
+/**
+ * @param expirationTime Time after which a lease is considered expired if not updated in the meantime
+ * @param updateInterval Interval at which leases are refreshed, renewed and possibly new leases taken
+ */
 case class LeaseCoordinationSettings(
-  renewalInterval: Duration = 5.seconds,
-  refreshInterval: Duration = 30.seconds,
-  stealInterval: Duration = 30.seconds
-)
+  expirationTime: Duration = 1.minute,
+  updateInterval: Duration = 30.seconds
+) {
+  require(updateInterval < expirationTime, "expirationTime must be less than updateInterval")
+}
 
 case class LeaseState(lease: Lease, completed: Option[Promise[Nothing, Unit]], lastUpdated: Instant) {
   def update(updatedLease: Lease, now: Instant) =
@@ -67,7 +71,6 @@ case class State(
   def updateLease(lease: Lease, now: Instant): State =
     updateLeases(List(lease), now)
 
-  // TODO only update lastUpdated when it has actually changed
   def updateLeases(leases: List[Lease], now: Instant): State =
     copy(currentLeases =
       currentLeases ++ leases
@@ -96,15 +99,13 @@ case class State(
         .getOrElse(LeaseState(lease, Some(completed), now)))
     )
 
-  def releaseLease(lease: Lease, now: Instant): State = {
-    println(s"Releasing lease ${lease}")
+  def releaseLease(lease: Lease, now: Instant): State =
     copy(currentLeases =
       currentLeases + (lease.key -> currentLeases
         .get(lease.key)
         .map(_.copy(lease = lease, completed = None, lastUpdated = now))
         .get)
     )
-  }
 
 }
 
@@ -504,7 +505,6 @@ object DynamoDbLeaseCoordinator {
     }
 
     case class RenewLease(shard: String, done: Promise[Throwable, Unit]) extends LeaseCommand
-    // case class StealLease(shard: String, done: Promise[Nothing, Unit])   extends Command
     case class UpdateCheckpoint(
       shard: String,
       checkpoint: ExtendedSequenceNumber,
@@ -535,7 +535,8 @@ object DynamoDbLeaseCoordinator {
     applicationName: String,
     workerId: String,
     shards: Map[String, Shard],
-    emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit
+    emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit,
+    settings: LeaseCoordinationSettings
   ): ZManaged[Clock with Random with Logging with Has[DynamoDbAsyncClient], Throwable, LeaseCoordinator] =
     ZManaged.make {
       log.locally(LogAnnotation.Name(s"worker-${workerId}" :: Nil)) {
@@ -565,9 +566,8 @@ object DynamoDbLeaseCoordinator {
         _ <- logNamed(s"worker-${workerId}")(c.runloop.runDrain).forkManaged
         _ <- logNamed(s"worker-${workerId}") {
                (c.refreshLeases *> c.renewLeases *> c.takeLeases)
-               // TODO all needs to be configurable
-                 .repeat(Schedule.fixed(5.seconds))
-                 .delay(5.seconds)
+                 .repeat(Schedule.fixed(settings.updateInterval))
+                 .delay(settings.updateInterval)
              }.forkManaged
       } yield ()
     }
@@ -578,14 +578,19 @@ object DynamoDbLeaseCoordinator {
   /**
    * Compute which leases to take, either without owner or from other workers
    *
-   * We take unowned leases first. We only steal if necessary and do it from the busiest worker first.
+   * We take expired and unowned leases first. We only steal if necessary and do it from the busiest worker first.
    * We will not steal more than the other worker's target (nr leases / nr workers).
    *
     * @param allLeases Latest known state of the all leases
    * @param workerId ID of this worker
+   * @param expiredLeases Leases that have expired
    * @return List of leases that should be taken by this worker
    */
-  def leasesToTake(allLeases: List[Lease], workerId: String): ZIO[Random with Logging, Nothing, List[Lease]] = {
+  def leasesToTake(
+    allLeases: List[Lease],
+    workerId: String,
+    expiredLeases: List[Lease] = List.empty
+  ): ZIO[Random with Logging, Nothing, List[Lease]] = {
     val allWorkers = allLeases.map(_.owner).collect { case Some(owner) => owner }.toSet ++ Set(workerId)
     val target     = Math.floor(allLeases.size * 1.0 / (allWorkers.size * 1.0)).toInt
 
@@ -600,10 +605,11 @@ object DynamoDbLeaseCoordinator {
 
     if (nrLeasesToTake > 0)
       for {
-        leasesWithoutOwner <- shuffle(allLeases.filter(_.owner.isEmpty)).map(_.take(nrLeasesToTake))
-        remaining           = nrLeasesToTake - leasesWithoutOwner.size // Is never less than 0 because of the take ^^
-        toSteal            <- leasesToSteal(allLeases, workerId, target, nrLeasesToSteal = remaining)
-      } yield leasesWithoutOwner ++ toSteal
+        leasesWithoutOwnerOrExpired <-
+          shuffle(expiredLeases ++ allLeases.filter(_.owner.isEmpty)).map(_.take(nrLeasesToTake))
+        remaining                    = nrLeasesToTake - leasesWithoutOwnerOrExpired.size // Is never less than 0 because of the take ^^
+        toSteal                     <- leasesToSteal(allLeases, workerId, target, nrLeasesToSteal = remaining)
+      } yield leasesWithoutOwnerOrExpired ++ toSteal
     else ZIO.succeed(List.empty)
   }
 

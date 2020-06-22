@@ -25,6 +25,7 @@ import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative.fetcher.{ EnhancedFanOutFetcher, PollingFetcher }
 import zio.random.Random
 import zio.logging.Logging
+import nl.vroste.zio.kinesis.client.zionative.dynamodb.LeaseCoordinationSettings
 
 case class ExtendedSequenceNumber(sequenceNumber: String, subSequenceNumber: Long)
 
@@ -82,6 +83,7 @@ object Consumer {
     applicationName: String,
     deserializer: Deserializer[R, T],
     fetchMode: FetchMode = FetchMode.Polling(),
+    leaseCoordinationSettings: LeaseCoordinationSettings = LeaseCoordinationSettings(),
     initialStartingPosition: ShardIteratorType = ShardIteratorType.TrimHorizon,
     workerId: String = "worker1",
     emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit
@@ -121,7 +123,9 @@ object Consumer {
           for {
             currentShards    <- Client.listShards(streamName).runCollect.map(_.map(l => (l.shardId(), l)).toMap).toManaged_
             _                <- ZManaged.die(new Exception("No shards in stream!")).when(currentShards.isEmpty)
-            leaseCoordinator <- DynamoDbLeaseCoordinator.make(applicationName, workerId, currentShards, emitDiagnostic)
+            leaseCoordinator <-
+              DynamoDbLeaseCoordinator
+                .make(applicationName, workerId, currentShards, emitDiagnostic, leaseCoordinationSettings)
           } yield (currentShards, leaseCoordinator)
         )(_ -> _)
         .map {
