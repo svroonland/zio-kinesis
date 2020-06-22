@@ -4,12 +4,18 @@ import java.time.Instant
 import java.util.concurrent.CompletableFuture
 
 import nl.vroste.zio.kinesis.client.serde.{ Deserializer, Serializer }
+import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.awssdk.services.kinesis.model._
 import zio.clock.Clock
 import zio.stream.ZStream
-import zio.{ Schedule, Task, ZIO, ZManaged }
+import zio.{ Has, Schedule, Task, ZIO, ZLayer, ZManaged }
 
 object Client {
+
+  val live: ZLayer[Has[KinesisAsyncClient], Throwable, Client] =
+    ZLayer.fromService[KinesisAsyncClient, Client.Service] { kinesisClient =>
+      new ClientLive(kinesisClient)
+    }
 
   /**
    * Client for consumer and producer operations

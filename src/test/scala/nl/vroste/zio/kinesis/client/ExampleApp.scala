@@ -13,7 +13,7 @@ import zio.{ Chunk, ExitCode, Schedule, ZIO }
 
 object ExampleApp extends zio.App {
 
-  private val clientLayer      = LocalStackLayers.kinesisAsyncClientLayer >>> ClientLive.layer
+  private val clientLayer      = LocalStackLayers.kinesisAsyncClientLayer >>> Client.live
   private val adminClientLayer = LocalStackLayers.kinesisAsyncClientLayer >>> AdminClient.live
 
   override def run(

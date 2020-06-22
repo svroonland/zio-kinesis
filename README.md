@@ -195,7 +195,7 @@ import zio.clock.Clock
 
 val streamName  = "my_stream"
 val applicationName ="my_awesome_zio_application"
-val clientLayer = DefaultClientsLayers.kinesisAsyncClientLayer >>> ClientLive.layer
+val clientLayer = DefaultClientsLayers.kinesisAsyncClientLayer >>> Client.live
 
 (for {
   producer <- Producer
@@ -225,7 +225,7 @@ import zio.{Task, ZIO}
 
 val streamName  = "my_stream"
 val consumerARN = "arn:aws:etc"
-val clientLayer = DefaultClientsLayers.kinesisAsyncClientLayer >>> ClientLive.layer
+val clientLayer = DefaultClientsLayers.kinesisAsyncClientLayer >>> Client.live
 
 (for {
   client <- ZIO.service[Client.Service]

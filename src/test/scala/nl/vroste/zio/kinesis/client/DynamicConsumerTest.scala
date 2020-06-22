@@ -39,7 +39,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                        )
                    )
                    .retry(retryOnResourceNotFound)
-                   .provideLayer(Clock.live ++ (LocalStackLayers.kinesisAsyncClientLayer >>> ClientLive.layer))
+                   .provideLayer(Clock.live ++ (LocalStackLayers.kinesisAsyncClientLayer >>> Client.live))
 
             _ <- putStrLn("Starting dynamic consumer")
             _ <- (for {
@@ -152,7 +152,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                      .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
                      .retry(retryOnResourceNotFound)
                  }
-                 .provideSomeLayer(Clock.live ++ (LocalStackLayers.kinesisAsyncClientLayer >>> ClientLive.layer))
+                 .provideSomeLayer(Clock.live ++ (LocalStackLayers.kinesisAsyncClientLayer >>> Client.live))
                  .runDrain
                  .fork
 
@@ -250,7 +250,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
             (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
           } yield assert(processed)(Assertion.equalTo(checkpointed))
         }
-        .provideCustomLayer(Clock.live ++ (LocalStackLayers.kinesisAsyncClientLayer >>> ClientLive.layer))
+        .provideCustomLayer(Clock.live ++ (LocalStackLayers.kinesisAsyncClientLayer >>> Client.live))
     } @@ TestAspect.timeout(40.seconds)
 
   // TODO check the order of received records is correct
