@@ -58,7 +58,7 @@ object DynamicConsumer {
       Blocking with R,
       Throwable,
       (String, ZStream[Blocking, Throwable, Record[T]], Checkpointer)
-    ]                                   // TODO - what about Blocking?
+    ]
   }
 
   case class Record[T](
