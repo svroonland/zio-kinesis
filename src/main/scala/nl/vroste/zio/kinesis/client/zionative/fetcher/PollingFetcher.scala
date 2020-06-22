@@ -28,8 +28,9 @@ object PollingFetcher {
           // GetRecords can be called up to 5 times per second per shard
           // TODO we probably also want some minimum interval here to prevent frequent polls with only a few records
           getRecordsThrottled  <- throttledFunction(5, 1.second)((Client.getRecords _).tupled)
-          initialShardIterator <-
-            getShardIterator((streamDescription.streamName, shard.shardId(), startingPosition)).toManaged_
+          initialShardIterator <- getShardIterator((streamDescription.streamName, shard.shardId(), startingPosition))
+                                    .retry(retryOnThrottledWithSchedule(config.backoff))
+                                    .toManaged_
           shardIterator        <- Ref.make[String](initialShardIterator).toManaged_
 
           pollWithDelay <- makePollWithDelayIfNoResult(config.delay) {
