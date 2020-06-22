@@ -123,14 +123,13 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
       .build()
 
     asZIO(client.updateItem(request))
-      .tapError(e => log.warn(s"Got error claiming lease: ${e}"))
-      .unit
-      .catchAll {
-        case _: ConditionalCheckFailedException =>
-          ZIO.fail(Right(UnableToClaimLease))
-        case e                                  =>
-          ZIO.fail(Left(e))
-      }
+    // .tapError(e => log.warn(s"Got error claiming lease: ${e}"))
+    .unit.catchAll {
+      case _: ConditionalCheckFailedException =>
+        ZIO.fail(Right(UnableToClaimLease))
+      case e                                  =>
+        ZIO.fail(Left(e))
+    }
 
   }
 

@@ -35,6 +35,11 @@ import nl.vroste.zio.kinesis.client.zionative.dynamodb.LeaseTable
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import software.amazon.awssdk.services.kinesis.model.Shard
+import nl.vroste.zio.kinesis.client.zionative.dynamodb.LeaseCoordinationSettings
+import java.time.Instant
+import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.Checkpoint
+import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.LeaseReleased
+import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.LeaseAcquired
 // import zio.logging.LogAnnotation
 
 object NativeConsumerTest extends DefaultRunnableSpec {
@@ -49,8 +54,8 @@ object NativeConsumerTest extends DefaultRunnableSpec {
   - [ ] something about rate limits: maybe if we have multiple consumers active and run into rate limits?
   - [X] Steal an equal share of leases from another worker
   - [X] Two workers must be able to start up concurrently
-  - [ ] When one of two workers fail, the other must take over (TODO how to simulate crashing worker)
-  - [ ] When one of two workers stops gracefully, the other must take over the shards
+  - [ ] When one of two workers fail, the other must take over (TODO how to simulate crashing worker: manually update lease table)
+  - [X] When one of two workers stops gracefully, the other must take over the shards
   - [ ] Restart a shard stream when the user has ended it
   - [ ] Recover from a lost connection
    */
@@ -355,6 +360,79 @@ object NativeConsumerTest extends DefaultRunnableSpec {
               } yield assertCompletes
             }
         }
+      },
+      testM("workers must take over from a stopped consumer") {
+        val nrRecords = 2000
+        val nrShards  = 6
+
+        ZIO.effectTotal((streamPrefix + "testStream-3", streamPrefix + "test3")).flatMap {
+          case (streamName, applicationName) =>
+            def consumer(workerId: String, emitDiagnostic: DiagnosticEvent => UIO[Unit]) =
+              Consumer
+                .shardedStream(
+                  streamName,
+                  applicationName,
+                  Serde.asciiString,
+                  workerId = workerId,
+                  emitDiagnostic = emitDiagnostic,
+                  leaseCoordinationSettings = LeaseCoordinationSettings(10.seconds, 3.seconds)
+                )
+                .flatMapPar(Int.MaxValue) {
+                  case (shard @ _, shardStream, checkpointer) =>
+                    shardStream
+                      .tap(checkpointer.stage)
+                      .aggregateAsyncWithin(ZTransducer.collectAllN(200), Schedule.fixed(1.second))
+                      .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
+                      .map(_.last)
+                      .tap(_ => checkpointer.checkpoint)
+                      .catchAll {
+                        case Right(_) =>
+                          ZStream.empty
+                        case Left(e)  => ZStream.fail(e)
+                      }
+                }
+
+            withStream(streamName, shards = nrShards) {
+              for {
+                producer                   <- produceSampleRecords(streamName, nrRecords, chunkSize = 50).fork
+                shardsProcessedByConsumer2 <- Ref.make[Set[String]](Set.empty)
+                events                     <- Ref.make[List[(String, Instant, DiagnosticEvent)]](List.empty)
+                emitDiagnostic              = (workerId: String) =>
+                                   (event: DiagnosticEvent) =>
+                                     //  onDiagnostic(workerId)(event) *>
+                                     zio.clock.currentDateTime
+                                       .map(_.toInstant())
+                                       .orDie
+                                       .flatMap(time => events.update(_ :+ (workerId, time, event)))
+                                       .provideLayer(Clock.live)
+
+                _                          <- ZStream
+                       .mergeAll(3)(
+                         consumer("worker1", emitDiagnostic("worker1"))
+                           .take(10)
+                           .ensuringFirst(log.warn("worker1 done")),
+                         consumer("worker2", emitDiagnostic("worker2")).ensuringFirst(log.warn("worker2 DONE")),
+                         consumer("worker3", emitDiagnostic("worker3")).ensuringFirst(log.warn("Worker3 DONE"))
+                       )
+                       .take(100) // TODO make it complete faster on a deterministic signal
+                       .runCollect
+                _                          <- producer.interrupt
+                allEvents                  <-
+                  events.get.map(_.filterNot(_._3.isInstanceOf[PollComplete]).filterNot(_._3.isInstanceOf[Checkpoint]))
+                _                           = println(allEvents.mkString("\n"))
+
+                // Workers 2 and 3 should have later-timestamped LeaseAcquired for all shards that were released by Worker 1
+                worker1Released      = allEvents.collect { case ("worker1", time, LeaseReleased(shard)) => time -> shard }
+                releaseTime          = worker1Released.last._1
+                acquiredAfterRelease = allEvents.collect {
+                                         case (worker, time, LeaseAcquired(shard, _))
+                                             if worker != "worker1" && !time.isBefore(releaseTime) =>
+                                           shard
+                                       }
+
+              } yield assert(acquiredAfterRelease)(hasSameElements(worker1Released.map(_._2)))
+            }
+        }
       }
     ).provideSomeLayer(env) @@
       TestAspect.timed @@
@@ -377,7 +455,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
       _      <- client.createStream(name, shards).toManaged(_ => client.deleteStream(name).orDie)
       // Wait for the stream to have shards
       _      <- {
-        def getShards: ZIO[Has[Client] with Clock, Throwable, List[Shard]] =
+        def getShards: ZIO[Has[Client] with Clock, Throwable, Chunk[Shard]] =
           ZIO.service[Client].flatMap(_.listShards(name).runCollect).filterOrElse(_.nonEmpty)(_ => getShards)
         getShards.toManaged_
       }

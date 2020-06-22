@@ -26,6 +26,7 @@ import scala.util.control.NoStackTrace
 import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.LeaseCommand.RefreshLease
 import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.LeaseCommand.ReleaseLease
 import java.time.Instant
+import java.util.concurrent.TimeoutException
 
 object ZioExtensions {
   implicit class OnSuccessSyntax[R, E, A](val zio: ZIO[R, E, A]) extends AnyVal {
@@ -148,7 +149,8 @@ private class DynamoDbLeaseCoordinator(
   state: Ref[State],
   acquiredLeasesQueue: Queue[(Lease, Promise[Nothing, Unit])],
   emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit,
-  commandQueue: Queue[LeaseCommand]
+  commandQueue: Queue[LeaseCommand],
+  settings: LeaseCoordinationSettings
 ) extends LeaseCoordinator {
 
   import DynamoDbLeaseCoordinator._
@@ -301,11 +303,18 @@ private class DynamoDbLeaseCoordinator(
    */
   val refreshLeases = {
     for {
-      _      <- log.info("Refreshing leases")
-      leases <- table.getLeasesFromDB
-      _      <- log.info(s"Refreshing leases found ${leases.size} leases")
-      _      <- ZIO.foreach_(leases)(lease => processCommand(LeaseCommand.RefreshLease(lease, _)))
-      _      <- log.info("Refreshing leases done")
+      _             <- log.info("Refreshing leases")
+      currentLeases <- state.get.map(_.currentLeases.values.map(_.lease))
+      currentWorkers = currentLeases.map(_.owner).collect { case Some(owner) => owner }.toSet
+      leases        <- table.getLeasesFromDB
+      _             <- log.info(s"Refreshing leases found ${leases.size} leases")
+      _             <- ZIO.foreach_(leases)(lease => processCommand(LeaseCommand.RefreshLease(lease, _)))
+      newWorkers     = leases.map(_.owner).collect { case Some(owner) => owner }.toSet
+      workersJoined  = newWorkers -- currentWorkers
+      workersLeft    = currentWorkers -- newWorkers
+      _             <- ZIO.foreach(workersJoined)(w => emitDiagnostic(DiagnosticEvent.WorkerJoined(w)))
+      _             <- ZIO.foreach(workersLeft)(w => emitDiagnostic(DiagnosticEvent.WorkerLeft(w)))
+      _             <- log.info("Refreshing leases done")
     } yield ()
   }
 
@@ -316,28 +325,42 @@ private class DynamoDbLeaseCoordinator(
    */
   val takeLeases =
     for {
-      _             <- log.info("Stealing leases")
+      _             <- log.info("Taking leases")
       state         <- state.get
-      toSteal       <- leasesToTake(state.currentLeases.map(_._2.lease).toList, workerId)
+      expiredLeases <- now.map(now =>
+                         state.currentLeases.values
+                           .filter(_.lastUpdated.isBefore(now.minusMillis(settings.expirationTime.toMillis)))
+                           .map(_.lease)
+                           .toList
+                       )
+      _              = println(s"Expired leases: ${expiredLeases}")
+      toSteal       <- leasesToTake(state.currentLeases.map(_._2.lease).toList, workerId, expiredLeases)
+      _             <- log.info(s"Going to take ${toSteal.size} leases: ${toSteal.mkString(",")}")
       claimedLeases <- ZIO
-                         .foreachPar(toSteal) { lease =>
+                         .foreach(toSteal) { lease =>
                            val updatedLease = lease.claim(workerId)
-                           (table.claimLease(updatedLease).as(Some(updatedLease)) <* emitDiagnostic(
-                             DiagnosticEvent.LeaseStolen(lease.key, lease.owner.get)
-                           )).catchAll {
-                             case Right(UnableToClaimLease) =>
-                               log
-                                 .info(
-                                   s"$workerId Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
-                                 )
-                                 .as(None)
-                             case Left(e)                   =>
-                               ZIO.fail(e)
-
-                           }
+                           table
+                             .claimLease(updatedLease)
+                             .as(Some(updatedLease))
+                             .timeoutFail(Left(new TimeoutException("timeout claim lease")))(
+                               1.seconds
+                             )
+                             .catchAll {
+                               case Right(UnableToClaimLease) =>
+                                 log
+                                   .info(
+                                     s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
+                                   )
+                                   .as(None)
+                               case Left(e)                   =>
+                                 log.error(s"Got error ${e}") *> ZIO.fail(e)
+                             }
                          }
                          .map(_.flatten)
-      _             <- ZIO.foreach_(claimedLeases)(registerNewAcquiredLease)
+                         .onInterrupt(_ => log.warn("Why was I interrupted???"))
+      _             <- log.info(s"Taking leases done, going to register them")
+      _             <- ZIO.foreachPar_(claimedLeases)(registerNewAcquiredLease)
+      _             <- log.info(s"Taking leases done")
     } yield ()
 
   // Puts it in the state and the queue
@@ -555,7 +578,8 @@ object DynamoDbLeaseCoordinator {
                           state,
                           acquiredLeases,
                           emitDiagnostic,
-                          commandQueue
+                          commandQueue,
+                          settings
                         )
         } yield coordinator
       }
@@ -565,9 +589,10 @@ object DynamoDbLeaseCoordinator {
         _ <- logNamed(s"worker-${workerId}")(c.initializeLeases *> c.takeLeases).forkManaged
         _ <- logNamed(s"worker-${workerId}")(c.runloop.runDrain).forkManaged
         _ <- logNamed(s"worker-${workerId}") {
-               (c.refreshLeases *> c.renewLeases *> c.takeLeases)
-                 .repeat(Schedule.fixed(settings.updateInterval))
-                 .delay(settings.updateInterval)
+               (log.info("Begin update cycle") *> c.refreshLeases *> c.renewLeases *> c.takeLeases *> log.info(
+                 "Update cycle complete"
+               )).repeat(Schedule.fixed(settings.updateInterval).jittered)
+                 .delay(settings.updateInterval) // TODO add some jitter
              }.forkManaged
       } yield ()
     }
@@ -599,18 +624,19 @@ object DynamoDbLeaseCoordinator {
     val nrLeasesToTake = target - ourLeases.size
 
     // We may already own some leases
-    // println(
-    // s"We have ${ourLeases.size}, we would like to have ${target}/${allLeases.size} leases (${allWorkers.size} workers), we need ${nrLeasesToTake} more"
-    // )
+    log.info(
+      s"We have ${ourLeases.size}, we would like to have ${target}/${allLeases.size} leases (${allWorkers.size} workers), we need ${nrLeasesToTake} more"
+    ) *> (if (nrLeasesToTake > 0)
+            for {
+              leasesWithoutOwner         <- shuffle(allLeases.filter(_.owner.isEmpty)).map(_.take(nrLeasesToTake))
+              leasesExpired              <- shuffle(expiredLeases).map(_.take(nrLeasesToTake - leasesWithoutOwner.size))
+              leasesWithoutOwnerOrExpired = leasesWithoutOwner ++ leasesExpired
 
-    if (nrLeasesToTake > 0)
-      for {
-        leasesWithoutOwnerOrExpired <-
-          shuffle(expiredLeases ++ allLeases.filter(_.owner.isEmpty)).map(_.take(nrLeasesToTake))
-        remaining                    = nrLeasesToTake - leasesWithoutOwnerOrExpired.size // Is never less than 0 because of the take ^^
-        toSteal                     <- leasesToSteal(allLeases, workerId, target, nrLeasesToSteal = remaining)
-      } yield leasesWithoutOwnerOrExpired ++ toSteal
-    else ZIO.succeed(List.empty)
+              remaining =
+                nrLeasesToTake - leasesWithoutOwnerOrExpired.size // Is never less than 0 because of the take ^^
+              toSteal  <- leasesToSteal(allLeases, workerId, target, nrLeasesToSteal = remaining)
+            } yield leasesWithoutOwnerOrExpired ++ toSteal
+          else ZIO.succeed(List.empty))
   }
 
   /**
@@ -669,7 +695,6 @@ object DynamoDbLeaseCoordinator {
                                      .map(_.take(nrLeasesToTake))
                                }
       leasesToSteal          = leasesToStealByWorker.flatten
-      _                     <- log.info(s"Going to steal ${nrLeasesToSteal} leases: ${leasesToSteal.mkString(",")}")
     } yield leasesToSteal
   }
 
