@@ -23,27 +23,10 @@ object ClientLive {
     ZLayer.fromService[KinesisAsyncClient, Client.Service] { kinesisClient =>
       new Client.Service {
 
-        /**
-         * Registers a stream consumer for use during the lifetime of the managed resource
-         *
-       * @param streamARN    ARN of the stream to consume
-         * @param consumerName Name of the consumer
-         * @return Managed resource that unregisters the stream consumer after use
-         */
         def createConsumer(streamARN: String, consumerName: String): ZManaged[Any, Throwable, Consumer] =
           registerStreamConsumer(streamARN, consumerName)
             .toManaged(consumer => deregisterStreamConsumer(consumer.consumerARN()).ignore)
 
-        /**
-         * List all shards in a stream
-         *
-       * Handles paginated responses from the AWS API in a streaming manner
-         *
-       * @param chunkSize Number of results to fetch in one request (maxResults parameter).
-         *                  Overwrites the maxResults in the request
-         *
-       * @return ZStream of shards in a stream
-         */
         def listShards(
           streamName: String,
           streamCreationTimestamp: Option[Instant] = None,
@@ -86,23 +69,6 @@ object ClientLive {
             .map(_.shardIterator())
         }
 
-        /**
-         * Creates a `ZStream` of the records in the given shard
-         *
-       * Records are deserialized to values of type `T`
-         *
-       * Subscriptions are valid for only 5 minutes and should be renewed by the caller with
-         * an up to date starting position.
-         *
-       * @param consumerARN
-         * @param shardID
-         * @param startingPosition
-         * @param deserializer Converter of record's data bytes to a value of type T
-         * @tparam R Environment required by the deserializer
-         * @tparam T Type of values
-         * @return Stream of records. When exceptions occur in the subscription or the streaming, the
-         *         stream will fail.
-         */
         def subscribeToShard[R, T](
           consumerARN: String,
           shardID: String,

@@ -7,11 +7,22 @@ import nl.vroste.zio.kinesis.client.serde.{ Deserializer, Serializer }
 import software.amazon.awssdk.services.kinesis.model._
 import zio.clock.Clock
 import zio.stream.ZStream
-import zio.{ Has, Schedule, Task, ZIO, ZManaged }
+import zio.{ Schedule, Task, ZIO, ZManaged }
 
 object Client {
 
-  type Client = Has[Service]
+  /**
+   * Client for consumer and producer operations
+   *
+   * The interface is as close as possible to the natural ZIO variant of the KinesisAsyncClient interface,
+   * with some noteable differences:
+   * - Methods working with records (consuming or producing) make use of Serdes for (de)serialization
+   * - Paginated APIs such as listShards are modeled as a Stream
+   * - AWS SDK library method responses that only indicate success and do not contain any other
+   *   data (besides SDK internals) are mapped to a ZIO of Unit
+   * - AWS SDK library method responses that contain a single field are mapped to a ZIO of that field's type
+   *
+   */
   trait Service {
 
     /**

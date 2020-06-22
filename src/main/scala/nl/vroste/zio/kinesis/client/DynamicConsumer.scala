@@ -17,7 +17,6 @@ import zio._
  * Ensures proper resource shutdown and failure handling
  */
 object DynamicConsumer {
-  type DynamicConsumer = Has[Service]
 
   trait Service {
 

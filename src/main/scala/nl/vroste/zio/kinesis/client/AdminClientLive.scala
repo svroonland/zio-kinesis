@@ -2,7 +2,6 @@ package nl.vroste.zio.kinesis.client
 
 import java.time.Instant
 
-import nl.vroste.zio.kinesis.client.AdminClient.AdminClient
 import nl.vroste.zio.kinesis.client.Util.{ asZIO, paginatedRequest }
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.awssdk.services.kinesis.model._
@@ -10,7 +9,7 @@ import zio.clock.Clock
 import zio.duration._
 import zio.interop.reactivestreams._
 import zio.stream.ZStream
-import zio.{ Chunk, Has, Schedule, Task, ZLayer }
+import zio.{ Tag => _, _ }
 
 import scala.jdk.CollectionConverters._
 

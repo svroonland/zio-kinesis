@@ -5,7 +5,7 @@ import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import zio.{ Has, ZIO, ZLayer, ZManaged }
 
-object clients {
+object DefaultClientsLayers {
 
   def kinesisAsyncClientLayer: ZLayer[Any, Throwable, Has[KinesisAsyncClient]] =
     ZLayer.fromManaged(ZManaged.fromAutoCloseable {

@@ -3,7 +3,6 @@ package nl.vroste.zio.kinesis.client
 import java.util.UUID
 
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
-import nl.vroste.zio.kinesis.client.Client.Client
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio._
