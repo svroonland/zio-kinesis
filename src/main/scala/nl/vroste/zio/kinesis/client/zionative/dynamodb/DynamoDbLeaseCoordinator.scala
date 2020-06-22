@@ -272,20 +272,16 @@ private class DynamoDbLeaseCoordinator(
     } yield ()
   }
 
-  def leasesToSteal(state: State): ZIO[Random with Logging, Nothing, List[Lease]] =
-    DynamoDbLeaseCoordinator.leasesToSteal(state.currentLeases.values.toList, workerId)
-
   /**
-   * A single round of lease stealing
+   * Takes leases, unowned or from other workers, to get this worker's number of leases to the target value (nr leases / nr workers)
    *
-   * - First take expired leases (TODO)
-   * - Then take X leases from the most loaded worked
+   * Taking individual leases may fail, but the others will still be tried. Only in the next round of lease taking will we try again.
    */
-  val stealLeases =
+  val takeLeases =
     for {
       _             <- log.info("Stealing leases")
       state         <- state.get
-      toSteal       <- leasesToSteal(state)
+      toSteal       <- leasesToTake(state.currentLeases.values.toList, workerId)
       claimedLeases <- ZIO
                          .foreachPar(toSteal) { lease =>
                            val updatedLease = lease.claim(workerId)
@@ -530,10 +526,10 @@ object DynamoDbLeaseCoordinator {
     }(_.releaseLeases.orDie).tap { c =>
       // Do all initalization in parallel
       for {
-        _ <- logNamed(s"worker-${workerId}")(c.initializeLeases *> c.stealLeases).forkManaged
+        _ <- logNamed(s"worker-${workerId}")(c.initializeLeases *> c.takeLeases).forkManaged
         _ <- logNamed(s"worker-${workerId}")(c.runloop.runDrain).forkManaged
         _ <- logNamed(s"worker-${workerId}") {
-               (c.refreshLeases *> c.renewLeases *> c.stealLeases)
+               (c.refreshLeases *> c.renewLeases *> c.takeLeases)
                // TODO all needs to be configurable
                  .repeat(Schedule.fixed(5.seconds))
                  .delay(5.seconds)
@@ -544,63 +540,98 @@ object DynamoDbLeaseCoordinator {
   def logNamed[R, E, A](name: String)(f: ZIO[R, E, A]): ZIO[Logging with R, E, A] =
     log.locally(LogAnnotation.Name(name :: Nil))(f)
 
-  def leasesToSteal(allLeases: List[Lease], workerId: String): ZIO[Random with Logging, Nothing, List[Lease]] = {
-    // TODO something with shards that don't have a lease yet
+  /**
+   * Compute which leases to take, either without owner or from other workers
+   *
+   * We take unowned leases first. We only steal if necessary and do it from the busiest worker first.
+   * We will not steal more than the other worker's target (nr leases / nr workers).
+   *
+    * @param allLeases Latest known state of the all leases
+   * @param workerId ID of this worker
+   * @return List of leases that should be taken by this worker
+   */
+  def leasesToTake(allLeases: List[Lease], workerId: String): ZIO[Random with Logging, Nothing, List[Lease]] = {
+    val allWorkers = allLeases.map(_.owner).collect { case Some(owner) => owner }.toSet ++ Set(workerId)
+    val target     = Math.floor(allLeases.size * 1.0 / (allWorkers.size * 1.0)).toInt
+
+    val ourLeases = allLeases.filter(_.owner.contains(workerId))
+
+    val nrLeasesToTake = target - ourLeases.size
+    if (nrLeasesToTake > 0)
+      for {
+        leasesWithoutOwner <- shuffle(allLeases.filter(_.owner.isEmpty)).map(_.take(nrLeasesToTake))
+        remaining           = nrLeasesToTake - leasesWithoutOwner.size // Is never less than 0 because of the take ^^
+        toSteal            <- leasesToSteal(allLeases, workerId, target, nrLeasesToSteal = remaining)
+      } yield leasesWithoutOwner ++ toSteal
+    else ZIO.succeed(List.empty)
+  }
+
+  /**
+   * Computes leases to steal from other workers
+   *
+   * @param allLeases Latest known state of the all leases
+   * @param workerId ID of this worker
+   * @param target Target number of leases for this worker
+   * @param nrLeasesToSteal How many leases to steal to get to the target
+   * @return List of leases that should be stolen
+   */
+  def leasesToSteal(
+    allLeases: List[Lease],
+    workerId: String,
+    target: Int,
+    nrLeasesToSteal: Int
+  ): ZIO[Random with Logging, Nothing, List[Lease]] = {
     val leasesByWorker = allLeases.groupBy(_.owner).collect { case (Some(owner), leases) => owner -> leases }.toMap
     val ourLeases      = allLeases.filter(_.owner.contains(workerId))
     val allWorkers     = allLeases.map(_.owner).collect { case Some(owner) => owner }.toSet ++ Set(
       workerId
     ) // We may already own some leases
-    val target = Math.floor(allLeases.size * 1.0 / (allWorkers.size * 1.0)).toInt
     // println(
     // s"We have ${ourLeases.size}, we would like to have ${target}/${allLeases.size} leases (${allWorkers.size} workers)"
     // )
-    if (ourLeases.size < target) {
-      val nrLeasesToSteal = target - ourLeases.size
-      // println(s"Planning to steal ${nrLeasesToSteal} leases")
+    // println(s"Planning to steal ${nrLeasesToSteal} leases")
 
-      // From busiest to least busy
-      val nrLeasesByWorker  = allWorkers
-        .map(worker => worker -> allLeases.count(_.owner.contains(worker)))
-        .toMap
-        .view
-        .filterKeys(_ != workerId)
-        .toList
-        .sortBy {
-          case (worker, nrLeases) => (nrLeases * -1, worker)
-        } // Sort desc by nr of leases and then asc by worker ID for deterministic sort order
-      // println(s"Nr Leases by worker: ${nrLeasesByWorker}")
-      val spilloverByWorker = nrLeasesByWorker.map {
-        case (worker, nrLeases) => worker -> Math.max(0, nrLeases - target)
+    // From busiest to least busy
+    val nrLeasesByWorker  = allWorkers
+      .map(worker => worker -> allLeases.count(_.owner.contains(worker)))
+      .toMap
+      .view
+      .filterKeys(_ != workerId)
+      .toList
+      .sortBy {
+        case (worker, nrLeases) => (nrLeases * -1, worker)
+      } // Sort desc by nr of leases and then asc by worker ID for deterministic sort order
+    // println(s"Nr Leases by worker: ${nrLeasesByWorker}")
+    val spilloverByWorker = nrLeasesByWorker.map {
+      case (worker, nrLeases) => worker -> Math.max(0, nrLeases - target)
+    }
+    // println(s"Spillover: ${spilloverByWorker}")
+
+    // Determine how many leases to take from each worker
+    val nrLeasesToStealByWorker = spilloverByWorker
+      .foldLeft((nrLeasesToSteal, Map.empty[String, Int])) {
+        case ((leasesToStealLeft, nrByWorker), (worker, spillover)) =>
+          val toTake = Math.min(spillover, leasesToStealLeft)
+
+          (leasesToStealLeft - toTake, nrByWorker + (worker -> toTake))
       }
-      // println(s"Spillover: ${spilloverByWorker}")
+      ._2
+      .filter(_._2 > 0)
+    // println(s"Going to steal from workers ${nrLeasesToStealByWorker}")
 
-      // Determine how many leases to take from each worker
-      val nrLeasesToStealByWorker = spilloverByWorker
-        .foldLeft((nrLeasesToSteal, Map.empty[String, Int])) {
-          case ((leasesToStealLeft, nrByWorker), (worker, spillover)) =>
-            val toTake = Math.min(spillover, leasesToStealLeft)
+    // Candidate leases
+    val candidatesByWorker = allLeases.filter(_.owner.forall(_ != workerId))
 
-            (leasesToStealLeft - toTake, nrByWorker + (worker -> toTake))
-        }
-        ._2
-        .filter(_._2 > 0)
-      // println(s"Going to steal from workers ${nrLeasesToStealByWorker}")
-
-      // Candidate leases
-      val candidatesByWorker = allLeases.filter(_.owner.forall(_ != workerId))
-
-      // Steal leases
-      for {
-        leasesToStealByWorker <- ZIO.foreach(nrLeasesToStealByWorker) {
-                                   case (worker, nrLeasesToTake) =>
-                                     shuffle(leasesByWorker.get(worker).getOrElse(List.empty))
-                                       .map(_.take(nrLeasesToTake))
-                                 }
-        leasesToSteal          = leasesToStealByWorker.flatten
-        _                     <- log.info(s"Going to steal ${nrLeasesToSteal} leases: ${leasesToSteal.mkString(",")}")
-      } yield leasesToSteal
-    } else ZIO.succeed(List.empty)
+    // Steal leases
+    for {
+      leasesToStealByWorker <- ZIO.foreach(nrLeasesToStealByWorker) {
+                                 case (worker, nrLeasesToTake) =>
+                                   shuffle(leasesByWorker.get(worker).getOrElse(List.empty))
+                                     .map(_.take(nrLeasesToTake))
+                               }
+      leasesToSteal          = leasesToStealByWorker.flatten
+      _                     <- log.info(s"Going to steal ${nrLeasesToSteal} leases: ${leasesToSteal.mkString(",")}")
+    } yield leasesToSteal
   }
 
 }

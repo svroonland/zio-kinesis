@@ -32,19 +32,19 @@ object LeaseStealingTest extends DefaultRunnableSpec {
     } yield leases
 
   import zio.test.Assertion._
-  import DynamoDbLeaseCoordinator.leasesToSteal
+  import DynamoDbLeaseCoordinator.leasesToTake
   // import TestAspect.ignore
 
   override def spec =
     suite("Lease coordinator")(
       testM("does not want to steal leases if its the only worker") {
         checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.const(1))) { leases =>
-          assertM(leasesToSteal(leases, workerId(1)))(isEmpty)
+          assertM(leasesToTake(leases, workerId(1)))(isEmpty)
         }
       }, // @@ TestAspect.ignore,
       testM("steals some leases when its not the only worker") {
         checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.const(1))) { leases =>
-          assertM(leasesToSteal(leases, workerId(2)))(isNonEmpty)
+          assertM(leasesToTake(leases, workerId(2)))(isNonEmpty)
         }
       }, // @@ TestAspect.ignore,
       testM("steals leases if it has less than its equal share") {
@@ -63,7 +63,7 @@ object LeaseStealingTest extends DefaultRunnableSpec {
             val expectedToSteal = Math.max(0, expectedShare - nrOwnedLeases) // We could own more than our fair share
 
             for {
-              toSteal <- DynamoDbLeaseCoordinator.leasesToSteal(leases, workerId(1))
+              toSteal <- DynamoDbLeaseCoordinator.leasesToTake(leases, workerId(1))
             } yield assert(toSteal.size)(equalTo(expectedToSteal))
         }
       }, //  @@ TestAspect.ignore,
@@ -79,7 +79,7 @@ object LeaseStealingTest extends DefaultRunnableSpec {
             val busiestWorkers = leasesByWorker.map(_._1)
 
             for {
-              toSteal       <- DynamoDbLeaseCoordinator.leasesToSteal(leases, workerId(1))
+              toSteal       <- DynamoDbLeaseCoordinator.leasesToTake(leases, workerId(1))
               // The order of workers should be equal to the order of busiest workers
               toStealWorkers = changedElements(toSteal.map(_.owner.get))
             } yield assert(toStealWorkers)(equalTo(busiestWorkers.take(toStealWorkers.size)))
