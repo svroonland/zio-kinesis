@@ -4,6 +4,9 @@ import java.time.Instant
 import java.util.UUID
 
 import nl.vroste.zio.kinesis.client.serde.Deserializer
+import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
+import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
+import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import software.amazon.kinesis.common.{ InitialPositionInStream, InitialPositionInStreamExtended }
 import software.amazon.kinesis.processor.RecordProcessorCheckpointer
@@ -17,6 +20,13 @@ import zio._
  * Ensures proper resource shutdown and failure handling
  */
 object DynamicConsumer {
+
+  val live: ZLayer[Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[DynamoDbAsyncClient], Nothing, Has[
+    DynamicConsumer.Service
+  ]] =
+    ZLayer.fromServices[KinesisAsyncClient, CloudWatchAsyncClient, DynamoDbAsyncClient, DynamicConsumer.Service] {
+      DynamicConsumerLive.apply
+    }
 
   trait Service {
 

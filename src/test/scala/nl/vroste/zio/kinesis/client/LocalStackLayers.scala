@@ -80,6 +80,6 @@ object LocalStackLayers {
     })
 
   val dynamicConsumerLayer: ZLayer[Any, Throwable, Has[DynamicConsumer.Service]] =
-    kinesisAsyncClientLayer ++ dynamoDbClientLayer ++ cloudWatchClientLayer >>> DynamicConsumerLive.layer
+    kinesisAsyncClientLayer ++ dynamoDbClientLayer ++ cloudWatchClientLayer >>> DynamicConsumer.live
 
 }

@@ -82,7 +82,7 @@ _ <- dynamicConsumer
   }.provideLayer(Blocking.live)
   .runDrain
 } yield ()).provideLayer(
-  kinesisAsyncClientLayer ++ cloudWatchAsyncClientLayer ++ dynamoDbAsyncClientLayer >>> DynamicConsumerLive.layer
+  kinesisAsyncClientLayer ++ cloudWatchAsyncClientLayer ++ dynamoDbAsyncClientLayer >>> DynamicConsumer.live
 )
 ```
 
@@ -134,7 +134,7 @@ _ <- dynamicConsumer
   .provideLayer(Blocking.live ++ Clock.live)
   .runDrain
 } yield ()).provideLayer(
-  kinesisAsyncClientLayer ++ cloudWatchAsyncClientLayer ++ dynamoDbAsyncClientLayer >>> DynamicConsumerLive.layer
+  kinesisAsyncClientLayer ++ cloudWatchAsyncClientLayer ++ dynamoDbAsyncClientLayer >>> DynamicConsumer.live
 )
 ```
 
