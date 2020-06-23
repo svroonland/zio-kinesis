@@ -12,8 +12,8 @@ import zio.{ Has, Schedule, Task, ZLayer }
 object AdminClient {
 
   val live: ZLayer[Has[KinesisAsyncClient], Throwable, AdminClient] =
-    ZLayer.fromService[KinesisAsyncClient, AdminClient.Service] { kinesisClient =>
-      new AdminClientLive(kinesisClient)
+    ZLayer.fromService[KinesisAsyncClient, AdminClient.Service] {
+      new AdminClientLive(_)
     }
 
   /**

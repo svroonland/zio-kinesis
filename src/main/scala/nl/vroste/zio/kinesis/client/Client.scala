@@ -13,8 +13,8 @@ import zio.{ Has, Schedule, Task, ZIO, ZLayer, ZManaged }
 object Client {
 
   val live: ZLayer[Has[KinesisAsyncClient], Throwable, Client] =
-    ZLayer.fromService[KinesisAsyncClient, Client.Service] { kinesisClient =>
-      new ClientLive(kinesisClient)
+    ZLayer.fromService[KinesisAsyncClient, Client.Service] {
+      new ClientLive(_)
     }
 
   /**
