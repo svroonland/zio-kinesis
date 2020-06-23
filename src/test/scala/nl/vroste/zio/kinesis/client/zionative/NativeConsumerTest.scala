@@ -52,7 +52,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
   - [ ] something about rate limits: maybe if we have multiple consumers active and run into rate limits?
   - [X] Steal an equal share of leases from another worker
   - [X] Two workers must be able to start up concurrently
-  - [ ] When one of two workers fail, the other must take over (TODO how to simulate crashing worker: manually update lease table OR worker with very long refresh time and no checkpoints)
+  - [X] When one of a group of workers fail, the others must take over its leases
   - [X] When one of two workers stops gracefully, the other must take over the shards
   - [X] Restart a shard stream when the user has ended it
   - [ ] Recover from a lost connection
@@ -447,53 +447,58 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                       }
                 }
 
-            for {
-              producer                   <- produceSampleRecords(streamName, nrRecords, chunkSize = 50).fork
-              shardsProcessedByConsumer2 <- Ref.make[Set[String]](Set.empty)
-              events                     <- Ref.make[List[(String, Instant, DiagnosticEvent)]](List.empty)
-              emitDiagnostic              = (workerId: String) =>
-                                 (event: DiagnosticEvent) =>
-                                   onDiagnostic(workerId)(event) *>
-                                     zio.clock.currentDateTime
-                                       .map(_.toInstant())
-                                       .orDie
-                                       .flatMap(time => events.update(_ :+ (workerId, time, event)))
-                                       .provideLayer(Clock.live)
+            // The events we have to wait for: 1. At least one LeaseAcquired by worker 1. 2. LeaseAcquired for the same shard by another worker, but it's not a steal (?)
+            // maybe NOT a LeaseReleased by worker 1
+            def testIsComplete(events: List[(String, Instant, DiagnosticEvent)]) = {
+              for {
+                acquiredByWorker1      <- Some(events.collect {
+                                       case (worker, time, event: LeaseAcquired) if worker == "worker1" => event.shardId
+                                     }).filter(_.nonEmpty)
+                acquiredByOtherWorkers <- Some(events.collect {
+                                            case (worker, time, event: LeaseAcquired) if worker != "worker1" =>
+                                              event.shardId
+                                          }).filter(_.nonEmpty)
+              } yield acquiredByWorker1.toSet subsetOf acquiredByOtherWorkers.toSet
+            }.getOrElse(false)
 
-              consumer1Done              <- Promise.make[Nothing, Unit]
-              stream                     <- ZStream
+            for {
+              producer   <- produceSampleRecords(streamName, nrRecords, chunkSize = 50).fork
+              done       <- Promise.make[Nothing, Unit]
+              events     <- Ref.make[List[(String, Instant, DiagnosticEvent)]](List.empty)
+              handleEvent = (workerId: String) =>
+                              (event: DiagnosticEvent) =>
+                                onDiagnostic(workerId)(event) *>
+                                  zio.clock.currentDateTime
+                                    .map(_.toInstant())
+                                    .orDie
+                                    .flatMap(time => events.update(_ :+ (workerId, time, event)))
+                                    .provideLayer(Clock.live) *> events.get.flatMap(events =>
+                                  done.succeed(()).when(testIsComplete(events))
+                                )
+
+              stream     <- ZStream
                           .mergeAll(3)(
                             // The zombie consumer: not updating checkpoints and not renewing leases
                             consumer(
                               "worker1",
-                              emitDiagnostic("worker1"),
+                              handleEvent("worker1"),
                               checkpointInterval = 5.minutes,
                               renewInterval = 5.minutes,
                               expirationTime = 10.minutes
                             ),
-                            consumer("worker2", emitDiagnostic("worker2")).ensuringFirst(log.warn("worker2 DONE")),
-                            consumer("worker3", emitDiagnostic("worker3")).ensuringFirst(log.warn("Worker3 DONE"))
+                            consumer("worker2", handleEvent("worker2")).ensuringFirst(log.warn("worker2 DONE")),
+                            consumer("worker3", handleEvent("worker3")).ensuringFirst(log.warn("Worker3 DONE"))
                           )
                           .runDrain
                           .fork
-              _                          <- consumer1Done.await *> ZIO.sleep(10.seconds)
-              _                          <- putStrLn("Interrupting producer and stream")
-              _                          <- producer.interrupt
-              _                          <- stream.interrupt
-              allEvents                  <-
+              _          <- done.await
+              _          <- putStrLn("Interrupting producer and stream")
+              _          <- producer.interrupt
+              _          <- stream.interrupt
+              allEvents  <-
                 events.get.map(_.filterNot(_._3.isInstanceOf[PollComplete]).filterNot(_._3.isInstanceOf[Checkpoint]))
-              // _                           = println(allEvents.mkString("\n"))
-
-              // Workers 2 and 3 should have later-timestamped LeaseAcquired for all shards that were released by Worker 1
-              worker1Released      = allEvents.collect { case ("worker1", time, LeaseReleased(shard)) => time -> shard }
-              releaseTime          = worker1Released.last._1
-              acquiredAfterRelease = allEvents.collect {
-                                       case (worker, time, LeaseAcquired(shard, _))
-                                           if worker != "worker1" && !time.isBefore(releaseTime) =>
-                                         shard
-                                     }
-
-            } yield assert(acquiredAfterRelease)(hasSameElements(worker1Released.map(_._2)))
+              _           = println(allEvents.mkString("\n"))
+            } yield assertCompletes
         }
       },
       testM("a worker must pick up an ended shard stream") {

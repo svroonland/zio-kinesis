@@ -313,7 +313,7 @@ private class DynamoDbLeaseCoordinator(
       workersJoined  = newWorkers -- currentWorkers
       workersLeft    = currentWorkers -- newWorkers
       _             <- ZIO.foreach(workersJoined)(w => emitDiagnostic(DiagnosticEvent.WorkerJoined(w)))
-      _             <- ZIO.foreach(workersLeft)(w => emitDiagnostic(DiagnosticEvent.WorkerLeft(w)))
+      _             <- ZIO.foreach(workersLeft)(w => emitDiagnostic(DiagnosticEvent.WorkerLeft(w))) // TODO also for zombie workers
       _             <- log.info("Refreshing leases done")
     } yield ()
   }
@@ -613,12 +613,16 @@ object DynamoDbLeaseCoordinator {
     workerId: String,
     expiredLeases: List[Lease] = List.empty
   ): ZIO[Random with Logging, Nothing, List[Lease]] = {
-    val allWorkers = allLeases.map(_.owner).collect { case Some(owner) => owner }.toSet ++ Set(workerId)
-    val minTarget  = Math.floor(allLeases.size * 1.0 / (allWorkers.size * 1.0)).toInt
+    val allWorkers    = allLeases.map(_.owner).collect { case Some(owner) => owner }.toSet ++ Set(workerId)
+    val activeWorkers =
+      (allLeases.toSet -- expiredLeases).map(_.owner).collect { case Some(owner) => owner }.toSet ++ Set(workerId)
+    val zombieWorkers = allWorkers -- activeWorkers
+
+    val minTarget = Math.floor(allLeases.size * 1.0 / (activeWorkers.size * 1.0)).toInt
 
     // If the nr of workers does not evenly divide the shards, there's some leases that at least one worker should take
     // These we will not steal, only take
-    val optional = allLeases.size % allWorkers.size
+    val optional = allLeases.size % activeWorkers.size
 
     val target = minTarget
 
@@ -629,7 +633,8 @@ object DynamoDbLeaseCoordinator {
 
     // We may already own some leases
     log.info(
-      s"We have ${ourLeases.size}, we would like to have at least ${target}/${allLeases.size} leases (${allWorkers.size} workers), we need ${minNrLeasesToTake} more with an optional ${optional}"
+      s"We have ${ourLeases.size}, we would like to have at least ${target}/${allLeases.size} leases (${activeWorkers.size} active workers, " +
+        s"${zombieWorkers.size} zombie workers), we need ${minNrLeasesToTake} more with an optional ${optional}"
     ) *> (if (minNrLeasesToTake > 0)
             for {
               leasesWithoutOwner         <- shuffle(allLeases.filter(_.owner.isEmpty)).map(_.take(maxNrLeasesToTake))
