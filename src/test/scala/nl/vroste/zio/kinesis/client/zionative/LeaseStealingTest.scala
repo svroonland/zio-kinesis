@@ -42,6 +42,14 @@ object LeaseStealingTest extends DefaultRunnableSpec {
           assertM(leasesToTake(leases, workerId(1)))(isEmpty)
         }
       },                        // @@ TestAspect.ignore,
+      testM("Steals leases manually") {
+        val leases = List(
+          Lease("shard-0", Some("worker-1"), 1, 0, None, List(), None),
+          Lease("shard-1", Some("worker-1"), 1, 0, None, List(), None)
+        )
+        assertM(leasesToTake(leases, workerId(2)))(isNonEmpty)
+
+      },
       testM("steals some leases when its not the only worker") {
         checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.const(1))) { leases =>
           assertM(leasesToTake(leases, workerId(2)))(isNonEmpty)
@@ -50,21 +58,23 @@ object LeaseStealingTest extends DefaultRunnableSpec {
       testM("takes leases if it has less than its equal share") {
         checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10), allOwned = false)) {
           leases =>
-            // {
-            // val leases = List(Lease("shard-0",Some("worker-2"),1,0,None,List(),None), Lease("shard-1",Some("worker-2"),1,0,None,List(),None))
-            val workers       = leases.map(_.owner).collect { case Some(owner) => owner }.toSet
-            val nrWorkers     = (workers + workerId(1)).size
-            val nrOwnedLeases = leases.map(_.owner).collect { case Some(owner) if owner == workerId(1) => 1 }.size
-            val expectedShare = Math.floor(leases.size * 1.0 / nrWorkers).toInt
+            val workers          = leases.map(_.owner).collect { case Some(owner) => owner }.toSet
+            val nrWorkers        = (workers + workerId(1)).size
+            val nrOwnedLeases    = leases.map(_.owner).collect { case Some(owner) if owner == workerId(1) => 1 }.size
+            val minExpectedShare = Math.floor(leases.size * 1.0 / nrWorkers).toInt
+            val maxExpectedShare = minExpectedShare + (leases.size % nrWorkers)
             println(
-              s"For ${leases.size} leases, ${nrWorkers} workers, nr owned leases ${nrOwnedLeases}: expecting share ${expectedShare}"
+              s"For ${leases.size} leases, ${nrWorkers} workers, nr owned leases ${nrOwnedLeases}: expecting share between ${minExpectedShare} and ${maxExpectedShare}"
             )
 
-            val expectedToSteal = Math.max(0, expectedShare - nrOwnedLeases) // We could own more than our fair share
+            val minExpectedToSteal =
+              Math.max(0, minExpectedShare - nrOwnedLeases) // We could own more than our fair share
+            val maxExpectedToSteal =
+              Math.max(0, maxExpectedShare - nrOwnedLeases) // We could own more than our fair share
 
             for {
               toSteal <- DynamoDbLeaseCoordinator.leasesToTake(leases, workerId(1))
-            } yield assert(toSteal.size)(equalTo(expectedToSteal))
+            } yield assert(toSteal.size)(isWithin(minExpectedToSteal, maxExpectedToSteal))
         }
       },                        //  @@ TestAspect.ignore,
       testM("takes unclaimed leases first") {

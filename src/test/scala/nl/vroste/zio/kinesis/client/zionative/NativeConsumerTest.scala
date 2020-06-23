@@ -25,7 +25,6 @@ import zio.UIO
 import zio.Schedule
 import zio.stream.ZTransducer
 import zio.ZLayer
-// import zio.logging.log
 import zio.logging.slf4j.Slf4jLogger
 import zio.Ref
 import zio.Promise
@@ -40,7 +39,6 @@ import java.time.Instant
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.Checkpoint
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.LeaseReleased
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.LeaseAcquired
-// import zio.logging.LogAnnotation
 
 object NativeConsumerTest extends DefaultRunnableSpec {
   /*
@@ -339,8 +337,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
       },
       testM("workers must take over from a stopped consumer") {
         val nrRecords = 2000
-        val nrShards  =
-          6 // TODO try this with an odd number of shards, such that nrShards % nrWorkers != 0, it will not be picked up
+        val nrShards  = 7
 
         withRandomStreamAndApplicationName(nrShards) {
           (streamName, applicationName) =>
@@ -393,7 +390,94 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                           )
                           .runDrain
                           .fork
-              _                          <- consumer1Done.await.delay(10.seconds)
+              _                          <- consumer1Done.await *> ZIO.sleep(10.seconds)
+              _                          <- putStrLn("Interrupting producer and stream")
+              _                          <- producer.interrupt
+              _                          <- stream.interrupt
+              allEvents                  <-
+                events.get.map(_.filterNot(_._3.isInstanceOf[PollComplete]).filterNot(_._3.isInstanceOf[Checkpoint]))
+              // _                           = println(allEvents.mkString("\n"))
+
+              // Workers 2 and 3 should have later-timestamped LeaseAcquired for all shards that were released by Worker 1
+              worker1Released      = allEvents.collect { case ("worker1", time, LeaseReleased(shard)) => time -> shard }
+              releaseTime          = worker1Released.last._1
+              acquiredAfterRelease = allEvents.collect {
+                                       case (worker, time, LeaseAcquired(shard, _))
+                                           if worker != "worker1" && !time.isBefore(releaseTime) =>
+                                         shard
+                                     }
+
+            } yield assert(acquiredAfterRelease)(hasSameElements(worker1Released.map(_._2)))
+        }
+      },
+      testM("workers must take over from a zombie consumer") {
+        val nrRecords = 2000
+        val nrShards  = 7
+
+        withRandomStreamAndApplicationName(nrShards) {
+          (streamName, applicationName) =>
+            def consumer(
+              workerId: String,
+              emitDiagnostic: DiagnosticEvent => UIO[Unit],
+              checkpointInterval: Duration = 1.second,
+              expirationTime: Duration = 10.seconds,
+              renewInterval: Duration = 3.seconds
+            ) =
+              Consumer
+                .shardedStream(
+                  streamName,
+                  applicationName,
+                  Serde.asciiString,
+                  workerId = workerId,
+                  emitDiagnostic = emitDiagnostic,
+                  leaseCoordinationSettings = LeaseCoordinationSettings(expirationTime, renewInterval)
+                )
+                .flatMapPar(Int.MaxValue) {
+                  case (shard @ _, shardStream, checkpointer) =>
+                    shardStream
+                      .tap(checkpointer.stage)
+                      .aggregateAsyncWithin(ZTransducer.collectAllN(200000), Schedule.fixed(checkpointInterval))
+                      .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
+                      .map(_.last)
+                      .tap(_ => checkpointer.checkpoint)
+                      .catchAll {
+                        case Right(_) =>
+                          ZStream.empty
+                        case Left(e)  => ZStream.fail(e)
+                      }
+                }
+
+            for {
+              producer                   <- produceSampleRecords(streamName, nrRecords, chunkSize = 50).fork
+              shardsProcessedByConsumer2 <- Ref.make[Set[String]](Set.empty)
+              events                     <- Ref.make[List[(String, Instant, DiagnosticEvent)]](List.empty)
+              emitDiagnostic              = (workerId: String) =>
+                                 (event: DiagnosticEvent) =>
+                                   onDiagnostic(workerId)(event) *>
+                                     zio.clock.currentDateTime
+                                       .map(_.toInstant())
+                                       .orDie
+                                       .flatMap(time => events.update(_ :+ (workerId, time, event)))
+                                       .provideLayer(Clock.live)
+
+              consumer1Done              <- Promise.make[Nothing, Unit]
+              stream                     <- ZStream
+                          .mergeAll(3)(
+                            // The zombie consumer: not updating checkpoints and not renewing leases
+                            consumer(
+                              "worker1",
+                              emitDiagnostic("worker1"),
+                              checkpointInterval = 5.minutes,
+                              renewInterval = 5.minutes,
+                              expirationTime = 10.minutes
+                            ),
+                            consumer("worker2", emitDiagnostic("worker2")).ensuringFirst(log.warn("worker2 DONE")),
+                            consumer("worker3", emitDiagnostic("worker3")).ensuringFirst(log.warn("Worker3 DONE"))
+                          )
+                          .runDrain
+                          .fork
+              _                          <- consumer1Done.await *> ZIO.sleep(10.seconds)
+              _                          <- putStrLn("Interrupting producer and stream")
               _                          <- producer.interrupt
               _                          <- stream.interrupt
               allEvents                  <-
@@ -414,7 +498,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
       },
       testM("a worker must pick up an ended shard stream") {
         val nrRecords = 2000
-        val nrShards  = 2
+        val nrShards  = 3
 
         withRandomStreamAndApplicationName(nrShards) {
           (streamName, applicationName) =>
@@ -470,7 +554,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     ).provideSomeLayer(env) @@
       TestAspect.timed @@
       TestAspect.timeoutWarning(30.seconds) @@
-      TestAspect.timeout(60.seconds)
+      TestAspect.timeout(120.seconds)
 
   val env =
     ((Layers.kinesisAsyncClient >>>

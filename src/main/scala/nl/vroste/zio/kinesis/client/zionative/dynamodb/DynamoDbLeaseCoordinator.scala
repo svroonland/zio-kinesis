@@ -342,9 +342,6 @@ private class DynamoDbLeaseCoordinator(
                            table
                              .claimLease(updatedLease)
                              .as(Some(updatedLease))
-                             .timeoutFail(Left(new TimeoutException("timeout claim lease")))(
-                               1.seconds
-                             )
                              .catchAll {
                                case Right(UnableToClaimLease) =>
                                  log
@@ -357,10 +354,9 @@ private class DynamoDbLeaseCoordinator(
                              }
                          }
                          .map(_.flatten)
-                         .onInterrupt(_ => log.warn("Why was I interrupted???"))
-      _             <- log.info(s"Taking leases done, going to register them")
+      // _             <- log.info(s"Taking leases done, going to register them")
       _             <- ZIO.foreachPar_(claimedLeases)(registerNewAcquiredLease)
-      _             <- log.info(s"Taking leases done")
+      // _             <- log.info(s"Taking leases done")
     } yield ()
 
   // Puts it in the state and the queue
@@ -589,10 +585,11 @@ object DynamoDbLeaseCoordinator {
         _ <- logNamed(s"worker-${workerId}")(c.initializeLeases *> c.takeLeases).forkManaged
         _ <- logNamed(s"worker-${workerId}")(c.runloop.runDrain).forkManaged
         _ <- logNamed(s"worker-${workerId}") {
-               (log.info("Begin update cycle") *> c.refreshLeases *> c.renewLeases *> c.takeLeases *> log.info(
-                 "Update cycle complete"
-               )).repeat(Schedule.fixed(settings.updateInterval).jittered)
-                 .delay(settings.updateInterval) // TODO add some jitter
+               (
+                 //  log.info("Begin update cycle") *>
+                 c.refreshLeases *> c.renewLeases *> c.takeLeases // *> log.info("Update cycle complete")
+               ).repeat(Schedule.fixed(settings.updateInterval).jittered)
+                 .delay(settings.updateInterval)                  // TODO add some jitter
              }.forkManaged
       } yield ()
     }
@@ -617,23 +614,31 @@ object DynamoDbLeaseCoordinator {
     expiredLeases: List[Lease] = List.empty
   ): ZIO[Random with Logging, Nothing, List[Lease]] = {
     val allWorkers = allLeases.map(_.owner).collect { case Some(owner) => owner }.toSet ++ Set(workerId)
-    val target     = Math.floor(allLeases.size * 1.0 / (allWorkers.size * 1.0)).toInt
+    val minTarget  = Math.floor(allLeases.size * 1.0 / (allWorkers.size * 1.0)).toInt
+
+    // If the nr of workers does not evenly divide the shards, there's some leases that at least one worker should take
+    // These we will not steal, only take
+    val optional = allLeases.size % allWorkers.size
+
+    val target = minTarget
 
     val ourLeases = allLeases.filter(_.owner.contains(workerId))
 
-    val nrLeasesToTake = target - ourLeases.size
+    val minNrLeasesToTake = Math.max(0, target - ourLeases.size)
+    val maxNrLeasesToTake = Math.max(0, target + optional - ourLeases.size)
 
     // We may already own some leases
     log.info(
-      s"We have ${ourLeases.size}, we would like to have ${target}/${allLeases.size} leases (${allWorkers.size} workers), we need ${nrLeasesToTake} more"
-    ) *> (if (nrLeasesToTake > 0)
+      s"We have ${ourLeases.size}, we would like to have at least ${target}/${allLeases.size} leases (${allWorkers.size} workers), we need ${minNrLeasesToTake} more with an optional ${optional}"
+    ) *> (if (minNrLeasesToTake > 0)
             for {
-              leasesWithoutOwner         <- shuffle(allLeases.filter(_.owner.isEmpty)).map(_.take(nrLeasesToTake))
-              leasesExpired              <- shuffle(expiredLeases).map(_.take(nrLeasesToTake - leasesWithoutOwner.size))
+              leasesWithoutOwner         <- shuffle(allLeases.filter(_.owner.isEmpty)).map(_.take(maxNrLeasesToTake))
+              leasesExpired              <- shuffle(expiredLeases).map(_.take(maxNrLeasesToTake - leasesWithoutOwner.size))
               leasesWithoutOwnerOrExpired = leasesWithoutOwner ++ leasesExpired
 
-              remaining =
-                nrLeasesToTake - leasesWithoutOwnerOrExpired.size // Is never less than 0 because of the take ^^
+              // We can only steal from our target budget, not the optional ones
+              remaining = Math.max(0, minNrLeasesToTake - leasesWithoutOwnerOrExpired.size)
+              _         = println(s"Remaining: ${remaining}, ${minNrLeasesToTake} to ${maxNrLeasesToTake}")
               toSteal  <- leasesToSteal(allLeases, workerId, target, nrLeasesToSteal = remaining)
             } yield leasesWithoutOwnerOrExpired ++ toSteal
           else ZIO.succeed(List.empty))
