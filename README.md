@@ -146,7 +146,7 @@ buffered records in this situation, before it is completed.
 By default `Client`, `AdminClient`, `DynamicConsumer` and `Producer` will load AWS credentials and regions via the
 [Default Credential/Region Provider](https://docs.aws.amazon.com/sdk-for-java/v1/developer-guide/credentials.html).
 Using the client builders, many parameters can be customized. Refer to the AWS documentation for more information.
-Default client ZLayers are provided in `DefaultClients` for production and for test thet are provided in `LocalStackLayers`
+Default client ZLayers are provided in `DefaultClients` for production and for test thet are provided in `LocalStackServices`
 
 The following snippet shows the full range of parameters to `DynamicConsumer.Service.shardedStream`
 

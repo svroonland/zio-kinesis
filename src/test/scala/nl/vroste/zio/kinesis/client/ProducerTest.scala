@@ -16,8 +16,8 @@ import zio.{ Chunk, ZIO }
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
 
-  private val clientLayer      = LocalStackLayers.kinesisAsyncClientLayer >>> Client.live
-  private val adminClientLayer = LocalStackLayers.kinesisAsyncClientLayer >>> AdminClient.live
+  private val clientLayer      = LocalStackServices.kinesisAsyncClientLayer >>> Client.live
+  private val adminClientLayer = LocalStackServices.kinesisAsyncClientLayer >>> AdminClient.live
 
   def spec =
     suite("Producer")(

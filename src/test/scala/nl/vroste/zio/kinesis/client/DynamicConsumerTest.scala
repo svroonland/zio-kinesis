@@ -17,7 +17,7 @@ import zio.test._
 object DynamicConsumerTest extends DefaultRunnableSpec {
   import TestUtil._
 
-  private val createStreamLayers = LocalStackLayers.kinesisAsyncClientLayer >>> AdminClient.live
+  private val createStreamLayers = LocalStackServices.kinesisAsyncClientLayer >>> AdminClient.live
 
   def testConsume1 =
     testM("consume records produced on all shards produced on the stream") {
@@ -39,7 +39,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                        )
                    )
                    .retry(retryOnResourceNotFound)
-                   .provideLayer(Clock.live ++ (LocalStackLayers.kinesisAsyncClientLayer >>> Client.live))
+                   .provideLayer(Clock.live ++ (LocalStackServices.kinesisAsyncClientLayer >>> Client.live))
 
             _ <- putStrLn("Starting dynamic consumer")
             _ <- (for {
@@ -62,7 +62,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                             .take(2)
                             .runCollect
                    } yield ()).provideSomeLayer[Clock with Blocking with Console](
-                   LocalStackLayers.dynamicConsumerLayer
+                   LocalStackServices.dynamicConsumerLayer
                  )
 
           } yield assertCompletes)
@@ -132,7 +132,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                       )
 
         } yield stream)
-          .provideSomeLayer[Console with Blocking](LocalStackLayers.dynamicConsumerLayer)
+          .provideSomeLayer[Console with Blocking](LocalStackServices.dynamicConsumerLayer)
       }
 
       createStream(streamName, 10).provideSomeLayer[Console](createStreamLayers).use { _ =>
@@ -152,7 +152,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                      .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
                      .retry(retryOnResourceNotFound)
                  }
-                 .provideSomeLayer(Clock.live ++ (LocalStackLayers.kinesisAsyncClientLayer >>> Client.live))
+                 .provideSomeLayer(Clock.live ++ (LocalStackServices.kinesisAsyncClientLayer >>> Client.live))
                  .runDrain
                  .fork
 
@@ -214,7 +214,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                             }
                       }
         } yield stream).provideLayer(
-          Console.live ++ Blocking.live ++ Clock.live ++ LocalStackLayers.dynamicConsumerLayer
+          Console.live ++ Blocking.live ++ Clock.live ++ LocalStackServices.dynamicConsumerLayer
         )
 
       createStream(streamName, 2)
@@ -250,7 +250,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
             (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
           } yield assert(processed)(Assertion.equalTo(checkpointed))
         }
-        .provideCustomLayer(Clock.live ++ (LocalStackLayers.kinesisAsyncClientLayer >>> Client.live))
+        .provideCustomLayer(Clock.live ++ (LocalStackServices.kinesisAsyncClientLayer >>> Client.live))
     } @@ TestAspect.timeout(40.seconds)
 
   // TODO check the order of received records is correct

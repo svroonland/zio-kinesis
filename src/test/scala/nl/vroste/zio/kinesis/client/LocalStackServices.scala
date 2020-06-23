@@ -17,7 +17,7 @@ import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.awssdk.utils.AttributeMap
 import zio.{ Has, ZIO, ZLayer, ZManaged }
 
-object LocalStackLayers {
+object LocalStackServices {
 
   private val region: Region          = Region.of("us-east-1")
   private val kinesisUri: URI         = URI.create("http://localhost:4568")

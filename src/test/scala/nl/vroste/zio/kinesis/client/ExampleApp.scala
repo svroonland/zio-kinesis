@@ -13,8 +13,8 @@ import zio.{ Chunk, ExitCode, Schedule, ZIO }
 
 object ExampleApp extends zio.App {
 
-  private val clientLayer      = LocalStackLayers.kinesisAsyncClientLayer >>> Client.live
-  private val adminClientLayer = LocalStackLayers.kinesisAsyncClientLayer >>> AdminClient.live
+  private val clientLayer      = LocalStackServices.kinesisAsyncClientLayer >>> Client.live
+  private val adminClientLayer = LocalStackServices.kinesisAsyncClientLayer >>> AdminClient.live
 
   override def run(
     args: List[String]
@@ -59,7 +59,7 @@ object ExampleApp extends zio.App {
       _ <- putStrLn("Exiting app")
 
     } yield ExitCode.success
-  }.provideCustomLayer(adminClientLayer ++ clientLayer ++ LocalStackLayers.dynamicConsumerLayer).orDie
+  }.provideCustomLayer(adminClientLayer ++ clientLayer ++ LocalStackServices.dynamicConsumerLayer).orDie
 
   def produceRecords(streamName: String, nrRecords: Int) =
     (for {
