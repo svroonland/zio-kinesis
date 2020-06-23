@@ -59,7 +59,7 @@ Usage example:
 import zio._
 import zio.blocking.Blocking
 import nl.vroste.zio.kinesis.client.serde.Serde
-import nl.vroste.zio.kinesis.client.DefaultClientsLayers._
+import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.DynamicConsumer
 import nl.vroste.zio.kinesis.client.DynamicConsumerLive
 
@@ -82,7 +82,7 @@ _ <- dynamicConsumer
   }.provideLayer(Blocking.live)
   .runDrain
 } yield ()).provideLayer(
-  kinesisAsyncClientLayer() ++ cloudWatchAsyncClientLayer() ++ dynamoDbAsyncClientLayer() >>> DynamicConsumer.live
+  kinesisAsyncClientLayer ++ cloudWatchAsyncClientLayer ++ dynamoDbAsyncClientLayer >>> DynamicConsumer.live
 )
 ```
 
@@ -134,7 +134,7 @@ _ <- dynamicConsumer
   .provideLayer(Blocking.live ++ Clock.live)
   .runDrain
 } yield ()).provideLayer(
-  kinesisAsyncClientLayer() ++ cloudWatchAsyncClientLayer() ++ dynamoDbAsyncClientLayer() >>> DynamicConsumer.live
+  kinesisAsyncClientLayer ++ cloudWatchAsyncClientLayer ++ dynamoDbAsyncClientLayer >>> DynamicConsumer.live
 )
 ```
 
@@ -195,7 +195,7 @@ import zio.clock.Clock
 
 val streamName  = "my_stream"
 val applicationName ="my_awesome_zio_application"
-val clientLayer = DefaultClientsLayers.kinesisAsyncClientLayer() >>> Client.live
+val clientLayer = kinesisAsyncClientLayer() >>> Client.live
 
 (for {
   producer <- Producer
@@ -217,7 +217,8 @@ Process all shards of a stream from the beginning, using an existing registered 
 shard positions yourself using some external storage mechanism.
 
 ```scala
-import nl.vroste.zio.kinesis.client.{Client, ClientLive, DefaultClientsLayers}
+import nl.vroste.zio.kinesis.client._
+import nl.vroste.zio.kinesis.client.{Client, ClientLive}
 import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio.clock.Clock
@@ -225,7 +226,7 @@ import zio.{Task, ZIO}
 
 val streamName  = "my_stream"
 val consumerARN = "arn:aws:etc"
-val clientLayer = DefaultClientsLayers.kinesisAsyncClientLayer() >>> Client.live
+val clientLayer = kinesisAsyncClientLayer() >>> Client.live
 
 (for {
   client <- ZIO.service[Client.Service]
