@@ -1,30 +1,36 @@
 package nl.vroste.zio.kinesis.client
 
-import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
-import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
-import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
+import software.amazon.awssdk.services.cloudwatch.{ CloudWatchAsyncClient, CloudWatchAsyncClientBuilder }
+import software.amazon.awssdk.services.dynamodb.{ DynamoDbAsyncClient, DynamoDbAsyncClientBuilder }
+import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyncClientBuilder }
 import zio.{ Has, ZIO, ZLayer, ZManaged }
 
 object DefaultClientsLayers {
 
-  def kinesisAsyncClientLayer: ZLayer[Any, Throwable, Has[KinesisAsyncClient]] =
+  def kinesisAsyncClientLayer(
+    builder: KinesisAsyncClientBuilder = KinesisAsyncClient.builder
+  ): ZLayer[Any, Throwable, Has[KinesisAsyncClient]] =
     ZLayer.fromManaged(ZManaged.fromAutoCloseable {
       ZIO.effect(
-        KinesisAsyncClient.builder.build
+        builder.build
       )
     })
 
-  def cloudWatchAsyncClientLayer: ZLayer[Any, Throwable, Has[CloudWatchAsyncClient]] =
+  def cloudWatchAsyncClientLayer(
+    builder: CloudWatchAsyncClientBuilder = CloudWatchAsyncClient.builder
+  ): ZLayer[Any, Throwable, Has[CloudWatchAsyncClient]] =
     ZLayer.fromManaged(ZManaged.fromAutoCloseable {
       ZIO.effect(
-        CloudWatchAsyncClient.builder.build
+        builder.build
       )
     })
 
-  def dynamoDbAsyncClientLayer: ZLayer[Any, Throwable, Has[DynamoDbAsyncClient]] =
+  def dynamoDbAsyncClientLayer(
+    builder: DynamoDbAsyncClientBuilder = DynamoDbAsyncClient.builder
+  ): ZLayer[Any, Throwable, Has[DynamoDbAsyncClient]] =
     ZLayer.fromManaged(ZManaged.fromAutoCloseable {
       ZIO.effect(
-        DynamoDbAsyncClient.builder.build
+        builder.build
       )
     })
 
