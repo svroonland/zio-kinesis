@@ -137,20 +137,20 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
           (1 to nrRecords).map(i => ProducerRecord(s"key$i", s"msg$i"))
         for {
           _                     <- putStrLn("Putting records")
-          _                     <- ZStream
-                 .fromIterable(1 to nrRecords)
-                 .schedule(Schedule.spaced(250.millis))
-                 .mapM { _ =>
-                   ZIO
-                     .accessM[Client](
-                       _.get
-                         .putRecords(streamName, Serde.asciiString, records)
-                     )
-                     .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
-                     .retry(retryOnResourceNotFound)
-                 }
-                 .runDrain
-                 .fork
+          producer              <- ZStream
+                        .fromIterable(1 to nrRecords)
+                        .schedule(Schedule.spaced(250.millis))
+                        .mapM { _ =>
+                          ZIO
+                            .accessM[Client](
+                              _.get
+                                .putRecords(streamName, Serde.asciiString, records)
+                            )
+                            .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
+                            .retry(retryOnResourceNotFound)
+                        }
+                        .runDrain
+                        .fork
 
           _                     <- putStrLn("Starting dynamic consumers")
           activeConsumers       <- Ref.make[Set[String]](Set.empty)
@@ -159,6 +159,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                    merge delayStream(streamConsumer("2", activeConsumers), 5.seconds))
                  .interruptWhen(allConsumersGotAShard.join)
                  .runCollect
+          _                     <- producer.interrupt
         } yield assertCompletes
       }
     }
