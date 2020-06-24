@@ -137,20 +137,20 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
           (1 to nrRecords).map(i => ProducerRecord(s"key$i", s"msg$i"))
         for {
           _                     <- putStrLn("Putting records")
-          _                     <- ZStream
-                 .fromIterable(1 to nrRecords)
-                 .schedule(Schedule.spaced(250.millis))
-                 .mapM { _ =>
-                   ZIO
-                     .accessM[Client](
-                       _.get
-                         .putRecords(streamName, Serde.asciiString, records)
-                     )
-                     .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
-                     .retry(retryOnResourceNotFound)
-                 }
-                 .runDrain
-                 .fork
+          producer              <- ZStream
+                        .fromIterable(1 to nrRecords)
+                        .schedule(Schedule.spaced(250.millis))
+                        .mapM { _ =>
+                          ZIO
+                            .accessM[Client](
+                              _.get
+                                .putRecords(streamName, Serde.asciiString, records)
+                            )
+                            .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
+                            .retry(retryOnResourceNotFound)
+                        }
+                        .runDrain
+                        .fork
 
           _                     <- putStrLn("Starting dynamic consumers")
           activeConsumers       <- Ref.make[Set[String]](Set.empty)
@@ -159,6 +159,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                    merge delayStream(streamConsumer("2", activeConsumers), 5.seconds))
                  .interruptWhen(allConsumersGotAShard.join)
                  .runCollect
+          _                     <- producer.interrupt
         } yield assertCompletes
       }
     }
@@ -240,13 +241,14 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
             lastProcessedRecords      <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
             lastCheckpointedRecords   <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
             _                         <- putStrLn("ABOUT TO START CONSUMER")
-            _                         <- streamConsumer(interrupted, lastProcessedRecords, lastCheckpointedRecords).runCollect.fork
+            consumer                  <- streamConsumer(interrupted, lastProcessedRecords, lastCheckpointedRecords).runCollect.fork
             _                         <- ZIO.unit.delay(30.seconds)
             _                         <- producing.interrupt
+            _                         <- consumer.join
             (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
           } yield assert(processed)(Assertion.equalTo(checkpointed))
         }
-    } @@ TestAspect.timeout(40.seconds)
+    } @@ TestAspect.timeout(60.seconds)
 
   // TODO check the order of received records is correct
 

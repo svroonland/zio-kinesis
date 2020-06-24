@@ -73,7 +73,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
               records  <- Consumer
                            .shardedStream(
                              streamName,
-                             s"${streamName}-test1",
+                             applicationName,
                              Serde.asciiString,
                              fetchMode = FetchMode.Polling(batchSize = 1000),
                              emitDiagnostic = onDiagnostic("worker1")
@@ -367,20 +367,19 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                 }
 
             for {
-              producer                   <- produceSampleRecords(streamName, nrRecords, chunkSize = 50).fork
-              shardsProcessedByConsumer2 <- Ref.make[Set[String]](Set.empty)
-              events                     <- Ref.make[List[(String, Instant, DiagnosticEvent)]](List.empty)
-              emitDiagnostic              = (workerId: String) =>
+              producer      <- produceSampleRecords(streamName, nrRecords, chunkSize = 50).fork
+              events        <- Ref.make[List[(String, Instant, DiagnosticEvent)]](List.empty)
+              emitDiagnostic = (workerId: String) =>
                                  (event: DiagnosticEvent) =>
                                    //  onDiagnostic(workerId)(event) *>
                                    zio.clock.currentDateTime
                                      .map(_.toInstant())
                                      .orDie
-                                     .flatMap(time => events.update(_ :+ (workerId, time, event)))
+                                     .flatMap(time => events.update(_ :+ ((workerId, time, event))))
                                      .provideLayer(Clock.live)
 
-              consumer1Done              <- Promise.make[Nothing, Unit]
-              stream                     <- ZStream
+              consumer1Done <- Promise.make[Nothing, Unit]
+              stream        <- ZStream
                           .mergeAll(3)(
                             consumer("worker1", emitDiagnostic("worker1"))
                               .take(10) // Such that it has had time to claim some leases
@@ -390,11 +389,11 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                           )
                           .runDrain
                           .fork
-              _                          <- consumer1Done.await *> ZIO.sleep(10.seconds)
-              _                          <- putStrLn("Interrupting producer and stream")
-              _                          <- producer.interrupt
-              _                          <- stream.interrupt
-              allEvents                  <-
+              _             <- consumer1Done.await *> ZIO.sleep(10.seconds)
+              _             <- putStrLn("Interrupting producer and stream")
+              _             <- producer.interrupt
+              _             <- stream.interrupt
+              allEvents     <-
                 events.get.map(_.filterNot(_._3.isInstanceOf[PollComplete]).filterNot(_._3.isInstanceOf[Checkpoint]))
               // _                           = println(allEvents.mkString("\n"))
 
@@ -452,10 +451,10 @@ object NativeConsumerTest extends DefaultRunnableSpec {
             def testIsComplete(events: List[(String, Instant, DiagnosticEvent)]) = {
               for {
                 acquiredByWorker1      <- Some(events.collect {
-                                       case (worker, time, event: LeaseAcquired) if worker == "worker1" => event.shardId
+                                       case (worker, _, event: LeaseAcquired) if worker == "worker1" => event.shardId
                                      }).filter(_.nonEmpty)
                 acquiredByOtherWorkers <- Some(events.collect {
-                                            case (worker, time, event: LeaseAcquired) if worker != "worker1" =>
+                                            case (worker, _, event: LeaseAcquired) if worker != "worker1" =>
                                               event.shardId
                                           }).filter(_.nonEmpty)
               } yield acquiredByWorker1.toSet subsetOf acquiredByOtherWorkers.toSet
@@ -471,7 +470,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                   zio.clock.currentDateTime
                                     .map(_.toInstant())
                                     .orDie
-                                    .flatMap(time => events.update(_ :+ (workerId, time, event)))
+                                    .flatMap(time => events.update(_ :+ ((workerId, time, event))))
                                     .provideLayer(Clock.live) *> events.get.flatMap(events =>
                                   done.succeed(()).when(testIsComplete(events))
                                 )
@@ -548,7 +547,6 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                         .succeed(())
                         .whenM(events.get.map(_.collect { case _: LeaseAcquired => 1 }.sum == nrShards + 1))
 
-              consumer1Done <- Promise.make[Nothing, Unit]
               stream        <- consumer("worker1", emitDiagnostic("worker1")).runDrain.fork
               _             <- done.await
               _             <- producer.interrupt

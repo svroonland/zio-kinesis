@@ -1,7 +1,6 @@
 package nl.vroste.zio.kinesis.client
 
 import java.time.Instant
-import java.util.concurrent.CompletableFuture
 
 import nl.vroste.zio.kinesis.client.serde.{ Deserializer, Serializer }
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
@@ -20,6 +19,7 @@ import software.amazon.awssdk.http.Protocol
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClientBuilder
 import zio.IO
 import software.amazon.awssdk.core.SdkBytes
+import zio._
 
 object Client {
 
@@ -198,59 +198,5 @@ object Client {
           )
           .protocol(Protocol.HTTP2)
       )
-
-}
-
-private object Util {
-  def asZIO[T](f: => CompletableFuture[T]): Task[T] = ZIO.effect(f).flatMap(ZIO.fromCompletionStage(_))
-
-  def paginatedRequest[R, E, A, Token](fetch: Option[Token] => ZIO[R, E, (A, Option[Token])])(
-    throttling: Schedule[Clock, Any, Int] = Schedule.forever
-  ): ZStream[Clock with R, E, A] =
-    ZStream.fromEffect(fetch(None)).flatMap {
-      case (results, nextTokenOpt) =>
-        ZStream.succeed(results) ++ (nextTokenOpt match {
-          case None            => ZStream.empty
-          case Some(nextToken) =>
-            ZStream.paginateM[R, E, A, Token](nextToken)(token => fetch(Some(token))).scheduleElements(throttling)
-        })
-    }
-
-  def exponentialBackoff(
-    min: Duration,
-    max: Duration,
-    factor: Double = 2.0,
-    maxRecurs: Option[Int] = None
-  ): Schedule[Clock, Throwable, Any] =
-    (Schedule.exponential(min).whileOutput(_ <= max) andThen Schedule.fixed(max)) &&
-      maxRecurs.map(Schedule.recurs).getOrElse(Schedule.forever)
-
-  /**
-   * Executes calls through a token bucket stream, ensuring a maximum rate of calls
-   *
-   * Allows for bursting
-   *
-   * @param units Maximum number of calls per duration
-   * @param duration Duration for nr of tokens
-   * @return The original function with rate limiting applied, as a managed resource
-   */
-  def throttledFunction[R, I, E, A](units: Long, duration: Duration)(
-    f: I => ZIO[R, E, A]
-  ): ZManaged[Clock, Nothing, I => ZIO[R, E, A]] =
-    for {
-      requestsQueue <- Queue.unbounded[(IO[E, A], Promise[E, A])].toManaged_
-      _             <- ZStream
-             .fromQueueWithShutdown(requestsQueue)
-             .throttleShape(units, duration, units)(_ => 1)
-             .mapM { case (effect, promise) => promise.complete(effect) }
-             .runDrain
-             .forkManaged
-    } yield (input: I) =>
-      for {
-        env     <- ZIO.environment[R]
-        promise <- Promise.make[E, A]
-        _       <- requestsQueue.offer((f(input).provide(env), promise))
-        result  <- promise.await
-      } yield result
 
 }
