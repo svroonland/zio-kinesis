@@ -29,10 +29,10 @@ object ExampleApp extends zio.App {
     args: List[String]
   ): ZIO[zio.ZEnv, Nothing, ExitCode] = {
 
-    val streamName      = "zio-test-stream-2" // + UUID.randomUUID().toString
+    val streamName      = "zio-test-stream-3" // + UUID.randomUUID().toString
     val nrRecords       = 500000
-    val nrShards        = 21
-    val applicationName = "testApp-4"         // + UUID.randomUUID().toString(),
+    val nrShards        = 2
+    val applicationName = "testApp-5"         // + UUID.randomUUID().toString(),
 
     def worker(id: String) =
       ZStream.fromEffect(
@@ -71,7 +71,7 @@ object ExampleApp extends zio.App {
       _        <- TestUtil.createStreamUnmanaged(streamName, nrShards)
       producer <- produceRecords(streamName, nrRecords).fork
       _        <- producer.join
-      nrWorkers = 4
+      nrWorkers = 2
       workers  <- ZIO.foreach(1 to nrWorkers)(id => worker(s"worker${id}").runDrain.fork)
       _        <- ZIO.raceAll(ZIO.sleep(2.minute), workers.map(_.join))
       _         = println("Interrupting app")
