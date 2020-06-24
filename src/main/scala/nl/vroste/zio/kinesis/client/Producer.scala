@@ -76,6 +76,7 @@ final case class ProducerSettings(
   failedDelay: Duration = 100.millis
 )
 
+// TODO add logging
 object Producer {
   def make[R, T](
     streamName: String,

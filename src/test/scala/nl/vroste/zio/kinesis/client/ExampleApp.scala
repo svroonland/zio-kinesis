@@ -30,12 +30,14 @@ object ExampleApp extends zio.App {
   ): ZIO[zio.ZEnv, Nothing, ExitCode] = {
 
     val streamName      = "zio-test-stream-2" // + UUID.randomUUID().toString
-    val nrRecords       = 200000
+    val nrRecords       = 500000
     val nrShards        = 21
     val applicationName = "testApp-4"         // + UUID.randomUUID().toString(),
 
     def worker(id: String) =
-      ZStream.fromEffect(zio.random.nextIntBetween(0, 3000).flatMap(d => ZIO.sleep(d.millis))) *> Consumer
+      ZStream.fromEffect(
+        zio.random.nextIntBetween(0, 3000).flatMap(d => ZIO.sleep(d.millis))
+      ) *> Consumer
         .shardedStream(
           streamName,
           applicationName = applicationName,
@@ -59,29 +61,32 @@ object ExampleApp extends zio.App {
                 case Right(ShardLeaseLost) =>
                   ZStream.empty
                 case Left(e)               =>
-                  ZStream.fromEffect(log.error(s"${id} got" + e)) *> ZStream.fail(e)
+                  ZStream.fromEffect(
+                    log.error(s"${id} shard ${shardID} stream failed with" + e + ": " + e.getStackTrace())
+                  ) *> ZStream.fail(e)
               }
         }
 
     for {
       _        <- TestUtil.createStreamUnmanaged(streamName, nrShards)
       producer <- produceRecords(streamName, nrRecords).fork
+      _        <- producer.join
       nrWorkers = 4
-      workers  <- ZIO.foreachPar_(1 to nrWorkers)(id => worker(s"worker${id}").runCollect).fork
-      _        <- ZIO.raceAll(ZIO.sleep(2.minute), List(workers.join, producer.join))
+      workers  <- ZIO.foreach(1 to nrWorkers)(id => worker(s"worker${id}").runDrain.fork)
+      _        <- ZIO.raceAll(ZIO.sleep(2.minute), workers.map(_.join))
       _         = println("Interrupting app")
       _        <- producer.interrupt
-      _        <- workers.interrupt
+      _        <- ZIO.foreachPar_(workers)(_.interrupt)
     } yield ExitCode.success
   }.orDie.provideCustomLayer(
-    awsEnv // TODO!!
+    awsEnv // TODO switch back!!
     // localStackEnv
   )
 
   // Based on AWS profile
   val kinesisAsyncClientProfile: ZLayer[Any, Throwable, Has[KinesisAsyncClient]] =
     ZLayer.fromManaged(
-      ZManaged.fromAutoCloseable(ZIO.effect(KinesisAsyncClient.builder.build()))
+      ZManaged.fromAutoCloseable(ZIO.effect(Client.adjustKinesisClientBuilder(KinesisAsyncClient.builder).build()))
     )
 
   val dynamoDbAsyncClientProfile: ZLayer[Any, Throwable, Has[DynamoDbAsyncClient]] =
@@ -112,8 +117,11 @@ object ExampleApp extends zio.App {
             .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
             .retry(retryOnResourceNotFound && Schedule.recurs(1))
             .as(Chunk.unit)
+            .fork
+            .map(Chunk.single(_))
           // .delay(1.second)
         )
+        .mapMPar(1000)(_.join)
         .runDrain
     }
 }

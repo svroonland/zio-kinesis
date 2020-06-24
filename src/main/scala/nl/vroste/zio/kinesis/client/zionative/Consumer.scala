@@ -110,10 +110,12 @@ object Consumer {
         )
       }
 
-    def makeFetcher(streamDescription: StreamDescription): ZManaged[Clock with Has[Client], Throwable, Fetcher] =
+    def makeFetcher(
+      streamDescription: StreamDescription
+    ): ZManaged[Clock with Has[Client] with Logging, Throwable, Fetcher] =
       fetchMode match {
         case c: Polling     => PollingFetcher.make(streamDescription, c, emitDiagnostic)
-        case EnhancedFanOut => EnhancedFanOutFetcher.make(streamDescription, workerId)
+        case EnhancedFanOut => EnhancedFanOutFetcher.make(streamDescription, workerId, emitDiagnostic)
       }
 
     ZStream.unwrapManaged {
@@ -122,9 +124,7 @@ object Consumer {
           ZManaged.unwrap(
             AdminClient
               .describeStream(streamName)
-              // .tap(s => log.debug(s"Stream description: ${s}"))
               .map(makeFetcher)
-            // .tap(_ => log.debug("Created fetcher"))
           ),
           for {
             // _                <- log.debug("Listing shards").toManaged_

@@ -586,10 +586,10 @@ object DynamoDbLeaseCoordinator {
         _ <- logNamed(s"worker-${workerId}")(c.runloop.runDrain).forkManaged
         _ <- logNamed(s"worker-${workerId}") {
                (
-                //  log.info("Begin update cycle") *>
-                   c.refreshLeases *> c.renewLeases *> c.takeLeases // *> log.info("Update cycle complete")
+                 //  log.info("Begin update cycle") *>
+                 c.refreshLeases *> c.renewLeases *> c.takeLeases // *> log.info("Update cycle complete")
                ).repeat(Schedule.fixed(settings.updateInterval).jittered)
-                 .delay(settings.updateInterval) // TODO add some jitter
+                 .delay(settings.updateInterval)                  // TODO add some jitter
              }.forkManaged
       } yield ()
     }

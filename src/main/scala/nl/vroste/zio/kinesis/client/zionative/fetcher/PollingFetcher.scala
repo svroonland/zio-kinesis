@@ -16,7 +16,7 @@ object PollingFetcher {
   def make(
     streamDescription: StreamDescription,
     config: FetchMode.Polling,
-    emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit
+    emitDiagnostic: DiagnosticEvent => UIO[Unit]
   ): ZManaged[Clock with Has[Client], Throwable, Fetcher] =
     for {
       // Max 5 calls per second (globally)

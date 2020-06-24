@@ -16,6 +16,9 @@ import zio.stream.ZStream
 
 import scala.jdk.CollectionConverters._
 import software.amazon.awssdk.http.SdkCancellationException
+import software.amazon.awssdk.http.nio.netty.Http2Configuration
+import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient
+import software.amazon.awssdk.http.Protocol
 
 /**
  * Client for consumer and producer operations
@@ -124,14 +127,14 @@ class Client(val kinesisClient: KinesisAsyncClient) {
    * @param consumerARN
    * @param shardID
    * @param startingPosition
-   * @return Stream of records. When exceptions occur in the subscription or the streaming, the
-   *         stream will fail.
+   * @return Stream of SubscribeToShardEvents, each of which contain records.
+   *         When exceptions occur in the subscription or the streaming, the stream will fail.
    */
   def subscribeToShard(
     consumerARN: String,
     shardID: String,
     startingPosition: ShardIteratorType
-  ): ZStream[Any, Throwable, ConsumerRecord] = {
+  ): ZStream[Any, Throwable, SubscribeToShardEvent] = {
 
     val b = StartingPosition.builder()
 
@@ -146,9 +149,9 @@ class Client(val kinesisClient: KinesisAsyncClient) {
         b.`type`(JIteratorType.AT_TIMESTAMP).timestamp(timestamp)
     }
 
-    ZStream.fromEffect {
+    ZStream.unwrap {
       for {
-        streamP <- Promise.make[Throwable, ZStream[Any, Throwable, Record]]
+        streamP <- Promise.make[Throwable, ZStream[Any, Throwable, SubscribeToShardEvent]]
         runtime <- ZIO.runtime[Any]
 
         subscribeResponse = asZIO {
@@ -166,21 +169,12 @@ class Client(val kinesisClient: KinesisAsyncClient) {
         _                <- subscribeResponse.unit race streamP.await
         stream           <- streamP.await
       } yield stream
-    }.flatMap(identity).map { record =>
-      ConsumerRecord(
-        record.sequenceNumber(),
-        record.approximateArrivalTimestamp(),
-        record.data(),
-        record.partitionKey(),
-        record.encryptionType(),
-        shardID
-      )
     }
   }
 
   private def subscribeToShardResponseHandler(
     runtime: zio.Runtime[Any],
-    streamP: Promise[Throwable, ZStream[Any, Throwable, Record]]
+    streamP: Promise[Throwable, ZStream[Any, Throwable, SubscribeToShardEvent]]
   ) =
     new SubscribeToShardResponseHandler {
       override def responseReceived(response: SubscribeToShardResponse): Unit =
@@ -188,8 +182,8 @@ class Client(val kinesisClient: KinesisAsyncClient) {
 
       override def onEventStream(publisher: SdkPublisher[SubscribeToShardEventStream]): Unit = {
         val streamOfRecords: ZStream[Any, Throwable, SubscribeToShardEvent] =
-          publisher.filter(classOf[SubscribeToShardEvent]).toStream(1024)
-        runtime.unsafeRun(streamP.succeed(streamOfRecords.mapConcat(_.records().asScala)).unit)
+          publisher.filter(classOf[SubscribeToShardEvent]).toStream()
+        runtime.unsafeRun(streamP.succeed(streamOfRecords).unit)
       }
 
       override def exceptionOccurred(throwable: Throwable): Unit = ()
@@ -345,6 +339,35 @@ object Client {
     f: Client => ZIO[R1, E1, A1]
   ): ZIO[Has[Client] with R, E, A] =
     ZIO.service[Client].flatMap(f)
+
+  /**
+   * Optimize for
+   *
+      * @param builder
+   * @param maxConcurrency Set this to something like the number of leases + a bit more
+   * @param initialWindowSize
+   * @param healthCheckPingPeriod
+   */
+  def adjustKinesisClientBuilder(
+    builder: KinesisAsyncClientBuilder,
+    maxConcurrency: Int = Integer.MAX_VALUE,
+    initialWindowSize: Int = 10 * 1024 * 1024,
+    healthCheckPingPeriod: Duration = 60.seconds
+  ) =
+    builder
+      .httpClientBuilder(
+        NettyNioAsyncHttpClient
+          .builder()
+          .maxConcurrency(maxConcurrency)
+          .http2Configuration(
+            Http2Configuration
+              .builder()
+              .initialWindowSize(initialWindowSize)
+              .healthCheckPingPeriod(healthCheckPingPeriod.asJava)
+              .build()
+          )
+          .protocol(Protocol.HTTP2)
+      )
 
 }
 

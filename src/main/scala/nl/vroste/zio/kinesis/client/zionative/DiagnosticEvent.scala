@@ -21,7 +21,14 @@ object DiagnosticEvent {
   case class PollComplete(shardId: String, nrRecords: Int, behindLatest: Duration, duration: Duration)
       extends DiagnosticEvent
 
-  case class SubscribeToShard(shardId: String, behindLatest: Duration) extends DiagnosticEvent
+  /**
+   * Enhanced fanout produced a batch of records
+   *
+        * @param shardId
+   * @param nrRecords
+   * @param behindLatest
+   */
+  case class SubscribeToShardEvent(shardId: String, nrRecords: Int, behindLatest: Duration) extends DiagnosticEvent
 
   sealed trait LeaseEvent extends DiagnosticEvent
 
