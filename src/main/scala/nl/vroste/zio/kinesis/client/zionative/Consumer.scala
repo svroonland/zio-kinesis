@@ -125,6 +125,7 @@ object Consumer {
               .map(makeFetcher)
           ),
           for {
+            // TODO do we have to wait for currentShards to complete here?
             currentShards    <- Client.listShards(streamName).runCollect.map(_.map(l => (l.shardId(), l)).toMap).toManaged_
             _                <- ZManaged.fail(new Exception("No shards in stream!")).when(currentShards.isEmpty)
             leaseCoordinator <-

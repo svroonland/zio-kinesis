@@ -42,13 +42,15 @@ object ZioExtensions {
  * Default values are compatible with KCL defaults (TODO not quite yet)
  *
  * @param expirationTime Time after which a lease is considered expired if not updated in the meantime
- * @param updateInterval Interval at which leases are refreshed, renewed and possibly new leases taken
+ * @param refreshAndTakeInterval Interval at which leases are refreshed and possibly new leases taken
+ * @param renewInterval Interval at which leases are renewed to prevent them expiring
  */
 case class LeaseCoordinationSettings(
-  expirationTime: Duration = 20.seconds,
-  updateInterval: Duration = 10.seconds
+  expirationTime: Duration = 10.seconds,
+  renewInterval: Duration = 3.seconds,
+  refreshAndTakeInterval: Duration = 20.seconds
 ) {
-  require(updateInterval < expirationTime, "expirationTime must be less than updateInterval")
+  require(renewInterval < expirationTime, "renewInterval must be less than expirationTime")
 }
 
 case class LeaseState(lease: Lease, completed: Option[Promise[Nothing, Unit]], lastUpdated: Instant) {
@@ -291,7 +293,6 @@ private class DynamoDbLeaseCoordinator(
    * will think ours are expired
    */
   val renewLeases = for {
-    _          <- log.info("Renewing leases")
     // TODO we could skip renewing leases that were recently checkpointed, save a few DynamoDB credits
     heldLeases <- state.get.map(_.heldLeases.keySet)
     _          <- ZIO
@@ -309,14 +310,12 @@ private class DynamoDbLeaseCoordinator(
       currentLeases <- state.get.map(_.currentLeases.values.map(_.lease))
       currentWorkers = currentLeases.map(_.owner).collect { case Some(owner) => owner }.toSet
       leases        <- table.getLeasesFromDB
-      _             <- log.info(s"Refreshing leases found ${leases.size} leases")
       _             <- ZIO.foreachPar_(leases)(lease => processCommand(LeaseCommand.RefreshLease(lease, _)))
       newWorkers     = leases.map(_.owner).collect { case Some(owner) => owner }.toSet
       workersJoined  = newWorkers -- currentWorkers
       workersLeft    = currentWorkers -- newWorkers
       _             <- ZIO.foreach(workersJoined)(w => emitDiagnostic(DiagnosticEvent.WorkerJoined(w)))
       _             <- ZIO.foreach(workersLeft)(w => emitDiagnostic(DiagnosticEvent.WorkerLeft(w))) // TODO also for zombie workers
-      _             <- log.info("Refreshing leases done")
     } yield ()
   }
 
@@ -373,7 +372,7 @@ private class DynamoDbLeaseCoordinator(
     for {
       state             <- state.get
       allLeases          = state.currentLeases.view.mapValues(_.lease)
-      _                 <- log.info(s"Found leases: ${allLeases.mkString(", ")}")
+      _                 <- log.info(s"Found ${allLeases.size} leases")
       // Claim new leases for the shards the database doesn't have leases for
       shardsWithoutLease =
         state.shards.values.toList.filterNot(shard => allLeases.values.map(_.key).toList.contains(shard.shardId()))
@@ -578,15 +577,29 @@ object DynamoDbLeaseCoordinator {
     }(_.releaseLeases.orDie).tap { c =>
       // Do all initalization in parallel
       for {
-        _ <- logNamed(s"worker-${workerId}")(c.initializeLeases *> c.takeLeases).forkManaged
         _ <- logNamed(s"worker-${workerId}")(c.runloop.runDrain).forkManaged
-        _ <- logNamed(s"worker-${workerId}") {
-               (
-                 //  log.info("Begin update cycle") *>
-                 c.refreshLeases *> c.renewLeases *> c.takeLeases // *> log.info("Update cycle complete")
-               ).repeat(Schedule.fixed(settings.updateInterval).jittered)
-                 .delay(settings.updateInterval)                  // TODO add some jitter
-             }.forkManaged
+        _ <- logNamed(s"worker-${workerId}")(
+               // Initialize
+               c.initializeLeases *>
+                 c.takeLeases *>
+                 // Periodic refresh
+                 (c.refreshLeases *> c.takeLeases)
+                   .repeat(
+                     Schedule
+                       .fixed(settings.refreshAndTakeInterval)
+                       .jittered(0.95, 1.05)
+                   )
+                   .delay(settings.refreshAndTakeInterval)
+             ).forkManaged
+        _ <- logNamed(s"worker-${workerId}")(
+               (c.renewLeases)
+                 .repeat(
+                   Schedule
+                     .fixed(settings.renewInterval)
+                     .addDelay(_ => settings.renewInterval)
+                     .jittered(0.95, 1.05)
+                 )
+             ).forkManaged
       } yield ()
     }
 
@@ -661,7 +674,6 @@ object DynamoDbLeaseCoordinator {
     nrLeasesToSteal: Int
   ): ZIO[Random with Logging, Nothing, List[Lease]] = {
     val leasesByWorker = allLeases.groupBy(_.owner).collect { case (Some(owner), leases) => owner -> leases }.toMap
-    val ourLeases      = allLeases.filter(_.owner.contains(workerId))
     val allWorkers     = allLeases.map(_.owner).collect { case Some(owner) => owner }.toSet ++ Set(workerId)
     // println(s"Planning to steal ${nrLeasesToSteal} leases")
 

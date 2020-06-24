@@ -8,21 +8,22 @@ import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio.console._
 import zio.duration._
-import zio.logging.{ log, Logging }
 import zio.logging.slf4j.Slf4jLogger
+import zio.logging.{ log, Logging }
 import zio.stream.{ ZStream, ZTransducer }
-import zio.{ Chunk, ExitCode, Has, Schedule, ZIO, ZLayer }
+import zio._
 
 /**
  * Example app that shows the ZIO-native and KCL workers running in parallel
  */
 object ExampleApp extends zio.App {
-  val streamName      = "zio-test-stream-4" // + java.util.UUID.randomUUID().toString
-  val nrRecords       = 200000
-  val nrShards        = 11
-  val nrNativeWorkers = 1
-  val nrKclWorkers    = 1
-  val applicationName = "testApp-7"         // + java.util.UUID.randomUUID().toString(),
+  val streamName      = "zio-test-stream-5" // + java.util.UUID.randomUUID().toString
+  val nrRecords       = 2000000
+  val nrShards        = 193
+  val nrNativeWorkers = 13
+  val nrKclWorkers    = 0
+  val applicationName = "testApp-8"         // + java.util.UUID.randomUUID().toString(),
+  val runtime         = 3.minute
 
   override def run(
     args: List[String]
@@ -30,7 +31,7 @@ object ExampleApp extends zio.App {
 
     def worker(id: String) =
       ZStream.fromEffect(
-        zio.random.nextIntBetween(0, 3000).flatMap(d => ZIO.sleep(d.millis))
+        zio.random.nextIntBetween(0, 20000).flatMap(d => ZIO.sleep(d.millis))
       ) *> Consumer
         .shardedStream(
           streamName,
@@ -64,23 +65,24 @@ object ExampleApp extends zio.App {
               }
         }
 
-    def kclWorker(id: String) =
+    def kclWorker(id: String, requestShutdown: Promise[Nothing, Unit]) =
       ZStream.fromEffect(
-        zio.random.nextIntBetween(0, 3000).flatMap(d => ZIO.sleep(d.millis))
+        zio.random.nextIntBetween(0, 1000).flatMap(d => ZIO.sleep(d.millis))
       ) *> DynamicConsumer
         .shardedStream(
           streamName,
           applicationName = applicationName,
           deserializer = Serde.asciiString,
-          isEnhancedFanOut = false,
-          workerIdentifier = id
+          isEnhancedFanOut = true,
+          workerIdentifier = id,
+          requestShutdown = requestShutdown.await
         )
         .flatMapPar(Int.MaxValue) {
           case (shardID, shardStream, checkpointer) =>
             shardStream
               .tap(r =>
                 checkpointer
-                  .stageOnSuccess(putStrLn(s"${id} Processing record $r").when(false))(r)
+                  .stageOnSuccess(putStrLn(s"${id} Processing record $r").when(true))(r)
               )
               .aggregateAsyncWithin(ZTransducer.last, Schedule.fixed(5.second))
               .mapConcat(_.toList)
@@ -101,13 +103,21 @@ object ExampleApp extends zio.App {
       producer   <- produceRecords(streamName, nrRecords).fork
 //      _          <- producer.join
       workers    <- ZIO.foreach(1 to nrNativeWorkers)(id => worker(s"worker${id}").runDrain.fork)
-      kclWorkers <- ZIO.foreach((1 + nrNativeWorkers) to (nrKclWorkers + nrNativeWorkers))(id =>
-                      kclWorker(s"worker${id}").runDrain.fork
-                    )
-      _          <- ZIO.raceAll(ZIO.sleep(2.minute), (workers ++ kclWorkers).map(_.join))
+      kclWorkers <-
+        ZIO.foreach((1 + nrNativeWorkers) to (nrKclWorkers + nrNativeWorkers))(id =>
+          (for {
+            shutdown <- Promise.make[Nothing, Unit]
+            fib      <- kclWorker(s"worker${id}", shutdown).runDrain.forkDaemon
+            _        <- ZIO.never.unit.ensuring(
+                   log.warn(s"Requesting shutdown for worker worker${id}!") *> shutdown.succeed(()) <* fib.join.orDie
+                 )
+          } yield ()).fork
+        )
+      _          <- ZIO.sleep(runtime)
       _           = println("Interrupting app")
-      _          <- producer.interrupt
-      _          <- ZIO.foreachPar_(workers)(_.interrupt)
+      _          <- producer.interruptFork
+      _          <- ZIO.foreachPar(kclWorkers)(_.interrupt)
+      _          <- ZIO.foreachPar(workers)(_.interrupt)
     } yield ExitCode.success
   }.orDie.provideCustomLayer(
     awsEnv // TODO switch back!!
@@ -121,8 +131,8 @@ object ExampleApp extends zio.App {
 
   val awsEnv
     : ZLayer[Any, Nothing, AdminClient with Client with DynamicConsumer with Logging with Has[DynamoDbAsyncClient]] =
-    (kinesisAsyncClientLayer(Client.adjustKinesisClientBuilder(KinesisAsyncClient.builder())).orDie ++
-      dynamoDbAsyncClientLayer().orDie ++
+    (kinesisAsyncClientLayer(Client.adjustKinesisClientBuilder(KinesisAsyncClient.builder())).fresh.orDie ++
+      dynamoDbAsyncClientLayer().fresh.orDie ++
       cloudWatchAsyncClientLayer().orDie) >>>
       (AdminClient.live.orDie ++ Client.live.orDie ++ DynamicConsumer.live ++ loggingEnv ++ ZLayer
         .requires[Has[DynamoDbAsyncClient]])
@@ -141,7 +151,7 @@ object ExampleApp extends zio.App {
             .as(Chunk.unit)
             .fork
             .map(Chunk.single(_))
-            .delay(1.second)
+//            .delay(1.second)
         )
         .mapMPar(1)(_.join)
         .runDrain
