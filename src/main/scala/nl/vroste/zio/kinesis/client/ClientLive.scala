@@ -1,6 +1,7 @@
 package nl.vroste.zio.kinesis.client
 
 import java.time.Instant
+import java.util.concurrent.CompletableFuture
 
 import nl.vroste.zio.kinesis.client.serde.{ Deserializer, Serializer }
 import software.amazon.awssdk.core.SdkBytes
@@ -200,4 +201,22 @@ private[client] class ClientLive(kinesisClient: KinesisAsyncClient) extends Clie
   def putRecords(streamName: String, entries: List[PutRecordsRequestEntry]): Task[PutRecordsResponse] =
     putRecords(PutRecordsRequest.builder().streamName(streamName).records(entries: _*).build())
 
+}
+
+private object Util {
+  def asZIO[T](f: => CompletableFuture[T]): Task[T] = ZIO.fromCompletionStage(f)
+
+  type Token = String
+
+  def paginatedRequest[R, E, A](fetch: Option[Token] => ZIO[R, E, (A, Option[Token])])(
+    throttling: Schedule[Clock, Any, Int] = Schedule.forever
+  ): ZStream[Clock with R, E, A] =
+    ZStream.fromEffect(fetch(None)).flatMap {
+      case (results, nextTokenOpt) =>
+        ZStream.succeed(results) ++ (nextTokenOpt match {
+          case None            => ZStream.empty
+          case Some(nextToken) =>
+            ZStream.paginateM[R, E, A, Token](nextToken)(token => fetch(Some(token))).scheduleElements(throttling)
+        })
+    }
 }
