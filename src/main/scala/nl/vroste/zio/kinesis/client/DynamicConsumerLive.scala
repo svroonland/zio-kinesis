@@ -104,13 +104,13 @@ private[client] class DynamicConsumerLive(
       }
 
       override def leaseLost(leaseLostInput: LeaseLostInput): Unit =
-        shardQueue.stop("lease lost")
+        if (shardQueue != null) shardQueue.stop("lease lost")
 
       override def shardEnded(shardEndedInput: ShardEndedInput): Unit =
-        shardQueue.stop("shard ended")
+        if (shardQueue != null) shardQueue.stop("shard ended")
 
       override def shutdownRequested(shutdownRequestedInput: ShutdownRequestedInput): Unit =
-        shardQueue.stop("shutdown requested")
+        if (shardQueue != null) shardQueue.stop("shutdown requested")
     }
 
     class Queues(
@@ -144,7 +144,10 @@ private[client] class DynamicConsumerLive(
 
     def retrievalConfig(kinesisClient: KinesisAsyncClient) =
       if (isEnhancedFanOut)
-        new FanOutConfig(kinesisClient).streamName(streamName).applicationName(applicationName)
+        new FanOutConfig(kinesisClient)
+          .streamName(streamName)
+          .applicationName(applicationName)
+          .consumerName(workerIdentifier)
       else
         new PollingConfig(streamName, kinesisClient)
 

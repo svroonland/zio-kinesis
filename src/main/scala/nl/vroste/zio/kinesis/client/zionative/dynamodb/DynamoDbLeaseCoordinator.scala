@@ -39,12 +39,14 @@ object ZioExtensions {
 }
 
 /**
+ * Default values are compatible with KCL defaults (TODO not quite yet)
+ *
  * @param expirationTime Time after which a lease is considered expired if not updated in the meantime
  * @param updateInterval Interval at which leases are refreshed, renewed and possibly new leases taken
  */
 case class LeaseCoordinationSettings(
-  expirationTime: Duration = 1.minute,
-  updateInterval: Duration = 30.seconds
+  expirationTime: Duration = 20.seconds,
+  updateInterval: Duration = 10.seconds
 ) {
   require(updateInterval < expirationTime, "expirationTime must be less than updateInterval")
 }
