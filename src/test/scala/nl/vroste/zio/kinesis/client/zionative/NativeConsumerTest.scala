@@ -17,8 +17,8 @@ import zio.console._
 import nl.vroste.zio.kinesis.client.TestUtil.retryOnResourceNotFound
 import zio.Chunk
 import nl.vroste.zio.kinesis.client.zionative.Consumer
+import nl.vroste.zio.kinesis.client.LocalStackServices
 import zio.duration._
-import nl.vroste.zio.kinesis.client.TestUtil.Layers
 import zio.ZManaged
 import zio.test.Assertion._
 import zio.UIO
@@ -84,7 +84,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                            }
                            .take(nrRecords.toLong)
                            .runCollect
-              shardIds <- ZIO.service[AdminClient].flatMap(_.describeStream(streamName)).map(_.shards.map(_.shardId()))
+              shardIds <- AdminClient.describeStream(streamName).map(_.shards.map(_.shardId()))
               _        <- producer.interrupt
 
             } yield assert(records.map(_.shardId).toSet)(equalTo(shardIds.toSet))
@@ -563,24 +563,22 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
   val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some("NativeConsumerTest"))
 
-  val env =
-    ((Layers.kinesisAsyncClient >>>
-      (Layers.adminClient ++ Layers.client)).orDie ++
-      zio.test.environment.testEnvironment ++
-      Clock.live ++
-      Layers.dynamo.orDie) >>>
-      (ZLayer.identity ++ loggingEnv)
+  val env = ((LocalStackServices.env.orDie >>>
+    (AdminClient.live ++ Client.live ++ ZLayer.requires[Has[DynamoDbAsyncClient]])).orDie ++
+    zio.test.environment.testEnvironment ++
+    Clock.live) >>>
+    (ZLayer.identity ++ loggingEnv)
 
   def withStream[R, A](name: String, shards: Int)(
     f: ZIO[R, Throwable, A]
-  ): ZIO[Has[AdminClient] with Has[Client] with Clock with R, Throwable, A] =
+  ): ZIO[AdminClient with Client with Clock with R, Throwable, A] =
     (for {
-      client <- ZManaged.service[AdminClient]
+      client <- ZManaged.service[AdminClient.Service]
       _      <- client.createStream(name, shards).toManaged(_ => client.deleteStream(name).orDie)
       // Wait for the stream to have shards
       _      <- {
-        def getShards: ZIO[Has[Client] with Clock, Throwable, List[Shard]] =
-          ZIO.service[Client].flatMap(_.listShards(name).runCollect).filterOrElse(_.nonEmpty)(_ => getShards)
+        def getShards: ZIO[Client with Clock, Throwable, List[Shard]] =
+          ZIO.service[Client.Service].flatMap(_.listShards(name).runCollect).filterOrElse(_.nonEmpty)(_ => getShards)
         getShards.toManaged_
       }
     } yield ()).use_(f)
@@ -590,11 +588,8 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     chunkSize: Int = 100,
     throttle: Option[Duration] = None,
     indexStart: Int = 1
-  ): ZIO[Has[Client] with Clock, Throwable, Chunk[ProduceResponse]]         =
-    (for {
-      client   <- ZIO.service[Client].toManaged_
-      producer <- Producer.make(streamName, client, Serde.asciiString)
-    } yield producer).use { producer =>
+  ): ZIO[Client with Clock, Throwable, Chunk[ProduceResponse]]    =
+    Producer.make(streamName, Serde.asciiString).use { producer =>
       val records =
         (indexStart until (nrRecords + indexStart)).map(i => ProducerRecord(s"key$i", s"msg$i"))
       ZStream
@@ -617,11 +612,8 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     nrRecords: Int,
     chunkSize: Int = 100,
     indexStart: Int = 1
-  ): ZIO[Has[Client] with Clock, Throwable, Chunk[ProduceResponse]] =
-    (for {
-      client   <- ZIO.service[Client].toManaged_
-      producer <- Producer.make(streamName, client, Serde.asciiString)
-    } yield producer).use { producer =>
+  ): ZIO[Client with Clock, Throwable, Chunk[ProduceResponse]] =
+    Producer.make(streamName, Serde.asciiString).use { producer =>
       val records =
         (indexStart until (nrRecords + indexStart)).map(i => ProducerRecord(s"key$i", s"msg$i"))
       ZStream
@@ -667,7 +659,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     nrShards: Int
   )(
     f: (String, String) => ZIO[R, Throwable, A]
-  ): ZIO[Has[Client] with Has[AdminClient] with Clock with R, Throwable, A] =
+  ): ZIO[Client with AdminClient with Clock with R, Throwable, A] =
     ZIO.effectTotal((streamPrefix + "testStream", streamPrefix + "testApplication")).flatMap {
       case (streamName, applicationName) =>
         withStream(streamName, shards = nrShards) {

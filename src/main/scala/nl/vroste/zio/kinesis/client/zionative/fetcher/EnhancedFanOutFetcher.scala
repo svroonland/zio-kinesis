@@ -22,24 +22,28 @@ import java.io.IOException
 
 object EnhancedFanOutFetcher {
   private def registerConsumerIfNotExists(streamARN: String, consumerName: String) =
-    ZIO.service[Client].flatMap(_.registerStreamConsumer(streamARN, consumerName)).map(_.consumerARN()).catchSome {
-      case e: ResourceInUseException =>
-        // Consumer already exists, retrieve it
-        ZIO
-          .service[Client]
-          .flatMap(_.describeStreamConsumer(streamARN, consumerName))
-          .filterOrElse(_.consumerStatus() != ConsumerStatus.DELETING)(_ => ZIO.fail(e))
-          .map(_.consumerARN())
-    }
+    ZIO
+      .service[Client.Service]
+      .flatMap(_.registerStreamConsumer(streamARN, consumerName))
+      .map(_.consumerARN())
+      .catchSome {
+        case e: ResourceInUseException =>
+          // Consumer already exists, retrieve it
+          ZIO
+            .service[Client.Service]
+            .flatMap(_.describeStreamConsumer(streamARN, consumerName))
+            .filterOrElse(_.consumerStatus() != ConsumerStatus.DELETING)(_ => ZIO.fail(e))
+            .map(_.consumerARN())
+      }
 
   // TODO doesn't really need to be managed anymore
   def make(
     streamDescription: StreamDescription,
     workerId: String,
     emitDiagnostic: DiagnosticEvent => UIO[Unit]
-  ): ZManaged[Clock with Has[Client] with Logging, Throwable, Fetcher] =
+  ): ZManaged[Clock with Client with Logging, Throwable, Fetcher] =
     for {
-      client      <- ZIO.service[Client].toManaged_
+      client      <- ZIO.service[Client.Service].toManaged_
       env         <- ZIO.environment[Logging with Clock].toManaged_
       _            = println("Creating consumer")
       consumerARN <- registerConsumerIfNotExists(streamDescription.streamARN, workerId).toManaged_

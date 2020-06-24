@@ -88,7 +88,7 @@ object Consumer {
     workerId: String = "worker1",
     emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit
   ): ZStream[
-    Blocking with Clock with Random with Has[Client] with Has[AdminClient] with Has[DynamoDbAsyncClient] with Logging,
+    Blocking with Clock with Random with Client with AdminClient with Has[DynamoDbAsyncClient] with Logging,
     Throwable,
     (String, ZStream[R with Blocking with Clock with Logging, Throwable, Record[T]], Checkpointer)
   ] = {
@@ -112,7 +112,7 @@ object Consumer {
 
     def makeFetcher(
       streamDescription: StreamDescription
-    ): ZManaged[Clock with Has[Client] with Logging, Throwable, Fetcher] =
+    ): ZManaged[Clock with Client with Logging, Throwable, Fetcher] =
       fetchMode match {
         case c: Polling     => PollingFetcher.make(streamDescription, c, emitDiagnostic)
         case EnhancedFanOut => EnhancedFanOutFetcher.make(streamDescription, workerId, emitDiagnostic)

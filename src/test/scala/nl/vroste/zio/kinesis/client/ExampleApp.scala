@@ -11,7 +11,6 @@ import zio.{ Chunk, ExitCode, Schedule, ZIO }
 import zio.UIO
 import nl.vroste.zio.kinesis.client.zionative.FetchMode
 import nl.vroste.zio.kinesis.client.zionative.Consumer
-import TestUtil.Layers
 import nl.vroste.zio.kinesis.client.zionative.ShardLeaseLost
 import zio.logging.slf4j.Slf4jLogger
 import zio.logging.log
@@ -29,10 +28,10 @@ object ExampleApp extends zio.App {
     args: List[String]
   ): ZIO[zio.ZEnv, Nothing, ExitCode] = {
 
-    val streamName      = "zio-test-stream-3" // + UUID.randomUUID().toString
-    val nrRecords       = 500000
-    val nrShards        = 2
-    val applicationName = "testApp-5"         // + UUID.randomUUID().toString(),
+    val streamName      = "zio-test-stream-4" // + UUID.randomUUID().toString
+    val nrRecords       = 5000
+    val nrShards        = 11
+    val applicationName = "testApp-6"         // + UUID.randomUUID().toString(),
 
     def worker(id: String) =
       ZStream.fromEffect(
@@ -97,16 +96,13 @@ object ExampleApp extends zio.App {
   val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass().getName))
 
   val localStackEnv =
-    (Layers.kinesisAsyncClient >>> (Layers.adminClient ++ Layers.client)).orDie ++ Layers.dynamo.orDie ++ loggingEnv
+    (LocalStackServices.kinesisAsyncClientLayer >>> (AdminClient.live ++ Client.live)).orDie ++ LocalStackServices.dynamoDbClientLayer.orDie ++ loggingEnv
 
   val awsEnv =
-    (kinesisAsyncClientProfile >>> (Layers.adminClient ++ Layers.client)).orDie ++ dynamoDbAsyncClientProfile.orDie ++ loggingEnv
+    (kinesisAsyncClientProfile >>> (AdminClient.live ++ Client.live)).orDie ++ dynamoDbAsyncClientProfile.orDie ++ loggingEnv
 
   def produceRecords(streamName: String, nrRecords: Int) =
-    (for {
-      client   <- ZIO.service[Client].toManaged_
-      producer <- Producer.make(streamName, client, Serde.asciiString)
-    } yield producer).use { producer =>
+    Producer.make(streamName, Serde.asciiString).use { producer =>
       ZStream
         .range(1, nrRecords)
         .map(i => ProducerRecord(s"key$i", s"msg$i"))

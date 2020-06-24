@@ -17,11 +17,11 @@ object PollingFetcher {
     streamDescription: StreamDescription,
     config: FetchMode.Polling,
     emitDiagnostic: DiagnosticEvent => UIO[Unit]
-  ): ZManaged[Clock with Has[Client], Throwable, Fetcher] =
+  ): ZManaged[Clock with Client, Throwable, Fetcher] =
     for {
       // Max 5 calls per second (globally)
       getShardIterator <- throttledFunction(5, 1.second)((Client.getShardIterator _).tupled)
-      env              <- ZIO.environment[Has[Client] with Clock].toManaged_
+      env              <- ZIO.environment[Client with Clock].toManaged_
     } yield Fetcher { (shard, startingPosition) =>
       ZStream.unwrapManaged {
         for {

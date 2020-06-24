@@ -80,13 +80,13 @@ final case class ProducerSettings(
 object Producer {
   def make[R, T](
     streamName: String,
-    client: Client,
     serializer: Serializer[R, T],
     settings: ProducerSettings = ProducerSettings()
-  ): ZManaged[R with Clock, Throwable, Producer[T]] =
+  ): ZManaged[R with Clock with Client, Throwable, Producer[T]] =
     for {
-      env   <- ZIO.environment[R with Clock].toManaged_
-      queue <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
+      client <- ZManaged.service[Client.Service]
+      env    <- ZIO.environment[R with Clock].toManaged_
+      queue  <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
 
       failedQueue <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
 
