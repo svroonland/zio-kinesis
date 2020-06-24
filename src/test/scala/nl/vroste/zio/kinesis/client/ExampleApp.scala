@@ -18,7 +18,7 @@ object ExampleApp extends zio.App {
   ): ZIO[zio.ZEnv, Nothing, ExitCode] = {
 
     val streamName      = "zio-test-stream-4" // + java.util.UUID.randomUUID().toString
-    val nrRecords       = 200000
+    val nrRecords       = 20000
     val nrShards        = 11
     val nrWorkers       = 3
     val applicationName = "testApp-6"         // + java.util.UUID.randomUUID().toString(),

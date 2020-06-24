@@ -37,13 +37,13 @@ object FetchMode {
    * @param batchSize The maximum number of records to retrieve in one call to GetRecords. Note that Kinesis
    *        defines limits in terms of the maximum size in bytes of this call, so you need to take into account
    *        the distribution of data size of your records (i.e. avg and max).
-   * @param delay How long to wait after polling returned no new records
-   * @param backoff When getting a Provisioned Throughput Exception or KmsThrottlingException, schedule to apply for backoff
+   * @param interval Interval between polls
+   * @param throttlingBackoff When getting a Provisioned Throughput Exception or KmsThrottlingException, schedule to apply for backoff
    */
   case class Polling(
     batchSize: Int = 100,
-    delay: Duration = 1.second,
-    backoff: Schedule[Clock, Throwable, Any] = Util.exponentialBackoff(1.second, 1.minute)
+    interval: Duration = 1.second,
+    throttlingBackoff: Schedule[Clock, Throwable, Any] = Util.exponentialBackoff(1.second, 1.minute)
   ) extends FetchMode
 
   /**
