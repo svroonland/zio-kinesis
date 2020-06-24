@@ -181,7 +181,7 @@ object Client {
   def adjustKinesisClientBuilder(
     builder: KinesisAsyncClientBuilder,
     maxConcurrency: Int = Integer.MAX_VALUE,
-    initialWindowSize: Int = 10 * 1024 * 1024,
+    initialWindowSize: Int = 512 * 1024, // 512 KB, see https://github.com/awslabs/amazon-kinesis-client/pull/706
     healthCheckPingPeriod: Duration = 60.seconds
   ) =
     builder
