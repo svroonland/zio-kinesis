@@ -308,7 +308,7 @@ private class DynamoDbLeaseCoordinator(
       currentWorkers = currentLeases.map(_.owner).collect { case Some(owner) => owner }.toSet
       leases        <- table.getLeasesFromDB
       _             <- log.info(s"Refreshing leases found ${leases.size} leases")
-      _             <- ZIO.foreach_(leases)(lease => processCommand(LeaseCommand.RefreshLease(lease, _)))
+      _             <- ZIO.foreachPar_(leases)(lease => processCommand(LeaseCommand.RefreshLease(lease, _)))
       newWorkers     = leases.map(_.owner).collect { case Some(owner) => owner }.toSet
       workersJoined  = newWorkers -- currentWorkers
       workersLeft    = currentWorkers -- newWorkers
@@ -325,7 +325,6 @@ private class DynamoDbLeaseCoordinator(
    */
   val takeLeases =
     for {
-      _             <- log.info("Taking leases")
       state         <- state.get
       expiredLeases <- now.map(now =>
                          state.currentLeases.values
@@ -333,11 +332,10 @@ private class DynamoDbLeaseCoordinator(
                            .map(_.lease)
                            .toList
                        )
-      _              = println(s"Expired leases: ${expiredLeases}")
-      toSteal       <- leasesToTake(state.currentLeases.map(_._2.lease).toList, workerId, expiredLeases)
-      _             <- log.info(s"Going to take ${toSteal.size} leases: ${toSteal.mkString(",")}")
+      toTake        <- leasesToTake(state.currentLeases.map(_._2.lease).toList, workerId, expiredLeases)
+      _             <- log.info(s"Going to take ${toTake.size} leases: ${toTake.mkString(",")}").when(toTake.nonEmpty)
       claimedLeases <- ZIO
-                         .foreach(toSteal) { lease =>
+                         .foreachPar(toTake) { lease =>
                            val updatedLease = lease.claim(workerId)
                            table
                              .claimLease(updatedLease)
@@ -354,9 +352,7 @@ private class DynamoDbLeaseCoordinator(
                              }
                          }
                          .map(_.flatten)
-      // _             <- log.info(s"Taking leases done, going to register them")
       _             <- ZIO.foreachPar_(claimedLeases)(registerNewAcquiredLease)
-      // _             <- log.info(s"Taking leases done")
     } yield ()
 
   // Puts it in the state and the queue
@@ -375,16 +371,14 @@ private class DynamoDbLeaseCoordinator(
     for {
       state             <- state.get
       allLeases          = state.currentLeases.view.mapValues(_.lease)
-      _                  =
-        println(
-          s"Initializing. Shards: ${state.shards.values.map(_.shardId()).mkString(",")}, found leases: ${allLeases.mkString(",")}"
-        )
+      _                 <- log.info(s"Found leases: ${allLeases.mkString(", ")}")
       // Claim new leases for the shards the database doesn't have leases for
       shardsWithoutLease =
         state.shards.values.toList.filterNot(shard => allLeases.values.map(_.key).toList.contains(shard.shardId()))
-      _                 <- log.info(
-             s"No leases exist yet for these shards, creating: ${shardsWithoutLease.map(_.shardId()).mkString(",")}"
-           )
+      _                 <-
+        log.info(
+          s"No leases exist yet for these shards, creating and claiming: ${shardsWithoutLease.map(_.shardId()).mkString(",")}"
+        )
       _                 <- ZIO
              .foreachPar_(shardsWithoutLease) { shard =>
                val lease = Lease(

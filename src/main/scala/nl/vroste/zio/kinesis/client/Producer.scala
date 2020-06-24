@@ -123,7 +123,7 @@ object Producer {
                         .offerAll(newFailed.map(_._2))
                         .delay(settings.failedDelay)
                         .fork // TODO should be per shard
-                 _                     <- ZIO.foreach(succeeded) {
+                 _                     <- ZIO.foreachPar_(succeeded) {
                         case (response, request) =>
                           request.done.succeed(ProduceResponse(response.shardId(), response.sequenceNumber()))
                       }
