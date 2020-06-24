@@ -39,6 +39,8 @@ resolvers += Resolver.jcenterRepo
 libraryDependencies += "nl.vroste" %% "zio-kinesis" % "<version>"
 ```
 
+The latest version works with ZIO 1.0.0-RC21.
+
 ## DynamicConsumer
 `DynamicConsumer` offers a `ZStream`-based interface to Kinesis Streams, backed by AWS's 
 [Kinesis Client Library (KCL)](https://docs.aws.amazon.com/streams/latest/dev/shared-throughput-kcl-consumers.html). 
