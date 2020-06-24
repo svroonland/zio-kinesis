@@ -240,9 +240,10 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
             lastProcessedRecords      <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
             lastCheckpointedRecords   <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
             _                         <- putStrLn("ABOUT TO START CONSUMER")
-            _                         <- streamConsumer(interrupted, lastProcessedRecords, lastCheckpointedRecords).runCollect.fork
+            consumer                  <- streamConsumer(interrupted, lastProcessedRecords, lastCheckpointedRecords).runCollect.fork
             _                         <- ZIO.unit.delay(30.seconds)
             _                         <- producing.interrupt
+            _                         <- consumer.join
             (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
           } yield assert(processed)(Assertion.equalTo(checkpointed))
         }
