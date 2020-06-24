@@ -1,14 +1,13 @@
 package nl.vroste.zio.kinesis.client
 
 import java.time.Instant
-import java.util.concurrent.CompletableFuture
 
 import nl.vroste.zio.kinesis.client.serde.{ Deserializer, Serializer }
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.awssdk.services.kinesis.model._
 import zio.clock.Clock
 import zio.stream.ZStream
-import zio.{ Has, Schedule, Task, ZIO, ZLayer, ZManaged }
+import zio._
 
 object Client {
 
@@ -134,22 +133,4 @@ object Client {
     case class AtTimestamp(timestamp: Instant)             extends ShardIteratorType
   }
 
-}
-
-private object Util {
-  def asZIO[T](f: => CompletableFuture[T]): Task[T] = ZIO.fromCompletionStage(f)
-
-  type Token = String
-
-  def paginatedRequest[R, E, A](fetch: Option[Token] => ZIO[R, E, (A, Option[Token])])(
-    throttling: Schedule[Clock, Any, Int] = Schedule.forever
-  ): ZStream[Clock with R, E, A] =
-    ZStream.fromEffect(fetch(None)).flatMap {
-      case (results, nextTokenOpt) =>
-        ZStream.succeed(results) ++ (nextTokenOpt match {
-          case None            => ZStream.empty
-          case Some(nextToken) =>
-            ZStream.paginateM[R, E, A, Token](nextToken)(token => fetch(Some(token))).scheduleElements(throttling)
-        })
-    }
 }
