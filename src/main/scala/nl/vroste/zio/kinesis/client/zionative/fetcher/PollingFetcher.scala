@@ -55,7 +55,7 @@ object PollingFetcher {
                                         duration
                                       )
                                     )
-                             } yield Chunk.fromIterable(records.map(Consumer.toConsumerRecord(_, shard.shardId())))
+                             } yield Chunk.fromIterable(records)
                            }.toManaged_
         } yield ZStream.repeatEffectChunkOption(pollWithDelay)
       }.provide(env)

@@ -20,7 +20,6 @@ import zio.clock.Clock
 import zio.duration._
 import zio.stream.ZStream
 import zio.blocking.Blocking
-import zio.logging.log
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative.fetcher.{ EnhancedFanOutFetcher, PollingFetcher }
 import zio.random.Random
@@ -54,11 +53,11 @@ object FetchMode {
 }
 
 trait Fetcher {
-  def shardRecordStream(shard: Shard, startingPosition: ShardIteratorType): ZStream[Clock, Throwable, ConsumerRecord]
+  def shardRecordStream(shard: Shard, startingPosition: ShardIteratorType): ZStream[Clock, Throwable, KinesisRecord]
 }
 
 object Fetcher {
-  def apply(f: (Shard, ShardIteratorType) => ZStream[Clock, Throwable, ConsumerRecord]): Fetcher =
+  def apply(f: (Shard, ShardIteratorType) => ZStream[Clock, Throwable, KinesisRecord]): Fetcher =
     (shard, startingPosition) => f(shard, startingPosition)
 }
 
@@ -91,10 +90,9 @@ object Consumer {
     Throwable,
     (String, ZStream[R with Blocking with Clock with Logging, Throwable, Record[T]], Checkpointer)
   ] = {
-    // TODO find a way to prevent two case class conversions
     def toRecord(
       shardId: String,
-      r: ConsumerRecord
+      r: KinesisRecord
     ): ZIO[R, Throwable, Record[T]] =
       deserializer.deserialize(r.data.asByteBuffer()).map { data =>
         Record(
@@ -127,7 +125,6 @@ object Consumer {
               .map(makeFetcher)
           ),
           for {
-            // _                <- log.debug("Listing shards").toManaged_
             currentShards    <- Client.listShards(streamName).runCollect.map(_.map(l => (l.shardId(), l)).toMap).toManaged_
             _                <- ZManaged.fail(new Exception("No shards in stream!")).when(currentShards.isEmpty)
             leaseCoordinator <-

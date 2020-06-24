@@ -9,7 +9,6 @@ import zio.clock.Clock
 import zio.stream.ZStream
 import zio.UIO
 import zio.duration._
-import zio.Has
 import software.amazon.awssdk.services.kinesis.model.ResourceInUseException
 import software.amazon.awssdk.services.kinesis.model.ConsumerStatus
 import scala.jdk.CollectionConverters._
@@ -73,16 +72,6 @@ object EnhancedFanOutFetcher {
                          )
                      }
                      .mapConcat(_.records.asScala)
-                     .map { record =>
-                       ConsumerRecord(
-                         record.sequenceNumber(),
-                         record.approximateArrivalTimestamp(),
-                         record.data(),
-                         record.partitionKey(),
-                         record.encryptionType(),
-                         shard.shardId()
-                       )
-                     }
                      .repeat(Schedule.forever) // Shard subscriptions get canceled after 5 minutes
 
         } yield stream.catchSome {
