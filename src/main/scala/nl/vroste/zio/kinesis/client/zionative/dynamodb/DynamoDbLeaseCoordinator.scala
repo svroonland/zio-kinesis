@@ -401,31 +401,6 @@ private class DynamoDbLeaseCoordinator(
                    ZIO.fail(e)
                }
              }
-      // Claim leases without owner or ones that we left ourselves (ungraceful)
-      // TODO we can also claim leases that have expired (worker crashed before releasing)
-      claimableLeases    = allLeases.filter {
-                          case (key @ _, lease) => lease.owner.isEmpty || lease.owner.contains(workerId)
-                        }
-      _                 <- log.info(s"Claim of leases without owner for shards ${claimableLeases.mkString(",")}")
-      // TODO this might be somewhat redundant with lease stealing
-      _                 <- ZIO
-             .foreachPar_(claimableLeases) {
-               case (key @ _, lease) =>
-                 val updatedLease = lease.claim(workerId)
-                 table
-                   .claimLease(updatedLease)
-                   .as(updatedLease)
-                   .flatMap(registerNewAcquiredLease)
-                   .catchAll {
-                     case Right(UnableToClaimLease) =>
-                       log
-                         .info(
-                           s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
-                         )
-                     case Left(e)                   =>
-                       ZIO.fail(e)
-                   }
-             }
     } yield ()
 
   override def acquiredLeases: ZStream[zio.clock.Clock, Throwable, AcquiredLease]       =
