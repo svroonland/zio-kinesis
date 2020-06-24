@@ -14,28 +14,16 @@ package object client {
   def kinesisAsyncClientLayer(
     builder: KinesisAsyncClientBuilder = KinesisAsyncClient.builder
   ): ZLayer[Any, Throwable, Has[KinesisAsyncClient]] =
-    ZLayer.fromManaged(ZManaged.fromAutoCloseable {
-      ZIO.effect(
-        builder.build
-      )
-    })
+    ZManaged.fromAutoCloseable(ZIO.effect(builder.build)).toLayer
 
   def cloudWatchAsyncClientLayer(
     builder: CloudWatchAsyncClientBuilder = CloudWatchAsyncClient.builder
   ): ZLayer[Any, Throwable, Has[CloudWatchAsyncClient]] =
-    ZLayer.fromManaged(ZManaged.fromAutoCloseable {
-      ZIO.effect(
-        builder.build
-      )
-    })
+    ZManaged.fromAutoCloseable(ZIO.effect(builder.build)).toLayer
 
   def dynamoDbAsyncClientLayer(
     builder: DynamoDbAsyncClientBuilder = DynamoDbAsyncClient.builder
   ): ZLayer[Any, Throwable, Has[DynamoDbAsyncClient]] =
-    ZLayer.fromManaged(ZManaged.fromAutoCloseable {
-      ZIO.effect(
-        builder.build
-      )
-    })
+    ZManaged.fromAutoCloseable(ZIO.effect(builder.build)).toLayer
 
 }

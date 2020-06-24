@@ -229,8 +229,3 @@ private[client] class DynamicConsumerLive(
 
   }
 }
-
-private[client] object DynamicConsumerLive {
-  def apply(kinesis: KinesisAsyncClient, cloudWatch: CloudWatchAsyncClient, dynamoDb: DynamoDbAsyncClient) =
-    new DynamicConsumerLive(kinesis, cloudWatch, dynamoDb)
-}

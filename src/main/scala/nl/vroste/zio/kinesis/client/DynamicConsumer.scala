@@ -25,7 +25,7 @@ object DynamicConsumer {
     DynamicConsumer.Service
   ]] =
     ZLayer.fromServices[KinesisAsyncClient, CloudWatchAsyncClient, DynamoDbAsyncClient, DynamicConsumer.Service] {
-      DynamicConsumerLive.apply
+      new DynamicConsumerLive(_, _, _)
     }
 
   trait Service {
