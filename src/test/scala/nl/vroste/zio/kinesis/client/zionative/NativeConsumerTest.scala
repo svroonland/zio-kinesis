@@ -577,7 +577,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
       _      <- client.createStream(name, shards).toManaged(_ => client.deleteStream(name).orDie)
       // Wait for the stream to have shards
       _      <- {
-        def getShards: ZIO[Client with Clock, Throwable, List[Shard]] =
+        def getShards: ZIO[Client with Clock, Throwable, Chunk[Shard]] =
           ZIO.service[Client.Service].flatMap(_.listShards(name).runCollect).filterOrElse(_.nonEmpty)(_ => getShards)
         getShards.toManaged_
       }

@@ -67,7 +67,6 @@ trait LeaseCoordinator {
 
   def getCheckpointForShard(shard: Shard): UIO[Option[ExtendedSequenceNumber]]
 
-  // TODO current shards should probably be a stream or ref or something
   def acquiredLeases: ZStream[Clock, Throwable, AcquiredLease]
 
   def releaseLease(shardId: String): ZIO[Logging, Throwable, Unit]
@@ -92,6 +91,7 @@ object Consumer {
     Throwable,
     (String, ZStream[R with Blocking with Clock with Logging, Throwable, Record[T]], Checkpointer)
   ] = {
+    // TODO find a way to prevent two case class conversions
     def toRecord(
       shardId: String,
       r: ConsumerRecord

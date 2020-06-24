@@ -1,26 +1,15 @@
 package nl.vroste.zio.kinesis.client
-import java.util.UUID
-
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.TestUtil.retryOnResourceNotFound
 import nl.vroste.zio.kinesis.client.serde.Serde
+import nl.vroste.zio.kinesis.client.zionative.{ Consumer, FetchMode, ShardLeaseLost }
+import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import zio.console._
 import zio.duration._
+import zio.logging.log
+import zio.logging.slf4j.Slf4jLogger
 import zio.stream.{ ZStream, ZTransducer }
 import zio.{ Chunk, ExitCode, Schedule, ZIO }
-import zio.UIO
-import nl.vroste.zio.kinesis.client.zionative.FetchMode
-import nl.vroste.zio.kinesis.client.zionative.Consumer
-import nl.vroste.zio.kinesis.client.zionative.ShardLeaseLost
-import zio.logging.slf4j.Slf4jLogger
-import zio.logging.log
-import software.amazon.awssdk.services.kinesis.KinesisAsyncClientBuilder
-import zio.ZLayer
-import zio.Has
-import zio.ZManaged
-import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
-import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.LeaseCoordinationSettings
 
 object ExampleApp extends zio.App {
 
@@ -28,10 +17,11 @@ object ExampleApp extends zio.App {
     args: List[String]
   ): ZIO[zio.ZEnv, Nothing, ExitCode] = {
 
-    val streamName      = "zio-test-stream-4" // + UUID.randomUUID().toString
-    val nrRecords       = 5000
+    val streamName      = "zio-test-stream-4" // + java.util.UUID.randomUUID().toString
+    val nrRecords       = 200000
     val nrShards        = 11
-    val applicationName = "testApp-6"         // + UUID.randomUUID().toString(),
+    val nrWorkers       = 3
+    val applicationName = "testApp-6"         // + java.util.UUID.randomUUID().toString(),
 
     def worker(id: String) =
       ZStream.fromEffect(
@@ -42,7 +32,7 @@ object ExampleApp extends zio.App {
           applicationName = applicationName,
           deserializer = Serde.asciiString,
           fetchMode = FetchMode.EnhancedFanOut,
-          emitDiagnostic = ev => log.info(id + ": " + ev.toString()).provideLayer(loggingEnv),
+          emitDiagnostic = ev => log.info(id + ": " + ev.toString).provideLayer(loggingEnv),
           workerId = id
         )
         .flatMapPar(Int.MaxValue) {
@@ -61,7 +51,7 @@ object ExampleApp extends zio.App {
                   ZStream.empty
                 case Left(e)               =>
                   ZStream.fromEffect(
-                    log.error(s"${id} shard ${shardID} stream failed with" + e + ": " + e.getStackTrace())
+                    log.error(s"${id} shard ${shardID} stream failed with" + e + ": " + e.getStackTrace)
                   ) *> ZStream.fail(e)
               }
         }
@@ -70,7 +60,6 @@ object ExampleApp extends zio.App {
       _        <- TestUtil.createStreamUnmanaged(streamName, nrShards)
       producer <- produceRecords(streamName, nrRecords).fork
       _        <- producer.join
-      nrWorkers = 2
       workers  <- ZIO.foreach(1 to nrWorkers)(id => worker(s"worker${id}").runDrain.fork)
       _        <- ZIO.raceAll(ZIO.sleep(2.minute), workers.map(_.join))
       _         = println("Interrupting app")
@@ -82,24 +71,15 @@ object ExampleApp extends zio.App {
     // localStackEnv
   )
 
-  // Based on AWS profile
-  val kinesisAsyncClientProfile: ZLayer[Any, Throwable, Has[KinesisAsyncClient]] =
-    ZLayer.fromManaged(
-      ZManaged.fromAutoCloseable(ZIO.effect(Client.adjustKinesisClientBuilder(KinesisAsyncClient.builder).build()))
-    )
-
-  val dynamoDbAsyncClientProfile: ZLayer[Any, Throwable, Has[DynamoDbAsyncClient]] =
-    ZLayer.fromManaged(
-      ZManaged.fromAutoCloseable(ZIO.effect(DynamoDbAsyncClient.builder.build()))
-    )
-
-  val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass().getName))
+  val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
   val localStackEnv =
     (LocalStackServices.kinesisAsyncClientLayer >>> (AdminClient.live ++ Client.live)).orDie ++ LocalStackServices.dynamoDbClientLayer.orDie ++ loggingEnv
 
   val awsEnv =
-    (kinesisAsyncClientProfile >>> (AdminClient.live ++ Client.live)).orDie ++ dynamoDbAsyncClientProfile.orDie ++ loggingEnv
+    (kinesisAsyncClientLayer(
+      Client.adjustKinesisClientBuilder(KinesisAsyncClient.builder())
+    ) >>> (AdminClient.live ++ Client.live)).orDie ++ dynamoDbAsyncClientLayer().orDie ++ loggingEnv
 
   def produceRecords(streamName: String, nrRecords: Int) =
     Producer.make(streamName, Serde.asciiString).use { producer =>
