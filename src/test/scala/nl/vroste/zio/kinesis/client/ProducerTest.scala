@@ -16,6 +16,9 @@ import zio.{ Chunk, ZIO }
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
 
+  private val clientLayer      = LocalStackServices.kinesisAsyncClientLayer >>> Client.live
+  private val adminClientLayer = LocalStackServices.kinesisAsyncClientLayer >>> AdminClient.live
+
   def spec =
     suite("Producer")(
       testM("produce records to Kinesis successfully and efficiently") {
@@ -25,35 +28,37 @@ object ProducerTest extends DefaultRunnableSpec {
 
         (for {
           _        <- createStream(streamName, 10)
-          client   <- Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
           producer <- Producer
-                        .make(streamName, client, Serde.asciiString, ProducerSettings(bufferSize = 32768))
-                        .provideLayer(Clock.live)
-        } yield producer).use { producer =>
-          (
-            for {
-              _ <- ZIO.sleep(5.second)
-              // Parallelism, but not infinitely (not sure if it matters)
-              _ <- ZIO.collectAllParN(2)((1 to 20).map { i =>
-                     for {
-                       _      <- putStrLn(s"Starting chunk $i")
-                       records = (1 to 10).map(j => ProducerRecord(s"key$i", s"message$i-$j"))
-                       _      <- (producer
-                                .produceChunk(Chunk.fromIterable(records)) *> putStrLn(s"Chunk $i completed"))
-                     } yield ()
-                   })
-            } yield assertCompletes
-          )
-        }.untraced.provideLayer(Clock.live ++ Console.live)
+                        .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 32768))
+
+        } yield producer)
+          .provideSomeLayer[Console](Clock.live ++ clientLayer ++ adminClientLayer)
+          .use { producer =>
+            (
+              for {
+                _ <- ZIO.sleep(5.second)
+                // Parallelism, but not infinitely (not sure if it matters)
+                _ <- ZIO.collectAllParN(2)((1 to 20).map { i =>
+                       for {
+                         _      <- putStrLn(s"Starting chunk $i")
+                         records = (1 to 10).map(j => ProducerRecord(s"key$i", s"message$i-$j"))
+                         _      <- (producer
+                                  .produceChunk(Chunk.fromIterable(records)) *> putStrLn(s"Chunk $i completed"))
+                       } yield ()
+                     })
+              } yield assertCompletes
+            )
+          }
+          .untraced
+          .provideLayer(Clock.live ++ Console.live)
       } @@ timeout(2.minute),
       testM("fail when attempting to produce to a stream that does not exist") {
         val streamName = "zio-test-stream-not-existing"
 
         (for {
-          client   <- Client.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
           producer <- Producer
-                        .make(streamName, client, Serde.asciiString, ProducerSettings(bufferSize = 32768))
-                        .provideLayer(Clock.live)
+                        .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 32768))
+                        .provideLayer(Clock.live ++ clientLayer)
         } yield producer).use { producer =>
           val records = (1 to 10).map(j => ProducerRecord(s"key$j", s"message$j-$j"))
           producer

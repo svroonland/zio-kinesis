@@ -1,14 +1,16 @@
 package nl.vroste.zio.kinesis.client
+
 import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException }
 import zio.clock.Clock
-import zio.{ Schedule, ZIO, ZManaged }
 import zio.console.{ putStrLn, Console }
 import zio.duration._
+import zio.{ Schedule, ZIO, ZManaged }
 
 object TestUtil {
-  def createStream(streamName: String, nrShards: Int): ZManaged[Console, Throwable, Unit] =
+
+  def createStream(streamName: String, nrShards: Int): ZManaged[Console with AdminClient, Throwable, Unit] =
     for {
-      adminClient <- AdminClient.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
+      adminClient <- ZManaged.service[AdminClient.Service]
       _           <- adminClient
              .createStream(streamName, nrShards)
              .catchSome {
@@ -25,15 +27,14 @@ object TestUtil {
              }
     } yield ()
 
-  def createStreamUnmanaged(streamName: String, nrShards: Int) =
-    AdminClient
-      .build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
-      .use(
-        _.createStream(streamName, nrShards).catchSome {
-          case _: ResourceInUseException =>
-            putStrLn("Stream already exists")
-        }
-      )
+  def createStreamUnmanaged(streamName: String, nrShards: Int): ZIO[Console with AdminClient, Throwable, Unit] =
+    for {
+      adminClient <- ZIO.service[AdminClient.Service]
+      _           <- adminClient.createStream(streamName, nrShards).catchSome {
+             case _: ResourceInUseException =>
+               putStrLn("Stream already exists")
+           }
+    } yield ()
 
   val retryOnResourceNotFound: Schedule[Clock, Throwable, ((Throwable, Int), Duration)] =
     Schedule.doWhile[Throwable] {
