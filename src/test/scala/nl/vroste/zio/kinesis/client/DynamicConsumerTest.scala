@@ -17,15 +17,16 @@ import zio.test._
 object DynamicConsumerTest extends DefaultRunnableSpec {
   import TestUtil._
 
-  private val createStreamLayers = LocalStackServices.kinesisAsyncClientLayer >>> AdminClient.live
+  private val env: ZLayer[Any, Throwable, Client with AdminClient with DynamicConsumer with Clock] =
+    (LocalStackServices.kinesisAsyncClientLayer >>> (Client.live ++ AdminClient.live ++ LocalStackServices.dynamicConsumerLayer)) ++ Clock.live
 
-  def testConsume1 =
+  def testConsume1: ZSpec[Clock with Blocking with Console with DynamicConsumer with Client, Throwable] =
     testM("consume records produced on all shards produced on the stream") {
       val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
       val applicationName = "zio-test-" + UUID.randomUUID().toString
 
       createStream(streamName, 2)
-        .provideSomeLayer[Console](createStreamLayers)
+        .provideSomeLayer[Console](env)
         .use { _ =>
           (for {
             _ <- putStrLn("Putting records")
@@ -39,7 +40,6 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                        )
                    )
                    .retry(retryOnResourceNotFound)
-                   .provideLayer(Clock.live ++ (LocalStackServices.kinesisAsyncClientLayer >>> Client.live))
 
             _ <- putStrLn("Starting dynamic consumer")
             _ <- (for {
@@ -61,9 +61,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                             }
                             .take(2)
                             .runCollect
-                   } yield ()).provideSomeLayer[Clock with Blocking with Console](
-                   LocalStackServices.dynamicConsumerLayer
-                 )
+                   } yield ())
 
           } yield assertCompletes)
         // TODO this assertion doesn't do what the test says
@@ -81,7 +79,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
       def streamConsumer(
         workerIdentifier: String,
         activeConsumers: Ref[Set[String]]
-      ): ZStream[Console with Blocking, Throwable, (String, String)] = {
+      ): ZStream[Console with Blocking with DynamicConsumer with Clock, Throwable, (String, String)] = {
         val checkpointDivisor = 1
 
         def handler(shardId: String, r: DynamicConsumer.Record[String]) =
@@ -89,7 +87,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
             id <- ZIO.fiberId
             _  <- putStrLn(s"Consumer $workerIdentifier on fiber $id got record $r on shard $shardId")
             // Simulate some effectful processing
-            _  <- sleep(50.millis)
+            _  <- ZIO.sleep(50.millis)
           } yield ()
 
         (for {
@@ -121,7 +119,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                                       )
                               }.as((workerIdentifier, shardId))
                                 // Background and a bit delayed so we get a chance to actually emit some records
-                                .tap(_ => (sleep(1.second) *> activeConsumers.update(_ + workerIdentifier)).fork)
+                                .tap(_ => (ZIO.sleep(1.second) *> activeConsumers.update(_ + workerIdentifier)).fork)
                                 .ensuring(putStrLn(s"Shard $shardId completed for consumer $workerIdentifier"))
                                 .catchSome {
                                   case _: ShutdownException => // This will be thrown when the shard lease has been stolen
@@ -132,10 +130,9 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                       )
 
         } yield stream)
-          .provideSomeLayer[Console with Blocking](LocalStackServices.dynamicConsumerLayer)
       }
 
-      createStream(streamName, 10).provideSomeLayer[Console](createStreamLayers).use { _ =>
+      createStream(streamName, 10).provideSomeLayer[Console](env).use { _ =>
         val records =
           (1 to nrRecords).map(i => ProducerRecord(s"key$i", s"msg$i"))
         for {
@@ -152,7 +149,6 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                      .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
                      .retry(retryOnResourceNotFound)
                  }
-                 .provideSomeLayer(Clock.live ++ (LocalStackServices.kinesisAsyncClientLayer >>> Client.live))
                  .runDrain
                  .fork
 
@@ -181,7 +177,9 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
         interrupted: Promise[Nothing, Unit],
         lastProcessedRecords: Ref[Map[String, String]],
         lastCheckpointedRecords: Ref[Map[String, String]]
-      ): ZStream[Any, Throwable, DynamicConsumer.Record[String]] =
+      ): ZStream[Console with Blocking with Clock with DynamicConsumer, Throwable, DynamicConsumer.Record[
+        String
+      ]] =
         (for {
           service <- ZStream.service[DynamicConsumer.Service]
           stream  <- service
@@ -213,12 +211,10 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                                   .tap(_ => ZIO(println(s"Checkpointing for shard ${r.shardId} done")))
                             }
                       }
-        } yield stream).provideLayer(
-          Console.live ++ Blocking.live ++ Clock.live ++ LocalStackServices.dynamicConsumerLayer
-        )
+        } yield stream)
 
       createStream(streamName, 2)
-        .provideSomeLayer[Console](createStreamLayers)
+        .provideSomeLayer[Console](env)
         .use { _ =>
           for {
             producing                 <- ZStream
@@ -250,7 +246,6 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
             (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
           } yield assert(processed)(Assertion.equalTo(checkpointed))
         }
-        .provideCustomLayer(Clock.live ++ (LocalStackServices.kinesisAsyncClientLayer >>> Client.live))
     } @@ TestAspect.timeout(40.seconds)
 
   // TODO check the order of received records is correct
@@ -260,12 +255,10 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
       testConsume1,
       testConsume2,
       testCheckpointAtShutdown
-    ) @@ timeout(5.minute) @@ sequential
-
-  def sleep(d: Duration) = ZIO.sleep(d).provideLayer(Clock.live)
+    ).provideCustomLayer(env.orDie) @@ timeout(5.minute) @@ sequential
 
   def delayStream[R, E, O](s: ZStream[R, E, O], delay: Duration) =
-    ZStream.fromEffect(sleep(delay)).flatMap(_ => s)
+    ZStream.fromEffect(ZIO.sleep(delay)).flatMap(_ => s)
 
   def awaitRefPredicate[T](ref: Ref[T])(predicate: T => Boolean) =
     (for {
@@ -273,7 +266,6 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
       _ <- ZIO
              .whenM(ref.get.map(predicate))(p.succeed(()))
              .repeat(Schedule.fixed(1.second))
-             .provideLayer(Clock.live)
              .fork
       _ <- p.await
     } yield ()).fork

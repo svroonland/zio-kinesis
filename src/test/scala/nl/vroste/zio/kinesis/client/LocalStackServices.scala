@@ -17,6 +17,9 @@ import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.awssdk.utils.AttributeMap
 import zio.{ Has, ZIO, ZLayer, ZManaged }
 
+/**
+ * Layers for connecting to a LocalStack (https://localstack.cloud/) environment on a local docker host
+ */
 object LocalStackServices {
 
   private val region: Region          = Region.of("us-east-1")

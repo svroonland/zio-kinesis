@@ -12,9 +12,8 @@ import zio.stream.{ ZStream, ZTransducer }
 import zio.{ Chunk, ExitCode, Schedule, ZIO }
 
 object ExampleApp extends zio.App {
-
-  private val clientLayer      = LocalStackServices.kinesisAsyncClientLayer >>> Client.live
-  private val adminClientLayer = LocalStackServices.kinesisAsyncClientLayer >>> AdminClient.live
+  private val env =
+    LocalStackServices.kinesisAsyncClientLayer >>> (Client.live ++ AdminClient.live ++ LocalStackServices.dynamicConsumerLayer)
 
   override def run(
     args: List[String]
@@ -59,7 +58,7 @@ object ExampleApp extends zio.App {
       _ <- putStrLn("Exiting app")
 
     } yield ExitCode.success
-  }.provideCustomLayer(adminClientLayer ++ clientLayer ++ LocalStackServices.dynamicConsumerLayer).orDie
+  }.provideCustomLayer(env).orDie
 
   def produceRecords(streamName: String, nrRecords: Int) =
     (for {
