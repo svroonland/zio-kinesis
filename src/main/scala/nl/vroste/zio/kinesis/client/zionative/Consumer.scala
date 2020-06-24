@@ -113,16 +113,23 @@ object Consumer {
     def makeFetcher(streamDescription: StreamDescription): ZManaged[Clock with Has[Client], Throwable, Fetcher] =
       fetchMode match {
         case c: Polling     => PollingFetcher.make(streamDescription, c, emitDiagnostic)
-        case EnhancedFanOut => EnhancedFanOutFetcher.make(streamDescription, applicationName)
+        case EnhancedFanOut => EnhancedFanOutFetcher.make(streamDescription, workerId)
       }
 
     ZStream.unwrapManaged {
       ZManaged
         .mapParN(
-          ZManaged.unwrap(AdminClient.describeStream(streamName).map(makeFetcher)),
+          ZManaged.unwrap(
+            AdminClient
+              .describeStream(streamName)
+              // .tap(s => log.debug(s"Stream description: ${s}"))
+              .map(makeFetcher)
+            // .tap(_ => log.debug("Created fetcher"))
+          ),
           for {
+            // _                <- log.debug("Listing shards").toManaged_
             currentShards    <- Client.listShards(streamName).runCollect.map(_.map(l => (l.shardId(), l)).toMap).toManaged_
-            _                <- ZManaged.die(new Exception("No shards in stream!")).when(currentShards.isEmpty)
+            _                <- ZManaged.fail(new Exception("No shards in stream!")).when(currentShards.isEmpty)
             leaseCoordinator <-
               DynamoDbLeaseCoordinator
                 .make(applicationName, workerId, currentShards, emitDiagnostic, leaseCoordinationSettings)
@@ -143,6 +150,7 @@ object Consumer {
                                        .map(s => ShardIteratorType.AfterSequenceNumber(s.sequenceNumber))
                                        .getOrElse(initialStartingPosition)
                   stop                 = ZStream.fromEffect(leaseLost.await).as(Exit.fail(None))
+                  // TODO make shardRecordStream a ZIO[ZStream], so it can actually fail on creation and we can handle it here
                   shardStream          = (stop merge fetcher
                                     .shardRecordStream(shard, startingPosition)
                                     .mapChunksM { chunk => // mapM is slow
@@ -182,6 +190,10 @@ object Consumer {
   }
 
   def retryOnThrottledWithSchedule[R, A](schedule: Schedule[R, Throwable, A]): Schedule[R, Throwable, (Throwable, A)] =
-    Schedule.doWhile[Throwable](e => isThrottlingException.lift(e).isDefined) && schedule
+    Schedule.doWhile[Throwable](e => isThrottlingException.lift(e).isDefined).tapInput[R, Throwable] { e =>
+      if (isThrottlingException.isDefinedAt(e))
+        UIO(println("Got throttled!"))
+      else ZIO.unit
+    } && schedule
 
 }

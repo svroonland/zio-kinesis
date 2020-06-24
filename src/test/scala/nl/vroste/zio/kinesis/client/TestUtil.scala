@@ -10,9 +10,9 @@ import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
 
 object TestUtil {
-  def createStream(streamName: String, nrShards: Int): ZManaged[Console, Throwable, Unit] =
+  def createStream(streamName: String, nrShards: Int): ZManaged[Console with Has[AdminClient], Throwable, Unit] =
     for {
-      adminClient <- AdminClient.build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
+      adminClient <- ZManaged.service[AdminClient]
       _           <- adminClient
              .createStream(streamName, nrShards)
              .catchSome {
@@ -30,8 +30,8 @@ object TestUtil {
     } yield ()
 
   def createStreamUnmanaged(streamName: String, nrShards: Int) =
-    AdminClient
-      .build(LocalStackDynamicConsumer.kinesisAsyncClientBuilder)
+    ZManaged
+      .service[AdminClient]
       .use(
         _.createStream(streamName, nrShards).catchSome {
           case _: ResourceInUseException =>

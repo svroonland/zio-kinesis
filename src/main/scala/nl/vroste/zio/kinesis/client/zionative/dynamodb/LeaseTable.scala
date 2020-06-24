@@ -49,10 +49,11 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
   }
 
   def leaseTableExists: ZIO[Logging, Throwable, Boolean] =
-    asZIO(client.describeTable(DescribeTableRequest.builder().tableName(applicationName).build()))
-      .map(_.table().tableStatus() == TableStatus.ACTIVE)
-      .catchSome { case _: ResourceNotFoundException => ZIO.succeed(false) }
-      .tap(exists => log.info(s"Lease table ${applicationName} exists? ${exists}"))
+    log.info("Checking if table exists") *>
+      asZIO(client.describeTable(DescribeTableRequest.builder().tableName(applicationName).build()))
+        .map(_.table().tableStatus() == TableStatus.ACTIVE)
+        .catchSome { case _: ResourceNotFoundException => ZIO.succeed(false) }
+        .tap(exists => log.info(s"Lease table ${applicationName} exists? ${exists}"))
 
   def getLeasesFromDB: ZIO[Clock, Throwable, List[Lease]] =
     paginatedRequest { (lastItem: Option[DynamoDbItem]) =>
@@ -166,7 +167,6 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
       .build()
 
     asZIO(client.updateItem(request))
-      .tapError(e => log.warn(s"Got error updating checkpoint: ${e}"))
   }
 
   def renewLease(lease: Lease): ZIO[Logging, Either[Throwable, LeaseObsolete.type], Unit] = {

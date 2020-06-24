@@ -15,6 +15,7 @@ import zio.interop.reactivestreams._
 import zio.stream.ZStream
 
 import scala.jdk.CollectionConverters._
+import software.amazon.awssdk.http.SdkCancellationException
 
 /**
  * Client for consumer and producer operations
@@ -36,13 +37,26 @@ class Client(val kinesisClient: KinesisAsyncClient) {
   /**
    * Registers a stream consumer for use during the lifetime of the managed resource
    *
+   * If the consumer already exists, it will be reused
+   *
    * @param streamARN    ARN of the stream to consume
    * @param consumerName Name of the consumer
    * @return Managed resource that unregisters the stream consumer after use
    */
   def createConsumer(streamARN: String, consumerName: String): ZManaged[Any, Throwable, Consumer] =
-    registerStreamConsumer(streamARN, consumerName)
-      .toManaged(consumer => deregisterStreamConsumer(consumer.consumerARN()).ignore)
+    registerStreamConsumer(streamARN, consumerName).catchSome {
+      case e: ResourceInUseException =>
+        // Consumer already exists, retrieve it
+        describeStreamConsumer(streamARN, consumerName).map { description =>
+          Consumer
+            .builder()
+            .consumerARN(description.consumerARN())
+            .consumerCreationTimestamp(description.consumerCreationTimestamp())
+            .consumerName(description.consumerName())
+            .consumerStatus(description.consumerStatus())
+            .build()
+        }.filterOrElse(_.consumerStatus() != ConsumerStatus.DELETING)(_ => ZIO.fail(e))
+    }.toManaged(consumer => deregisterStreamConsumer(consumer.consumerARN()).ignore)
 
   /**
    * List all shards in a stream
@@ -67,9 +81,14 @@ class Client(val kinesisClient: KinesisAsyncClient) {
         .streamCreationTimestamp(streamCreationTimestamp.orNull)
         .nextToken(token.orNull)
 
+      // println(s"Calling listShards with token ${token}")
       asZIO(kinesisClient.listShards(request.build()))
+        .timeoutFail(new Exception("timey out"))(30.seconds)
+        // .tap(x => UIO(println(s"listShards gave ${x}")))
+        .tapError(x => UIO(println(s"listShards gave error ${x}")))
+        .onInterrupt(_ => UIO(println("listShards INERRTUPRED")))
         .map(response => (response.shards().asScala, Option(response.nextToken())))
-    }(Schedule.fixed(10.millis)).mapConcatChunk(Chunk.fromIterable)
+    }(Schedule.fixed(10.millis)).mapConcatChunk(Chunk.fromIterable) // .tap(_ => UIO(println("List shards outer done")))
 
   def getShardIterator(
     streamName: String,
@@ -169,7 +188,7 @@ class Client(val kinesisClient: KinesisAsyncClient) {
 
       override def onEventStream(publisher: SdkPublisher[SubscribeToShardEventStream]): Unit = {
         val streamOfRecords: ZStream[Any, Throwable, SubscribeToShardEvent] =
-          publisher.filter(classOf[SubscribeToShardEvent]).toStream()
+          publisher.filter(classOf[SubscribeToShardEvent]).toStream(1024)
         runtime.unsafeRun(streamP.succeed(streamOfRecords.mapConcat(_.records().asScala)).unit)
       }
 
@@ -187,6 +206,14 @@ class Client(val kinesisClient: KinesisAsyncClient) {
   ): ZIO[Any, Throwable, Consumer] = {
     val request = RegisterStreamConsumerRequest.builder().streamARN(streamARN).consumerName(consumerName).build()
     asZIO(kinesisClient.registerStreamConsumer(request)).map(_.consumer())
+  }
+
+  def describeStreamConsumer(
+    streamARN: String,
+    consumerName: String
+  ): ZIO[Any, Throwable, ConsumerDescription] = {
+    val request = DescribeStreamConsumerRequest.builder().streamARN(streamARN).consumerName(consumerName).build()
+    asZIO(kinesisClient.describeStreamConsumer(request)).map(_.consumerDescription())
   }
 
   /**
@@ -322,7 +349,7 @@ object Client {
 }
 
 private object Util {
-  def asZIO[T](f: => CompletableFuture[T]): Task[T] = ZIO.fromCompletionStage(f).refailWithTrace
+  def asZIO[T](f: => CompletableFuture[T]): Task[T] = ZIO.effect(f).flatMap(ZIO.fromCompletionStage(_)).refailWithTrace
 
   def paginatedRequest[R, E, A, Token](fetch: Option[Token] => ZIO[R, E, (A, Option[Token])])(
     throttling: Schedule[Clock, Any, Int] = Schedule.forever

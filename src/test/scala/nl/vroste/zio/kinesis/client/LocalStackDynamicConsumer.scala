@@ -45,7 +45,7 @@ object LocalStackDynamicConsumer {
       )
   }
 
-  val kinesisAsyncClientBuilder: KinesisAsyncClientBuilder = {
+  def kinesisAsyncClientBuilder: KinesisAsyncClientBuilder = {
     System.setProperty(SdkSystemSetting.CBOR_ENABLED.property, "false")
 
     KinesisAsyncClient

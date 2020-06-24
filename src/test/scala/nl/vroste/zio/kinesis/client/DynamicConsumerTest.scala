@@ -13,6 +13,7 @@ import zio.stream.{ ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test._
+import zio.logging.slf4j.Slf4jLogger
 
 object DynamicConsumerTest extends DefaultRunnableSpec {
   import TestUtil._
@@ -201,8 +202,18 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
           _                         <- producing.interrupt
           (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
         } yield assert(processed)(equalTo(checkpointed))
-      }.provideCustomLayer(Clock.live)
+      }
     } @@ TestAspect.timeout(40.seconds)
+
+  val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some("NativeConsumerTest"))
+
+  val env =
+    ((Layers.kinesisAsyncClient >>>
+      (Layers.adminClient ++ Layers.client)).orDie ++
+      zio.test.environment.testEnvironment ++
+      Clock.live ++
+      Layers.dynamo.orDie) >>>
+      (ZLayer.identity ++ loggingEnv)
 
   // TODO check the order of received records is correct
 
@@ -211,7 +222,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
       testConsume1,
       testConsume2,
       testCheckpointAtShutdown
-    ) @@ timeout(5.minute) @@ sequential
+    ).provideCustomLayer(env) @@ timeout(5.minute) @@ sequential
 
   def sleep(d: Duration) = ZIO.sleep(d).provideLayer(Clock.live)
 

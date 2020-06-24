@@ -21,6 +21,8 @@ object DiagnosticEvent {
   case class PollComplete(shardId: String, nrRecords: Int, behindLatest: Duration, duration: Duration)
       extends DiagnosticEvent
 
+  case class SubscribeToShard(shardId: String, behindLatest: Duration) extends DiagnosticEvent
+
   sealed trait LeaseEvent extends DiagnosticEvent
 
   /**

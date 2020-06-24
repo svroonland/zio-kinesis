@@ -9,8 +9,12 @@
         <appender-ref ref="STDOUT" />
     </root>
 
-    <logger name="software.amazon.kinesis" level="INFO"/>
-    <logger name="software.amazon.awssdk.profiles.internal" level="ERROR"/>
+    <logger name="nl.vroste.zio.kinesis" level="DEBUG"/>
+    <!-- This warns about cancelled SubscribeToShard requests -->
+    <logger name="software.amazon.awssdk.http.nio.netty.internal" level="ERROR"/>
+
+    <!-- <logger name="software.amazon.kinesis" level="INFO"/> -->
+    <!-- <logger name="software.amazon.awssdk.profiles.internal" level="ERROR"/> -->
     <!-- <logger name="software.amazon.awssdk.request" level="DEBUG"/> -->
     <!-- <logger name="io.netty" level="DEBUG"/> -->
 </configuration>

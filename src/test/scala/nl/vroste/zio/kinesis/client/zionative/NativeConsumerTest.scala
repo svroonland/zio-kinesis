@@ -561,6 +561,8 @@ object NativeConsumerTest extends DefaultRunnableSpec {
       TestAspect.timeoutWarning(30.seconds) @@
       TestAspect.timeout(120.seconds)
 
+  val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some("NativeConsumerTest"))
+
   val env =
     ((Layers.kinesisAsyncClient >>>
       (Layers.adminClient ++ Layers.client)).orDie ++
@@ -577,21 +579,18 @@ object NativeConsumerTest extends DefaultRunnableSpec {
       _      <- client.createStream(name, shards).toManaged(_ => client.deleteStream(name).orDie)
       // Wait for the stream to have shards
       _      <- {
-        def getShards: ZIO[Has[Client] with Clock, Throwable, Chunk[Shard]] =
+        def getShards: ZIO[Has[Client] with Clock, Throwable, List[Shard]] =
           ZIO.service[Client].flatMap(_.listShards(name).runCollect).filterOrElse(_.nonEmpty)(_ => getShards)
         getShards.toManaged_
       }
     } yield ()).use_(f)
-
-  val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some("NativeConsumerTest"))
-
   def produceSampleRecords(
     streamName: String,
     nrRecords: Int,
     chunkSize: Int = 100,
     throttle: Option[Duration] = None,
     indexStart: Int = 1
-  ): ZIO[Has[Client] with Clock, Throwable, Chunk[ProduceResponse]] =
+  ): ZIO[Has[Client] with Clock, Throwable, Chunk[ProduceResponse]]         =
     (for {
       client   <- ZIO.service[Client].toManaged_
       producer <- Producer.make(streamName, client, Serde.asciiString)

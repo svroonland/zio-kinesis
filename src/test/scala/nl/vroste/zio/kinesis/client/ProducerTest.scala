@@ -12,9 +12,21 @@ import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test._
 import zio.{ Chunk, ZIO }
+import zio.logging.slf4j.Slf4jLogger
+import zio.ZLayer
 
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
+
+  val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some("NativeConsumerTest"))
+
+  val env =
+    ((Layers.kinesisAsyncClient >>>
+      (Layers.adminClient ++ Layers.client)).orDie ++
+      zio.test.environment.testEnvironment ++
+      Clock.live ++
+      Layers.dynamo.orDie) >>>
+      (ZLayer.identity ++ loggingEnv)
 
   def spec =
     suite("Producer")(
@@ -44,7 +56,7 @@ object ProducerTest extends DefaultRunnableSpec {
                    })
             } yield assertCompletes
           )
-        }.untraced.provideLayer(Clock.live ++ Console.live)
+        }.untraced
       } @@ timeout(2.minute),
       testM("fail when attempting to produce to a stream that does not exist") {
         val streamName = "zio-test-stream-not-existing"
@@ -60,5 +72,5 @@ object ProducerTest extends DefaultRunnableSpec {
             .produceChunk(Chunk.fromIterable(records)) *> putStrLn(s"Chunk completed")
         }.run.map(r => assert(r)(fails(isSubtype[KinesisException](anything))))
       } @@ timeout(1.minute)
-    ) @@ sequential
+    ).provideCustomLayer(env) @@ sequential
 }
