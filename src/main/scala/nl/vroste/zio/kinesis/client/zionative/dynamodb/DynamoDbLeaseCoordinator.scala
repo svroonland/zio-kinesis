@@ -73,6 +73,8 @@ case class State(
     case (shard, LeaseState(lease, Some(completed), _)) => shard -> (lease -> completed)
   }
 
+  def updateShards(shards: Map[String, Shard]): State = copy(shards = shards)
+
   def updateLease(lease: Lease, now: Instant): State =
     updateLeases(List(lease), now)
 
@@ -162,7 +164,9 @@ private class DynamoDbLeaseCoordinator(
 
   val now = zio.clock.currentDateTime.map(_.toInstant())
 
-  def updateState(f: (State, Instant) => State) = now.flatMap(n => state.update(f(_, n)))
+  private def updateState(f: (State, Instant) => State) = now.flatMap(n => state.update(f(_, n)))
+
+  def updateShards(shards: Map[String, Shard]): UIO[Unit] = state.update(_.updateShards(shards))
 
   /**
    * Operations that update a held lease will interfere unless we run them sequentially for each shard
@@ -326,6 +330,7 @@ private class DynamoDbLeaseCoordinator(
    */
   val takeLeases =
     for {
+      _             <- claimLeasesForShardsWithoutLease
       state         <- state.get
       expiredLeases <- now.map(now =>
                          state.currentLeases.values
@@ -368,7 +373,7 @@ private class DynamoDbLeaseCoordinator(
   /**
    * Claims all available leases for the current shards (no owner or not existent)
    */
-  def initializeLeases: ZIO[Logging with Clock, Throwable, Unit] =
+  def claimLeasesForShardsWithoutLease: ZIO[Logging with Clock, Throwable, Unit] =
     for {
       state             <- state.get
       allLeases          = state.currentLeases.view.mapValues(_.lease)
@@ -403,14 +408,14 @@ private class DynamoDbLeaseCoordinator(
              }
     } yield ()
 
-  override def acquiredLeases: ZStream[zio.clock.Clock, Throwable, AcquiredLease]       =
+  override def acquiredLeases: ZStream[zio.clock.Clock, Throwable, AcquiredLease]          =
     ZStream
       .fromQueue(acquiredLeasesQueue)
       .map { case (lease, complete) => AcquiredLease(lease.key, complete) }
 
-  override def getCheckpointForShard(shard: Shard): UIO[Option[ExtendedSequenceNumber]] =
+  override def getCheckpointForShard(shardId: String): UIO[Option[ExtendedSequenceNumber]] =
     for {
-      leaseOpt <- state.get.map(_.currentLeases.get(shard.shardId()))
+      leaseOpt <- state.get.map(_.currentLeases.get(shardId))
     } yield leaseOpt.flatMap(_.lease.checkpoint)
 
   private def processCommand[E, A](makeCommand: Promise[E, A] => LeaseCommand): IO[E, A] =
@@ -421,7 +426,7 @@ private class DynamoDbLeaseCoordinator(
       result  <- promise.await
     } yield result
 
-  override def makeCheckpointer(shard: Shard) =
+  override def makeCheckpointer(shardId: String) =
     for {
       staged <- Ref.make[Option[ExtendedSequenceNumber]](None)
       permit <- Semaphore.make(1)
@@ -453,12 +458,12 @@ private class DynamoDbLeaseCoordinator(
             lastStaged <- staged.get
             _          <- lastStaged match {
                    case Some(checkpoint) =>
-                     processCommand(LeaseCommand.UpdateCheckpoint(shard.shardId(), checkpoint, _, release = release))
+                     processCommand(LeaseCommand.UpdateCheckpoint(shardId, checkpoint, _, release = release))
                      // onSuccess to ensure updating in the face of interruption
                      // only update when the staged record has not changed while checkpointing
                        .onSuccess(_ => staged.updateSome { case Some(lastStaged) => None })
                    case None if release  =>
-                     processCommand(LeaseCommand.ReleaseLease(shard.shardId(), _)).mapError(Left(_))
+                     processCommand(LeaseCommand.ReleaseLease(shardId, _)).mapError(Left(_))
                    case None             =>
                      ZIO.unit
                  }
@@ -523,20 +528,17 @@ object DynamoDbLeaseCoordinator {
   def make(
     applicationName: String,
     workerId: String,
-    shards: Map[String, Shard],
     emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit,
     settings: LeaseCoordinationSettings
   ): ZManaged[Clock with Random with Logging with Has[DynamoDbAsyncClient], Throwable, LeaseCoordinator] =
     ZManaged.make {
       log.locally(LogAnnotation.Name(s"worker-${workerId}" :: Nil)) {
         for {
-          table          <- ZIO.service[DynamoDbAsyncClient].map(new LeaseTable(_, applicationName))
-          exists         <- table.createLeaseTableIfNotExists
-          currentLeases  <- if (exists) table.getLeasesFromDB else ZIO.succeed(List.empty)
-          _              <- log.info(s"Found ${currentLeases.size} existing leases: " + currentLeases.mkString("\n"))
-          state          <- State.make(currentLeases, shards) >>= (Ref.make(_))
-          acquiredLeases <- Queue.unbounded[(Lease, Promise[Nothing, Unit])]
-          commandQueue   <- Queue.unbounded[LeaseCommand]
+          table            <- ZIO.service[DynamoDbAsyncClient].map(new LeaseTable(_, applicationName))
+          leaseTableExists <- table.createLeaseTableIfNotExists
+          state            <- Ref.make(State.empty)
+          acquiredLeases   <- Queue.unbounded[(Lease, Promise[Nothing, Unit])]
+          commandQueue     <- Queue.unbounded[LeaseCommand]
 
           coordinator = new DynamoDbLeaseCoordinator(
                           table,
@@ -547,35 +549,35 @@ object DynamoDbLeaseCoordinator {
                           commandQueue,
                           settings
                         )
-        } yield coordinator
+        } yield (coordinator, leaseTableExists)
       }
-    }(_.releaseLeases.orDie).tap { c =>
-      // Do all initalization in parallel
-      for {
-        _ <- logNamed(s"worker-${workerId}")(c.runloop.runDrain).forkManaged
-        _ <- logNamed(s"worker-${workerId}")(
-               // Initialize
-               c.initializeLeases *>
-                 c.takeLeases *>
-                 // Periodic refresh
-                 (c.refreshLeases *> c.takeLeases)
+    }(_._1.releaseLeases.orDie).flatMap {
+      case (c, leaseTableExists) =>
+        // Do all initalization in parallel
+        for {
+          _ <- logNamed(s"worker-${workerId}")(c.runloop.runDrain).forkManaged
+          _ <- logNamed(s"worker-${workerId}")(
+                 // Initialization
+                 (c.refreshLeases.when(!leaseTableExists) *> c.takeLeases) *>
+                   // Periodic refresh
+                   (c.refreshLeases *> c.takeLeases)
+                     .repeat(
+                       Schedule
+                         .fixed(settings.refreshAndTakeInterval)
+                         .jittered(0.95, 1.05)
+                     )
+                     .delay(settings.refreshAndTakeInterval)
+               ).forkManaged
+          _ <- logNamed(s"worker-${workerId}")(
+                 (c.renewLeases)
                    .repeat(
                      Schedule
-                       .fixed(settings.refreshAndTakeInterval)
+                       .fixed(settings.renewInterval)
+                       .addDelay(_ => settings.renewInterval)
                        .jittered(0.95, 1.05)
                    )
-                   .delay(settings.refreshAndTakeInterval)
-             ).forkManaged
-        _ <- logNamed(s"worker-${workerId}")(
-               (c.renewLeases)
-                 .repeat(
-                   Schedule
-                     .fixed(settings.renewInterval)
-                     .addDelay(_ => settings.renewInterval)
-                     .jittered(0.95, 1.05)
-                 )
-             ).forkManaged
-      } yield ()
+               ).forkManaged
+        } yield c
     }
 
   def logNamed[R, E, A](name: String)(f: ZIO[R, E, A]): ZIO[Logging with R, E, A] =

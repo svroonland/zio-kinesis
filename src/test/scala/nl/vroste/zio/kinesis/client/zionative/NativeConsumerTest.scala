@@ -69,7 +69,9 @@ object NativeConsumerTest extends DefaultRunnableSpec {
         withRandomStreamAndApplicationName(nrShards) {
           (streamName, applicationName) =>
             for {
+              _        <- log.info("Starting producer")
               producer <- produceSampleRecords(streamName, nrRecords, chunkSize = 500).fork
+              _        <- log.info("Starting consumer")
               records  <- Consumer
                            .shardedStream(
                              streamName,

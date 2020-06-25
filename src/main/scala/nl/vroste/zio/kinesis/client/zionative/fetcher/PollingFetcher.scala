@@ -23,12 +23,12 @@ object PollingFetcher {
       // Max 5 calls per second (globally)
       getShardIterator <- throttledFunction(5, 1.second)((Client.getShardIterator _).tupled)
       env              <- ZIO.environment[Client with Clock].toManaged_
-    } yield Fetcher { (shard, startingPosition) =>
+    } yield Fetcher { (shardId, startingPosition) =>
       ZStream.unwrapManaged {
         for {
           // GetRecords can be called up to 5 times per second per shard
           getRecordsThrottled  <- throttledFunction(5, 1.second)((Client.getRecords _).tupled)
-          initialShardIterator <- getShardIterator((streamDescription.streamName, shard.shardId(), startingPosition))
+          initialShardIterator <- getShardIterator((streamDescription.streamName, shardId, startingPosition))
                                     .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
                                     .toManaged_
           shardIterator        <- Ref.make[String](initialShardIterator).toManaged_
@@ -50,7 +50,7 @@ object PollingFetcher {
               _                    <- Option(response.nextShardIterator).map(shardIterator.set).getOrElse(ZIO.fail(None))
               _                    <- emitDiagnostic(
                      DiagnosticEvent.PollComplete(
-                       shard.shardId(),
+                       shardId,
                        records.size,
                        response.millisBehindLatest().toLong.millis,
                        duration
@@ -67,16 +67,5 @@ object PollingFetcher {
           .flattenChunks
           .provide(env)
       }.provide(env)
-    }
-
-  /**
-   * Creates an effect that executes `poll` but with preceded by a delay if the previous call to `poll`
-   * returned an empty chunk
-   */
-  def makePollWithDelayIfNoResult[R, E, A](delay: Duration)(
-    poll: ZIO[R, E, Chunk[A]]
-  ): ZIO[Any, Nothing, ZIO[Clock with R, E, Chunk[A]]] =
-    Ref.make[Boolean](false).map { delayRef =>
-      ZIO.sleep(delay).whenM(delayRef.get) *> poll.tap(r => delayRef.set(r.isEmpty))
     }
 }

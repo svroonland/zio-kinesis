@@ -53,22 +53,24 @@ object FetchMode {
 }
 
 trait Fetcher {
-  def shardRecordStream(shard: Shard, startingPosition: ShardIteratorType): ZStream[Clock, Throwable, KinesisRecord]
+  def shardRecordStream(shardId: String, startingPosition: ShardIteratorType): ZStream[Clock, Throwable, KinesisRecord]
 }
 
 object Fetcher {
-  def apply(f: (Shard, ShardIteratorType) => ZStream[Clock, Throwable, KinesisRecord]): Fetcher =
+  def apply(f: (String, ShardIteratorType) => ZStream[Clock, Throwable, KinesisRecord]): Fetcher =
     (shard, startingPosition) => f(shard, startingPosition)
 }
 
 trait LeaseCoordinator {
-  def makeCheckpointer(shard: Shard): ZIO[Clock with Logging, Throwable, Checkpointer]
+  def makeCheckpointer(shardId: String): ZIO[Clock with Logging, Throwable, Checkpointer]
 
-  def getCheckpointForShard(shard: Shard): UIO[Option[ExtendedSequenceNumber]]
+  def getCheckpointForShard(shardId: String): UIO[Option[ExtendedSequenceNumber]]
 
   def acquiredLeases: ZStream[Clock, Throwable, AcquiredLease]
 
   def releaseLease(shardId: String): ZIO[Logging, Throwable, Unit]
+
+  def updateShards(shards: Map[String, Shard]): UIO[Unit]
 }
 
 object LeaseCoordinator {
@@ -90,10 +92,7 @@ object Consumer {
     Throwable,
     (String, ZStream[R with Blocking with Clock with Logging, Throwable, Record[T]], Checkpointer)
   ] = {
-    def toRecord(
-      shardId: String,
-      r: KinesisRecord
-    ): ZIO[R, Throwable, Record[T]] =
+    def toRecord(shardId: String, r: KinesisRecord): ZIO[R, Throwable, Record[T]] =
       deserializer.deserialize(r.data.asByteBuffer()).map { data =>
         Record(
           shardId,
@@ -124,39 +123,52 @@ object Consumer {
               .describeStream(streamName)
               .map(makeFetcher)
           ),
+          // Fetch shards and initialize the lease coordinator at the same time
+          // When we have the shards, we inform the lease coordinator. When the lease table
+          // still has to be created, we have the shards in time for lease claiming begins.
+          // If not in time, the next cycle of takeLeases will take care of it
+          // When the lease table already exists, the updateShards call will not provide
+          // additional information to the lease coordinator, and the list of leases is used
+          // as the list of shards.
           for {
-            // TODO do we have to wait for currentShards to complete here?
-            currentShards    <- Client.listShards(streamName).runCollect.map(_.map(l => (l.shardId(), l)).toMap).toManaged_
-            _                <- ZManaged.fail(new Exception("No shards in stream!")).when(currentShards.isEmpty)
-            leaseCoordinator <-
-              DynamoDbLeaseCoordinator
-                .make(applicationName, workerId, currentShards, emitDiagnostic, leaseCoordinationSettings)
-          } yield (currentShards, leaseCoordinator)
+            fetchShards      <- Client
+                             .listShards(streamName)
+                             .runCollect
+                             .map(_.map(l => (l.shardId(), l)).toMap)
+                             .flatMap { shards =>
+                               if (shards.isEmpty) ZIO.fail(new Exception("No shards in stream!"))
+                               else ZIO.succeed(shards)
+                             }
+                             .forkManaged
+            leaseCoordinator <- DynamoDbLeaseCoordinator
+                                  .make(applicationName, workerId, emitDiagnostic, leaseCoordinationSettings)
+            _                <- fetchShards.join.flatMap(leaseCoordinator.updateShards(_)).forkManaged
+          } yield leaseCoordinator
         )(_ -> _)
         .map {
-          case (fetcher, (currentShards, leaseCoordinator)) =>
+          case (fetcher, leaseCoordinator) =>
             leaseCoordinator.acquiredLeases.collect {
-              case AcquiredLease(shardId, leaseLost) if currentShards.contains(shardId) =>
-                (currentShards.get(shardId).get, leaseLost)
+              case AcquiredLease(shardId, leaseLost) =>
+                (shardId, leaseLost)
             }.mapMPar(10) { // TODO config var: max shard starts or something
-              case (shard, leaseLost) =>
+              case (shardId, leaseLost) =>
                 for {
-                  checkpointer        <- leaseCoordinator.makeCheckpointer(shard)
+                  checkpointer        <- leaseCoordinator.makeCheckpointer(shardId)
                   blocking            <- ZIO.environment[Blocking]
-                  startingPositionOpt <- leaseCoordinator.getCheckpointForShard(shard)
+                  startingPositionOpt <- leaseCoordinator.getCheckpointForShard(shardId)
                   startingPosition     = startingPositionOpt
                                        .map(s => ShardIteratorType.AfterSequenceNumber(s.sequenceNumber))
                                        .getOrElse(initialStartingPosition)
                   stop                 = ZStream.fromEffect(leaseLost.await).as(Exit.fail(None))
                   // TODO make shardRecordStream a ZIO[ZStream], so it can actually fail on creation and we can handle it here
                   shardStream          = (stop merge fetcher
-                                    .shardRecordStream(shard, startingPosition)
+                                    .shardRecordStream(shardId, startingPosition)
                                     .mapChunksM { chunk => // mapM is slow
-                                      chunk.mapM(record => toRecord(shard.shardId(), record))
+                                      chunk.mapM(record => toRecord(shardId, record))
                                     }
                                     .map(Exit.succeed(_))).collectWhileSuccess
                 } yield (
-                  shard.shardId(),
+                  shardId,
                   shardStream.ensuringFirst {
                     checkpointer.checkpointAndRelease.catchAll {
                       case Left(e)               => ZIO.fail(e)

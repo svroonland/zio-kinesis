@@ -46,7 +46,7 @@ object EnhancedFanOutFetcher {
       env         <- ZIO.environment[Logging with Clock].toManaged_
       _            = println("Creating consumer")
       consumerARN <- registerConsumerIfNotExists(streamDescription.streamARN, workerId).toManaged_
-    } yield Fetcher { (shard, startingPosition) =>
+    } yield Fetcher { (shardId, startingPosition) =>
       ZStream.unwrap {
         for {
           currentPosition <- Ref.make[ShardIteratorType](startingPosition)
@@ -56,7 +56,7 @@ object EnhancedFanOutFetcher {
                        client
                          .subscribeToShard(
                            consumerARN,
-                           shard.shardId(),
+                           shardId,
                            pos
                          )
                      }
@@ -65,7 +65,7 @@ object EnhancedFanOutFetcher {
                          emitDiagnostic(
                            DiagnosticEvent
                              .SubscribeToShardEvent(
-                               shard.shardId(),
+                               shardId,
                                e.records.size,
                                e.millisBehindLatest().toLong.millis
                              )
@@ -79,7 +79,7 @@ object EnhancedFanOutFetcher {
             ZStream.unwrap(ZIO.sleep(1.second).tap(_ => UIO(println("Throttled!"))).as(stream))
           case e @ (_: ReadTimeoutException | _: IOException)     =>
             ZStream.unwrap(
-              log.warn(s"SubscribeToShard IO error for shard ${shard.shardId()}, will retry: ${e}").as(stream)
+              log.warn(s"SubscribeToShard IO error for shard ${shardId}, will retry: ${e}").as(stream)
             )
 
         } // TODO this should be replaced with a ZStream#retry with a proper exponential backoff scheme
