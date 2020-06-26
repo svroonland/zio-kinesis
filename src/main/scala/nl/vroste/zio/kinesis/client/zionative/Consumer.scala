@@ -69,8 +69,6 @@ trait LeaseCoordinator {
   def acquiredLeases: ZStream[Clock, Throwable, AcquiredLease]
 
   def releaseLease(shardId: String): ZIO[Logging, Throwable, Unit]
-
-  def updateShards(shards: Map[String, Shard]): UIO[Unit]
 }
 
 object LeaseCoordinator {
@@ -140,9 +138,9 @@ object Consumer {
                                else ZIO.succeed(shards)
                              }
                              .forkManaged
-            leaseCoordinator <- DynamoDbLeaseCoordinator
-                                  .make(applicationName, workerId, emitDiagnostic, leaseCoordinationSettings)
-            _                <- fetchShards.join.flatMap(leaseCoordinator.updateShards(_)).forkManaged
+            leaseCoordinator <-
+              DynamoDbLeaseCoordinator
+                .make(applicationName, workerId, emitDiagnostic, leaseCoordinationSettings, fetchShards.join)
           } yield leaseCoordinator
         )(_ -> _)
         .map {

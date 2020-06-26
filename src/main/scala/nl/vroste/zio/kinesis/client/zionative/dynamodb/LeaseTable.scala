@@ -17,7 +17,9 @@ import scala.util.{ Failure, Try }
 class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
   import LeaseTable._
 
-  // // TODO billing mode
+  /**
+   * Returns whether the table already existed
+   */
   def createLeaseTableIfNotExists: ZIO[Clock with Logging, Throwable, Boolean] = {
     val keySchema            = List(keySchemaElement("leaseKey", KeyType.HASH))
     val attributeDefinitions = List(attributeDefinition("leaseKey", ScalarAttributeType.S))
@@ -30,22 +32,29 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
       .attributeDefinitions(attributeDefinitions.asJavaCollection)
       .build()
 
-    val createTable = log.info("Creating lease table") *> asZIO(client.createTable(request)).unit
+    val createTable = log.info(s"Creating lease table ${applicationName}") *> asZIO(client.createTable(request))
+    // This is for LocalStack compatibility, which returns an empty response when the table already exists
+    // See https://github.com/localstack/localstack/issues/2629
+      .filterOrFail(_.tableDescription() != null)(
+        ResourceInUseException.builder().message("Table already exists").build()
+      )
+      .unit
 
     // recursion, yeah!
     def awaitTableCreated: ZIO[Clock with Logging, Throwable, Unit] =
       leaseTableExists
-        .flatMap(awaitTableCreated.delay(10.seconds).unless(_)) // TODO 10 seconds?
+        .flatMap(awaitTableCreated.delay(1.seconds).unless(_)) // TODO 10 seconds?
 
     // Just try to create the table, if we get ResourceInUse it already existed or another worker is creating it
     (createTable *> awaitTableCreated.as(false)).catchSome {
       // Another worker may have created the table between this worker checking if it exists and attempting to create it
-      case _: ResourceInUseException => ZIO.succeed(true)
+      case _: ResourceInUseException =>
+        ZIO.succeed(true)
     }.timeoutFail(new Exception("Timeout creating lease table"))(10.minute) // I dunno
   }
 
   def leaseTableExists: ZIO[Logging, Throwable, Boolean] =
-    log.info("Checking if table exists") *>
+    log.debug("Checking if table exists") *>
       asZIO(client.describeTable(DescribeTableRequest.builder().tableName(applicationName).build()))
         .map(_.table().tableStatus() == TableStatus.ACTIVE)
         .catchSome { case _: ResourceNotFoundException => ZIO.succeed(false) }

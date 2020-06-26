@@ -166,7 +166,8 @@ private class DynamoDbLeaseCoordinator(
 
   private def updateState(f: (State, Instant) => State) = now.flatMap(n => state.update(f(_, n)))
 
-  def updateShards(shards: Map[String, Shard]): UIO[Unit] = state.update(_.updateShards(shards))
+  private def updateShards(shards: Map[String, Shard]): UIO[Unit] =
+    state.update(_.updateShards(shards))
 
   /**
    * Operations that update a held lease will interfere unless we run them sequentially for each shard
@@ -529,7 +530,8 @@ object DynamoDbLeaseCoordinator {
     applicationName: String,
     workerId: String,
     emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit,
-    settings: LeaseCoordinationSettings
+    settings: LeaseCoordinationSettings,
+    shards: Task[Map[String, Shard]]
   ): ZManaged[Clock with Random with Logging with Has[DynamoDbAsyncClient], Throwable, LeaseCoordinator] =
     ZManaged.make {
       log.locally(LogAnnotation.Name(s"worker-${workerId}" :: Nil)) {
@@ -556,9 +558,19 @@ object DynamoDbLeaseCoordinator {
         // Do all initalization in parallel
         for {
           _ <- logNamed(s"worker-${workerId}")(c.runloop.runDrain).forkManaged
+          // Wait for shards if the lease table does not exist yet, otherwise we assume there's leases
+          // for all shards already, so just fork it. If there's new shards, the next `takeLeases` will
+          // claim leases for them.
+          _ <- logNamed(s"worker-${workerId}") {
+                 val awaitAndUpdateShards = shards.flatMap(c.updateShards)
+
+                 c.refreshLeases.when(leaseTableExists) *>
+                   (if (leaseTableExists) awaitAndUpdateShards.fork else awaitAndUpdateShards)
+               }.toManaged_
+          _  = log.info("Begin first initialisation: takeLeases")
           _ <- logNamed(s"worker-${workerId}")(
                  // Initialization
-                 (c.refreshLeases.when(!leaseTableExists) *> c.takeLeases) *>
+                 (c.takeLeases) *>
                    // Periodic refresh
                    (c.refreshLeases *> c.takeLeases)
                      .repeat(
