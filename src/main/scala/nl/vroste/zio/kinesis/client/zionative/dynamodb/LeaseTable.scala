@@ -17,11 +17,8 @@ import scala.util.{ Failure, Try }
 class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
   import LeaseTable._
 
-  def createLeaseTableIfNotExists: ZIO[Clock with Logging, Throwable, Boolean] =
-    leaseTableExists.flatMap(exists => if (exists) ZIO.succeed(true) else createLeaseTable.as(false))
-
-  // TODO billing mode
-  def createLeaseTable: ZIO[Clock with Logging, Throwable, Unit] = {
+  // // TODO billing mode
+  def createLeaseTableIfNotExists: ZIO[Clock with Logging, Throwable, Boolean] = {
     val keySchema            = List(keySchemaElement("leaseKey", KeyType.HASH))
     val attributeDefinitions = List(attributeDefinition("leaseKey", ScalarAttributeType.S))
 
@@ -33,19 +30,18 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
       .attributeDefinitions(attributeDefinitions.asJavaCollection)
       .build()
 
-    val createTable = log.info("Creating lease table") *> asZIO(client.createTable(request)).unit.catchSome {
-      // Another worker may have created the table between this worker checking if it exists and attempting to create it
-      case _: ResourceInUseException => ZIO.unit
-    }
+    val createTable = log.info("Creating lease table") *> asZIO(client.createTable(request)).unit
 
     // recursion, yeah!
     def awaitTableCreated: ZIO[Clock with Logging, Throwable, Unit] =
       leaseTableExists
-        .flatMap(awaitTableCreated.delay(10.seconds).unless(_))
+        .flatMap(awaitTableCreated.delay(10.seconds).unless(_)) // TODO 10 seconds?
 
-    createTable *>
-      awaitTableCreated
-        .timeoutFail(new Exception("Timeout creating lease table"))(10.minute) // I dunno
+    // Just try to create the table, if we get ResourceInUse it already existed or another worker is creating it
+    (createTable *> awaitTableCreated.as(false)).catchSome {
+      // Another worker may have created the table between this worker checking if it exists and attempting to create it
+      case _: ResourceInUseException => ZIO.succeed(true)
+    }.timeoutFail(new Exception("Timeout creating lease table"))(10.minute) // I dunno
   }
 
   def leaseTableExists: ZIO[Logging, Throwable, Boolean] =
