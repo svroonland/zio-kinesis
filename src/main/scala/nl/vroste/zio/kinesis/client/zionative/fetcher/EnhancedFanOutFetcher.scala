@@ -53,23 +53,36 @@ object EnhancedFanOutFetcher {
     } yield Fetcher { (shardId, startingPosition) =>
       ZStream.unwrap {
         for {
-          currentPosition <- Ref.make[ShardIteratorType](startingPosition)
+          currentPosition <- Ref.make[Option[ShardIteratorType]](Some(startingPosition))
           stream           = ZStream
-                     .fromEffect(currentPosition.get.flatMap(pos => subscribeThrottled((pos, shardId))))
+                     .fromEffect(
+//                       log.info("Calling subscribeThrottled") *>
+                       currentPosition.get
+                         .flatMap(
+                           _.map(pos => subscribeThrottled((pos, shardId))).getOrElse(ZIO.succeed(ZStream.empty))
+                         )
+                       // <* log.debug("Calling subscribeThrotteld done")
+                     )
                      .flatten
                      .tap { e =>
-                       currentPosition.set(ShardIteratorType.AfterSequenceNumber(e.continuationSequenceNumber)) *>
-                         emitDiagnostic(
-                           DiagnosticEvent
-                             .SubscribeToShardEvent(
-                               shardId,
-                               e.records.size,
-                               e.millisBehindLatest().toLong.millis
-                             )
-                         )
+                       currentPosition.set(
+                         Option(e.continuationSequenceNumber()).map(ShardIteratorType.AfterSequenceNumber)
+                       )
+                     }
+                     .tap { e =>
+                       emitDiagnostic(
+                         DiagnosticEvent
+                           .SubscribeToShardEvent(
+                             shardId,
+                             e.records.size,
+                             e.millisBehindLatest().toLong.millis
+                           )
+                       )
                      }
                      .mapConcat(_.records.asScala)
-                     .repeat(Schedule.forever) // Shard subscriptions get canceled after 5 minutes
+                     .repeat(
+                       Schedule.doUntilM(_ => currentPosition.get.map(_.isEmpty))
+                     ) // Shard subscriptions get canceled after 5 minutes, resulting in stream completion.
 
         } yield stream.catchSome {
           case e if Consumer.isThrottlingException.isDefinedAt(e) =>
@@ -78,8 +91,16 @@ object EnhancedFanOutFetcher {
             ZStream.unwrap(
               log.warn(s"SubscribeToShard IO error for shard ${shardId}, will retry: ${e}").as(stream)
             )
-
-        } // TODO this should be replaced with a ZStream#retry with a proper exponential backoff scheme
+          case e                                                  =>
+            ZStream.unwrap(
+              log
+                .error(s"Unknown failure in SubscribeToShard: ${e}")
+                .as(
+                  ZStream.fail(e)
+                )
+            )
+        } ++ // TODO this should be replaced with a ZStream#retry with a proper exponential backoff scheme
+          ZStream.unwrap(log.warn(s"Oh no why has shard stream ${shardId} completed??").as(ZStream.empty))
       }.provide(env)
     }
 }
