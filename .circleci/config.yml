@@ -57,6 +57,8 @@ jobs:
       - restore_cache:
           key: sbt-cache
       - run: sbt ++2.13.1! test
+      - store_test_results:
+          path: target/test-reports
       - save_cache:
           key: sbt-cache
           paths:
