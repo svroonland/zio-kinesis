@@ -226,7 +226,9 @@ private class DefaultLeaseCoordinator(
                    case Right(LeaseObsolete) =>
                      leaseLost(lease, leaseCompleted) *>
                        log.info(s"Unable to renew lease for shard, lease counter was obsolete").unit
-                   case Left(e)              => ZIO.fail(e)
+                   case Left(e)              =>
+                     // TODO we should probably retry this
+                     ZIO.fail(e)
                  }
             _ <- updateState(_.updateLease(updatedLease, _))
             _ <- emitDiagnostic(DiagnosticEvent.LeaseRenewed(updatedLease.key))
@@ -299,7 +301,7 @@ private class DefaultLeaseCoordinator(
    * If our application does not checkpoint, we still need to periodically renew leases, otherwise other workers
    * will think ours are expired
    */
-  val renewLeases = for {
+  val renewLeases: ZIO[Any, Throwable, Unit] = for {
     // TODO we could skip renewing leases that were recently checkpointed, save a few DynamoDB credits
     heldLeases <- state.get.map(_.heldLeases.keySet)
     _          <- ZIO
@@ -602,15 +604,19 @@ object DefaultLeaseCoordinator {
                            .jittered(0.95, 1.05)
                        )
                        .delay(settings.refreshAndTakeInterval)
+                       .tapCause(e => log.error("Refresh & take leases failed, will retry", e))
+                       .retry(Schedule.forever)
                  ).forkManaged
             _ <- logNamed(s"worker-${workerId}")(
-                   (c.renewLeases)
+                   c.renewLeases
                      .repeat(
                        Schedule
                          .fixed(settings.renewInterval)
                          .jittered(0.95, 1.05)
                      )
                      .delay(settings.renewInterval)
+                     .tapCause(e => log.error("Renewing leases failed, will retry", e))
+                     .retry(Schedule.forever)
                  ).forkManaged
           } yield c
       }
