@@ -254,7 +254,7 @@ object Util {
     max: Duration,
     factor: Double = 2.0,
     maxRecurs: Option[Int] = None
-  ): Schedule[Clock, Throwable, Any] =
+  ): Schedule[Clock, Any, Any] =
     (Schedule.exponential(min, factor).whileOutput(_ <= max) andThen Schedule.fixed(max)) &&
       maxRecurs.map(Schedule.recurs).getOrElse(Schedule.forever)
 

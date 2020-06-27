@@ -8,8 +8,13 @@ import zio.clock.Clock
 import zio.duration._
 import zio.stream.ZStream
 import zio._
+import zio.logging.log
+import zio.stream.ZStream.{ fromEffect, unfoldM }
 
 import scala.jdk.CollectionConverters._
+import scala.util.control.NonFatal
+import nl.vroste.zio.kinesis.client.Util
+import zio.logging.Logging
 
 object PollingFetcher {
   import Consumer.retryOnThrottledWithSchedule
@@ -18,11 +23,11 @@ object PollingFetcher {
     streamDescription: StreamDescription,
     config: FetchMode.Polling,
     emitDiagnostic: DiagnosticEvent => UIO[Unit]
-  ): ZManaged[Clock with Client, Throwable, Fetcher] =
+  ): ZManaged[Clock with Client with Logging, Throwable, Fetcher] =
     for {
       // Max 5 calls per second (globally)
       getShardIterator <- throttledFunction(5, 1.second)((Client.getShardIterator _).tupled)
-      env              <- ZIO.environment[Client with Clock].toManaged_
+      env              <- ZIO.environment[Client with Clock with Logging].toManaged_
     } yield Fetcher { (shardId, startingPosition) =>
       ZStream.unwrapManaged {
         for {
@@ -58,14 +63,46 @@ object PollingFetcher {
                    )
             } yield Chunk.fromIterable(records)
 
-        } yield ZStream
-          .repeatEffectWith(pollWithDelay, Schedule.fixed(config.interval))
-          .catchAll {
-            case None    => ZStream.empty
-            case Some(e) => ZStream.fail(e)
-          }
-          .flattenChunks
-          .provide(env)
+        } yield retryStream(
+          ZStream
+            .repeatEffectWith(pollWithDelay, Schedule.fixed(config.interval))
+            .catchAll {
+              case None    => ZStream.empty
+              case Some(e) =>
+                ZStream.unwrap(
+                  log.warn(s"Error in PollingFetcher for shard ${shardId}, will retry. ${e}").as(ZStream.fail(e))
+                )
+            }
+            .flattenChunks,
+          config.throttlingBackoff
+        ).provide(env)
       }.provide(env)
+    }
+
+  def retryStream[R, R1 <: R, E, O](stream: ZStream[R, E, O], schedule: Schedule[R1, E, _]): ZStream[R1, E, O] =
+    ZStream.unwrap {
+      for {
+        s0    <- schedule.initial
+        state <- Ref.make[schedule.State](s0)
+      } yield {
+        def streamWithRetry: ZStream[R1, E, O] =
+          stream
+            .catchAll(e =>
+              ZStream.unwrap {
+                (for {
+                  s        <- state.get
+                  newState <- schedule.update(e, s)
+                } yield newState).fold(
+                  _ => ZStream.fail(e),
+                  newState =>
+                    ZStream.fromEffect(state.set(newState)) *> streamWithRetry.tap(_ =>
+                      schedule.initial.flatMap(state.set)
+                    )
+                )
+              }
+            )
+
+        streamWithRetry
+      }
     }
 }
