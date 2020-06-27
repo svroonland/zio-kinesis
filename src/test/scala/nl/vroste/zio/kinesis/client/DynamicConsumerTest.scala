@@ -254,9 +254,9 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
   override def spec =
     suite("DynamicConsumer")(
-      testConsume1,
-      testConsume2,
-      testCheckpointAtShutdown
+      testConsume1 @@ TestAspect.ignore,
+      testConsume2 @@ TestAspect.ignore,
+      testCheckpointAtShutdown @@ TestAspect.ignore
     ).provideCustomLayer(env.orDie) @@ timeout(5.minute) @@ sequential @@ ignore
 
   def delayStream[R, E, O](s: ZStream[R, E, O], delay: Duration) =
