@@ -257,7 +257,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
       testConsume1,
       testConsume2,
       testCheckpointAtShutdown
-    ).provideCustomLayer(env.orDie) @@ timeout(5.minute) @@ sequential
+    ).provideCustomLayer(env.orDie) @@ timeout(5.minute) @@ sequential @@ ignore
 
   def delayStream[R, E, O](s: ZStream[R, E, O], delay: Duration) =
     ZStream.fromEffect(ZIO.sleep(delay)).flatMap(_ => s)
