@@ -20,7 +20,6 @@ import zio.duration._
 import zio.logging._
 import zio.random.{ shuffle, Random }
 import zio.stream.ZStream
-import scala.collection.compat._
 
 object ZioExtensions {
   implicit class OnSuccessSyntax[R, E, A](val zio: ZIO[R, E, A]) extends AnyVal {
