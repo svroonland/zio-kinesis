@@ -46,10 +46,10 @@ name := "zio-kinesis"
 scalafmtOnCompile := true
 
 libraryDependencies ++= Seq(
-  "dev.zio"                %% "zio-streams"                 % "1.0.0-RC21",
-  "dev.zio"                %% "zio-test"                    % "1.0.0-RC21" % "test",
-  "dev.zio"                %% "zio-test-sbt"                % "1.0.0-RC21" % "test",
-  "dev.zio"                %% "zio-interop-reactivestreams" % "1.0.3.5-RC11",
+  "dev.zio"                %% "zio-streams"                 % "1.0.0-RC21-1",
+  "dev.zio"                %% "zio-test"                    % "1.0.0-RC21-1" % "test",
+  "dev.zio"                %% "zio-test-sbt"                % "1.0.0-RC21-1" % "test",
+  "dev.zio"                %% "zio-interop-reactivestreams" % "1.0.3.5-RC12",
   "dev.zio"                %% "zio-logging"                 % "0.3.1",
   "dev.zio"                %% "zio-logging-slf4j"           % "0.3.1",
   "software.amazon.awssdk"  % "kinesis"                     % "2.13.43",

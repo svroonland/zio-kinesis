@@ -63,28 +63,27 @@ import zio.blocking.Blocking
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.DynamicConsumer
-import nl.vroste.zio.kinesis.client.DynamicConsumerLive
 
 val streamName  = "my_stream"
 val applicationName ="my_awesome_zio_application"
 
 (for {
-dynamicConsumer <- ZIO.service[DynamicConsumer.Service]
-_ <- dynamicConsumer
-  .shardedStream(
-    streamName,
-    applicationName = applicationName,
-    deserializer = Serde.asciiString
-  )
-  .flatMapPar(Int.MaxValue) { case (shardId: String, shardStream, checkpointer) =>
-    shardStream
-      .tap { r: DynamicConsumer.Record[String] =>
-        ZIO(println(s"Got record ${r} on shard ${shardId}")) *> checkpointer.checkpointNow
-      }
-  }.provideLayer(Blocking.live)
-  .runDrain
+  dynamicConsumer <- ZIO.service[DynamicConsumer.Service]
+  _ <- dynamicConsumer
+    .shardedStream(
+      streamName,
+      applicationName = applicationName,
+      deserializer = Serde.asciiString
+    )
+    .flatMapPar(Int.MaxValue) { case (shardId: String, shardStream, checkpointer) =>
+      shardStream
+        .tap { r: DynamicConsumer.Record[String] =>
+          ZIO(println(s"Got record ${r} on shard ${shardId}")) *> checkpointer.checkpointNow
+        }
+    }.provideLayer(Blocking.live)
+    .runDrain
 } yield ()).provideLayer(
-  kinesisAsyncClientLayer ++ cloudWatchAsyncClientLayer ++ dynamoDbAsyncClientLayer >>> DynamicConsumer.live
+  kinesisAsyncClientLayer() ++ cloudWatchAsyncClientLayer() ++ dynamoDbAsyncClientLayer() >>> DynamicConsumer.live
 )
 ```
 
@@ -136,7 +135,7 @@ _ <- dynamicConsumer
   .provideLayer(Blocking.live ++ Clock.live)
   .runDrain
 } yield ()).provideLayer(
-  kinesisAsyncClientLayer ++ cloudWatchAsyncClientLayer ++ dynamoDbAsyncClientLayer >>> DynamicConsumer.live
+  kinesisAsyncClientLayer() ++ cloudWatchAsyncClientLayer() ++ dynamoDbAsyncClientLayer() >>> DynamicConsumer.live
 )
 ```
 
@@ -148,7 +147,8 @@ buffered records in this situation, before it is completed.
 By default `Client`, `AdminClient`, `DynamicConsumer` and `Producer` will load AWS credentials and regions via the
 [Default Credential/Region Provider](https://docs.aws.amazon.com/sdk-for-java/v1/developer-guide/credentials.html).
 Using the client builders, many parameters can be customized. Refer to the AWS documentation for more information.
-Default client ZLayers are provided in `DefaultClients` for production and for test thet are provided in `LocalStackServices`
+Default client ZLayers are provided in `nl.vroste.zio.kinesis.client` package object for production and for integration 
+tests are provided in `LocalStackServices`
 
 The following snippet shows the full range of parameters to `DynamicConsumer.Service.shardedStream`
 
