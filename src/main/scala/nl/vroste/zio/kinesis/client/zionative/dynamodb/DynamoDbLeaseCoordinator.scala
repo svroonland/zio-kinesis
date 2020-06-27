@@ -44,11 +44,15 @@ object ZioExtensions {
  * @param expirationTime Time after which a lease is considered expired if not updated in the meantime
  * @param refreshAndTakeInterval Interval at which leases are refreshed and possibly new leases taken
  * @param renewInterval Interval at which leases are renewed to prevent them expiring
+ * @param maxParallelLeaseAcquisitions Maximum parallel calls to DynamoDB to claim a lease.
+ *                                     This is not the maximum number of leases to steal in one iteration
+ *                                     of `refreshAndTakeInterval`.
  */
 case class LeaseCoordinationSettings(
   expirationTime: Duration = 10.seconds,
   renewInterval: Duration = 3.seconds,
-  refreshAndTakeInterval: Duration = 20.seconds
+  refreshAndTakeInterval: Duration = 20.seconds,
+  maxParallelLeaseAcquisitions: Int = 10
 ) {
   require(renewInterval < expirationTime, "renewInterval must be less than expirationTime")
 }
@@ -325,6 +329,46 @@ private class DynamoDbLeaseCoordinator(
   }
 
   /**
+   * Claims all available leases for the current shards (no owner or not existent)
+   */
+  val claimLeasesForShardsWithoutLease: ZIO[Logging with Clock, Throwable, Unit] =
+    for {
+      state             <- state.get
+      allLeases          = state.currentLeases.view.mapValues(_.lease).toMap
+      _                 <- log.info(s"Found ${allLeases.size} leases")
+      // Claim new leases for the shards the database doesn't have leases for
+      shardsWithoutLease =
+        state.shards.values.toList.filterNot(shard => allLeases.values.map(_.key).toList.contains(shard.shardId()))
+      _                 <-
+        log
+          .info(
+            s"No leases exist yet for these shards, creating and claiming: ${shardsWithoutLease.map(_.shardId()).mkString(",")}"
+          )
+          .when(shardsWithoutLease.nonEmpty)
+      _                 <- ZIO
+             .foreachParN_(settings.maxParallelLeaseAcquisitions)(shardsWithoutLease) { shard =>
+               val lease = Lease(
+                 key = shard.shardId(),
+                 owner = Some(workerId),
+                 counter = 0L,
+                 ownerSwitchesSinceCheckpoint = 0L,
+                 checkpoint = None,
+                 parentShardIds = Seq.empty
+               )
+
+               (table.createLease(lease) <* registerNewAcquiredLease(lease)).catchAll {
+                 case Right(LeaseAlreadyExists) =>
+                   log
+                     .info(
+                       s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
+                     )
+                 case Left(e)                   =>
+                   ZIO.fail(e)
+               }
+             }
+    } yield ()
+
+  /**
    * Takes leases, unowned or from other workers, to get this worker's number of leases to the target value (nr leases / nr workers)
    *
    * Taking individual leases may fail, but the others will still be tried. Only in the next round of lease taking will we try again.
@@ -342,7 +386,7 @@ private class DynamoDbLeaseCoordinator(
       toTake        <- leasesToTake(state.currentLeases.map(_._2.lease).toList, workerId, expiredLeases)
       _             <- log.info(s"Going to take ${toTake.size} leases: ${toTake.mkString(",")}").when(toTake.nonEmpty)
       claimedLeases <- ZIO
-                         .foreachPar(toTake) { lease =>
+                         .foreachParN(settings.maxParallelLeaseAcquisitions)(toTake) { lease =>
                            val updatedLease = lease.claim(workerId)
                            table
                              .claimLease(updatedLease)
@@ -372,42 +416,16 @@ private class DynamoDbLeaseCoordinator(
     } yield ()
 
   /**
-   * Claims all available leases for the current shards (no owner or not existent)
+   * For leases that we found in the lease table that have our worker ID as owner but we don't
+   * currently have in our state as acquired
    */
-  def claimLeasesForShardsWithoutLease: ZIO[Logging with Clock, Throwable, Unit] =
-    for {
-      state             <- state.get
-      allLeases          = state.currentLeases.view.mapValues(_.lease).toMap
-      _                 <- log.info(s"Found ${allLeases.size} leases")
-      // Claim new leases for the shards the database doesn't have leases for
-      shardsWithoutLease =
-        state.shards.values.toList.filterNot(shard => allLeases.values.map(_.key).toList.contains(shard.shardId()))
-      _                 <-
-        log.info(
-          s"No leases exist yet for these shards, creating and claiming: ${shardsWithoutLease.map(_.shardId()).mkString(",")}"
-        )
-      _                 <- ZIO
-             .foreachPar_(shardsWithoutLease) { shard =>
-               val lease = Lease(
-                 key = shard.shardId(),
-                 owner = Some(workerId),
-                 counter = 0L,
-                 ownerSwitchesSinceCheckpoint = 0L,
-                 checkpoint = None,
-                 parentShardIds = Seq.empty
-               )
-
-               (table.createLease(lease) <* registerNewAcquiredLease(lease)).catchAll {
-                 case Right(LeaseAlreadyExists) =>
-                   log
-                     .info(
-                       s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
-                     )
-                 case Left(e)                   =>
-                   ZIO.fail(e)
-               }
-             }
-    } yield ()
+  val resumeUnreleasedLeases = for {
+    s             <- state.get
+    leasesToResume = s.currentLeases.collect {
+                       case (shardId @ _, LeaseState(lease, None, _)) if lease.owner.contains(workerId) => lease
+                     }
+    _             <- ZIO.foreachPar_(leasesToResume)(registerNewAcquiredLease)
+  } yield ()
 
   override def acquiredLeases: ZStream[zio.clock.Clock, Throwable, AcquiredLease]          =
     ZStream
@@ -564,7 +582,7 @@ object DynamoDbLeaseCoordinator {
           _ <- logNamed(s"worker-${workerId}") {
                  val awaitAndUpdateShards = shards.flatMap(c.updateShards)
 
-                 c.refreshLeases.when(leaseTableExists) *>
+                 (c.refreshLeases *> c.resumeUnreleasedLeases).when(leaseTableExists) *>
                    (if (leaseTableExists) awaitAndUpdateShards.fork else awaitAndUpdateShards)
                }.toManaged_
           _  = log.info("Begin first initialisation: takeLeases")
@@ -585,9 +603,9 @@ object DynamoDbLeaseCoordinator {
                    .repeat(
                      Schedule
                        .fixed(settings.renewInterval)
-                       .addDelay(_ => settings.renewInterval)
                        .jittered(0.95, 1.05)
                    )
+                   .delay(settings.renewInterval)
                ).forkManaged
         } yield c
     }

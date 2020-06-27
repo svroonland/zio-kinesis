@@ -17,12 +17,12 @@ import zio._
  * Example app that shows the ZIO-native and KCL workers running in parallel
  */
 object ExampleApp extends zio.App {
-  val streamName      = "zio-test-stream-5" // + java.util.UUID.randomUUID().toString
+  val streamName      = "zio-test-stream-7" // + java.util.UUID.randomUUID().toString
   val nrRecords       = 2000000
-  val nrShards        = 193
-  val nrNativeWorkers = 13
+  val nrShards        = 200
+  val nrNativeWorkers = 1
   val nrKclWorkers    = 0
-  val applicationName = "testApp-8"         // + java.util.UUID.randomUUID().toString(),
+  val applicationName = "testApp-12"        // + java.util.UUID.randomUUID().toString(),
   val runtime         = 3.minute
 
   override def run(
@@ -37,10 +37,15 @@ object ExampleApp extends zio.App {
           streamName,
           applicationName = applicationName,
           deserializer = Serde.asciiString,
-          fetchMode = FetchMode.Polling(),
+          fetchMode = FetchMode.EnhancedFanOut(maxSubscriptionsPerSecond = 50), // FetchMode.Polling(),
           emitDiagnostic = {
-            case _: DiagnosticEvent.PollComplete => ZIO.unit
-            case ev                              => log.info(id + ": " + ev.toString).provideLayer(loggingEnv)
+            case ev: DiagnosticEvent.PollComplete =>
+              log
+                .info(
+                  id + s": PollComplete for ${ev.nrRecords} records of ${ev.shardId}, behind latest: ${ev.duration.toMillis} millis"
+                )
+                .provideLayer(loggingEnv)
+            case ev                               => log.info(id + ": " + ev.toString).provideLayer(loggingEnv)
           },
           workerId = id
         )
@@ -51,8 +56,9 @@ object ExampleApp extends zio.App {
                 checkpointer
                   .stageOnSuccess(putStrLn(s"${id} Processing record $r").when(false))(r)
               )
-              .aggregateAsyncWithin(ZTransducer.last, Schedule.fixed(5.second))
-              .mapConcat(_.toList)
+              .aggregateAsyncWithin(ZTransducer.collectAllN(10000), Schedule.fixed(5.second))
+              .tap(rs => log.info(s"${id} processed ${rs.size} records on shard ${shardID}"))
+              .mapConcat(_.lastOption.toList)
               .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
               .tap(_ => checkpointer.checkpoint)
               .catchAll {
@@ -131,7 +137,9 @@ object ExampleApp extends zio.App {
 
   val awsEnv
     : ZLayer[Any, Nothing, AdminClient with Client with DynamicConsumer with Logging with Has[DynamoDbAsyncClient]] =
-    (kinesisAsyncClientLayer(Client.adjustKinesisClientBuilder(KinesisAsyncClient.builder())).fresh.orDie ++
+    (kinesisAsyncClientLayer(
+      Client.adjustKinesisClientBuilder(KinesisAsyncClient.builder(), maxConcurrency = 100)
+    ).fresh.orDie ++
       dynamoDbAsyncClientLayer().fresh.orDie ++
       cloudWatchAsyncClientLayer().orDie) >>>
       (AdminClient.live.orDie ++ Client.live.orDie ++ DynamicConsumer.live ++ loggingEnv ++ ZLayer
@@ -153,7 +161,7 @@ object ExampleApp extends zio.App {
             .map(Chunk.single(_))
 //            .delay(1.second)
         )
-        .mapMPar(1)(_.join)
+        .mapMPar(10)(_.join)
         .runDrain
     }
 }

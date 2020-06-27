@@ -272,4 +272,11 @@ object Util {
         result  <- promise.await
       } yield result
 
+  def throttledFunctionN[R, I0, I1, E, A](units: Long, duration: Duration)(
+    f: (I0, I1) => ZIO[R, E, A]
+  ): ZManaged[Clock, Nothing, ((I0, I1)) => ZIO[R, E, A]] =
+    throttledFunction[R, (I0, I1), E, A](units, duration) {
+      case (i0, i1) => f(i0, i1)
+    }
+
 }

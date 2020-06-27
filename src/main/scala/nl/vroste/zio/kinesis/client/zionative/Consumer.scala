@@ -39,7 +39,7 @@ object FetchMode {
    * @param throttlingBackoff When getting a Provisioned Throughput Exception or KmsThrottlingException, schedule to apply for backoff
    */
   case class Polling(
-    batchSize: Int = 100,
+    batchSize: Int = 1000,
     interval: Duration = 1.second,
     throttlingBackoff: Schedule[Clock, Throwable, Any] = Util.exponentialBackoff(1.second, 1.minute)
   ) extends FetchMode
@@ -47,7 +47,8 @@ object FetchMode {
   /**
    * Fetch data using enhanced fanout
    */
-  case object EnhancedFanOut extends FetchMode
+  case class EnhancedFanOut(deregisterConsumerAtShutdown: Boolean = false, maxSubscriptionsPerSecond: Int = 10)
+      extends FetchMode
 }
 
 trait Fetcher {
@@ -107,8 +108,8 @@ object Consumer {
       streamDescription: StreamDescription
     ): ZManaged[Clock with Client with Logging, Throwable, Fetcher] =
       fetchMode match {
-        case c: Polling     => PollingFetcher.make(streamDescription, c, emitDiagnostic)
-        case EnhancedFanOut => EnhancedFanOutFetcher.make(streamDescription, workerId, emitDiagnostic)
+        case c: Polling        => PollingFetcher.make(streamDescription, c, emitDiagnostic)
+        case c: EnhancedFanOut => EnhancedFanOutFetcher.make(streamDescription, workerId, c, emitDiagnostic)
       }
 
     def createDependencies =

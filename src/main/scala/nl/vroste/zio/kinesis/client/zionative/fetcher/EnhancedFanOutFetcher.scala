@@ -4,9 +4,9 @@ import java.io.IOException
 
 import io.netty.handler.timeout.ReadTimeoutException
 import nl.vroste.zio.kinesis.client.AdminClient.StreamDescription
-import nl.vroste.zio.kinesis.client.Client
+import nl.vroste.zio.kinesis.client.{ Client, Util }
 import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
-import nl.vroste.zio.kinesis.client.zionative.{ Consumer, DiagnosticEvent, Fetcher }
+import nl.vroste.zio.kinesis.client.zionative.{ Consumer, DiagnosticEvent, FetchMode, Fetcher }
 import software.amazon.awssdk.services.kinesis.model.{ ConsumerStatus, ResourceInUseException }
 import zio.clock.Clock
 import zio.duration._
@@ -33,30 +33,30 @@ object EnhancedFanOutFetcher {
       }
 
   // TODO doesn't really need to be managed anymore
+  // TODO configure: deregsiter stream consumers after use
   def make(
     streamDescription: StreamDescription,
     workerId: String,
+    config: FetchMode.EnhancedFanOut,
     emitDiagnostic: DiagnosticEvent => UIO[Unit]
   ): ZManaged[Clock with Client with Logging, Throwable, Fetcher] =
     for {
-      client      <- ZIO.service[Client.Service].toManaged_
-      env         <- ZIO.environment[Logging with Clock].toManaged_
-      _            = println("Creating consumer")
-      consumerARN <- registerConsumerIfNotExists(streamDescription.streamARN, workerId).toManaged_
+      client             <- ZIO.service[Client.Service].toManaged_
+      env                <- ZIO.environment[Logging with Clock].toManaged_
+      _                   = println("Creating consumer")
+      consumerARN        <- registerConsumerIfNotExists(streamDescription.streamARN, workerId).toManaged_
+      subscribeThrottled <- Util.throttledFunctionN(config.maxSubscriptionsPerSecond, 1.second) {
+                              (pos: ShardIteratorType, shardId: String) =>
+                                ZIO.succeed(client.subscribeToShard(consumerARN, shardId, pos))
+                            }
+      // TODO we need to wait until the consumer becomes active, otherwise there will be no events in the stream
     } yield Fetcher { (shardId, startingPosition) =>
       ZStream.unwrap {
         for {
           currentPosition <- Ref.make[ShardIteratorType](startingPosition)
           stream           = ZStream
-                     .fromEffect(currentPosition.get)
-                     .flatMap { pos =>
-                       client
-                         .subscribeToShard(
-                           consumerARN,
-                           shardId,
-                           pos
-                         )
-                     }
+                     .fromEffect(currentPosition.get.flatMap(subscribeThrottled(_, shardId)))
+                     .flatten
                      .tap { e =>
                        currentPosition.set(ShardIteratorType.AfterSequenceNumber(e.continuationSequenceNumber)) *>
                          emitDiagnostic(
