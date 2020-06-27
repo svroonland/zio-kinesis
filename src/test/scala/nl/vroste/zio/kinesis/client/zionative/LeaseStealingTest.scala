@@ -115,7 +115,7 @@ object LeaseStealingTest extends DefaultRunnableSpec {
   def changedElements[A](as: List[A]): List[A] =
     as.foldLeft(List.empty[A]) { case (acc, a) => if (acc.lastOption.contains(a)) acc else acc :+ a }
 
-  val loggingEnv                               = Slf4jLogger.make((_, logEntry) => logEntry, Some("NativeConsumerTest"))
+  val loggingEnv                               = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
   def genTraverse[R, A, B](elems: Iterable[A])(f: A => Gen[R, B]): Gen[R, List[B]] =
     Gen.crossAll(elems.map(f))
