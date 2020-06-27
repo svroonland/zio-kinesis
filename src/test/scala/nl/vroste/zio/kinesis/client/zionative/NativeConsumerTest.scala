@@ -351,7 +351,8 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                   Serde.asciiString,
                   workerId = workerId,
                   emitDiagnostic = emitDiagnostic,
-                  leaseCoordinationSettings = LeaseCoordinationSettings(10.seconds, 3.seconds)
+                  leaseCoordinationSettings =
+                    LeaseCoordinationSettings(10.seconds, 3.seconds, refreshAndTakeInterval = 3.seconds)
                 )
                 .flatMapPar(Int.MaxValue) {
                   case (shard @ _, shardStream, checkpointer) =>
@@ -373,12 +374,12 @@ object NativeConsumerTest extends DefaultRunnableSpec {
               events        <- Ref.make[List[(String, Instant, DiagnosticEvent)]](List.empty)
               emitDiagnostic = (workerId: String) =>
                                  (event: DiagnosticEvent) =>
-                                   //  onDiagnostic(workerId)(event) *>
-                                   zio.clock.currentDateTime
-                                     .map(_.toInstant())
-                                     .orDie
-                                     .flatMap(time => events.update(_ :+ ((workerId, time, event))))
-                                     .provideLayer(Clock.live)
+                                   onDiagnostic(workerId)(event) *>
+                                     zio.clock.currentDateTime
+                                       .map(_.toInstant())
+                                       .orDie
+                                       .flatMap(time => events.update(_ :+ ((workerId, time, event))))
+                                       .provideLayer(Clock.live)
 
               consumer1Done <- Promise.make[Nothing, Unit]
               stream        <- ZStream
