@@ -138,17 +138,12 @@ object Client {
     }
 
   def getShardIterator(streamName: String, shardId: String, iteratorType: ShardIteratorType): ClientTask[String] =
-    withClient(_.getShardIterator(streamName, shardId, iteratorType))
+    ZIO.service[Client.Service].flatMap(_.getShardIterator(streamName, shardId, iteratorType))
 
   def getRecords(shardIterator: String, limit: Int): ClientTask[GetRecordsResponse] =
-    withClient(_.getRecords(shardIterator, limit))
+    ZIO.service[Client.Service].flatMap(_.getRecords(shardIterator, limit))
 
   type ClientTask[+A] = ZIO[Client, Throwable, A]
-
-  private def withClient[R, R1 >: R, E, E1 <: E, A, A1 <: A](
-    f: Client.Service => ZIO[R1, E1, A1]
-  ): ZIO[Client with R, E, A] =
-    ZIO.service[Service].flatMap(f)
 
   case class ConsumerRecord(
     sequenceNumber: String,
