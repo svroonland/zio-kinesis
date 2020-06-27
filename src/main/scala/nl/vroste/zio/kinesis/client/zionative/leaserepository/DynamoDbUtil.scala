@@ -1,4 +1,4 @@
-package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
+package nl.vroste.zio.kinesis.client.zionative.leaserepository
 
 import software.amazon.awssdk.services.dynamodb.model._
 

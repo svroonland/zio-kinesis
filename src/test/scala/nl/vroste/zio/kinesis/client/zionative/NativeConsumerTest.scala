@@ -10,7 +10,8 @@ import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.TestUtil.retryOnResourceNotFound
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
-import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.{ DynamoDbLeaseRepository, LeaseCoordinationSettings }
+import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.LeaseCoordinationSettings
+import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
 import software.amazon.awssdk.services.kinesis.model.Shard
 import zio._

@@ -2,7 +2,7 @@ package nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.TestUtil.retryOnResourceNotFound
 import nl.vroste.zio.kinesis.client.serde.Serde
-import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DynamoDbLeaseRepository
+import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
 import nl.vroste.zio.kinesis.client.zionative.{
   Consumer,
   DiagnosticEvent,
