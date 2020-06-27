@@ -106,8 +106,9 @@ private[client] class ClientLive(kinesisClient: KinesisAsyncClient) extends Clie
 
     ZStream.unwrap {
       for {
-        streamP <- Promise.make[Throwable, ZStream[Any, Throwable, SubscribeToShardEvent]]
-        runtime <- ZIO.runtime[Any]
+        streamP                 <- Promise.make[Throwable, ZStream[Any, Throwable, SubscribeToShardEvent]]
+        streamExceptionOccurred <- Promise.make[Nothing, Throwable]
+        runtime                 <- ZIO.runtime[Any]
 
         subscribeResponse = asZIO {
                               kinesisClient.subscribeToShard(
@@ -117,19 +118,21 @@ private[client] class ClientLive(kinesisClient: KinesisAsyncClient) extends Clie
                                   .shardId(shardID)
                                   .startingPosition(jStartingPosition.build())
                                   .build(),
-                                subscribeToShardResponseHandler(runtime, streamP)
+                                subscribeToShardResponseHandler(runtime, streamP, streamExceptionOccurred)
                               )
                             }
-        // subscribeResponse only completes with failure, not with success. It does not contain information of value anyway
+        // subscribeResponse only completes with failure during stream initialization, not with success.
+        // It does not contain information of value when succeeding
         _                <- subscribeResponse.unit race streamP.await
         stream           <- streamP.await
-      } yield stream
+      } yield stream merge ZStream.unwrap(streamExceptionOccurred.await.map(ZStream.fail(_)))
     }
   }
 
   private def subscribeToShardResponseHandler(
     runtime: zio.Runtime[Any],
-    streamP: Promise[Throwable, ZStream[Any, Throwable, SubscribeToShardEvent]]
+    streamP: Promise[Throwable, ZStream[Any, Throwable, SubscribeToShardEvent]],
+    streamExceptionOccurred: Promise[Nothing, Throwable]
   ) =
     new SubscribeToShardResponseHandler {
       override def responseReceived(response: SubscribeToShardResponse): Unit =
@@ -141,7 +144,10 @@ private[client] class ClientLive(kinesisClient: KinesisAsyncClient) extends Clie
         runtime.unsafeRun(streamP.succeed(streamOfRecords).unit)
       }
 
-      override def exceptionOccurred(throwable: Throwable): Unit = ()
+      // For some reason these exceptions are not published by the publisher on onEventStream
+      // so we have to merge them into our ZStream ourselves
+      override def exceptionOccurred(throwable: Throwable): Unit =
+        runtime.unsafeRun(streamExceptionOccurred.succeed(throwable))
 
       override def complete(): Unit = () // We only observe the subscriber's onComplete
     }
