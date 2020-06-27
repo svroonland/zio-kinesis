@@ -6,8 +6,8 @@ import nl.vroste.zio.kinesis.client.DynamicConsumer.Record
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.{ EnhancedFanOut, Polling }
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
-import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.{ DefaultLeaseCoordinator, LeaseCoordinationSettings }
 import nl.vroste.zio.kinesis.client.zionative.fetcher.{ EnhancedFanOutFetcher, PollingFetcher }
+import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.{ DefaultLeaseCoordinator, LeaseCoordinationSettings }
 import nl.vroste.zio.kinesis.client.{ AdminClient, Client, Util }
 import software.amazon.awssdk.services.kinesis.model.{
   KmsThrottlingException,
@@ -19,7 +19,7 @@ import zio._
 import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.duration._
-import zio.logging.Logging
+import zio.logging.{ log, Logging }
 import zio.random.Random
 import zio.stream.ZStream
 
@@ -46,8 +46,11 @@ object FetchMode {
   /**
    * Fetch data using enhanced fanout
    */
-  case class EnhancedFanOut(deregisterConsumerAtShutdown: Boolean = false, maxSubscriptionsPerSecond: Int = 10)
-      extends FetchMode
+  case class EnhancedFanOut(
+    deregisterConsumerAtShutdown: Boolean = false,
+    maxSubscriptionsPerSecond: Int = 10,
+    retryDelay: Duration = 10.seconds
+  ) extends FetchMode
 }
 
 trait Fetcher {
@@ -152,7 +155,7 @@ object Consumer {
             case (shardId, leaseLost) =>
               for {
                 checkpointer        <- leaseCoordinator.makeCheckpointer(shardId)
-                blocking            <- ZIO.environment[Blocking]
+                env                 <- ZIO.environment[Blocking with Logging]
                 startingPositionOpt <- leaseCoordinator.getCheckpointForShard(shardId)
                 startingPosition     = startingPositionOpt
                                      .map(s => ShardIteratorType.AfterSequenceNumber(s.sequenceNumber))
@@ -169,10 +172,10 @@ object Consumer {
                 shardId,
                 shardStream.ensuringFirst {
                   checkpointer.checkpointAndRelease.catchAll {
-                    case Left(e)               => ZIO.fail(e)
+                    case Left(e)               =>
+                      log.error(s"Error in checkpoint and release: ${e}").unit
                     case Right(ShardLeaseLost) => ZIO.unit // This is fine during shutdown
-                  }.orDie
-                    .provide(blocking)
+                  }.provide(env)
                 },
                 checkpointer
               )

@@ -50,7 +50,8 @@ case class LeaseCoordinationSettings(
   renewInterval: Duration = 3.seconds,
   refreshAndTakeInterval: Duration = 20.seconds,
   maxParallelLeaseAcquisitions: Int = 10,
-  maxParallelLeaseRenewals: Int = 10
+  maxParallelLeaseRenewals: Int = 10,
+  releaseLeaseTimeout: Duration = 10.seconds
 ) {
   require(renewInterval < expirationTime, "renewInterval must be less than expirationTime")
 }
@@ -301,6 +302,7 @@ private class DefaultLeaseCoordinator(
    * If our application does not checkpoint, we still need to periodically renew leases, otherwise other workers
    * will think ours are expired
    */
+  // TODO if renewing fails because of connection issues after a few attempts, we should release the lease
   val renewLeases: ZIO[Any, Throwable, Unit] = for {
     // TODO we could skip renewing leases that were recently checkpointed, save a few DynamoDB credits
     heldLeases <- state.get.map(_.heldLeases.keySet)
@@ -495,12 +497,17 @@ private class DefaultLeaseCoordinator(
         staged.set(Some(ExtendedSequenceNumber(r.sequenceNumber, r.subSequenceNumber)))
     }
 
-  def releaseLeases: ZIO[Logging, Throwable, Unit] =
+  def releaseLeases: ZIO[Logging with Clock, Nothing, Unit] =
     state.get
       .map(_.heldLeases.values)
-      .flatMap(ZIO.foreachPar_(_) { case (lease, _) => releaseLease(lease.key) })
+      .flatMap(ZIO.foreachPar_(_) {
+        case (lease, _) =>
+          releaseLease(lease.key)
+            .timeout(settings.releaseLeaseTimeout)
+            .ignore // We do our best to release the lease
+      })
 
-  override def releaseLease(shard: String)         =
+  override def releaseLease(shard: String) =
     processCommand(LeaseCommand.ReleaseLease(shard, _))
 }
 
@@ -576,7 +583,7 @@ object DefaultLeaseCoordinator {
                             )
             } yield (coordinator, leaseTableExists)
           }
-        }(_._1.releaseLeases.orDie)
+        }(_._1.releaseLeases)
       }
       .flatMap {
         case (c, leaseTableExists) =>

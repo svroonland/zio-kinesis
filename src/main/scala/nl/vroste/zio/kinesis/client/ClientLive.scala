@@ -125,7 +125,7 @@ private[client] class ClientLive(kinesisClient: KinesisAsyncClient) extends Clie
         // It does not contain information of value when succeeding
         _                <- subscribeResponse.unit raceFirst streamP.await raceFirst streamExceptionOccurred.await
         stream           <- (streamExceptionOccurred.await.map(Left(_)) raceFirst streamP.await.either).absolve
-      } yield stream merge ZStream.unwrap(streamExceptionOccurred.await.map(ZStream.fail(_))).catchSome {
+      } yield (stream merge ZStream.unwrap(streamExceptionOccurred.await.map(ZStream.fail(_)))).catchSome {
         case e: CompletionException =>
           ZStream.fail(Option(e.getCause).getOrElse(e))
       }
@@ -138,30 +138,21 @@ private[client] class ClientLive(kinesisClient: KinesisAsyncClient) extends Clie
     streamExceptionOccurred: Promise[Nothing, Throwable]
   ) =
     new SubscribeToShardResponseHandler {
-      override def responseReceived(response: SubscribeToShardResponse): Unit = {
-        println(s"Got response ${response}")
-
+      override def responseReceived(response: SubscribeToShardResponse): Unit =
         ()
-      }
 
       override def onEventStream(publisher: SdkPublisher[SubscribeToShardEventStream]): Unit = {
-        println(s"On event stream")
-        val streamOfRecords: ZStream[Any, Throwable, SubscribeToShardEvent] =
-          publisher.filter(classOf[SubscribeToShardEvent]).toStream()
+        val streamOfRecords = publisher.filter(classOf[SubscribeToShardEvent]).toStream()
         runtime.unsafeRun(streamP.succeed(streamOfRecords).unit)
       }
 
       // For some reason these exceptions are not published by the publisher on onEventStream
       // so we have to merge them into our ZStream ourselves
-      override def exceptionOccurred(throwable: Throwable): Unit = {
-        println(s"Exception occurred: ${throwable}")
-        runtime.unsafeRun(streamExceptionOccurred.succeed(throwable))
-      }
+      override def exceptionOccurred(throwable: Throwable): Unit =
+        runtime.unsafeRun(streamExceptionOccurred.succeed(throwable).unit)
 
-      override def complete(): Unit = {
-        println("complete!")
+      override def complete(): Unit =
         () // We only observe the subscriber's onComplete
-      }
     }
 
   /**
@@ -239,7 +230,12 @@ private[client] class ClientLive(kinesisClient: KinesisAsyncClient) extends Clie
 }
 
 object Util {
-  def asZIO[T](f: => CompletableFuture[T]): Task[T] = ZIO.effect(f).flatMap(ZIO.fromCompletionStage(_))
+  def asZIO[T](f: => CompletableFuture[T]): Task[T] =
+    ZIO.fromCompletionStage(f)
+//  ZIO
+//      .effect(f)
+//      .flatMap(ZIO.fromCompletionStage(_))
+//      .mapError(_.fillInStackTrace())
 
   def paginatedRequest[R, E, A, Token](fetch: Option[Token] => ZIO[R, E, (A, Option[Token])])(
     throttling: Schedule[Clock, Any, Int] = Schedule.forever

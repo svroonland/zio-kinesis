@@ -19,19 +19,19 @@ import zio.logging.slf4j.Slf4jLogger
 import zio.logging.{ log, Logging }
 import zio.stream.{ ZStream, ZTransducer }
 import zio._
-import zio.clock.Clock
 
 /**
  * Example app that shows the ZIO-native and KCL workers running in parallel
  */
 object ExampleApp extends zio.App {
-  val streamName      = "zio-test-stream-8" // + java.util.UUID.randomUUID().toString
-  val nrRecords       = 2000000
-  val nrShards        = 2
-  val nrNativeWorkers = 1
-  val nrKclWorkers    = 0
-  val applicationName = "testApp-13"        // + java.util.UUID.randomUUID().toString(),
-  val runtime         = 20.minute
+  val streamName                      = "zio-test-stream-8" // + java.util.UUID.randomUUID().toString
+  val nrRecords                       = 2000000
+  val nrShards                        = 2
+  val nrNativeWorkers                 = 1
+  val nrKclWorkers                    = 0
+  val applicationName                 = "testApp-13"        // + java.util.UUID.randomUUID().toString(),
+  val runtime                         = 10.minute
+  val maxRandomWorkerStartDelayMillis = 1                   // 20000
 
   override def run(
     args: List[String]
@@ -39,7 +39,7 @@ object ExampleApp extends zio.App {
 
     def worker(id: String) =
       ZStream.fromEffect(
-        zio.random.nextIntBetween(0, 20000).flatMap(d => ZIO.sleep(d.millis))
+        zio.random.nextIntBetween(0, maxRandomWorkerStartDelayMillis).flatMap(d => ZIO.sleep(d.millis))
       ) *> Consumer
         .shardedStream(
           streamName,
@@ -78,6 +78,7 @@ object ExampleApp extends zio.App {
                   ) *> ZStream.fail(e)
               }
         }
+        .ensuring(log.info(s"Worker ${id} stream completed"))
 
     def kclWorker(id: String, requestShutdown: Promise[Nothing, Unit]) =
       ZStream.fromEffect(
@@ -127,16 +128,18 @@ object ExampleApp extends zio.App {
                  )
           } yield ()).fork
         )
-      _          <- ZIO.sleep(runtime)
+      // Sleep, but abort early if one of our children dies
+      _          <- ZIO.sleep(runtime) raceFirst ZIO.foreachPar_(kclWorkers ++ workers)(_.join)
       _           = println("Interrupting app")
       _          <- producer.interruptFork
       _          <- ZIO.foreachPar(kclWorkers)(_.interrupt)
       _          <- ZIO.foreachPar(workers)(_.interrupt)
     } yield ExitCode.success
-  }.orDie.provideCustomLayer(
-    awsEnv // TODO switch back!!
-    // localStackEnv
-  )
+  }.foldCauseM(e => log.error(s"Program failed: ${e.prettyPrint}", e).as(ExitCode.failure), ZIO.succeed(_))
+    .provideCustomLayer(
+      awsEnv // TODO switch back!!
+      // localStackEnv
+    )
 
   val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
@@ -173,11 +176,14 @@ object ExampleApp extends zio.App {
             .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
             .retry(retryOnResourceNotFound && Schedule.recurs(1))
             .as(Chunk.unit)
+            .tapCause(e => log.error("Producing records chunk failed, will retry", e))
+            .retry(Schedule.exponential(1.second))
             .fork
             .map(Chunk.single(_))
 //            .delay(1.second)
         )
         .mapMPar(10)(_.join)
         .runDrain
+        .tapCause(e => log.error("Producing records chunk failed", e))
     }
 }

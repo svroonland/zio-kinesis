@@ -169,7 +169,7 @@ object Client {
     builder: KinesisAsyncClientBuilder,
     maxConcurrency: Int = Int.MaxValue,
     initialWindowSize: Int = 512 * 1024, // 512 KB, see https://github.com/awslabs/amazon-kinesis-client/pull/706
-    healthCheckPingPeriod: Duration = 60.seconds,
+    healthCheckPingPeriod: Duration = 10.seconds,
     maxPendingConnectionAcquires: Int = 10000,
     connectionAcquisitionTimeout: Duration = 30.seconds,
     readTimeout: Duration = 30.seconds
