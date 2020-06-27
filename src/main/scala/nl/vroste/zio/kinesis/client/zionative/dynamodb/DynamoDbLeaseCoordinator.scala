@@ -47,12 +47,16 @@ object ZioExtensions {
  * @param maxParallelLeaseAcquisitions Maximum parallel calls to DynamoDB to claim a lease.
  *                                     This is not the maximum number of leases to steal in one iteration
  *                                     of `refreshAndTakeInterval`.
+ * @param maxParallelLeaseRenewals Maximum parallel calls to DynamoDB to claim a lease.
+ *                                     This is not the maximum number of leases to steal in one iteration
+ *                                     of `refreshAndTakeInterval`.
  */
 case class LeaseCoordinationSettings(
   expirationTime: Duration = 10.seconds,
   renewInterval: Duration = 3.seconds,
   refreshAndTakeInterval: Duration = 20.seconds,
-  maxParallelLeaseAcquisitions: Int = 10
+  maxParallelLeaseAcquisitions: Int = 10,
+  maxParallelLeaseRenewals: Int = 10
 ) {
   require(renewInterval < expirationTime, "renewInterval must be less than expirationTime")
 }
@@ -305,7 +309,9 @@ private class DynamoDbLeaseCoordinator(
     // TODO we could skip renewing leases that were recently checkpointed, save a few DynamoDB credits
     heldLeases <- state.get.map(_.heldLeases.keySet)
     _          <- ZIO
-           .foreachPar_(heldLeases)(shardId => processCommand(LeaseCommand.RenewLease(shardId, _)))
+           .foreachParN_(settings.maxParallelLeaseRenewals)(heldLeases)(shardId =>
+             processCommand(LeaseCommand.RenewLease(shardId, _))
+           )
   } yield ()
 
   /**
@@ -551,64 +557,69 @@ object DynamoDbLeaseCoordinator {
     settings: LeaseCoordinationSettings,
     shards: Task[Map[String, Shard]]
   ): ZManaged[Clock with Random with Logging with Has[DynamoDbAsyncClient], Throwable, LeaseCoordinator] =
-    ZManaged.make {
-      log.locally(LogAnnotation.Name(s"worker-${workerId}" :: Nil)) {
-        for {
-          table            <- ZIO.service[DynamoDbAsyncClient].map(new LeaseTable(_, applicationName))
-          leaseTableExists <- table.createLeaseTableIfNotExists
-          state            <- Ref.make(State.empty)
-          acquiredLeases   <- Queue.unbounded[(Lease, Promise[Nothing, Unit])]
-          commandQueue     <- Queue.unbounded[LeaseCommand]
+    Queue
+      .unbounded[(Lease, Promise[Nothing, Unit])]
+      .toManaged(_.shutdown)
+      .flatMap { acquiredLeases =>
+        ZManaged.make {
+          log.locally(LogAnnotation.Name(s"worker-${workerId}" :: Nil)) {
+            for {
+              table            <- ZIO.service[DynamoDbAsyncClient].map(new LeaseTable(_, applicationName))
+              leaseTableExists <- table.createLeaseTableIfNotExists
+              state            <- Ref.make(State.empty)
+              commandQueue     <- Queue.unbounded[LeaseCommand]
 
-          coordinator = new DynamoDbLeaseCoordinator(
-                          table,
-                          workerId,
-                          state,
-                          acquiredLeases,
-                          emitDiagnostic,
-                          commandQueue,
-                          settings
-                        )
-        } yield (coordinator, leaseTableExists)
+              coordinator = new DynamoDbLeaseCoordinator(
+                              table,
+                              workerId,
+                              state,
+                              acquiredLeases,
+                              emitDiagnostic,
+                              commandQueue,
+                              settings
+                            )
+            } yield (coordinator, leaseTableExists)
+          }
+        }(_._1.releaseLeases.orDie)
       }
-    }(_._1.releaseLeases.orDie).flatMap {
-      case (c, leaseTableExists) =>
-        // Do all initalization in parallel
-        for {
-          _ <- logNamed(s"worker-${workerId}")(c.runloop.runDrain).forkManaged
-          // Wait for shards if the lease table does not exist yet, otherwise we assume there's leases
-          // for all shards already, so just fork it. If there's new shards, the next `takeLeases` will
-          // claim leases for them.
-          _ <- logNamed(s"worker-${workerId}") {
-                 val awaitAndUpdateShards = shards.flatMap(c.updateShards)
+      .flatMap {
+        case (c, leaseTableExists) =>
+          // Do all initalization in parallel
+          for {
+            _ <- logNamed(s"worker-${workerId}")(c.runloop.runDrain).forkManaged
+            // Wait for shards if the lease table does not exist yet, otherwise we assume there's leases
+            // for all shards already, so just fork it. If there's new shards, the next `takeLeases` will
+            // claim leases for them.
+            _ <- logNamed(s"worker-${workerId}") {
+                   val awaitAndUpdateShards = shards.flatMap(c.updateShards)
 
-                 (c.refreshLeases *> c.resumeUnreleasedLeases).when(leaseTableExists) *>
-                   (if (leaseTableExists) awaitAndUpdateShards.fork else awaitAndUpdateShards)
-               }.toManaged_
-          _  = log.info("Begin first initialisation: takeLeases")
-          _ <- logNamed(s"worker-${workerId}")(
-                 // Initialization
-                 (c.takeLeases) *>
-                   // Periodic refresh
-                   (c.refreshLeases *> c.takeLeases)
+                   (c.refreshLeases *> c.resumeUnreleasedLeases).when(leaseTableExists) *>
+                     (if (leaseTableExists) awaitAndUpdateShards.fork else awaitAndUpdateShards)
+                 }.toManaged_
+            _  = log.info("Begin first initialisation: takeLeases")
+            _ <- logNamed(s"worker-${workerId}")(
+                   // Initialization
+                   (c.takeLeases) *>
+                     // Periodic refresh
+                     (c.refreshLeases *> c.takeLeases)
+                       .repeat(
+                         Schedule
+                           .fixed(settings.refreshAndTakeInterval)
+                           .jittered(0.95, 1.05)
+                       )
+                       .delay(settings.refreshAndTakeInterval)
+                 ).forkManaged
+            _ <- logNamed(s"worker-${workerId}")(
+                   (c.renewLeases)
                      .repeat(
                        Schedule
-                         .fixed(settings.refreshAndTakeInterval)
+                         .fixed(settings.renewInterval)
                          .jittered(0.95, 1.05)
                      )
-                     .delay(settings.refreshAndTakeInterval)
-               ).forkManaged
-          _ <- logNamed(s"worker-${workerId}")(
-                 (c.renewLeases)
-                   .repeat(
-                     Schedule
-                       .fixed(settings.renewInterval)
-                       .jittered(0.95, 1.05)
-                   )
-                   .delay(settings.renewInterval)
-               ).forkManaged
-        } yield c
-    }
+                     .delay(settings.renewInterval)
+                 ).forkManaged
+          } yield c
+      }
 
   def logNamed[R, E, A](name: String)(f: ZIO[R, E, A]): ZIO[Logging with R, E, A] =
     log.locally(LogAnnotation.Name(name :: Nil))(f)
