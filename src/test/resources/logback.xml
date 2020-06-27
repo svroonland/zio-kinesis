@@ -19,6 +19,6 @@
 
     <logger name="software.amazon.kinesis" level="INFO"/>
     <!-- <logger name="software.amazon.awssdk.profiles.internal" level="ERROR"/> -->
-    <logger name="software.amazon.awssdk.request" level="DEBUG"/>
+    <!-- <logger name="software.amazon.awssdk.request" level="DEBUG"/> -->
     <!-- <logger name="io.netty" level="DEBUG"/> -->
 </configuration>
