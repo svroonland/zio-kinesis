@@ -1,23 +1,20 @@
 package nl.vroste.zio.kinesis.client.zionative.fetcher
 
+import java.io.IOException
+
+import io.netty.handler.timeout.ReadTimeoutException
 import nl.vroste.zio.kinesis.client.AdminClient.StreamDescription
 import nl.vroste.zio.kinesis.client.Client
 import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
-import nl.vroste.zio.kinesis.client.zionative.{ Consumer, Fetcher }
-import zio.{ Ref, Schedule, ZIO, ZManaged }
+import nl.vroste.zio.kinesis.client.zionative.{ Consumer, DiagnosticEvent, Fetcher }
+import software.amazon.awssdk.services.kinesis.model.{ ConsumerStatus, ResourceInUseException }
 import zio.clock.Clock
-import zio.stream.ZStream
-import zio.UIO
 import zio.duration._
-import software.amazon.awssdk.services.kinesis.model.ResourceInUseException
-import software.amazon.awssdk.services.kinesis.model.ConsumerStatus
+import zio.logging.{ log, Logging }
+import zio.stream.ZStream
+import zio._
+
 import scala.jdk.CollectionConverters._
-import nl.vroste.zio.kinesis.client.Client.ConsumerRecord
-import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent
-import io.netty.handler.timeout.ReadTimeoutException
-import zio.logging.log
-import zio.logging.Logging
-import java.io.IOException
 
 object EnhancedFanOutFetcher {
   private def registerConsumerIfNotExists(streamARN: String, consumerName: String) =

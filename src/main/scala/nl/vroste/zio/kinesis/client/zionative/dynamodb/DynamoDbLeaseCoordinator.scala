@@ -1,13 +1,17 @@
 package nl.vroste.zio.kinesis.client.zionative.dynamodb
 
+import java.time.Instant
+
 import nl.vroste.zio.kinesis.client.DynamicConsumer.Record
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative._
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.{ Lease, LeaseCommand }
 import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.LeaseCommand.{
+  RefreshLease,
+  ReleaseLease,
   RenewLease,
   UpdateCheckpoint
 }
+import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.{ Lease, LeaseCommand }
 import nl.vroste.zio.kinesis.client.zionative.dynamodb.LeaseTable.{
   LeaseAlreadyExists,
   LeaseObsolete,
@@ -22,11 +26,7 @@ import zio.duration._
 import zio.logging._
 import zio.random.{ shuffle, Random }
 import zio.stream.ZStream
-import scala.util.control.NoStackTrace
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.LeaseCommand.RefreshLease
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.LeaseCommand.ReleaseLease
-import java.time.Instant
-import java.util.concurrent.TimeoutException
+import scala.collection.compat._
 
 object ZioExtensions {
   implicit class OnSuccessSyntax[R, E, A](val zio: ZIO[R, E, A]) extends AnyVal {
@@ -233,7 +233,7 @@ private class DynamoDbLeaseCoordinator(
           ZIO.fail(new Exception(s"Unknown lease for shard ${shard}! This indicates a programming error"))
       }
 
-    def doRefreshLease(lease: Lease, done: Promise[Nothing, Unit]): ZIO[Clock, Throwable, Unit] =
+    def doRefreshLease(lease: Lease): ZIO[Clock, Throwable, Unit] =
       for {
         currentState <- state.get
         shardId       = lease.key
@@ -286,7 +286,7 @@ private class DynamoDbLeaseCoordinator(
             case RenewLease(shard, done)                            =>
               doRenewLease(shard).foldM(done.fail, done.succeed)
             case RefreshLease(lease, done)                          =>
-              doRefreshLease(lease, done).tap(done.succeed) // Cannot fail
+              doRefreshLease(lease).tap(done.succeed) // Cannot fail
             case ReleaseLease(shard, done)                          =>
               doReleaseLease(shard).foldM(done.fail, done.succeed)
           }
@@ -377,7 +377,7 @@ private class DynamoDbLeaseCoordinator(
   def claimLeasesForShardsWithoutLease: ZIO[Logging with Clock, Throwable, Unit] =
     for {
       state             <- state.get
-      allLeases          = state.currentLeases.view.mapValues(_.lease)
+      allLeases          = state.currentLeases.view.mapValues(_.lease).toMap
       _                 <- log.info(s"Found ${allLeases.size} leases")
       // Claim new leases for the shards the database doesn't have leases for
       shardsWithoutLease =
@@ -462,7 +462,7 @@ private class DynamoDbLeaseCoordinator(
                      processCommand(LeaseCommand.UpdateCheckpoint(shardId, checkpoint, _, release = release))
                      // onSuccess to ensure updating in the face of interruption
                      // only update when the staged record has not changed while checkpointing
-                       .onSuccess(_ => staged.updateSome { case Some(lastStaged) => None })
+                       .onSuccess(_ => staged.updateSome { case Some(lastStaged @ _) => None })
                    case None if release  =>
                      processCommand(LeaseCommand.ReleaseLease(shardId, _)).mapError(Left(_))
                    case None             =>

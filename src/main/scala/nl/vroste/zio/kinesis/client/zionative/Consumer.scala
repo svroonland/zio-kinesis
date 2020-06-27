@@ -5,26 +5,24 @@ import nl.vroste.zio.kinesis.client.Client.{ ConsumerRecord, ShardIteratorType }
 import nl.vroste.zio.kinesis.client.DynamicConsumer.Record
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.{ EnhancedFanOut, Polling }
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator
+import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
+import nl.vroste.zio.kinesis.client.zionative.dynamodb.{ DynamoDbLeaseCoordinator, LeaseCoordinationSettings }
+import nl.vroste.zio.kinesis.client.zionative.fetcher.{ EnhancedFanOutFetcher, PollingFetcher }
 import nl.vroste.zio.kinesis.client.{ AdminClient, Client, Util }
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
 import software.amazon.awssdk.services.kinesis.model.{
   KmsThrottlingException,
   LimitExceededException,
   ProvisionedThroughputExceededException,
-  Shard,
   Record => KinesisRecord
 }
 import zio._
+import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.duration._
-import zio.stream.ZStream
-import zio.blocking.Blocking
-import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
-import nl.vroste.zio.kinesis.client.zionative.fetcher.{ EnhancedFanOutFetcher, PollingFetcher }
-import zio.random.Random
 import zio.logging.Logging
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.LeaseCoordinationSettings
+import zio.random.Random
+import zio.stream.ZStream
 
 case class ExtendedSequenceNumber(sequenceNumber: String, subSequenceNumber: Long)
 

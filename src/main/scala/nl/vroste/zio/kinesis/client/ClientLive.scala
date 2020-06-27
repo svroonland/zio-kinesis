@@ -3,7 +3,7 @@ package nl.vroste.zio.kinesis.client
 import java.time.Instant
 import java.util.concurrent.CompletableFuture
 
-import nl.vroste.zio.kinesis.client.serde.{ Deserializer, Serializer }
+import nl.vroste.zio.kinesis.client.serde.Serializer
 import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.core.async.SdkPublisher
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
@@ -241,7 +241,7 @@ object Util {
     factor: Double = 2.0,
     maxRecurs: Option[Int] = None
   ): Schedule[Clock, Throwable, Any] =
-    (Schedule.exponential(min).whileOutput(_ <= max) andThen Schedule.fixed(max)) &&
+    (Schedule.exponential(min, factor).whileOutput(_ <= max) andThen Schedule.fixed(max)) &&
       maxRecurs.map(Schedule.recurs).getOrElse(Schedule.forever)
 
   /**

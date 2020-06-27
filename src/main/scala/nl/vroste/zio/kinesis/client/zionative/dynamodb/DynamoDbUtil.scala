@@ -37,12 +37,12 @@ object DynamoDbUtil {
   def attributeValue[T: ClassTag](value: T): AttributeValue = {
     val builder = AttributeValue.builder()
     value match {
-      case null            => builder.nul(true)
-      case v: String       => builder.s(v)
-      case v: Long         => builder.n(v.toString)
-      case v: List[String] => builder.ss(v.asJavaCollection)
-      case v: Seq[String]  => builder.ss(v.asJavaCollection)
-      case v               =>
+      case null       => builder.nul(true)
+      case v: String  => builder.s(v)
+      case v: Long    => builder.n(v.toString)
+      case v: List[_] => builder.ss(v.map(_.toString).asJavaCollection)
+      case v: Seq[_]  => builder.ss(v.map(_.toString).asJavaCollection)
+      case v          =>
         throw new Exception(s"Could not convert value ${v} to attribute!")
     }
     builder.build()

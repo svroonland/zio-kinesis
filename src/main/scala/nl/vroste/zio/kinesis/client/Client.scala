@@ -2,23 +2,15 @@ package nl.vroste.zio.kinesis.client
 
 import java.time.Instant
 
-import nl.vroste.zio.kinesis.client.serde.{ Deserializer, Serializer }
-import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
+import nl.vroste.zio.kinesis.client.serde.Serializer
+import software.amazon.awssdk.core.SdkBytes
+import software.amazon.awssdk.http.Protocol
+import software.amazon.awssdk.http.nio.netty.{ Http2Configuration, NettyNioAsyncHttpClient }
+import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyncClientBuilder }
 import software.amazon.awssdk.services.kinesis.model._
 import zio.clock.Clock
-import zio.stream.ZStream
-import zio.{ Has, Schedule, Task, ZIO, ZLayer, ZManaged }
-import zio.Promise
-import zio.Queue
 import zio.duration._
-
-import software.amazon.awssdk.http.SdkCancellationException
-import software.amazon.awssdk.http.nio.netty.Http2Configuration
-import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient
-import software.amazon.awssdk.http.Protocol
-import software.amazon.awssdk.services.kinesis.KinesisAsyncClientBuilder
-import zio.IO
-import software.amazon.awssdk.core.SdkBytes
+import zio.stream.ZStream
 import zio._
 
 object Client {

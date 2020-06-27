@@ -1,44 +1,28 @@
 package nl.vroste.zio.kinesis.client.zionative
 
-import zio.test._
-import zio.ZIO
-import zio.Has
-import nl.vroste.zio.kinesis.client.Client
-import nl.vroste.zio.kinesis.client.AdminClient
+import java.time.Instant
 import java.{ util => ju }
-import nl.vroste.zio.kinesis.client.Producer
-import nl.vroste.zio.kinesis.client.Client.ProducerRecord
-import zio.stream.ZStream
 
-import zio.logging.log
+import scala.collection.compat._
+
+import nl.vroste.zio.kinesis.client.Client.ProducerRecord
+import nl.vroste.zio.kinesis.client.{ AdminClient, Client, LocalStackServices, Producer }
+import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
+import nl.vroste.zio.kinesis.client.TestUtil.retryOnResourceNotFound
 import nl.vroste.zio.kinesis.client.serde.Serde
+import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
+import nl.vroste.zio.kinesis.client.zionative.dynamodb.{ LeaseCoordinationSettings, LeaseTable }
+import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
+import software.amazon.awssdk.services.kinesis.model.Shard
+import zio._
 import zio.clock.Clock
 import zio.console._
-import nl.vroste.zio.kinesis.client.TestUtil.retryOnResourceNotFound
-import zio.Chunk
-import nl.vroste.zio.kinesis.client.zionative.Consumer
-import nl.vroste.zio.kinesis.client.LocalStackServices
 import zio.duration._
-import zio.ZManaged
-import zio.test.Assertion._
-import zio.UIO
-import zio.Schedule
-import zio.stream.ZTransducer
-import zio.ZLayer
+import zio.logging.log
 import zio.logging.slf4j.Slf4jLogger
-import zio.Ref
-import zio.Promise
-import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
-import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.ShardLeaseLost
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.LeaseTable
-import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
-import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
-import software.amazon.awssdk.services.kinesis.model.Shard
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.LeaseCoordinationSettings
-import java.time.Instant
-import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.Checkpoint
-import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.LeaseReleased
-import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.LeaseAcquired
+import zio.stream.{ ZStream, ZTransducer }
+import zio.test.Assertion._
+import zio.test._
 
 object NativeConsumerTest extends DefaultRunnableSpec {
   /*
@@ -397,14 +381,18 @@ object NativeConsumerTest extends DefaultRunnableSpec {
               _             <- producer.interrupt
               _             <- stream.interrupt
               allEvents     <-
-                events.get.map(_.filterNot(_._3.isInstanceOf[PollComplete]).filterNot(_._3.isInstanceOf[Checkpoint]))
+                events.get.map(
+                  _.filterNot(_._3.isInstanceOf[PollComplete]).filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
+                )
               // _                           = println(allEvents.mkString("\n"))
 
               // Workers 2 and 3 should have later-timestamped LeaseAcquired for all shards that were released by Worker 1
-              worker1Released      = allEvents.collect { case ("worker1", time, LeaseReleased(shard)) => time -> shard }
+              worker1Released      = allEvents.collect {
+                                  case ("worker1", time, DiagnosticEvent.LeaseReleased(shard)) => time -> shard
+                                }
               releaseTime          = worker1Released.last._1
               acquiredAfterRelease = allEvents.collect {
-                                       case (worker, time, LeaseAcquired(shard, _))
+                                       case (worker, time, DiagnosticEvent.LeaseAcquired(shard, _))
                                            if worker != "worker1" && !time.isBefore(releaseTime) =>
                                          shard
                                      }
@@ -454,10 +442,12 @@ object NativeConsumerTest extends DefaultRunnableSpec {
             def testIsComplete(events: List[(String, Instant, DiagnosticEvent)]) = {
               for {
                 acquiredByWorker1      <- Some(events.collect {
-                                       case (worker, _, event: LeaseAcquired) if worker == "worker1" => event.shardId
+                                       case (worker, _, event: DiagnosticEvent.LeaseAcquired) if worker == "worker1" =>
+                                         event.shardId
                                      }).filter(_.nonEmpty)
                 acquiredByOtherWorkers <- Some(events.collect {
-                                            case (worker, _, event: LeaseAcquired) if worker != "worker1" =>
+                                            case (worker, _, event: DiagnosticEvent.LeaseAcquired)
+                                                if worker != "worker1" =>
                                               event.shardId
                                           }).filter(_.nonEmpty)
               } yield acquiredByWorker1.toSet subsetOf acquiredByOtherWorkers.toSet
@@ -498,7 +488,9 @@ object NativeConsumerTest extends DefaultRunnableSpec {
               _          <- producer.interrupt
               _          <- stream.interrupt
               allEvents  <-
-                events.get.map(_.filterNot(_._3.isInstanceOf[PollComplete]).filterNot(_._3.isInstanceOf[Checkpoint]))
+                events.get.map(
+                  _.filterNot(_._3.isInstanceOf[PollComplete]).filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
+                )
               _           = println(allEvents.mkString("\n"))
             } yield assertCompletes
         }
@@ -541,14 +533,15 @@ object NativeConsumerTest extends DefaultRunnableSpec {
               producer      <- produceSampleRecords(streamName, nrRecords, chunkSize = 50).fork
               done          <- Promise.make[Nothing, Unit]
               events        <- Ref.make[List[DiagnosticEvent]](List.empty)
-              emitDiagnostic =
-                (workerId: String) =>
-                  (event: DiagnosticEvent) =>
-                    onDiagnostic(workerId)(event) *>
-                      events.update(_ :+ event) *>
-                      done
-                        .succeed(())
-                        .whenM(events.get.map(_.collect { case _: LeaseAcquired => 1 }.sum == nrShards + 1))
+              emitDiagnostic = (workerId: String) =>
+                                 (event: DiagnosticEvent) =>
+                                   onDiagnostic(workerId)(event) *>
+                                     events.update(_ :+ event) *>
+                                     done
+                                       .succeed(())
+                                       .whenM(events.get.map(_.collect {
+                                         case _: DiagnosticEvent.LeaseAcquired => 1
+                                       }.sum == nrShards + 1))
 
               stream        <- consumer("worker1", emitDiagnostic("worker1")).runDrain.fork
               _             <- done.await
