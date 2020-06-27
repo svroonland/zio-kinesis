@@ -301,7 +301,7 @@ private class DynamoDbLeaseCoordinator(
     // TODO we could skip renewing leases that were recently checkpointed, save a few DynamoDB credits
     heldLeases <- state.get.map(_.heldLeases.keySet)
     _          <- ZIO
-           .foreach_(heldLeases)(shardId => processCommand(LeaseCommand.RenewLease(shardId, _)))
+           .foreachPar_(heldLeases)(shardId => processCommand(LeaseCommand.RenewLease(shardId, _)))
   } yield ()
 
   /**
