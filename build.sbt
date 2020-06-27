@@ -64,6 +64,10 @@ Compile / compile / scalacOptions ++= {
   if (scalaBinaryVersion.value == "2.13") Seq("-P:silencer:globalFilters=[import scala.collection.compat._]")
   else Seq.empty
 }
+Test / compile / scalacOptions ++= {
+  if (scalaBinaryVersion.value == "2.13") Seq("-P:silencer:globalFilters=[import scala.collection.compat._]")
+  else Seq.empty
+}
 Compile / doc / scalacOptions ++= {
   if (scalaBinaryVersion.value == "2.13") Seq("-P:silencer:globalFilters=[import scala.collection.compat._]")
   else Seq.empty
