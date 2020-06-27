@@ -4,8 +4,8 @@ import zio.test._
 import zio.test.Gen
 
 import zio.test.DefaultRunnableSpec
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.Lease
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator
+import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator.Lease
+import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator
 import zio.logging.slf4j.Slf4jLogger
 // import zio.UIO
 import zio.random.Random
@@ -32,7 +32,7 @@ object LeaseStealingTest extends DefaultRunnableSpec {
     } yield leases
 
   import zio.test.Assertion._
-  import DynamoDbLeaseCoordinator.leasesToTake
+  import DefaultLeaseCoordinator.leasesToTake
   // import TestAspect.ignore
 
   override def spec =
@@ -73,14 +73,14 @@ object LeaseStealingTest extends DefaultRunnableSpec {
               Math.max(0, maxExpectedShare - nrOwnedLeases) // We could own more than our fair share
 
             for {
-              toSteal <- DynamoDbLeaseCoordinator.leasesToTake(leases, workerId(1))
+              toSteal <- DefaultLeaseCoordinator.leasesToTake(leases, workerId(1))
             } yield assert(toSteal.size)(isWithin(minExpectedToSteal, maxExpectedToSteal))
         }
       },                        //  @@ TestAspect.ignore,
       testM("takes unclaimed leases first") {
         checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10), allOwned = false)) { leases =>
           for {
-            toTake          <- DynamoDbLeaseCoordinator.leasesToTake(leases, workerId(1))
+            toTake          <- DefaultLeaseCoordinator.leasesToTake(leases, workerId(1))
             fromOtherWorkers = toTake.dropWhile(_.owner.isEmpty)
           } yield assert(fromOtherWorkers)(forall(hasField("owner", _.owner, isNone)))
         }
@@ -88,8 +88,8 @@ object LeaseStealingTest extends DefaultRunnableSpec {
       testM("steals leases randomly to reduce contention for the same lease") {
         checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10), allOwned = true)) { leases =>
           for {
-            toSteal1 <- DynamoDbLeaseCoordinator.leasesToTake(leases, workerId(1))
-            toSteal2 <- DynamoDbLeaseCoordinator.leasesToTake(leases, workerId(1))
+            toSteal1 <- DefaultLeaseCoordinator.leasesToTake(leases, workerId(1))
+            toSteal2 <- DefaultLeaseCoordinator.leasesToTake(leases, workerId(1))
           } yield assert(toSteal1)(not(equalTo(toSteal2))) || assert(toSteal1)(hasSize(isLessThanEqualTo(1)))
         }
       } @@ TestAspect.flaky(3), // Randomness is randomly not-random
@@ -104,7 +104,7 @@ object LeaseStealingTest extends DefaultRunnableSpec {
             val busiestWorkers = leasesByWorker.map(_._1)
 
             for {
-              toSteal       <- DynamoDbLeaseCoordinator.leasesToTake(leases, workerId(1))
+              toSteal       <- DefaultLeaseCoordinator.leasesToTake(leases, workerId(1))
               // The order of workers should be equal to the order of busiest workers
               toStealWorkers = changedElements(toSteal.map(_.owner.get))
             } yield assert(toStealWorkers)(equalTo(busiestWorkers.take(toStealWorkers.size)))

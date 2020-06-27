@@ -1,24 +1,18 @@
-package nl.vroste.zio.kinesis.client.zionative.dynamodb
+package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
 
 import java.time.Instant
 
 import nl.vroste.zio.kinesis.client.DynamicConsumer.Record
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative._
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.LeaseCommand.{
+import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator.LeaseCommand.{
   RefreshLease,
   ReleaseLease,
   RenewLease,
   UpdateCheckpoint
 }
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.{ Lease, LeaseCommand }
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.LeaseTable.{
-  LeaseAlreadyExists,
-  LeaseObsolete,
-  UnableToClaimLease
-}
-import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
-import software.amazon.awssdk.services.dynamodb.model._
+import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator.{ Lease, LeaseCommand }
+import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.{ LeaseAlreadyExists, LeaseObsolete, UnableToClaimLease }
 import software.amazon.awssdk.services.kinesis.model.Shard
 import zio._
 import zio.clock.Clock
@@ -157,8 +151,8 @@ object State {
  * Terminology:
  * - held lease: a lease held by this worker
  */
-private class DynamoDbLeaseCoordinator(
-  table: LeaseTable,
+private class DefaultLeaseCoordinator(
+  table: LeaseRepository.Service,
   workerId: String,
   state: Ref[State],
   acquiredLeasesQueue: Queue[(Lease, Promise[Nothing, Unit])],
@@ -167,7 +161,7 @@ private class DynamoDbLeaseCoordinator(
   settings: LeaseCoordinationSettings
 ) extends LeaseCoordinator {
 
-  import DynamoDbLeaseCoordinator._
+  import DefaultLeaseCoordinator._
   import ZioExtensions.OnSuccessSyntax
 
   val now = zio.clock.currentDateTime.map(_.toInstant())
@@ -206,10 +200,10 @@ private class DynamoDbLeaseCoordinator(
                  .updateCheckpoint(updatedLease) <* emitDiagnostic(
                  DiagnosticEvent.Checkpoint(shard, checkpoint)
                )).catchAll {
-               case _: ConditionalCheckFailedException =>
+               case Right(LeaseObsolete) =>
                  leaseLost(updatedLease, leaseCompleted).orDie *>
                    ZIO.fail(Right(ShardLeaseLost))
-               case e                                  =>
+               case Left(e)              =>
                  ZIO.fail(Left(e))
              }.onSuccess { _ =>
                (updateState(_.updateLease(updatedLease, _)) *>
@@ -274,9 +268,9 @@ private class DynamoDbLeaseCoordinator(
         val updatedLease = lease.copy(owner = None).increaseCounter
 
         table.releaseLease(updatedLease).catchAll {
-          case Right(ShardLeaseLost) => // This is fine at shutdown
+          case Right(LeaseObsolete) => // This is fine at shutdown
             ZIO.unit
-          case Left(e)               =>
+          case Left(e)              =>
             ZIO.fail(e)
         } *> completed.succeed(()) *>
           updateState(_.releaseLease(updatedLease, _)) *>
@@ -324,7 +318,7 @@ private class DynamoDbLeaseCoordinator(
       _             <- log.info("Refreshing leases")
       currentLeases <- state.get.map(_.currentLeases.values.map(_.lease))
       currentWorkers = currentLeases.map(_.owner).collect { case Some(owner) => owner }.toSet
-      leases        <- table.getLeasesFromDB
+      leases        <- table.getLeases
       _             <- ZIO.foreachPar_(leases)(lease => processCommand(LeaseCommand.RefreshLease(lease, _)))
       newWorkers     = leases.map(_.owner).collect { case Some(owner) => owner }.toSet
       workersJoined  = newWorkers -- currentWorkers
@@ -508,7 +502,7 @@ private class DynamoDbLeaseCoordinator(
     processCommand(LeaseCommand.ReleaseLease(shard, _))
 }
 
-object DynamoDbLeaseCoordinator {
+object DefaultLeaseCoordinator {
 
   /**
    * Commands relating to leases that need to be executed non-concurrently per lease, because
@@ -556,7 +550,7 @@ object DynamoDbLeaseCoordinator {
     emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit,
     settings: LeaseCoordinationSettings,
     shards: Task[Map[String, Shard]]
-  ): ZManaged[Clock with Random with Logging with Has[DynamoDbAsyncClient], Throwable, LeaseCoordinator] =
+  ): ZManaged[Clock with Random with Logging with LeaseRepositoryFactory, Throwable, LeaseCoordinator] =
     Queue
       .unbounded[(Lease, Promise[Nothing, Unit])]
       .toManaged(_.shutdown)
@@ -564,12 +558,12 @@ object DynamoDbLeaseCoordinator {
         ZManaged.make {
           log.locally(LogAnnotation.Name(s"worker-${workerId}" :: Nil)) {
             for {
-              table            <- ZIO.service[DynamoDbAsyncClient].map(new LeaseTable(_, applicationName))
+              table            <- ZIO.service[LeaseRepository.Factory].map(_.make(applicationName))
               leaseTableExists <- table.createLeaseTableIfNotExists
               state            <- Ref.make(State.empty)
               commandQueue     <- Queue.unbounded[LeaseCommand]
 
-              coordinator = new DynamoDbLeaseCoordinator(
+              coordinator = new DefaultLeaseCoordinator(
                               table,
                               workerId,
                               state,

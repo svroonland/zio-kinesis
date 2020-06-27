@@ -4,14 +4,13 @@ import java.time.Instant
 import java.{ util => ju }
 
 import scala.collection.compat._
-
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.{ AdminClient, Client, LocalStackServices, Producer }
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.TestUtil.retryOnResourceNotFound
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.{ LeaseCoordinationSettings, LeaseTable }
+import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.{ DynamoDbLeaseRepository, LeaseCoordinationSettings }
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
 import software.amazon.awssdk.services.kinesis.model.Shard
 import zio._
@@ -559,7 +558,8 @@ object NativeConsumerTest extends DefaultRunnableSpec {
   val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some("NativeConsumerTest"))
 
   val env = ((LocalStackServices.env.orDie >>>
-    (AdminClient.live ++ Client.live ++ ZLayer.requires[Has[DynamoDbAsyncClient]])).orDie ++
+    (AdminClient.live ++ Client.live ++ (ZLayer
+      .requires[Has[DynamoDbAsyncClient]] >>> DynamoDbLeaseRepository.factory.passthrough))).orDie ++
     zio.test.environment.testEnvironment ++
     Clock.live) >>>
     (ZLayer.identity ++ loggingEnv)
@@ -637,14 +637,14 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
   def assertAllLeasesReleased(applicationName: String) =
     for {
-      table  <- ZIO.service[DynamoDbAsyncClient].map(new LeaseTable(_, applicationName))
-      leases <- table.getLeasesFromDB
+      table  <- ZIO.service[LeaseRepository.Factory].map(_.make(applicationName))
+      leases <- table.getLeases
     } yield assert(leases)(forall(hasField("owner", _.owner, isNone)))
 
   def getCheckpoints(applicationName: String) =
     for {
-      table      <- ZIO.service[DynamoDbAsyncClient].map(new LeaseTable(_, applicationName))
-      leases     <- table.getLeasesFromDB
+      table      <- ZIO.service[LeaseRepository.Factory].map(_.make(applicationName))
+      leases     <- table.getLeases
       checkpoints = leases.collect {
                       case l if l.checkpoint.isDefined => l.key -> l.checkpoint.get.sequenceNumber
                     }.toMap

@@ -2,7 +2,14 @@ package nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.TestUtil.retryOnResourceNotFound
 import nl.vroste.zio.kinesis.client.serde.Serde
-import nl.vroste.zio.kinesis.client.zionative.{ Consumer, DiagnosticEvent, FetchMode, ShardLeaseLost }
+import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DynamoDbLeaseRepository
+import nl.vroste.zio.kinesis.client.zionative.{
+  Consumer,
+  DiagnosticEvent,
+  FetchMode,
+  LeaseRepositoryFactory,
+  ShardLeaseLost
+}
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.kinesis.exceptions.ShutdownException
@@ -12,18 +19,19 @@ import zio.logging.slf4j.Slf4jLogger
 import zio.logging.{ log, Logging }
 import zio.stream.{ ZStream, ZTransducer }
 import zio._
+import zio.clock.Clock
 
 /**
  * Example app that shows the ZIO-native and KCL workers running in parallel
  */
 object ExampleApp extends zio.App {
-  val streamName      = "zio-test-stream-7" // + java.util.UUID.randomUUID().toString
+  val streamName      = "zio-test-stream-8" // + java.util.UUID.randomUUID().toString
   val nrRecords       = 2000000
-  val nrShards        = 200
+  val nrShards        = 2
   val nrNativeWorkers = 1
   val nrKclWorkers    = 0
-  val applicationName = "testApp-12"        // + java.util.UUID.randomUUID().toString(),
-  val runtime         = 3.minute
+  val applicationName = "testApp-13"        // + java.util.UUID.randomUUID().toString(),
+  val runtime         = 20.minute
 
   override def run(
     args: List[String]
@@ -106,7 +114,7 @@ object ExampleApp extends zio.App {
 
     for {
       _          <- TestUtil.createStreamUnmanaged(streamName, nrShards)
-      producer   <- produceRecords(streamName, nrRecords).fork
+      producer   <- produceRecords(streamName, nrRecords).tapError(e => log.error(s"Producer error: ${e}")).fork
 //      _          <- producer.join
       workers    <- ZIO.foreach(1 to nrNativeWorkers)(id => worker(s"worker${id}").runDrain.fork)
       kclWorkers <-
@@ -133,17 +141,25 @@ object ExampleApp extends zio.App {
   val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
   val localStackEnv =
-    (LocalStackServices.kinesisAsyncClientLayer >>> (AdminClient.live ++ Client.live)).orDie ++ LocalStackServices.dynamoDbClientLayer.orDie ++ loggingEnv
+    (LocalStackServices.kinesisAsyncClientLayer >>> (AdminClient.live ++ Client.live)).orDie ++ (LocalStackServices.dynamoDbClientLayer.orDie >>> (ZLayer
+      .requires[Has[DynamoDbAsyncClient]] ++ DynamoDbLeaseRepository.factory)) ++ loggingEnv
 
-  val awsEnv
-    : ZLayer[Any, Nothing, AdminClient with Client with DynamicConsumer with Logging with Has[DynamoDbAsyncClient]] =
-    (kinesisAsyncClientLayer(
+  val awsEnv: ZLayer[Any, Nothing, AdminClient with Client with DynamicConsumer with Logging with Has[
+    DynamoDbAsyncClient
+  ] with LeaseRepositoryFactory] = {
+    val kinesis         = kinesisAsyncClientLayer(
       Client.adjustKinesisClientBuilder(KinesisAsyncClient.builder(), maxConcurrency = 100)
-    ).fresh.orDie ++
-      dynamoDbAsyncClientLayer().fresh.orDie ++
-      cloudWatchAsyncClientLayer().orDie) >>>
-      (AdminClient.live.orDie ++ Client.live.orDie ++ DynamicConsumer.live ++ loggingEnv ++ ZLayer
-        .requires[Has[DynamoDbAsyncClient]])
+    )
+    val client          = Client.live
+    val cloudWatch      = cloudWatchAsyncClientLayer()
+    val dynamo          = dynamoDbAsyncClientLayer()
+    val repoFactory     = DynamoDbLeaseRepository.factory
+    val adminClient     = AdminClient.live
+    val dynamicConsumer = DynamicConsumer.live
+    val logging         = loggingEnv
+
+    (kinesis ++ cloudWatch ++ dynamo).orDie >>> (client ++ adminClient ++ dynamicConsumer ++ repoFactory ++ logging).passthrough.orDie
+  }
 
   def produceRecords(streamName: String, nrRecords: Int) =
     Producer.make(streamName, Serde.asciiString).use { producer =>

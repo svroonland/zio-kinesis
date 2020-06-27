@@ -6,7 +6,7 @@ import nl.vroste.zio.kinesis.client.DynamicConsumer.Record
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.{ EnhancedFanOut, Polling }
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.{ DynamoDbLeaseCoordinator, LeaseCoordinationSettings }
+import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.{ DefaultLeaseCoordinator, LeaseCoordinationSettings }
 import nl.vroste.zio.kinesis.client.zionative.fetcher.{ EnhancedFanOutFetcher, PollingFetcher }
 import nl.vroste.zio.kinesis.client.{ AdminClient, Client, Util }
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
@@ -85,7 +85,7 @@ object Consumer {
     workerId: String = "worker1",
     emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit
   ): ZStream[
-    Blocking with Clock with Random with Client with AdminClient with Has[DynamoDbAsyncClient] with Logging,
+    Blocking with Clock with Random with Client with AdminClient with LeaseRepositoryFactory with Logging,
     Throwable,
     (String, ZStream[R with Blocking with Clock with Logging, Throwable, Record[T]], Checkpointer)
   ] = {
@@ -138,7 +138,7 @@ object Consumer {
                              }
                              .forkManaged
             leaseCoordinator <-
-              DynamoDbLeaseCoordinator
+              DefaultLeaseCoordinator
                 .make(applicationName, workerId, emitDiagnostic, leaseCoordinationSettings, fetchShards.join)
           } yield leaseCoordinator
         )(_ -> _)

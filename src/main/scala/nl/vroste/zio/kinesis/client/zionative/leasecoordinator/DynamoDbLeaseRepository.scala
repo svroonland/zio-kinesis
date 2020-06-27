@@ -1,9 +1,10 @@
-package nl.vroste.zio.kinesis.client.zionative.dynamodb
+package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
 
 import nl.vroste.zio.kinesis.client.Util.{ asZIO, paginatedRequest }
-import nl.vroste.zio.kinesis.client.zionative.{ ExtendedSequenceNumber, ShardLeaseLost }
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbLeaseCoordinator.Lease
-import nl.vroste.zio.kinesis.client.zionative.dynamodb.DynamoDbUtil._
+import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.{ LeaseAlreadyExists, LeaseObsolete, UnableToClaimLease }
+import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator.Lease
+import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DynamoDbUtil._
+import nl.vroste.zio.kinesis.client.zionative.{ ExtendedSequenceNumber, LeaseRepository, LeaseRepositoryFactory }
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
 import software.amazon.awssdk.services.dynamodb.model._
 import zio._
@@ -14,13 +15,13 @@ import zio.logging._
 import scala.jdk.CollectionConverters._
 import scala.util.{ Failure, Try }
 
-class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
-  import LeaseTable._
+private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient, applicationName: String)
+    extends LeaseRepository.Service {
 
   /**
    * Returns whether the table already existed
    */
-  def createLeaseTableIfNotExists: ZIO[Clock with Logging, Throwable, Boolean] = {
+  override def createLeaseTableIfNotExists: ZIO[Clock with Logging, Throwable, Boolean] = {
     val keySchema            = List(keySchemaElement("leaseKey", KeyType.HASH))
     val attributeDefinitions = List(attributeDefinition("leaseKey", ScalarAttributeType.S))
 
@@ -53,14 +54,14 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
     }.timeoutFail(new Exception("Timeout creating lease table"))(10.minute) // I dunno
   }
 
-  def leaseTableExists: ZIO[Logging, Throwable, Boolean] =
+  override def leaseTableExists: ZIO[Logging, Throwable, Boolean] =
     log.debug("Checking if table exists") *>
       asZIO(client.describeTable(DescribeTableRequest.builder().tableName(applicationName).build()))
         .map(_.table().tableStatus() == TableStatus.ACTIVE)
         .catchSome { case _: ResourceNotFoundException => ZIO.succeed(false) }
         .tap(exists => log.info(s"Lease table ${applicationName} exists? ${exists}"))
 
-  def getLeasesFromDB: ZIO[Clock, Throwable, List[Lease]] =
+  override def getLeases: ZIO[Clock, Throwable, List[Lease]] =
     paginatedRequest { (lastItem: Option[DynamoDbItem]) =>
       val builder     = ScanRequest.builder().tableName(applicationName)
       val scanRequest = lastItem.map(_.asJava).fold(builder)(builder.exclusiveStartKey).build()
@@ -84,7 +85,7 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
    * @param lease
    * @return
    */
-  def releaseLease(lease: Lease): ZIO[Logging, Either[Throwable, ShardLeaseLost.type], Unit] = {
+  override def releaseLease(lease: Lease): ZIO[Logging, Either[Throwable, LeaseObsolete.type], Unit] = {
     import ImplicitConversions.toAttributeValue
     val request = UpdateItemRequest
       .builder()
@@ -101,14 +102,14 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
     asZIO(client.updateItem(request)).unit.catchAll {
       case e: ConditionalCheckFailedException =>
         log.error("Check failed", Cause.fail(e))
-        ZIO.fail(Right(ShardLeaseLost))
+        ZIO.fail(Right(LeaseObsolete))
       case e                                  =>
         ZIO.fail(Left(e))
     }.tapError(e => log.info(s"Got error releasing lease ${lease.key}: ${e}"))
   }
 
   // Returns the updated lease
-  def claimLease(lease: Lease): ZIO[Logging, Either[Throwable, UnableToClaimLease.type], Unit] = {
+  override def claimLease(lease: Lease): ZIO[Logging, Either[Throwable, UnableToClaimLease.type], Unit] = {
     import ImplicitConversions.toAttributeValue
     val request = UpdateItemRequest
       .builder()
@@ -140,7 +141,7 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
   }
 
   // Puts the lease counter to the given lease's counter and expects counter - 1
-  def updateCheckpoint(lease: Lease) = {
+  override def updateCheckpoint(lease: Lease): ZIO[Logging, Either[Throwable, LeaseObsolete.type], Unit] = {
     require(lease.checkpoint.isDefined, "Cannot update checkpoint without Lease.checkpoint property set")
 
     import ImplicitConversions.toAttributeValue
@@ -171,10 +172,15 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
       )
       .build()
 
-    asZIO(client.updateItem(request))
+    asZIO(client.updateItem(request)).unit.catchAll {
+      case _: ConditionalCheckFailedException =>
+        ZIO.fail(Right(LeaseObsolete))
+      case e                                  =>
+        ZIO.fail(Left(e))
+    }
   }
 
-  def renewLease(lease: Lease): ZIO[Logging, Either[Throwable, LeaseObsolete.type], Unit] = {
+  override def renewLease(lease: Lease): ZIO[Logging, Either[Throwable, LeaseObsolete.type], Unit] = {
     import ImplicitConversions.toAttributeValue
 
     val request = UpdateItemRequest
@@ -200,7 +206,7 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
       }
   }
 
-  def createLease(lease: Lease): ZIO[Logging, Either[Throwable, LeaseAlreadyExists.type], Unit] = {
+  override def createLease(lease: Lease): ZIO[Logging, Either[Throwable, LeaseAlreadyExists.type], Unit] = {
     val request = PutItemRequest
       .builder()
       .tableName(applicationName)
@@ -259,8 +265,8 @@ class LeaseTable(client: DynamoDbAsyncClient, applicationName: String) {
   }
 }
 
-object LeaseTable {
-  case object LeaseAlreadyExists
-  case object UnableToClaimLease
-  case object LeaseObsolete
+object DynamoDbLeaseRepository {
+
+  val factory: ZLayer[Has[DynamoDbAsyncClient], Nothing, LeaseRepositoryFactory] =
+    ZLayer.fromService(client => applicationName => new DynamoDbLeaseRepository(client, applicationName))
 }
