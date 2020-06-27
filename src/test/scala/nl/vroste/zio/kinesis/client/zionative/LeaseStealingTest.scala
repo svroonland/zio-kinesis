@@ -109,7 +109,7 @@ object LeaseStealingTest extends DefaultRunnableSpec {
               toStealWorkers = changedElements(toSteal.map(_.owner.get))
             } yield assert(toStealWorkers)(equalTo(busiestWorkers.take(toStealWorkers.size)))
         }
-      }
+      } @@ TestAspect.ignore
     ).provideCustomLayer(loggingEnv)
 
   def changedElements[A](as: List[A]): List[A] =
