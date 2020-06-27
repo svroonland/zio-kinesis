@@ -113,7 +113,7 @@ object Consumer {
         case EnhancedFanOut => EnhancedFanOutFetcher.make(streamDescription, workerId, emitDiagnostic)
       }
 
-    ZStream.unwrapManaged {
+    def createDependencies =
       ZManaged
         .mapParN(
           ZManaged.unwrap(
@@ -143,41 +143,43 @@ object Consumer {
                 .make(applicationName, workerId, emitDiagnostic, leaseCoordinationSettings, fetchShards.join)
           } yield leaseCoordinator
         )(_ -> _)
-        .map {
-          case (fetcher, leaseCoordinator) =>
-            leaseCoordinator.acquiredLeases.collect {
-              case AcquiredLease(shardId, leaseLost) =>
-                (shardId, leaseLost)
-            }.mapMPar(10) { // TODO config var: max shard starts or something
-              case (shardId, leaseLost) =>
-                for {
-                  checkpointer        <- leaseCoordinator.makeCheckpointer(shardId)
-                  blocking            <- ZIO.environment[Blocking]
-                  startingPositionOpt <- leaseCoordinator.getCheckpointForShard(shardId)
-                  startingPosition     = startingPositionOpt
-                                       .map(s => ShardIteratorType.AfterSequenceNumber(s.sequenceNumber))
-                                       .getOrElse(initialStartingPosition)
-                  stop                 = ZStream.fromEffect(leaseLost.await).as(Exit.fail(None))
-                  // TODO make shardRecordStream a ZIO[ZStream], so it can actually fail on creation and we can handle it here
-                  shardStream          = (stop merge fetcher
-                                    .shardRecordStream(shardId, startingPosition)
-                                    .mapChunksM { chunk => // mapM is slow
-                                      chunk.mapM(record => toRecord(shardId, record))
-                                    }
-                                    .map(Exit.succeed(_))).collectWhileSuccess
-                } yield (
-                  shardId,
-                  shardStream.ensuringFirst {
-                    checkpointer.checkpointAndRelease.catchAll {
-                      case Left(e)               => ZIO.fail(e)
-                      case Right(ShardLeaseLost) => ZIO.unit // This is fine during shutdown
-                    }.orDie
-                      .provide(blocking)
-                  },
-                  checkpointer
-                )
-            }
-        }
+
+    ZStream.unwrapManaged {
+      createDependencies.map {
+        case (fetcher, leaseCoordinator) =>
+          leaseCoordinator.acquiredLeases.collect {
+            case AcquiredLease(shardId, leaseLost) =>
+              (shardId, leaseLost)
+          }.mapMPar(10) { // TODO config var: max shard starts or something
+            case (shardId, leaseLost) =>
+              for {
+                checkpointer        <- leaseCoordinator.makeCheckpointer(shardId)
+                blocking            <- ZIO.environment[Blocking]
+                startingPositionOpt <- leaseCoordinator.getCheckpointForShard(shardId)
+                startingPosition     = startingPositionOpt
+                                     .map(s => ShardIteratorType.AfterSequenceNumber(s.sequenceNumber))
+                                     .getOrElse(initialStartingPosition)
+                stop                 = ZStream.fromEffect(leaseLost.await).as(Exit.fail(None))
+                // TODO make shardRecordStream a ZIO[ZStream], so it can actually fail on creation and we can handle it here
+                shardStream          = (stop merge fetcher
+                                  .shardRecordStream(shardId, startingPosition)
+                                  .mapChunksM { chunk => // mapM is slow
+                                    chunk.mapM(record => toRecord(shardId, record))
+                                  }
+                                  .map(Exit.succeed(_))).collectWhileSuccess
+              } yield (
+                shardId,
+                shardStream.ensuringFirst {
+                  checkpointer.checkpointAndRelease.catchAll {
+                    case Left(e)               => ZIO.fail(e)
+                    case Right(ShardLeaseLost) => ZIO.unit // This is fine during shutdown
+                  }.orDie
+                    .provide(blocking)
+                },
+                checkpointer
+              )
+          }
+      }
     }
   }
 
