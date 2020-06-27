@@ -42,7 +42,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
   - [ ] Recover from a lost connection
    */
 
-  def streamPrefix = ju.UUID.randomUUID().toString().take(6)
+  def streamPrefix = ju.UUID.randomUUID().toString().take(9)
 
   override def spec =
     suite("ZIO Native Kinesis Stream Consumer")(
