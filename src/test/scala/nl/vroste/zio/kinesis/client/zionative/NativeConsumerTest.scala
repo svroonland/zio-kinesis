@@ -552,6 +552,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
       }
     ).provideSomeLayer(env) @@
       TestAspect.timed @@
+      TestAspect.sequential @@ // For CircleCI
       TestAspect.timeoutWarning(30.seconds) @@
       TestAspect.timeout(120.seconds)
 
