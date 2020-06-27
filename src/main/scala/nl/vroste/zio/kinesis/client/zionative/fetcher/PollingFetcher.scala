@@ -63,46 +63,64 @@ object PollingFetcher {
                    )
             } yield Chunk.fromIterable(records)
 
-        } yield retryStream(
-          ZStream
-            .repeatEffectWith(pollWithDelay, Schedule.fixed(config.interval))
-            .catchAll {
-              case None    => ZStream.empty
-              case Some(e) =>
-                ZStream.unwrap(
-                  log.warn(s"Error in PollingFetcher for shard ${shardId}, will retry. ${e}").as(ZStream.fail(e))
-                )
+        } yield ZStream
+          .repeatEffectWith(pollWithDelay, Schedule.fixed(config.interval))
+          .catchAll {
+            case None    => ZStream.empty
+            case Some(e) =>
+              ZStream.unwrap(
+                log.warn(s"Error in PollingFetcher for shard ${shardId}: ${e}").as(ZStream.fail(e))
+              )
+          }
+          .flattenChunks
+          .retry(
+            config.throttlingBackoff.tapOutput {
+              case (delay, retryNr) =>
+                log.info(s"PollingFetcher will make make retry attempt nr ${retryNr} in ${delay.toMillis} millis")
             }
-            .flattenChunks,
-          config.throttlingBackoff
-        ).provide(env)
+          )
+          .provide(env)
       }.provide(env)
     }
 
-  def retryStream[R, R1 <: R, E, O](stream: ZStream[R, E, O], schedule: Schedule[R1, E, _]): ZStream[R1, E, O] =
-    ZStream.unwrap {
-      for {
-        s0    <- schedule.initial
-        state <- Ref.make[schedule.State](s0)
-      } yield {
-        def streamWithRetry: ZStream[R1, E, O] =
-          stream
-            .catchAll(e =>
-              ZStream.unwrap {
-                (for {
-                  s        <- state.get
-                  newState <- schedule.update(e, s)
-                } yield newState).fold(
-                  _ => ZStream.fail(e),
-                  newState =>
-                    ZStream.fromEffect(state.set(newState)) *> streamWithRetry.tap(_ =>
-                      schedule.initial.flatMap(state.set)
-                    )
-                )
-              }
-            )
+  implicit class ZStreamExtensions[-R, +E, +O](val stream: ZStream[R, E, O]) extends AnyVal {
 
-        streamWithRetry
+    /**
+     * When the stream fails, retry it according to the given schedule
+     *
+     * This retries the entire stream, so will re-execute all of the stream's acquire operations.
+     *
+     * The schedule is reset as soon as the first element passes through the stream again.
+     *
+      * @param schedule Schedule receiving as input the errors of the stream
+     * @return Stream outputting elements of all attempts of the stream
+     */
+    def retry[R1 <: R](schedule: Schedule[R1, E, _]): ZStream[R1, E, O] =
+      ZStream.unwrap {
+        for {
+          s0    <- schedule.initial
+          state <- Ref.make[schedule.State](s0)
+        } yield {
+          def go: ZStream[R1, E, O] =
+            stream
+              .catchAll(e =>
+                ZStream.unwrap {
+                  (for {
+                    s        <- state.get
+                    newState <- schedule.update(e, s)
+                  } yield newState).fold(
+                    _ => ZStream.fail(e), // Failure of the schedule indicates it doesn't accept the input
+                    newState =>
+                      ZStream.fromEffect(state.set(newState)) *> go.mapChunksM { chunk =>
+                        // Reset the schedule to its initial state when a chunk is successfully pulled
+                        state.set(s0).as(chunk)
+                      }
+                  )
+                }
+              )
+
+          go
+        }
       }
-    }
+  }
 }

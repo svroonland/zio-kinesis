@@ -40,7 +40,7 @@ object FetchMode {
   case class Polling(
     batchSize: Int = 1000,
     interval: Duration = 1.second,
-    throttlingBackoff: Schedule[Clock, Any, Any] = Util.exponentialBackoff(1.second, 1.minute)
+    throttlingBackoff: Schedule[Clock, Any, (Duration, Int)] = Util.exponentialBackoff(1.second, 1.minute)
   ) extends FetchMode
 
   /**

@@ -249,13 +249,13 @@ object Util {
         })
     }
 
-  def exponentialBackoff(
+  def exponentialBackoff[A](
     min: Duration,
     max: Duration,
     factor: Double = 2.0,
     maxRecurs: Option[Int] = None
-  ): Schedule[Clock, Any, Any] =
-    (Schedule.exponential(min, factor).whileOutput(_ <= max) andThen Schedule.fixed(max)) &&
+  ): Schedule[Clock, A, (Duration, Int)] =
+    (Schedule.exponential(min, factor).whileOutput(_ <= max) andThen Schedule.fixed(max).as(max)) &&
       maxRecurs.map(Schedule.recurs).getOrElse(Schedule.forever)
 
   /**
