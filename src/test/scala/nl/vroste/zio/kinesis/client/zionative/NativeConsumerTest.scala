@@ -23,6 +23,7 @@ import zio.logging.slf4j.Slf4jLogger
 import zio.stream.{ ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test._
+import zio.logging.Logging
 
 object NativeConsumerTest extends DefaultRunnableSpec {
   /*
@@ -567,7 +568,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
   def withStream[R, A](name: String, shards: Int)(
     f: ZIO[R, Throwable, A]
-  ): ZIO[AdminClient with Client with Clock with R, Throwable, A] =
+  ): ZIO[AdminClient with Client with Clock with R, Throwable, A]           =
     (for {
       client <- ZManaged.service[AdminClient.Service]
       _      <- client.createStream(name, shards).toManaged(_ => client.deleteStream(name).orDie)
@@ -584,7 +585,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     chunkSize: Int = 100,
     throttle: Option[Duration] = None,
     indexStart: Int = 1
-  ): ZIO[Client with Clock, Throwable, Chunk[ProduceResponse]]    =
+  ): ZIO[Client with Clock with Logging, Throwable, Chunk[ProduceResponse]] =
     Producer.make(streamName, Serde.asciiString).use { producer =>
       val records =
         (indexStart until (nrRecords + indexStart)).map(i => ProducerRecord(s"key$i", s"msg$i"))
@@ -608,7 +609,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     nrRecords: Int,
     chunkSize: Int = 100,
     indexStart: Int = 1
-  ): ZIO[Client with Clock, Throwable, Chunk[ProduceResponse]] =
+  ): ZIO[Client with Clock with Logging, Throwable, Chunk[ProduceResponse]] =
     Producer.make(streamName, Serde.asciiString).use { producer =>
       val records =
         (indexStart until (nrRecords + indexStart)).map(i => ProducerRecord(s"key$i", s"msg$i"))

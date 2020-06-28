@@ -15,6 +15,8 @@ import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
 object EnhancedFanOutFetcher {
+  import Util.ZStreamExtensions
+
   private def registerConsumerIfNotExists(streamARN: String, consumerName: String) =
     ZIO
       .service[Client.Service]
@@ -80,6 +82,10 @@ object EnhancedFanOutFetcher {
                 .repeat(
                   Schedule.doUntilM(_ => currentPosition.get.map(_.isEmpty))
                 ) // Shard subscriptions get canceled after 5 minutes, resulting in stream completion.
+                .retry((Schedule.succeed(config.retryDelay) && Schedule.forever).tapOutput {
+                  case (delay, retryNr) =>
+                    log.info(s"PollingFetcher will make make retry attempt nr ${retryNr} in ${delay.toMillis} millis")
+                })
                 .catchSome {
                   case e if Consumer.isThrottlingException.isDefinedAt(e) =>
                     ZStream.unwrap(ZIO.sleep(config.retryDelay).tap(_ => UIO(println("Throttled!"))).as(s))

@@ -27,8 +27,8 @@ object ExampleApp extends zio.App {
   val streamName                      = "zio-test-stream-8" // + java.util.UUID.randomUUID().toString
   val nrRecords                       = 2000000
   val nrShards                        = 2
-  val nrNativeWorkers                 = 1
-  val nrKclWorkers                    = 0
+  val nrNativeWorkers                 = 0
+  val nrKclWorkers                    = 1
   val applicationName                 = "testApp-13"        // + java.util.UUID.randomUUID().toString(),
   val runtime                         = 10.minute
   val maxRandomWorkerStartDelayMillis = 1                   // 20000
@@ -45,7 +45,8 @@ object ExampleApp extends zio.App {
           streamName,
           applicationName = applicationName,
           deserializer = Serde.asciiString,
-          fetchMode = FetchMode.EnhancedFanOut(maxSubscriptionsPerSecond = 50), // FetchMode.Polling(),
+          fetchMode = FetchMode.Polling(),
+//          fetchMode = FetchMode.EnhancedFanOut(maxSubscriptionsPerSecond = 50), // FetchMode.Polling(),
           emitDiagnostic = {
             case ev: DiagnosticEvent.PollComplete =>
               log
@@ -64,14 +65,25 @@ object ExampleApp extends zio.App {
                 checkpointer
                   .stageOnSuccess(putStrLn(s"${id} Processing record $r").when(false))(r)
               )
-              .aggregateAsyncWithin(ZTransducer.collectAllN(10000), Schedule.fixed(5.second))
+              .aggregateAsyncWithin(ZTransducer.collectAllN(1000), Schedule.fixed(5.second))
               .tap(rs => log.info(s"${id} processed ${rs.size} records on shard ${shardID}"))
               .mapConcat(_.lastOption.toList)
               .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-              .tap(_ => checkpointer.checkpoint)
+              .tap(_ =>
+                // TODO what if checkpointing fails due to a network error..?
+                checkpointer.checkpoint.catchAll {
+                  case Right(ShardLeaseLost) =>
+                    ZIO.unit
+                  case Left(e)               =>
+                    log.error(
+                      s"${id} shard ${shardID} stream failed checkpointing with" + e + ": " + e.getStackTrace
+                    ) *> ZIO.fail(Left(e))
+                }
+              )
               .catchAll {
                 case Right(ShardLeaseLost) =>
                   ZStream.empty
+
                 case Left(e)               =>
                   ZStream.fromEffect(
                     log.error(s"${id} shard ${shardID} stream failed with" + e + ": " + e.getStackTrace)
@@ -88,7 +100,7 @@ object ExampleApp extends zio.App {
           streamName,
           applicationName = applicationName,
           deserializer = Serde.asciiString,
-          isEnhancedFanOut = true,
+          isEnhancedFanOut = false,
           workerIdentifier = id,
           requestShutdown = requestShutdown.await
         )
@@ -99,13 +111,14 @@ object ExampleApp extends zio.App {
                 checkpointer
                   .stageOnSuccess(putStrLn(s"${id} Processing record $r").when(true))(r)
               )
-              .aggregateAsyncWithin(ZTransducer.last, Schedule.fixed(5.second))
+              .aggregateAsyncWithin(ZTransducer.collectAllN(1000), Schedule.fixed(5.second))
               .mapConcat(_.toList)
-              .tap(_ => checkpointer.checkpoint)
+              .tap(_ => log.info(s"${id} Checkpointing shard ${shardID}") *> checkpointer.checkpoint)
               .catchAll {
                 case _: ShutdownException => // This will be thrown when the shard lease has been stolen
                   // Abort the stream when we no longer have the lease
-                  ZStream.empty
+
+                  ZStream.fromEffect(log.error(s"${id} shard ${shardID} lost")) *> ZStream.empty
                 case e                    =>
                   ZStream.fromEffect(
                     log.error(s"${id} shard ${shardID} stream failed with" + e + ": " + e.getStackTrace)
@@ -173,6 +186,7 @@ object ExampleApp extends zio.App {
         .mapChunksM(
           producer
             .produceChunk(_)
+            .tap(_ => log.debug("Produced chunk"))
             .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
             .retry(retryOnResourceNotFound && Schedule.recurs(1))
             .as(Chunk.unit)
@@ -182,7 +196,7 @@ object ExampleApp extends zio.App {
             .map(Chunk.single(_))
 //            .delay(1.second)
         )
-        .mapMPar(10)(_.join)
+        .mapMPar(3)(_.join)
         .runDrain
         .tapCause(e => log.error("Producing records chunk failed", e))
     }
