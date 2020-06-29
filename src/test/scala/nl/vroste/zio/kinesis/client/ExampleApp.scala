@@ -26,10 +26,11 @@ import zio._
 object ExampleApp extends zio.App {
   val streamName                      = "zio-test-stream-8" // + java.util.UUID.randomUUID().toString
   val nrRecords                       = 2000000
-  val nrShards                        = 2
+  val nrShards                        = 100
+  val enhancedFanout                  = false
   val nrNativeWorkers                 = 0
   val nrKclWorkers                    = 1
-  val applicationName                 = "testApp-13"        // + java.util.UUID.randomUUID().toString(),
+  val applicationName                 = "testApp-1"         // + java.util.UUID.randomUUID().toString(),
   val runtime                         = 10.minute
   val maxRandomWorkerStartDelayMillis = 1                   // 20000
 
@@ -45,8 +46,7 @@ object ExampleApp extends zio.App {
           streamName,
           applicationName = applicationName,
           deserializer = Serde.asciiString,
-          fetchMode = FetchMode.Polling(),
-//          fetchMode = FetchMode.EnhancedFanOut(maxSubscriptionsPerSecond = 50), // FetchMode.Polling(),
+          fetchMode = if (enhancedFanout) FetchMode.EnhancedFanOut() else FetchMode.Polling(),
           emitDiagnostic = {
             case ev: DiagnosticEvent.PollComplete =>
               log
@@ -100,7 +100,7 @@ object ExampleApp extends zio.App {
           streamName,
           applicationName = applicationName,
           deserializer = Serde.asciiString,
-          isEnhancedFanOut = false,
+          isEnhancedFanOut = enhancedFanout,
           workerIdentifier = id,
           requestShutdown = requestShutdown.await
         )
@@ -109,7 +109,7 @@ object ExampleApp extends zio.App {
             shardStream
               .tap(r =>
                 checkpointer
-                  .stageOnSuccess(putStrLn(s"${id} Processing record $r").when(true))(r)
+                  .stageOnSuccess(putStrLn(s"${id} Processing record $r").when(false))(r)
               )
               .aggregateAsyncWithin(ZTransducer.collectAllN(1000), Schedule.fixed(5.second))
               .mapConcat(_.toList)
@@ -164,7 +164,7 @@ object ExampleApp extends zio.App {
     DynamoDbAsyncClient
   ] with LeaseRepositoryFactory] = {
     val kinesis         = kinesisAsyncClientLayer(
-      Client.adjustKinesisClientBuilder(KinesisAsyncClient.builder(), maxConcurrency = 100)
+      Client.adjustKinesisClientBuilder(KinesisAsyncClient.builder(), maxConcurrency = 500)
     )
     val client          = Client.live
     val cloudWatch      = cloudWatchAsyncClientLayer()
