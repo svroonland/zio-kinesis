@@ -4,5 +4,6 @@ import zio.Has
 package object zionative {
   type LeaseRepository        = Has[LeaseRepository.Service]
   type LeaseRepositoryFactory = Has[LeaseRepository.Factory]
+  type MetricsPublisher       = Has[MetricsPublisher.Service]
 
 }
