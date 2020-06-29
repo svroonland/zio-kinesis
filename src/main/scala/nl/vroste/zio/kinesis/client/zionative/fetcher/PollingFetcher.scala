@@ -9,10 +9,8 @@ import zio.duration._
 import zio.stream.ZStream
 import zio._
 import zio.logging.log
-import zio.stream.ZStream.{ fromEffect, unfoldM }
 
 import scala.jdk.CollectionConverters._
-import scala.util.control.NonFatal
 import nl.vroste.zio.kinesis.client.Util
 import zio.logging.Logging
 

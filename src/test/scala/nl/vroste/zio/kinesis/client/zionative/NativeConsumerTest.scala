@@ -28,7 +28,7 @@ import zio.logging.Logging
 object NativeConsumerTest extends DefaultRunnableSpec {
   /*
   - [X] It must retrieve records from all shards
-  - [ ] Support both polling and enhanced fanout
+  - [X] Support both polling and enhanced fanout
   - [X] Must restart from the given initial start point if no lease yet
   - [X] Must restart from the record after the last checkpointed record for each shard
   - [X] Should release leases at shutdown (another worker should aquicre all leases directly without having to steal)

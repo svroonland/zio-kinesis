@@ -1,7 +1,6 @@
 package nl.vroste.zio.kinesis.client
 
 import java.time.Instant
-import java.util.concurrent.{ CompletableFuture, CompletionException }
 
 import nl.vroste.zio.kinesis.client.serde.Serializer
 import software.amazon.awssdk.core.SdkBytes
@@ -15,6 +14,7 @@ import zio.interop.reactivestreams._
 import zio.stream.ZStream
 
 import scala.jdk.CollectionConverters._
+import java.util.concurrent.CompletionException
 
 private[client] class ClientLive(kinesisClient: KinesisAsyncClient) extends Client.Service {
   import Client._
