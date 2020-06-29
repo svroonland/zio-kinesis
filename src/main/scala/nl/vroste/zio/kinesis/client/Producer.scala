@@ -10,6 +10,7 @@ import zio._
 import zio.clock.Clock
 import zio.duration.{ Duration, _ }
 import zio.stream.{ ZSink, ZStream, ZTransducer }
+import zio.logging._
 
 import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
@@ -82,7 +83,7 @@ object Producer {
     streamName: String,
     serializer: Serializer[R, T],
     settings: ProducerSettings = ProducerSettings()
-  ): ZManaged[R with Clock with Client, Throwable, Producer[T]] =
+  ): ZManaged[R with Clock with Client with Logging, Throwable, Producer[T]] =
     for {
       client <- ZManaged.service[Client.Service]
       env    <- ZIO.environment[R with Clock].toManaged_
@@ -118,6 +119,7 @@ object Producer {
                                           else
                                             (Seq.empty, maybeSucceeded)
 
+                 _                     <- log.info(s"Failed to produce ${newFailed.size} records").when(newFailed.nonEmpty)
                  // TODO backoff for shard limit stuff
                  _                     <- failedQueue
                         .offerAll(newFailed.map(_._2))
