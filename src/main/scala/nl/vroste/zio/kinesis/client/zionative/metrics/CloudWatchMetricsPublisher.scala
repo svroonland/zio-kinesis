@@ -68,12 +68,42 @@ class CloudWatchMetricsPublisher(client: CloudWatchAsyncClient, eventQueue: Queu
       case SubscribeToShardEvent(shardId, nrRecords, behindLatest)  =>
         shardFetchMetrics(shardId, nrRecords, behindLatest, 0.millis, timestamp) // TODO what to do with duration
       case LeaseAcquired(shardId, checkpoint)                       => List.empty
-      case ShardLeaseLost(shardId)                                  => List.empty
-      case LeaseRenewed(shardId)                                    => List.empty
+      case ShardLeaseLost(shardId)                                  =>
+        List.empty
+        List(
+          metric(
+            "LostLeases",
+            1,
+            timestamp,
+            Seq("WorkerIdentifier" -> shardId, "Operation" -> "RenewAllLeases"),
+            StandardUnit.COUNT
+          )
+        )
+      case LeaseRenewed(shardId, duration)                          =>
+        List(
+          metric(
+            "RenewLease.Time",
+            duration.toMillis,
+            timestamp,
+            Seq("WorkerIdentifier" -> shardId, "Operation" -> "RenewAllLeases"),
+            StandardUnit.MILLISECONDS
+          ),
+          metric(
+            "RenewLease.Success",
+            1,
+            timestamp,
+            Seq("WorkerIdentifier" -> shardId, "Operation" -> "RenewAllLeases"),
+            StandardUnit.COUNT
+          )
+        )
       case LeaseReleased(shardId)                                   => List.empty
       case Checkpoint(shardId, checkpoint)                          => List.empty
       case WorkerJoined(workerId)                                   => List.empty
       case WorkerLeft(workerId)                                     => List.empty
+      // TODO LeaseCreated (for new leases)
+      // TODO count the number of current leases (periodic metric based on LeaseAcquired and ShardLeaseLost+LeaseReleased)
+      // TODO lease taken
+      // TODO NumWorkers (periodic metric based on WorkerJoined and WorkerLeft)
     }
 
   private def shardFetchMetrics(
@@ -116,8 +146,9 @@ class CloudWatchMetricsPublisher(client: CloudWatchAsyncClient, eventQueue: Queu
       .mapM(e => now.map((e, _)))
       .mapConcat(Function.tupled(toMetrics))
       .aggregateAsyncWithin(ZTransducer.collectAllN(maxBatchSize), Schedule.fixed(flushInterval))
-      .mapM(putMetricData) // TODO should probably retry
+      .mapM(putMetricData)             // TODO should probably retry
       .runDrain
+      .retry(Schedule.fixed(1.second)) // TODO proper back off
 
   private def putMetricData(metricData: Seq[MetricDatum]): ZIO[Logging, Throwable, Unit] = {
     val request = PutMetricDataRequest
