@@ -13,6 +13,7 @@ import zio.logging.log
 import scala.jdk.CollectionConverters._
 import nl.vroste.zio.kinesis.client.Util
 import zio.logging.Logging
+import software.amazon.awssdk.services.kinesis.model.ExpiredIteratorException
 
 object PollingFetcher {
   import Consumer.retryOnThrottledWithSchedule
@@ -38,32 +39,53 @@ object PollingFetcher {
           shardIterator        <- Ref.make[String](initialShardIterator).toManaged_
 
           // Failure with None indicates that there's no next shard iterator and the shard has ended
-          pollWithDelay: ZIO[Clock with Client, Option[Throwable], Chunk[Record]] =
-            for {
-              currentIterator      <- shardIterator.get
-              responseWithDuration <-
-                getRecordsThrottled((currentIterator, config.batchSize))
-                  .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
-                  .asSomeError
-                  .retry(
-                    Schedule.fixed(100.millis) && Schedule.recurs(3)
-                  ) // There is a race condition in kinesalite, see https://github.com/mhart/kinesalite/issues/25
-                  .timed
-              (duration, response)  = responseWithDuration
-              records               = response.records.asScala.toList
-              _                    <- Option(response.nextShardIterator).map(shardIterator.set).getOrElse(ZIO.fail(None))
-              _                    <- emitDiagnostic(
-                     DiagnosticEvent.PollComplete(
-                       shardId,
-                       records.size,
-                       response.millisBehindLatest().toLong.millis,
-                       duration
-                     )
-                   )
-            } yield Chunk.fromIterable(records)
+          doPoll                          = for {
+                     currentIterator      <- shardIterator.get
+                     responseWithDuration <-
+                       getRecordsThrottled(
+                         (currentIterator, config.batchSize)
+                       ).retry(
+                           retryOnThrottledWithSchedule(
+                             config.throttlingBackoff
+                           )
+                         )
+                         .asSomeError
+                         .retry(
+                           Schedule.fixed(
+                             100.millis
+                           ) && Schedule.recurs(3)
+                         ) // There is a race condition in kinesalite, see https://github.com/mhart/kinesalite/issues/25
+                         .timed
+                     (duration, response)  = responseWithDuration
+                     records               = response.records.asScala.toList
+                     _                    <- Option(response.nextShardIterator)
+                            .map(shardIterator.set)
+                            .getOrElse(ZIO.fail(None))
+                     _                    <- emitDiagnostic(
+                            DiagnosticEvent.PollComplete(
+                              shardId,
+                              records.size,
+                              response
+                                .millisBehindLatest()
+                                .toLong
+                                .millis,
+                              duration
+                            )
+                          )
+                   } yield Chunk.fromIterable(records)
+
+          doPollAndRetryOnExpiredIterator = doPoll.catchSome {
+                                              case Some(e: ExpiredIteratorException) =>
+                                                log.warn(s"Shard iterator expired: ${e}") *>
+                                                  getShardIterator(
+                                                    (streamDescription.streamName, shardId, startingPosition)
+                                                  ).retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
+                                                    .asSomeError
+                                                    .flatMap(shardIterator.set(_)) *> doPoll
+                                            }
 
         } yield ZStream
-          .repeatEffectWith(pollWithDelay, Schedule.fixed(config.interval))
+          .repeatEffectWith(doPollAndRetryOnExpiredIterator, Schedule.fixed(config.interval))
           .catchAll {
             case None    => ZStream.empty
             case Some(e) =>
