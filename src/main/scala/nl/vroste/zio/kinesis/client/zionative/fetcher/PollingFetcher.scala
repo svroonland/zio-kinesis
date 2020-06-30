@@ -104,7 +104,6 @@ object PollingFetcher {
                 log.info(s"PollingFetcher will make make retry attempt nr ${retryNr} in ${delay.toMillis} millis")
             }
           )
-          .provide(env)
       }.provide(env)
     }
 }
