@@ -16,6 +16,7 @@ import scala.util.control.NonFatal
 
 object EnhancedFanOutFetcher {
   import Util.ZStreamExtensions
+  import FetchUtil.repeatWhileNotNone
 
   def make(
     streamDescription: StreamDescription,
@@ -64,16 +65,6 @@ object EnhancedFanOutFetcher {
       }.provide(env)
     }
 
-  private def repeatWhileNotNone[Token, R, E, O](
-    token: Ref[Option[Token]]
-  )(stream: Token => ZStream[R, E, O]): ZStream[R, E, O] =
-    ZStream.unwrap {
-      token.get.flatMap {
-        case Some(t) => stream(t) *> repeatWhileNotNone(token)(stream)
-        case None    => ZStream.empty
-      }
-    }
-
   private def registerConsumerIfNotExists(streamARN: String, consumerName: String) =
     ZIO
       .service[Client.Service]
@@ -88,4 +79,16 @@ object EnhancedFanOutFetcher {
             .filterOrElse(_.consumerStatus() != ConsumerStatus.DELETING)(_ => ZIO.fail(e))
             .map(_.consumerARN())
       }
+}
+
+object FetchUtil {
+  def repeatWhileNotNone[Token, R, E, O](
+    token: Ref[Option[Token]]
+  )(stream: Token => ZStream[R, E, O]): ZStream[R, E, O] =
+    ZStream.unwrap {
+      token.get.map {
+        case Some(t) => stream(t) *> repeatWhileNotNone(token)(stream)
+        case None    => ZStream.empty
+      }
+    }
 }
