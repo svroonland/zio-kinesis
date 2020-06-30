@@ -24,7 +24,6 @@ import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.LeaseReleased
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.Checkpoint
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.WorkerJoined
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.WorkerLeft
-import nl.vroste.zio.kinesis.client.zionative.MetricsPublisher
 import software.amazon.awssdk.services.cloudwatch.model.Dimension
 import scala.jdk.CollectionConverters._
 import java.time.Instant
@@ -35,33 +34,43 @@ import zio.clock.Clock
 import zio.Has
 import zio.logging.{ log, Logging }
 import software.amazon.awssdk.services.cloudwatch.model.StandardUnit
+import zio.Ref
+import zio.stream.Take
+import zio.Chunk
+import nl.vroste.zio.kinesis.client.Util
 
-class CloudWatchMetricsPublisher(client: CloudWatchAsyncClient, eventQueue: Queue[DiagnosticEvent], namespace: String)
-    extends MetricsPublisher.Service {
-  val flushInterval: Duration = 20.seconds
-  val maxBatchSize            = 20 // SDK limit
+case class CloudWatchMetricsPublisherConfig(
+  flushInterval: Duration = 20.seconds,
+  maxBatchSize: Int = 20,
+  retrySchedule: Schedule[Clock, Any, (Duration, Int)] = Util.exponentialBackoff(1.second, 1.minute)
+) {
+  require(maxBatchSize <= 20, "maxBatchSize must be <= 20 (AWS SDK limit)")
+}
+
+/**
+ * Publishes KCL compatible metrics to CloudWatch
+ *
+ * TODO how do we support an application where there's more than one Kinesis stream
+ * being processed, so multiple sharded streams and multiple LeaseRepository and
+ *
+ *
+ *
+ */
+private class CloudWatchMetricsPublisher(
+  client: CloudWatchAsyncClient,
+  eventQueue: Queue[DiagnosticEvent],
+  periodicMetricsQueue: Queue[MetricDatum],
+  namespace: String,
+  workerId: String,
+  heldLeases: Ref[Set[String]],
+  workers: Ref[Set[String]],
+  config: CloudWatchMetricsPublisherConfig
+) extends CloudWatchMetricsPublisher.Service {
+  import CloudWatchMetricsPublisher._
 
   def processEvent(e: DiagnosticEvent): UIO[Unit] = eventQueue.offer(e).unit
 
-  private def dimension(name: String, value: String) = Dimension.builder().name(name).value(value).build()
-
-  private def metric(
-    name: String,
-    value: Double,
-    timestamp: Instant,
-    dimensions: Seq[(String, String)],
-    unit: StandardUnit
-  ) =
-    MetricDatum
-      .builder()
-      .metricName(name)
-      .dimensions(dimensions.map(Function.tupled(dimension)).asJava)
-      .value(value)
-      .timestamp(timestamp)
-      .unit(unit)
-      .build()
-
-  def toMetrics(e: DiagnosticEvent, timestamp: Instant): List[MetricDatum] =
+  private def toMetrics(e: DiagnosticEvent, timestamp: Instant): List[MetricDatum] =
     e match {
       case PollComplete(shardId, nrRecords, behindLatest, duration) =>
         shardFetchMetrics(shardId, nrRecords, behindLatest, duration, timestamp)
@@ -75,7 +84,7 @@ class CloudWatchMetricsPublisher(client: CloudWatchAsyncClient, eventQueue: Queu
             "LostLeases",
             1,
             timestamp,
-            Seq("WorkerIdentifier" -> shardId, "Operation" -> "RenewAllLeases"),
+            Seq("WorkerIdentifier" -> workerId, "Operation" -> "RenewAllLeases"),
             StandardUnit.COUNT
           )
         )
@@ -85,14 +94,14 @@ class CloudWatchMetricsPublisher(client: CloudWatchAsyncClient, eventQueue: Queu
             "RenewLease.Time",
             duration.toMillis,
             timestamp,
-            Seq("WorkerIdentifier" -> shardId, "Operation" -> "RenewAllLeases"),
+            Seq("WorkerIdentifier" -> workerId, "Operation" -> "RenewAllLeases"),
             StandardUnit.MILLISECONDS
           ),
           metric(
             "RenewLease.Success",
             1,
             timestamp,
-            Seq("WorkerIdentifier" -> shardId, "Operation" -> "RenewAllLeases"),
+            Seq("WorkerIdentifier" -> workerId, "Operation" -> "RenewAllLeases"),
             StandardUnit.COUNT
           )
         )
@@ -139,16 +148,59 @@ class CloudWatchMetricsPublisher(client: CloudWatchAsyncClient, eventQueue: Queu
 
   val now = zio.clock.currentDateTime.map(_.toInstant())
 
-  // TODO make sure queue is closed
+  def collectPeriodicMetrics(event: DiagnosticEvent, timestamp: Instant): UIO[Unit] =
+    event match {
+      case PollComplete(shardId, nrRecords, behindLatest, duration) => UIO.unit
+      case SubscribeToShardEvent(shardId, nrRecords, behindLatest)  => UIO.unit
+
+      case LeaseAcquired(shardId, checkpoint) => heldLeases.update(_ + shardId)
+      case ShardLeaseLost(shardId)            => heldLeases.update(_ - workerId)
+      case LeaseRenewed(shardId, duration)    => UIO.unit
+      case LeaseReleased(shardId)             => heldLeases.update(_ - workerId)
+      case Checkpoint(shardId, checkpoint)    => UIO.unit
+      case WorkerJoined(workerId)             => workers.update(_ + workerId)
+      case WorkerLeft(workerId)               => workers.update(_ - workerId)
+    }
+
   val processQueue =
-    ZStream
+    (ZStream
       .fromQueue(eventQueue)
-      .mapM(e => now.map((e, _)))
-      .mapConcat(Function.tupled(toMetrics))
-      .aggregateAsyncWithin(ZTransducer.collectAllN(maxBatchSize), Schedule.fixed(flushInterval))
+      .mapM(event => now.map((event, _)))
+      .tap(Function.tupled(collectPeriodicMetrics))
+      .mapConcat(Function.tupled(toMetrics)) merge ZStream.fromQueue(periodicMetricsQueue))
+      .aggregateAsyncWithin(ZTransducer.collectAllN(config.maxBatchSize), Schedule.fixed(config.flushInterval))
       .mapM(putMetricData)             // TODO should probably retry
       .runDrain
       .retry(Schedule.fixed(1.second)) // TODO proper back off
+
+  val generatePeriodicMetrics =
+    (for {
+      now            <- now
+      nrWorkers      <- workers.get.map(_.size)
+      nrLeases       <- heldLeases.get.map(_.size)
+      nrWorkersMetric = metric(
+                          "NumWorkers",
+                          nrWorkers,
+                          now,
+                          Seq("Operation" -> "TakeLeases", "WorkerIdentifier" -> workerId),
+                          StandardUnit.COUNT
+                        )
+      nrLeasesMetric  = metric(
+                         "TotalLeases",
+                         nrLeases,
+                         now,
+                         Seq("Operation" -> "TakeLeases", "WorkerIdentifier" -> workerId),
+                         StandardUnit.COUNT
+                       )
+      nrLeasesMetric2 = metric(
+                          "CurrentLeases",
+                          nrLeases,
+                          now,
+                          Seq("Operation" -> "RenewAllLeases", "WorkerIdentifier" -> workerId),
+                          StandardUnit.COUNT
+                        )
+      _              <- periodicMetricsQueue.offerAll(List(nrWorkersMetric, nrLeasesMetric, nrLeasesMetric2))
+    } yield ()).repeat(Schedule.fixed(30.seconds)) // TODO configurable
 
   private def putMetricData(metricData: Seq[MetricDatum]): ZIO[Logging, Throwable, Unit] = {
     val request = PutMetricDataRequest
@@ -160,4 +212,44 @@ class CloudWatchMetricsPublisher(client: CloudWatchAsyncClient, eventQueue: Queu
     // log.info(s"Putting metrics: ${request}") *>
     asZIO(client.putMetricData(request)).unit
   }
+}
+
+object CloudWatchMetricsPublisher {
+  trait Service {
+    def processEvent(e: DiagnosticEvent): UIO[Unit]
+  }
+
+  def make(applicationName: String, workerId: String): ZManaged[Clock with Logging with Has[
+    CloudWatchAsyncClient
+  ] with Has[CloudWatchMetricsPublisherConfig], Nothing, Service] =
+    for {
+      client  <- ZManaged.service[CloudWatchAsyncClient]
+      config  <- ZManaged.service[CloudWatchMetricsPublisherConfig]
+      q       <- Queue.bounded[DiagnosticEvent](1000).toManaged_
+      q2      <- Queue.bounded[MetricDatum](1000).toManaged_
+      leases  <- Ref.make[Set[String]](Set.empty).toManaged_
+      workers <- Ref.make[Set[String]](Set.empty).toManaged_
+      c        = new CloudWatchMetricsPublisher(client, q, q2, applicationName, workerId, leases, workers, config)
+      _       <- c.processQueue.forkManaged
+      _       <- c.generatePeriodicMetrics.forkManaged
+      _       <- ZManaged.finalizer(q.shutdown)
+    } yield c
+
+  private def metric(
+    name: String,
+    value: Double,
+    timestamp: Instant,
+    dimensions: Seq[(String, String)],
+    unit: StandardUnit
+  ) =
+    MetricDatum
+      .builder()
+      .metricName(name)
+      .dimensions(dimensions.map(Function.tupled(dimension)).asJava)
+      .value(value)
+      .timestamp(timestamp)
+      .unit(unit)
+      .build()
+
+  private def dimension(name: String, value: String) = Dimension.builder().name(name).value(value).build()
 }

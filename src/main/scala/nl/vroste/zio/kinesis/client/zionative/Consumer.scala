@@ -151,7 +151,7 @@ object Consumer {
           leaseCoordinator.acquiredLeases.collect {
             case AcquiredLease(shardId, leaseLost) =>
               (shardId, leaseLost)
-          }.mapMPar(10) { // TODO config var: max shard starts or something
+          }.mapM {
             case (shardId, leaseLost) =>
               for {
                 checkpointer        <- leaseCoordinator.makeCheckpointer(shardId)
@@ -170,6 +170,7 @@ object Consumer {
                                   .map(Exit.succeed(_))).collectWhileSuccess
               } yield (
                 shardId,
+                // TODO put retries here instead of in the Fetchers
                 shardStream.ensuringFirst {
                   checkpointer.checkpointAndRelease.catchAll {
                     case Left(e)               =>

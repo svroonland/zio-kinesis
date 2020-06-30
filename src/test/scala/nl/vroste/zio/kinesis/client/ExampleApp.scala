@@ -20,34 +20,35 @@ import zio.logging.{ log, Logging }
 import zio.stream.{ ZStream, ZTransducer }
 import zio._
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
-import nl.vroste.zio.kinesis.client.zionative.MetricsPublisher
 import zio.clock.Clock
+import nl.vroste.zio.kinesis.client.zionative.metrics.CloudWatchMetricsPublisher
+import nl.vroste.zio.kinesis.client.zionative.metrics.CloudWatchMetricsPublisherConfig
 
 /**
  * Example app that shows the ZIO-native and KCL workers running in parallel
  */
 object ExampleApp extends zio.App {
-  val streamName                      = "zio-test-stream-9" // + java.util.UUID.randomUUID().toString
+  val streamName                      = "zio-test-stream-10" // + java.util.UUID.randomUUID().toString
   val nrRecords                       = 2000000
-  val nrShards                        = 2
-  val enhancedFanout                  = true
-  val nrNativeWorkers                 = 1
+  val nrShards                        = 15
+  val enhancedFanout                  = false
+  val nrNativeWorkers                 = 5
   val nrKclWorkers                    = 0
-  val applicationName                 = "testApp-1"         // + java.util.UUID.randomUUID().toString(),
-  val runtime                         = 10.minute
-  val maxRandomWorkerStartDelayMillis = 1                   // 20000
+  val applicationName                 = "testApp-1"          // + java.util.UUID.randomUUID().toString(),
+  val runtime                         = 20.minute
+  val maxRandomWorkerStartDelayMillis = 15 * 60 * 1000       // 20000
 
   override def run(
     args: List[String]
   ): ZIO[zio.ZEnv, Nothing, ExitCode] = {
 
     def worker(id: String) =
-      ZStream.unwrap {
+      ZStream.unwrapManaged {
         for {
-          publisher <- ZIO.service[MetricsPublisher.Service]
-        } yield ZStream.fromEffect(
-          zio.random.nextIntBetween(0, maxRandomWorkerStartDelayMillis).flatMap(d => ZIO.sleep(d.millis))
-        ) *> Consumer
+          metrics <- CloudWatchMetricsPublisher.make(applicationName, id)
+          delay   <- zio.random.nextIntBetween(0, maxRandomWorkerStartDelayMillis).map(_.millis).toManaged_
+          _       <- log.info(s"Waiting ${delay.toMillis} ms to start worker ${id}").toManaged_
+        } yield ZStream.fromEffect(ZIO.sleep(delay)) *> Consumer
           .shardedStream(
             streamName,
             applicationName = applicationName,
@@ -62,7 +63,7 @@ object ExampleApp extends zio.App {
                     )
                     .provideLayer(loggingEnv)
                 case ev                               => log.info(id + ": " + ev.toString).provideLayer(loggingEnv)
-              }) *> publisher.processEvent(ev),
+              }) *> metrics.processEvent(ev),
             workerId = id
           )
           .flatMapPar(Int.MaxValue) {
@@ -170,7 +171,9 @@ object ExampleApp extends zio.App {
 
   val awsEnv: ZLayer[Clock, Nothing, AdminClient with Client with DynamicConsumer with Logging with Has[
     DynamoDbAsyncClient
-  ] with LeaseRepositoryFactory with MetricsPublisher] = {
+  ] with LeaseRepositoryFactory with Has[CloudWatchAsyncClient] with Has[
+    CloudWatchMetricsPublisherConfig
+  ]] = {
     val kinesis    = kinesisAsyncClientLayer(
       Client.adjustKinesisClientBuilder(KinesisAsyncClient.builder(), maxConcurrency = 500)
     )
@@ -185,12 +188,11 @@ object ExampleApp extends zio.App {
     val dynamicConsumer = DynamicConsumer.live
     val logging         = loggingEnv
 
-    val metricsPublisher = MetricsPublisher.make(applicationName)
+    val metricsPublisherConfig = ZLayer.succeed(CloudWatchMetricsPublisherConfig())
 
     ZLayer.requires[Clock] >+>
       awsClients >+>
-      (client ++ adminClient ++ dynamicConsumer ++ repoFactory ++ logging) >+>
-      metricsPublisher
+      (client ++ adminClient ++ dynamicConsumer ++ repoFactory ++ logging ++ metricsPublisherConfig)
   }
 
   def produceRecords(streamName: String, nrRecords: Int) =
@@ -210,7 +212,7 @@ object ExampleApp extends zio.App {
             .retry(Schedule.exponential(1.second))
             .fork
             .map(Chunk.single(_))
-//            .delay(1.second)
+            .delay(1.second) // TODO Until we fix throttling bug in Producer
         )
         .mapMPar(1)(_.join)
         .runDrain
