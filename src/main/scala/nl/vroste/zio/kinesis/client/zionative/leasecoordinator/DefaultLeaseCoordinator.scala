@@ -230,7 +230,6 @@ private class DefaultLeaseCoordinator(
                             leaseLost(lease, leaseCompleted) *>
                               log.info(s"Unable to renew lease for shard, lease counter was obsolete").unit
                           case Left(e)              =>
-                            // TODO we should probably retry this
                             ZIO.fail(e)
                         }
                         .timed

@@ -82,21 +82,23 @@ object EnhancedFanOutFetcher {
                 .repeat(
                   Schedule.doUntilM(_ => currentPosition.get.map(_.isEmpty))
                 ) // Shard subscriptions get canceled after 5 minutes, resulting in stream completion.
-                .retry((Schedule.succeed(config.retryDelay) && Schedule.forever).tapOutput {
-                  case (delay, retryNr) =>
-                    log.info(s"PollingFetcher will make make retry attempt nr ${retryNr} in ${delay.toMillis} millis")
-                })
                 .catchSome {
-                  case e if Consumer.isThrottlingException.isDefinedAt(e) =>
-                    ZStream.unwrap(ZIO.sleep(config.retryDelay).tap(_ => UIO(println("Throttled!"))).as(s))
-                  case NonFatal(e)                                        =>
+                  // case e if Consumer.isThrottlingException.isDefinedAt(e) =>
+                  //   ZStream.unwrap(ZIO.sleep(config.retryDelay).tap(_ => UIO(println("Throttled!"))).as(s))
+                  case NonFatal(e) =>
                     ZStream.unwrap(
                       log
                         .warn(s"Error in EnhancedFanOutFetcher for shard ${shardId}, will retry. ${e}")
                         .tap(_ => ZIO.sleep(config.retryDelay))
-                        .as(s)
+                        .as(ZStream.fail(e))
                     )
                 } // TODO this should be replaced with a ZStream#retry with a proper exponential backoff scheme
+                .retry((Schedule.succeed(config.retryDelay) && Schedule.forever).tapOutput {
+                  case (delay, retryNr) =>
+                    log.info(
+                      s"EnhancedFanOutFetcher will make make retry attempt nr ${retryNr} in ${delay.toMillis} millis"
+                    )
+                })
 
             s
           }
