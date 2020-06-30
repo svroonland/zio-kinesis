@@ -36,7 +36,7 @@ object ExampleApp extends zio.App {
   val nrKclWorkers                    = 0
   val applicationName                 = "testApp-1"          // + java.util.UUID.randomUUID().toString(),
   val runtime                         = 20.minute
-  val maxRandomWorkerStartDelayMillis = 15 * 60 * 1000       // 20000
+  val maxRandomWorkerStartDelayMillis = 5 * 60 * 1000        // 20000
 
   override def run(
     args: List[String]
@@ -200,7 +200,7 @@ object ExampleApp extends zio.App {
       ZStream
         .range(1, nrRecords)
         .map(i => ProducerRecord(s"key$i", s"msg$i"))
-        .chunkN(499)
+        .chunkN(30)
         .mapChunksM(
           producer
             .produceChunk(_)

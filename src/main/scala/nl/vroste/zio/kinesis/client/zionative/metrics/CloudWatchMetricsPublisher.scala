@@ -154,9 +154,9 @@ private class CloudWatchMetricsPublisher(
       case SubscribeToShardEvent(shardId, nrRecords, behindLatest)  => UIO.unit
 
       case LeaseAcquired(shardId, checkpoint) => heldLeases.update(_ + shardId)
-      case ShardLeaseLost(shardId)            => heldLeases.update(_ - workerId)
+      case ShardLeaseLost(shardId)            => heldLeases.update(_ - shardId)
       case LeaseRenewed(shardId, duration)    => UIO.unit
-      case LeaseReleased(shardId)             => heldLeases.update(_ - workerId)
+      case LeaseReleased(shardId)             => heldLeases.update(_ - shardId)
       case Checkpoint(shardId, checkpoint)    => UIO.unit
       case WorkerJoined(workerId)             => workers.update(_ + workerId)
       case WorkerLeft(workerId)               => workers.update(_ - workerId)
@@ -178,6 +178,7 @@ private class CloudWatchMetricsPublisher(
       now            <- now
       nrWorkers      <- workers.get.map(_.size)
       nrLeases       <- heldLeases.get.map(_.size)
+      _               = println(s"Worker ${workerId} has ${nrLeases} leases")
       nrWorkersMetric = metric(
                           "NumWorkers",
                           nrWorkers,

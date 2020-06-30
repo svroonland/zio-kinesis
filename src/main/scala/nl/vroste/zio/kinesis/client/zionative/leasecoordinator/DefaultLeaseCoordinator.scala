@@ -222,20 +222,21 @@ private class DefaultLeaseCoordinator(
         case Some((lease, leaseCompleted)) =>
           val updatedLease = lease.increaseCounter
           for {
-            result       <- table
+            result             <- table
                         .renewLease(updatedLease)
+                        .as(true)
                         .catchAll {
                           // This means the lease was updated by another worker
                           case Right(LeaseObsolete) =>
                             leaseLost(lease, leaseCompleted) *>
-                              log.info(s"Unable to renew lease for shard, lease counter was obsolete").unit
+                              log.info(s"Unable to renew lease for shard, lease counter was obsolete").as(false)
                           case Left(e)              =>
                             ZIO.fail(e)
                         }
                         .timed
-            (duration, _) = result
-            _            <- updateState(_.updateLease(updatedLease, _))
-            _            <- emitDiagnostic(DiagnosticEvent.LeaseRenewed(updatedLease.key, duration))
+            (duration, success) = result
+            _                  <- updateState(_.updateLease(updatedLease, _)).when(success)
+            _                  <- emitDiagnostic(DiagnosticEvent.LeaseRenewed(updatedLease.key, duration)).when(success)
           } yield ()
         case None                          =>
           ZIO.fail(new Exception(s"Unknown lease for shard ${shard}! This indicates a programming error"))
