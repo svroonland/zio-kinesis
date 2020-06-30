@@ -40,14 +40,14 @@ import zio.Chunk
 import nl.vroste.zio.kinesis.client.Util
 
 /**
-  * Configuration for CloudWatch metrics publishing
-  *
+ * Configuration for CloudWatch metrics publishing
+ *
   * @param maxFlushInterval Collected metrics will be uploaded to CloudWatch at most this interval
-  * @param maxBatchSize Collected metrics will be uploaded to CloudWatch at most this number of metrics. Must be <= 20 (AWS SDK limit)
-  * @param periodicMetricInterval Periodic metrics (nr leases / nr workers) are collected at this interval
-  * @param retrySchedule Transient upload failures are retried according to this schedule
-  * @param maxParallelUploads The maximum number of in-flight requests with batches of metric data to CloudWatch
-  */
+ * @param maxBatchSize Collected metrics will be uploaded to CloudWatch at most this number of metrics. Must be <= 20 (AWS SDK limit)
+ * @param periodicMetricInterval Periodic metrics (nr leases / nr workers) are collected at this interval
+ * @param retrySchedule Transient upload failures are retried according to this schedule
+ * @param maxParallelUploads The maximum number of in-flight requests with batches of metric data to CloudWatch
+ */
 case class CloudWatchMetricsPublisherConfig(
   maxFlushInterval: Duration = 20.seconds,
   maxBatchSize: Int = 20,
@@ -172,10 +172,11 @@ private class CloudWatchMetricsPublisher(
       .tap(Function.tupled(collectPeriodicMetrics))
       .mapConcat(Function.tupled(toMetrics)) merge ZStream.fromQueue(periodicMetricsQueue))
       .aggregateAsyncWithin(ZTransducer.collectAllN(config.maxBatchSize), Schedule.fixed(config.maxFlushInterval))
-      .mapMPar(config.maxParallelUploads){metrics => 
+      .mapMPar(config.maxParallelUploads) { metrics =>
         putMetricData(metrics)
-        .tapError(e => log.warn(s"Failed to upload metrics, will retry: ${e}"))
-        .retry(config.retrySchedule).orDie // orDie because schedule has Any as error type?
+          .tapError(e => log.warn(s"Failed to upload metrics, will retry: ${e}"))
+          .retry(config.retrySchedule)
+          .orDie // orDie because schedule has Any as error type?
       }
       .runDrain
       .tapCause(e => log.error("Metrics uploading has stopped with error", e))
@@ -239,7 +240,7 @@ object CloudWatchMetricsPublisher {
       c        = new CloudWatchMetricsPublisher(client, q, q2, applicationName, workerId, leases, workers, config)
       _       <- c.processQueue.forkManaged
       _       <- c.generatePeriodicMetrics.forkManaged
-      // Shutdown the queues first 
+      // Shutdown the queues first
       _       <- ZManaged.finalizer(q.shutdown)
       _       <- ZManaged.finalizer(q2.shutdown)
     } yield c

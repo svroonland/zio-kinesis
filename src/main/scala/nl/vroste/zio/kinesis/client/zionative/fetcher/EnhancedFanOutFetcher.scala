@@ -17,23 +17,6 @@ import scala.util.control.NonFatal
 object EnhancedFanOutFetcher {
   import Util.ZStreamExtensions
 
-  private def registerConsumerIfNotExists(streamARN: String, consumerName: String) =
-    ZIO
-      .service[Client.Service]
-      .flatMap(_.registerStreamConsumer(streamARN, consumerName))
-      .map(_.consumerARN())
-      .catchSome {
-        case e: ResourceInUseException =>
-          // Consumer already exists, retrieve it
-          ZIO
-            .service[Client.Service]
-            .flatMap(_.describeStreamConsumer(streamARN, consumerName))
-            .filterOrElse(_.consumerStatus() != ConsumerStatus.DELETING)(_ => ZIO.fail(e))
-            .map(_.consumerARN())
-      }
-
-  // TODO doesn't really need to be managed anymore
-  // TODO configure: deregister stream consumers after use
   def make(
     streamDescription: StreamDescription,
     workerId: String,
@@ -48,62 +31,61 @@ object EnhancedFanOutFetcher {
                               (pos: ShardIteratorType, shardId: String) =>
                                 ZIO.succeed(client.subscribeToShard(consumerARN, shardId, pos))
                             }
-      // TODO we need to wait until the consumer becomes active, otherwise there will be no events in the stream
     } yield Fetcher { (shardId, startingPosition) =>
       ZStream.unwrap {
         for {
-          currentPosition <- Ref.make[Option[ShardIteratorType]](Some(startingPosition))
-          stream           = {
-            def s: ZStream[Clock with Logging, Throwable, Record] =
-              ZStream
-                .fromEffect(
-                  currentPosition.get
-                    .flatMap(
-                      _.map(pos => subscribeThrottled((pos, shardId))).getOrElse(ZIO.succeed(ZStream.empty))
-                    )
+          currentPosition <- Ref.make[Option[ShardIteratorType]](Some(startingPosition)) // None means shard has ended
+        } yield repeatWhileNotNone(currentPosition) { pos =>
+          ZStream
+            .unwrap(subscribeThrottled((pos, shardId)))
+            .tap { e =>
+              currentPosition.set(
+                Option(e.continuationSequenceNumber()).map(ShardIteratorType.AfterSequenceNumber)
+              )
+            }
+            .tap { e =>
+              emitDiagnostic(
+                DiagnosticEvent
+                  .SubscribeToShardEvent(shardId, e.records.size, e.millisBehindLatest().toLong.millis)
+              )
+            }
+            .catchSome {
+              case NonFatal(e) =>
+                ZStream.unwrap(
+                  log
+                    .warn(s"Error in EnhancedFanOutFetcher for shard ${shardId}, will retry. ${e}")
+                    .as(ZStream.fail(e))
                 )
-                .flatten
-                .tap { e =>
-                  currentPosition.set(
-                    Option(e.continuationSequenceNumber()).map(ShardIteratorType.AfterSequenceNumber)
-                  )
-                }
-                .tap { e =>
-                  emitDiagnostic(
-                    DiagnosticEvent
-                      .SubscribeToShardEvent(
-                        shardId,
-                        e.records.size,
-                        e.millisBehindLatest().toLong.millis
-                      )
-                  )
-                }
-                .mapConcat(_.records.asScala)
-                .repeat(
-                  Schedule.doUntilM(_ => currentPosition.get.map(_.isEmpty))
-                ) // Shard subscriptions get canceled after 5 minutes, resulting in stream completion.
-                .catchSome {
-                  // case e if Consumer.isThrottlingException.isDefinedAt(e) =>
-                  //   ZStream.unwrap(ZIO.sleep(config.retryDelay).tap(_ => UIO(println("Throttled!"))).as(s))
-                  case NonFatal(e) =>
-                    ZStream.unwrap(
-                      log
-                        .warn(s"Error in EnhancedFanOutFetcher for shard ${shardId}, will retry. ${e}")
-                        .tap(_ => ZIO.sleep(config.retryDelay))
-                        .as(ZStream.fail(e))
-                    )
-                } // TODO this should be replaced with a ZStream#retry with a proper exponential backoff scheme
-                .retry((Schedule.succeed(config.retryDelay) && Schedule.forever).tapOutput {
-                  case (delay, retryNr) =>
-                    log.info(
-                      s"EnhancedFanOutFetcher will make make retry attempt nr ${retryNr} in ${delay.toMillis} millis"
-                    )
-                })
-
-            s
-          }
-
-        } yield stream
+            }
+            // Retry on connection loss, throttling exception, etc.
+            // Note that retry has to be at this level, not the outermost ZStream because that reinitializes the start position
+            .retry(config.retrySchedule)
+        }.mapConcat(_.records.asScala)
       }.provide(env)
     }
+
+  private def repeatWhileNotNone[Token, R, E, O](
+    token: Ref[Option[Token]]
+  )(stream: Token => ZStream[R, E, O]): ZStream[R, E, O] =
+    ZStream.unwrap {
+      token.get.flatMap {
+        case Some(t) => stream(t) *> repeatWhileNotNone(token)(stream)
+        case None    => ZStream.empty
+      }
+    }
+
+  private def registerConsumerIfNotExists(streamARN: String, consumerName: String) =
+    ZIO
+      .service[Client.Service]
+      .flatMap(_.registerStreamConsumer(streamARN, consumerName))
+      .map(_.consumerARN())
+      .catchSome {
+        case e: ResourceInUseException =>
+          // Consumer already exists, retrieve it
+          ZIO
+            .service[Client.Service]
+            .flatMap(_.describeStreamConsumer(streamARN, consumerName))
+            .filterOrElse(_.consumerStatus() != ConsumerStatus.DELETING)(_ => ZIO.fail(e))
+            .map(_.consumerARN())
+      }
 }

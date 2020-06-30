@@ -49,11 +49,17 @@ object FetchMode {
   case class EnhancedFanOut(
     deregisterConsumerAtShutdown: Boolean = false,
     maxSubscriptionsPerSecond: Int = 10,
-    retryDelay: Duration = 10.seconds
+    retrySchedule: Schedule[Clock, Any, (Duration, Int)] = Util.exponentialBackoff(1.second, 1.minute)
   ) extends FetchMode
 }
 
 trait Fetcher {
+
+  /**
+   * Stream of records on the shard with the given ID, starting from the startingPosition
+   *
+   * May complete when the shard ends
+   */
   def shardRecordStream(shardId: String, startingPosition: ShardIteratorType): ZStream[Clock, Throwable, KinesisRecord]
 }
 
