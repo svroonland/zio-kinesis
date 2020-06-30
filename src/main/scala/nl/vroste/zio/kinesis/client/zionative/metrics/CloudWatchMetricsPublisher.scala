@@ -39,22 +39,27 @@ import zio.stream.Take
 import zio.Chunk
 import nl.vroste.zio.kinesis.client.Util
 
+/**
+  * Configuration for CloudWatch metrics publishing
+  *
+  * @param maxFlushInterval Collected metrics will be uploaded to CloudWatch at most this interval
+  * @param maxBatchSize Collected metrics will be uploaded to CloudWatch at most this number of metrics. Must be <= 20 (AWS SDK limit)
+  * @param periodicMetricInterval Periodic metrics (nr leases / nr workers) are collected at this interval
+  * @param retrySchedule Transient upload failures are retried according to this schedule
+  * @param maxParallelUploads The maximum number of in-flight requests with batches of metric data to CloudWatch
+  */
 case class CloudWatchMetricsPublisherConfig(
-  flushInterval: Duration = 20.seconds,
+  maxFlushInterval: Duration = 20.seconds,
   maxBatchSize: Int = 20,
-  retrySchedule: Schedule[Clock, Any, (Duration, Int)] = Util.exponentialBackoff(1.second, 1.minute)
+  periodicMetricInterval: Duration = 30.seconds,
+  retrySchedule: Schedule[Clock, Any, (Duration, Int)] = Util.exponentialBackoff(1.second, 1.minute),
+  maxParallelUploads: Int = 3
 ) {
   require(maxBatchSize <= 20, "maxBatchSize must be <= 20 (AWS SDK limit)")
 }
 
 /**
  * Publishes KCL compatible metrics to CloudWatch
- *
- * TODO how do we support an application where there's more than one Kinesis stream
- * being processed, so multiple sharded streams and multiple LeaseRepository and
- *
- *
- *
  */
 private class CloudWatchMetricsPublisher(
   client: CloudWatchAsyncClient,
@@ -76,7 +81,7 @@ private class CloudWatchMetricsPublisher(
         shardFetchMetrics(shardId, nrRecords, behindLatest, duration, timestamp)
       case SubscribeToShardEvent(shardId, nrRecords, behindLatest)  =>
         shardFetchMetrics(shardId, nrRecords, behindLatest, 0.millis, timestamp) // TODO what to do with duration
-      case LeaseAcquired(shardId, checkpoint)                       => List.empty
+      case LeaseAcquired(shardId, checkpoint)                       => List.empty // Processed in periodic metrics
       case ShardLeaseLost(shardId)                                  =>
         List.empty
         List(
@@ -105,14 +110,12 @@ private class CloudWatchMetricsPublisher(
             StandardUnit.COUNT
           )
         )
-      case LeaseReleased(shardId)                                   => List.empty
+      case LeaseReleased(shardId)                                   => List.empty // Processed in periodic metrics
       case Checkpoint(shardId, checkpoint)                          => List.empty
-      case WorkerJoined(workerId)                                   => List.empty
-      case WorkerLeft(workerId)                                     => List.empty
+      case WorkerJoined(workerId)                                   => List.empty // Processed in periodic metrics
+      case WorkerLeft(workerId)                                     => List.empty // Processed in periodic metrics
       // TODO LeaseCreated (for new leases)
-      // TODO count the number of current leases (periodic metric based on LeaseAcquired and ShardLeaseLost+LeaseReleased)
       // TODO lease taken
-      // TODO NumWorkers (periodic metric based on WorkerJoined and WorkerLeft)
     }
 
   private def shardFetchMetrics(
@@ -129,7 +132,7 @@ private class CloudWatchMetricsPublisher(
         timestamp,
         Seq("ShardId" -> shardId, "Operation" -> "ProcessTask"),
         StandardUnit.COUNT
-      ), // TODO fetched != processed
+      ), // TODO fetched != quite processed
       metric(
         "Time",
         duration.toMillis,
@@ -168,10 +171,14 @@ private class CloudWatchMetricsPublisher(
       .mapM(event => now.map((event, _)))
       .tap(Function.tupled(collectPeriodicMetrics))
       .mapConcat(Function.tupled(toMetrics)) merge ZStream.fromQueue(periodicMetricsQueue))
-      .aggregateAsyncWithin(ZTransducer.collectAllN(config.maxBatchSize), Schedule.fixed(config.flushInterval))
-      .mapM(putMetricData)             // TODO should probably retry
+      .aggregateAsyncWithin(ZTransducer.collectAllN(config.maxBatchSize), Schedule.fixed(config.maxFlushInterval))
+      .mapMPar(config.maxParallelUploads){metrics => 
+        putMetricData(metrics)
+        .tapError(e => log.warn(s"Failed to upload metrics, will retry: ${e}"))
+        .retry(config.retrySchedule).orDie // orDie because schedule has Any as error type?
+      }
       .runDrain
-      .retry(Schedule.fixed(1.second)) // TODO proper back off
+      .tapCause(e => log.error("Metrics uploading has stopped with error", e))
 
   val generatePeriodicMetrics =
     (for {
@@ -201,7 +208,7 @@ private class CloudWatchMetricsPublisher(
                           StandardUnit.COUNT
                         )
       _              <- periodicMetricsQueue.offerAll(List(nrWorkersMetric, nrLeasesMetric, nrLeasesMetric2))
-    } yield ()).repeat(Schedule.fixed(30.seconds)) // TODO configurable
+    } yield ()).repeat(Schedule.fixed(config.periodicMetricInterval))
 
   private def putMetricData(metricData: Seq[MetricDatum]): ZIO[Logging, Throwable, Unit] = {
     val request = PutMetricDataRequest
@@ -210,7 +217,6 @@ private class CloudWatchMetricsPublisher(
       .namespace(namespace)
       .build()
 
-    // log.info(s"Putting metrics: ${request}") *>
     asZIO(client.putMetricData(request)).unit
   }
 }
@@ -233,7 +239,9 @@ object CloudWatchMetricsPublisher {
       c        = new CloudWatchMetricsPublisher(client, q, q2, applicationName, workerId, leases, workers, config)
       _       <- c.processQueue.forkManaged
       _       <- c.generatePeriodicMetrics.forkManaged
+      // Shutdown the queues first 
       _       <- ZManaged.finalizer(q.shutdown)
+      _       <- ZManaged.finalizer(q2.shutdown)
     } yield c
 
   private def metric(
