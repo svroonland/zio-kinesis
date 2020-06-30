@@ -167,7 +167,6 @@ object Consumer {
                                      .map(s => ShardIteratorType.AfterSequenceNumber(s.sequenceNumber))
                                      .getOrElse(initialStartingPosition)
                 stop                 = ZStream.fromEffect(leaseLost.await).as(Exit.fail(None))
-                // TODO make shardRecordStream a ZIO[ZStream], so it can actually fail on creation and we can handle it here
                 shardStream          = (stop merge fetcher
                                   .shardRecordStream(shardId, startingPosition)
                                   .mapChunksM { chunk => // mapM is slow
@@ -176,7 +175,6 @@ object Consumer {
                                   .map(Exit.succeed(_))).collectWhileSuccess
               } yield (
                 shardId,
-                // TODO put retries here instead of in the Fetchers
                 shardStream.ensuringFirst {
                   checkpointer.checkpointAndRelease.catchAll {
                     case Left(e)               =>
