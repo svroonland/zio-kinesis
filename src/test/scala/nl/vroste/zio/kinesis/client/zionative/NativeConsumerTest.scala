@@ -191,6 +191,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
             for {
               producer                   <- produceSampleRecords(streamName, nrRecords, chunkSize = 10, throttle = Some(1.second)).fork
               shardsProcessedByConsumer2 <- Ref.make[Set[String]](Set.empty)
+              consumer1Started           <- Promise.make[Nothing, Unit]
               shardCompletedByConsumer1  <- Promise.make[Nothing, String]
               shardStartedByConsumer2    <- Promise.make[Nothing, Unit]
               consumer1                   = Consumer
@@ -206,6 +207,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                 shardStream
                                 // .tap(r => UIO(println(s"Worker 1 got record on shard ${r.shardId}")))
                                   .tap(checkpointer.stage)
+                                  .tap(_ => consumer1Started.succeed(()))
                                   .aggregateAsyncWithin(ZTransducer.collectAllN(20), Schedule.fixed(1.second))
                                   .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
                                   .tap(_ => checkpointer.checkpoint)
@@ -247,7 +249,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                     .mapConcat(identity(_))
                             }
 
-              fib                        <- consumer1.merge(ZStream.unwrap(ZIO.sleep(8.seconds).as(consumer2))).runCollect.fork
+              fib                        <- consumer1.merge(ZStream.unwrap(consumer1Started.await.as(consumer2))).runCollect.fork
               completedShard             <- shardCompletedByConsumer1.await
               _                          <- shardStartedByConsumer2.await
               shardsConsumer2            <- shardsProcessedByConsumer2.get
