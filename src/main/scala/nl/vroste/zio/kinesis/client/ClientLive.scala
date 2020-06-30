@@ -125,11 +125,12 @@ private[client] class ClientLive(kinesisClient: KinesisAsyncClient) extends Clie
         // It does not contain information of value when succeeding
         _                <- subscribeResponse.unit raceFirst streamP.await raceFirst streamExceptionOccurred.await
         stream           <- (streamExceptionOccurred.await.map(Left(_)) raceFirst streamP.await.either).absolve
-      } yield (stream merge ZStream.unwrap(streamExceptionOccurred.await.map(ZStream.fail(_)))).catchSome {
-        case e: CompletionException =>
-          ZStream.fail(Option(e.getCause).getOrElse(e))
-      }
+      } yield (stream merge ZStream.unwrap(streamExceptionOccurred.await.map(ZStream.fail(_))))
+    }.catchSome {
+      case e: CompletionException =>
+        ZStream.fail(Option(e.getCause).getOrElse(e))
     }
+
   }
 
   private def subscribeToShardResponseHandler(

@@ -19,78 +19,87 @@ import zio.logging.slf4j.Slf4jLogger
 import zio.logging.{ log, Logging }
 import zio.stream.{ ZStream, ZTransducer }
 import zio._
+import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
+import zio.clock.Clock
+import nl.vroste.zio.kinesis.client.zionative.metrics.CloudWatchMetricsPublisher
+import nl.vroste.zio.kinesis.client.zionative.metrics.CloudWatchMetricsPublisherConfig
 
 /**
  * Example app that shows the ZIO-native and KCL workers running in parallel
  */
 object ExampleApp extends zio.App {
-  val streamName                      = "zio-test-stream-8" // + java.util.UUID.randomUUID().toString
+  val streamName                      = "zio-test-stream-10" // + java.util.UUID.randomUUID().toString
   val nrRecords                       = 2000000
-  val nrShards                        = 2
-  val nrNativeWorkers                 = 0
-  val nrKclWorkers                    = 1
-  val applicationName                 = "testApp-13"        // + java.util.UUID.randomUUID().toString(),
-  val runtime                         = 10.minute
-  val maxRandomWorkerStartDelayMillis = 1                   // 20000
+  val nrShards                        = 15
+  val enhancedFanout                  = false
+  val nrNativeWorkers                 = 5
+  val nrKclWorkers                    = 0
+  val applicationName                 = "testApp-1"          // + java.util.UUID.randomUUID().toString(),
+  val runtime                         = 20.minute
+  val maxRandomWorkerStartDelayMillis = 5 * 60 * 1000        // 20000
 
   override def run(
     args: List[String]
   ): ZIO[zio.ZEnv, Nothing, ExitCode] = {
 
     def worker(id: String) =
-      ZStream.fromEffect(
-        zio.random.nextIntBetween(0, maxRandomWorkerStartDelayMillis).flatMap(d => ZIO.sleep(d.millis))
-      ) *> Consumer
-        .shardedStream(
-          streamName,
-          applicationName = applicationName,
-          deserializer = Serde.asciiString,
-          fetchMode = FetchMode.Polling(),
-//          fetchMode = FetchMode.EnhancedFanOut(maxSubscriptionsPerSecond = 50), // FetchMode.Polling(),
-          emitDiagnostic = {
-            case ev: DiagnosticEvent.PollComplete =>
-              log
-                .info(
-                  id + s": PollComplete for ${ev.nrRecords} records of ${ev.shardId}, behind latest: ${ev.duration.toMillis} millis"
+      ZStream.unwrapManaged {
+        for {
+          metrics <- CloudWatchMetricsPublisher.make(applicationName, id)
+          delay   <- zio.random.nextIntBetween(0, maxRandomWorkerStartDelayMillis).map(_.millis).toManaged_
+          _       <- log.info(s"Waiting ${delay.toMillis} ms to start worker ${id}").toManaged_
+        } yield ZStream.fromEffect(ZIO.sleep(delay)) *> Consumer
+          .shardedStream(
+            streamName,
+            applicationName = applicationName,
+            deserializer = Serde.asciiString,
+            fetchMode = if (enhancedFanout) FetchMode.EnhancedFanOut() else FetchMode.Polling(),
+            emitDiagnostic = ev =>
+              (ev match {
+                case ev: DiagnosticEvent.PollComplete =>
+                  log
+                    .info(
+                      id + s": PollComplete for ${ev.nrRecords} records of ${ev.shardId}, behind latest: ${ev.behindLatest.toMillis} ms (took ${ev.duration.toMillis} ms)"
+                    )
+                    .provideLayer(loggingEnv)
+                case ev                               => log.info(id + ": " + ev.toString).provideLayer(loggingEnv)
+              }) *> metrics.processEvent(ev),
+            workerId = id
+          )
+          .flatMapPar(Int.MaxValue) {
+            case (shardID, shardStream, checkpointer) =>
+              shardStream
+                .tap(r =>
+                  checkpointer
+                    .stageOnSuccess(putStrLn(s"${id} Processing record $r").when(false))(r)
                 )
-                .provideLayer(loggingEnv)
-            case ev                               => log.info(id + ": " + ev.toString).provideLayer(loggingEnv)
-          },
-          workerId = id
-        )
-        .flatMapPar(Int.MaxValue) {
-          case (shardID, shardStream, checkpointer) =>
-            shardStream
-              .tap(r =>
-                checkpointer
-                  .stageOnSuccess(putStrLn(s"${id} Processing record $r").when(false))(r)
-              )
-              .aggregateAsyncWithin(ZTransducer.collectAllN(1000), Schedule.fixed(5.second))
-              .tap(rs => log.info(s"${id} processed ${rs.size} records on shard ${shardID}"))
-              .mapConcat(_.lastOption.toList)
-              .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-              .tap(_ =>
-                // TODO what if checkpointing fails due to a network error..?
-                checkpointer.checkpoint.catchAll {
+                .aggregateAsyncWithin(ZTransducer.collectAllN(1000), Schedule.fixed(5.second))
+                .tap(rs => log.info(s"${id} processed ${rs.size} records on shard ${shardID}"))
+                .mapConcat(_.lastOption.toList)
+                .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
+                .tap(_ =>
+                  // TODO what if checkpointing fails due to a network error..?
+                  checkpointer.checkpoint.catchAll {
+                    case Right(ShardLeaseLost) =>
+                      ZIO.unit
+                    case Left(e)               =>
+                      log.error(
+                        s"${id} shard ${shardID} stream failed checkpointing with" + e + ": " + e.getStackTrace
+                      ) *> ZIO.fail(Left(e))
+                  }
+                )
+                .catchAll {
                   case Right(ShardLeaseLost) =>
-                    ZIO.unit
-                  case Left(e)               =>
-                    log.error(
-                      s"${id} shard ${shardID} stream failed checkpointing with" + e + ": " + e.getStackTrace
-                    ) *> ZIO.fail(Left(e))
-                }
-              )
-              .catchAll {
-                case Right(ShardLeaseLost) =>
-                  ZStream.empty
+                    ZStream.empty
 
-                case Left(e)               =>
-                  ZStream.fromEffect(
-                    log.error(s"${id} shard ${shardID} stream failed with" + e + ": " + e.getStackTrace)
-                  ) *> ZStream.fail(e)
-              }
-        }
-        .ensuring(log.info(s"Worker ${id} stream completed"))
+                  case Left(e)               =>
+                    ZStream.fromEffect(
+                      log.error(s"${id} shard ${shardID} stream failed with" + e + ": " + e.getStackTrace)
+                    ) *> ZStream.fail(e)
+                }
+          }
+          .ensuring(log.info(s"Worker ${id} stream completed"))
+      }
 
     def kclWorker(id: String, requestShutdown: Promise[Nothing, Unit]) =
       ZStream.fromEffect(
@@ -100,7 +109,7 @@ object ExampleApp extends zio.App {
           streamName,
           applicationName = applicationName,
           deserializer = Serde.asciiString,
-          isEnhancedFanOut = false,
+          isEnhancedFanOut = enhancedFanout,
           workerIdentifier = id,
           requestShutdown = requestShutdown.await
         )
@@ -109,7 +118,7 @@ object ExampleApp extends zio.App {
             shardStream
               .tap(r =>
                 checkpointer
-                  .stageOnSuccess(putStrLn(s"${id} Processing record $r").when(true))(r)
+                  .stageOnSuccess(putStrLn(s"${id} Processing record $r").when(false))(r)
               )
               .aggregateAsyncWithin(ZTransducer.collectAllN(1000), Schedule.fixed(5.second))
               .mapConcat(_.toList)
@@ -160,21 +169,30 @@ object ExampleApp extends zio.App {
     (LocalStackServices.kinesisAsyncClientLayer >>> (AdminClient.live ++ Client.live)).orDie ++ (LocalStackServices.dynamoDbClientLayer.orDie >>> (ZLayer
       .requires[Has[DynamoDbAsyncClient]] ++ DynamoDbLeaseRepository.factory)) ++ loggingEnv
 
-  val awsEnv: ZLayer[Any, Nothing, AdminClient with Client with DynamicConsumer with Logging with Has[
+  val awsEnv: ZLayer[Clock, Nothing, AdminClient with Client with DynamicConsumer with Logging with Has[
     DynamoDbAsyncClient
-  ] with LeaseRepositoryFactory] = {
-    val kinesis         = kinesisAsyncClientLayer(
-      Client.adjustKinesisClientBuilder(KinesisAsyncClient.builder(), maxConcurrency = 100)
+  ] with LeaseRepositoryFactory with Has[CloudWatchAsyncClient] with Has[
+    CloudWatchMetricsPublisherConfig
+  ]] = {
+    val kinesis    = kinesisAsyncClientLayer(
+      Client.adjustKinesisClientBuilder(KinesisAsyncClient.builder(), maxConcurrency = 500)
     )
-    val client          = Client.live
-    val cloudWatch      = cloudWatchAsyncClientLayer()
-    val dynamo          = dynamoDbAsyncClientLayer()
+    val cloudWatch = cloudWatchAsyncClientLayer()
+    val dynamo     = dynamoDbAsyncClientLayer()
+    val awsClients = (kinesis ++ cloudWatch ++ dynamo).orDie
+
+    val client      = Client.live.orDie
+    val adminClient = AdminClient.live.orDie
+
     val repoFactory     = DynamoDbLeaseRepository.factory
-    val adminClient     = AdminClient.live
     val dynamicConsumer = DynamicConsumer.live
     val logging         = loggingEnv
 
-    (kinesis ++ cloudWatch ++ dynamo).orDie >>> (client ++ adminClient ++ dynamicConsumer ++ repoFactory ++ logging).passthrough.orDie
+    val metricsPublisherConfig = ZLayer.succeed(CloudWatchMetricsPublisherConfig())
+
+    ZLayer.requires[Clock] >+>
+      awsClients >+>
+      (client ++ adminClient ++ dynamicConsumer ++ repoFactory ++ logging ++ metricsPublisherConfig)
   }
 
   def produceRecords(streamName: String, nrRecords: Int) =
@@ -182,7 +200,7 @@ object ExampleApp extends zio.App {
       ZStream
         .range(1, nrRecords)
         .map(i => ProducerRecord(s"key$i", s"msg$i"))
-        .chunkN(499)
+        .chunkN(30)
         .mapChunksM(
           producer
             .produceChunk(_)
@@ -194,9 +212,9 @@ object ExampleApp extends zio.App {
             .retry(Schedule.exponential(1.second))
             .fork
             .map(Chunk.single(_))
-//            .delay(1.second)
+            .delay(1.second) // TODO Until we fix throttling bug in Producer
         )
-        .mapMPar(3)(_.join)
+        .mapMPar(1)(_.join)
         .runDrain
         .tapCause(e => log.error("Producing records chunk failed", e))
     }

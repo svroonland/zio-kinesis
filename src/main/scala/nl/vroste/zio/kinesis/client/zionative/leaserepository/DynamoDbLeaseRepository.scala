@@ -33,23 +33,21 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient, applicationNa
       .attributeDefinitions(attributeDefinitions.asJavaCollection)
       .build()
 
-    val createTable = log.info(s"Creating lease table ${applicationName}") *> asZIO(client.createTable(request))
-    // This is for LocalStack compatibility, which returns an empty response when the table already exists
-    // See https://github.com/localstack/localstack/issues/2629
-      .filterOrFail(_.tableDescription() != null)(
-        ResourceInUseException.builder().message("Table already exists").build()
-      )
-      .unit
+    val createTable = log.info(s"Creating lease table ${applicationName}") *> asZIO(client.createTable(request)).unit
 
     // recursion, yeah!
     def awaitTableCreated: ZIO[Clock with Logging, Throwable, Unit] =
       leaseTableExists
-        .flatMap(awaitTableCreated.delay(1.seconds).unless(_)) // TODO 10 seconds?
+        .flatMap(awaitTableCreated.delay(1.seconds).unless(_))
 
     // Just try to create the table, if we get ResourceInUse it already existed or another worker is creating it
     (createTable *> awaitTableCreated.as(false)).catchSome {
       // Another worker may have created the table between this worker checking if it exists and attempting to create it
-      case _: ResourceInUseException =>
+      case _: ResourceInUseException    =>
+        ZIO.succeed(true)
+      case _: ResourceNotFoundException =>
+        // This is for LocalStack compatibility, which returns a ResourceNotFoundException when the table already exists
+        // See https://github.com/localstack/localstack/issues/2629
         ZIO.succeed(true)
     }.timeoutFail(new Exception("Timeout creating lease table"))(10.minute) // I dunno
   }

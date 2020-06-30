@@ -12,6 +12,7 @@ import zio.Promise
 import zio.ZManaged
 import zio.Task
 import zio.IO
+import java.util.concurrent.CompletionException
 
 object Util {
   implicit class ZStreamExtensions[-R, +E, +O](val stream: ZStream[R, E, O]) extends AnyVal {
@@ -56,11 +57,13 @@ object Util {
   }
 
   def asZIO[T](f: => CompletableFuture[T]): Task[T] =
-    ZIO.fromCompletionStage(f)
-//  ZIO
-//      .effect(f)
-//      .flatMap(ZIO.fromCompletionStage(_))
-//      .mapError(_.fillInStackTrace())
+    ZIO
+      .effect(f)
+      .flatMap(ZIO.fromCompletionStage(_))
+      .catchSome {
+        case e: CompletionException =>
+          ZIO.fail(Option(e.getCause()).getOrElse(e))
+      }
 
   def paginatedRequest[R, E, A, Token](fetch: Option[Token] => ZIO[R, E, (A, Option[Token])])(
     throttling: Schedule[Clock, Any, Int] = Schedule.forever

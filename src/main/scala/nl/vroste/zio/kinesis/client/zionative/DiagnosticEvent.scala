@@ -53,8 +53,9 @@ object DiagnosticEvent {
    * The worker successfully renewed the lease for the given shard
    *
     * @param shardId Shard ID
+   * @param duration Time it took to renew the lease
    */
-  case class LeaseRenewed(shardId: String) extends LeaseEvent
+  case class LeaseRenewed(shardId: String, duration: Duration) extends LeaseEvent
 
   /**
    * The lease for the given shard was gracefully released
