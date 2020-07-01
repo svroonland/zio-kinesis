@@ -24,6 +24,7 @@ import zio.stream.{ ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test._
 import zio.logging.Logging
+import nl.vroste.zio.kinesis.client.ProducerSettings
 
 object NativeConsumerTest extends DefaultRunnableSpec {
   /*
@@ -588,7 +589,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     throttle: Option[Duration] = None,
     indexStart: Int = 1
   ): ZIO[Client with Clock with Logging, Throwable, Chunk[ProduceResponse]] =
-    Producer.make(streamName, Serde.asciiString).use { producer =>
+    Producer.make(streamName, Serde.asciiString, ProducerSettings(maxParallelRequest = 1)).use { producer =>
       val records =
         (indexStart until (nrRecords + indexStart)).map(i => ProducerRecord(s"key$i", s"msg$i"))
       ZStream
