@@ -598,7 +598,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
         .mapChunksM { chunk =>
           producer
             .produceChunk(chunk)
-            .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
+            .tapError(e => putStrLn(s"Error in producing fiber: $e").provideLayer(Console.live))
             .retry(retryOnResourceNotFound)
             .tap(_ => throttle.map(ZIO.sleep(_)).getOrElse(UIO.unit))
             .map(Chunk.fromIterable)
@@ -622,7 +622,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
         .mapChunksM(chunk =>
           producer
             .produceChunk(chunk)
-            .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
+            .tapError(e => putStrLn(s"Error in producing fiber: $e").provideLayer(Console.live))
             .retry(retryOnResourceNotFound)
             .fork
             .map(fib => Chunk.single(fib))

@@ -104,6 +104,7 @@ object Producer {
                (for {
                  response              <- client
                                .putRecords(streamName, batch.entries.map(_.r).reverse)
+                               .tapError(e => log.warn(s"Error producing records, will retry if recoverable: ${e}"))
                                .retry(scheduleCatchRecoverable && settings.backoffRequests)
 
                  maybeSucceeded         = response
