@@ -14,6 +14,7 @@ import zio.logging._
 
 import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
+import io.netty.handler.timeout.ReadTimeoutException
 
 /**
  * Producer for Kinesis records
@@ -203,6 +204,7 @@ object Producer {
   private final def scheduleCatchRecoverable: Schedule[Any, Throwable, Throwable] =
     Schedule.doWhile {
       case e: KinesisException if e.statusCode() / 100 != 4 => true
+      case _: ReadTimeoutException                          => true
       case _                                                => false
     }
 }
