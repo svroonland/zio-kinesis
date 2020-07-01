@@ -30,13 +30,14 @@ import nl.vroste.zio.kinesis.client.zionative.metrics.CloudWatchMetricsPublisher
 object ExampleApp extends zio.App {
   val streamName                      = "zio-test-stream-10" // + java.util.UUID.randomUUID().toString
   val nrRecords                       = 2000000
-  val nrShards                        = 15
+  val nrShards                        = 2
   val enhancedFanout                  = false
-  val nrNativeWorkers                 = 5
+  val nrNativeWorkers                 = 1
   val nrKclWorkers                    = 0
   val applicationName                 = "testApp-1"          // + java.util.UUID.randomUUID().toString(),
   val runtime                         = 20.minute
-  val maxRandomWorkerStartDelayMillis = 5 * 60 * 1000        // 20000
+  val maxRandomWorkerStartDelayMillis = 1 + 0 * 60 * 1000    // 20000
+  val recordProcessingTime: Duration  = 5.seconds
 
   override def run(
     args: List[String]
@@ -53,7 +54,7 @@ object ExampleApp extends zio.App {
             streamName,
             applicationName = applicationName,
             deserializer = Serde.asciiString,
-            fetchMode = if (enhancedFanout) FetchMode.EnhancedFanOut() else FetchMode.Polling(),
+            fetchMode = if (enhancedFanout) FetchMode.EnhancedFanOut() else FetchMode.Polling(batchSize = 100),
             emitDiagnostic = ev =>
               (ev match {
                 case ev: DiagnosticEvent.PollComplete =>
@@ -71,7 +72,9 @@ object ExampleApp extends zio.App {
               shardStream
                 .tap(r =>
                   checkpointer
-                    .stageOnSuccess(putStrLn(s"${id} Processing record $r").when(false))(r)
+                    .stageOnSuccess(
+                      (putStrLn(s"${id} Processing record $r") *> ZIO.sleep(recordProcessingTime)).when(true)
+                    )(r)
                 )
                 .aggregateAsyncWithin(ZTransducer.collectAllN(1000), Schedule.fixed(5.second))
                 .tap(rs => log.info(s"${id} processed ${rs.size} records on shard ${shardID}"))
@@ -94,7 +97,7 @@ object ExampleApp extends zio.App {
 
                   case Left(e)               =>
                     ZStream.fromEffect(
-                      log.error(s"${id} shard ${shardID} stream failed with" + e + ": " + e.getStackTrace)
+                      log.error(s"${id} shard ${shardID} stream failed with " + e + ": " + e.getStackTrace)
                     ) *> ZStream.fail(e)
                 }
           }
