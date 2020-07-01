@@ -402,7 +402,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
             } yield assert(acquiredAfterRelease)(hasSameElements(worker1Released.map(_._2)))
         }
-      } @@ TestAspect.ignore,
+      },
       testM("workers must take over from a zombie consumer") {
         val nrRecords = 2000
         val nrShards  = 7
