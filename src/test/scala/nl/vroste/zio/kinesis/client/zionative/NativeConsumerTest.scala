@@ -557,8 +557,8 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     ).provideSomeLayer(env) @@
       TestAspect.timed @@
       TestAspect.sequential @@ // For CircleCI
-      TestAspect.timeoutWarning(30.seconds) @@
-      TestAspect.timeout(300.seconds)
+      TestAspect.timeoutWarning(60.seconds) @@
+      TestAspect.timeout(600.seconds)
 
   val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some("NativeConsumerTest"))
 
