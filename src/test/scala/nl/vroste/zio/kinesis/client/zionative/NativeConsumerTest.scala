@@ -258,7 +258,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
             } yield assert(shardsConsumer2)(contains(completedShard))
         }
-      } @@ TestAspect.ignore, // TODO this one is fixed
+      },
       testM("workers should be able to start concurrently and both get some shards") {
         val nrRecords = 2000
         val nrShards  = 5
