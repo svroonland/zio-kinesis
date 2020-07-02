@@ -13,6 +13,7 @@ import zio.duration._
 import zio.stream.{ ZStream, ZTransducer }
 import zio.test.TestAspect._
 import zio.test._
+import zio.console._
 
 object DynamicConsumerTest extends DefaultRunnableSpec {
   import TestUtil._
@@ -171,8 +172,8 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
       val batchSize = 100
       val nrBatches = 100
-      val records   =
-        (1 to batchSize).map(i => ProducerRecord(s"key$i", s"msg$i"))
+//      val records   =
+//        (1 to batchSize).map(i => ProducerRecord(s"key$i", s"msg$i"))
 
       def streamConsumer(
         interrupted: Promise[Nothing, Unit],
@@ -196,6 +197,11 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                           shardStream
                             .tap(record => lastProcessedRecords.update(_ + (shardId -> record.sequenceNumber)))
                             .tap(checkpointer.stage)
+                            .tap(record =>
+                              ZIO.when(record.partitionKey == "key1000")(
+                                putStrLn("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
+                              )
+                            )
                             // .tap(r => putStrLn(s"Shard ${shardId} got record ${r.data}"))
                             // It's important that the checkpointing is always done before flattening the stream, otherwise
                             // we cannot guarantee that the KCL has not yet shutdown the record processor and taken away the lease
@@ -221,11 +227,15 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
             producing                 <- ZStream
                            .fromIterable(1 to nrBatches)
                            .schedule(Schedule.spaced(250.millis))
-                           .mapM { _ =>
+                           .mapM { batchIndex =>
                              ZIO
                                .accessM[Client](
                                  _.get
-                                   .putRecords(streamName, Serde.asciiString, records)
+                                   .putRecords(
+                                     streamName,
+                                     Serde.asciiString,
+                                     recordsForBatch(batchIndex, batchSize).map(i => ProducerRecord(s"key$i", s"msg$i"))
+                                   )
                                )
                                //                             .tap(_ => putStrLn("Put records on stream"))
                                .tapError(e => putStrLn(s"error: $e"))
@@ -254,8 +264,8 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
   override def spec =
     suite("DynamicConsumer")(
-      testConsume1,
-      testConsume2,
+      testConsume1 @@ ignore,
+      testConsume2 @@ ignore,
       testCheckpointAtShutdown
     ).provideCustomLayer(env.orDie) @@ timeout(5.minute) @@ sequential
 
