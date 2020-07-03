@@ -16,6 +16,7 @@ import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 import io.netty.handler.timeout.ReadTimeoutException
 import software.amazon.awssdk.core.exception.SdkClientException
+import java.io.IOException
 
 /**
  * Producer for Kinesis records
@@ -207,7 +208,7 @@ object Producer {
     Schedule.doWhile {
       case e: KinesisException if e.statusCode() / 100 != 4 => true
       case _: ReadTimeoutException                          => true
-      case e: SdkClientException                            => true
+      case e: IOException                                   => true
       case _                                                => false
     }
 }
