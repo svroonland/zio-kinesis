@@ -47,32 +47,4 @@ object TestUtil {
   def recordsForBatch(batchIndex: Int, batchSize: Int): Seq[Int] =
     ((if (batchIndex == 1) 1 else (batchIndex - 1) * batchSize) to (batchSize * batchIndex) - 1)
 
-//  def putRecordsEmitter(
-//    streamName: String,
-//    batchSize: Int,
-//    max: Int
-//  ) =
-//    ZStream.unfoldM(0) { i =>
-//      ZIO.service[Client.Service].flatMap { client =>
-//        if (i < max) {
-//          val recordsBatch                                           =
-//            (i until i + batchSize)
-//              .map(_ => ProducerRecord(s"key$i", s"msg$i"))
-//          val putRecordsM: ZIO[Clock, Throwable, PutRecordsResponse] = client
-//            .putRecords(
-//              streamName,
-//              Serde.asciiString,
-//              recordsBatch
-//            )
-//            .retry(retryOnResourceNotFound)
-//          for {
-//            _ <- putStrLn(s"i=$i putting $batchSize  records into Kinesis")
-//            _ <- putRecordsM
-//            _ <- putStrLn(s"successfully put records")
-//          } yield Some((i, i + batchSize))
-//        } else
-//          ZIO.effectTotal(None)
-//      }
-//    }
-
 }

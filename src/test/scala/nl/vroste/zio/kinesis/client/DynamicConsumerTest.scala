@@ -172,8 +172,6 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
       val batchSize = 100
       val nrBatches = 8
-//      val records   =
-//        (1 to batchSize).map(i => ProducerRecord(s"key$i", s"msg$i"))
 
       def streamConsumer(
         interrupted: Promise[Nothing, Unit],
@@ -199,7 +197,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                             .tap(checkpointer.stage)
                             .tap(record =>
                               ZIO.when(record.partitionKey == "key500")(
-                                putStrLn("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
+                                putStrLn(s"Interrupting for partition key ${record.partitionKey}")
                                   *> interrupted.succeed(())
                               )
                             )
@@ -225,26 +223,26 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
         .provideSomeLayer[Console](env.fresh)
         .use { _ =>
           for {
-            /* producing */ _         <- ZStream
-                                   .fromIterable(1 to nrBatches)
-                                   .schedule(Schedule.spaced(250.millis))
-                                   .mapM { batchIndex =>
-                                     ZIO
-                                       .accessM[Client](
-                                         _.get
-                                           .putRecords(
-                                             streamName,
-                                             Serde.asciiString,
-                                             recordsForBatch(batchIndex, batchSize)
-                                               .map(i => ProducerRecord(s"key$i", s"msg$i"))
-                                           )
-                                       )
-                                       //                             .tap(_ => putStrLn("Put records on stream"))
-                                       .tapError(e => putStrLn(s"error3: $e"))
-                                       .retry(retryOnResourceNotFound)
-                                   }
-                                   .runDrain
-                                   .tap(_ => ZIO(println("PRODUCING RECORDS DONE")))
+            _                         <- ZStream
+                   .fromIterable(1 to nrBatches)
+                   .schedule(Schedule.spaced(250.millis))
+                   .mapM { batchIndex =>
+                     ZIO
+                       .accessM[Client](
+                         _.get
+                           .putRecords(
+                             streamName,
+                             Serde.asciiString,
+                             recordsForBatch(batchIndex, batchSize)
+                               .map(i => ProducerRecord(s"key$i", s"msg$i"))
+                           )
+                       )
+                       //                             .tap(_ => putStrLn("Put records on stream"))
+                       .tapError(e => putStrLn(s"error3: $e"))
+                       .retry(retryOnResourceNotFound)
+                   }
+                   .runDrain
+                   .tap(_ => ZIO(println("PRODUCING RECORDS DONE")))
 //                           .forkAs("RecordProducing")
 
             interrupted               <- Promise
