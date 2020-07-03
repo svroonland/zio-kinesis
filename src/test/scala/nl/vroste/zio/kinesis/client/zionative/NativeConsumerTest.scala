@@ -374,11 +374,11 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
                 stream        <- ZStream
                             .mergeAll(3)(
-                              consumer("worker1", emitDiagnostic("worker1"))
+                              consumer("worker1-stopped", emitDiagnostic("worker1-stopped"))
                                 .take(10) // Such that it has had time to claim some leases
                                 .ensuringFirst(log.warn("worker1 done") *> consumer1Done.succeed(())),
-                              consumer("worker2", emitDiagnostic("worker2")).ensuringFirst(log.warn("worker2 DONE")),
-                              consumer("worker3", emitDiagnostic("worker3")).ensuringFirst(log.warn("Worker3 DONE"))
+                              consumer("worker2-stopped", emitDiagnostic("worker2-stopped")).ensuringFirst(log.warn("worker2 DONE")),
+                              consumer("worker3-stopped", emitDiagnostic("worker3-stopped")).ensuringFirst(log.warn("Worker3 DONE"))
                             )
                             .runDrain
                             .tapError(consumer1Done.fail(_))
@@ -395,12 +395,12 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
                 // Workers 2 and 3 should have later-timestamped LeaseAcquired for all shards that were released by Worker 1
                 worker1Released      = allEvents.collect {
-                                    case ("worker1", time, DiagnosticEvent.LeaseReleased(shard)) => time -> shard
+                                    case ("worker1-stopped", time, DiagnosticEvent.LeaseReleased(shard)) => time -> shard
                                   }
                 releaseTime          = worker1Released.last._1
                 acquiredAfterRelease = allEvents.collect {
                                          case (worker, time, DiagnosticEvent.LeaseAcquired(shard, _))
-                                             if worker != "worker1" && !time.isBefore(releaseTime) =>
+                                             if worker != "worker1-stopped" && !time.isBefore(releaseTime) =>
                                            shard
                                        }
 
