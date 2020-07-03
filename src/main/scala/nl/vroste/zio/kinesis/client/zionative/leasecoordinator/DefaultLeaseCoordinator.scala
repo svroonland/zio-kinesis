@@ -363,15 +363,19 @@ private class DefaultLeaseCoordinator(
                  parentShardIds = Seq.empty
                )
 
-               (table.createLease(lease) <* registerNewAcquiredLease(lease)).catchAll {
-                 case Right(LeaseAlreadyExists) =>
-                   log
-                     .info(
-                       s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
-                     )
-                 case Left(e)                   =>
-                   ZIO.fail(e)
-               }
+               log.info(s"Creating lease for ${shard.shardId}") *>
+                 table
+                   .createLease(lease)
+                   .tap(_ => log.info(s"Created lease for ${shard.shardId}"))
+                   .catchAll {
+                     case Right(LeaseAlreadyExists) =>
+                       log
+                         .info(
+                           s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
+                         )
+                     case Left(e)                   =>
+                       log.error(s"Error creating lease: ${e}") *> ZIO.fail(e)
+                   } <* registerNewAcquiredLease(lease)
              }
     } yield ()
 
@@ -602,7 +606,6 @@ object DefaultLeaseCoordinator {
                    (c.refreshLeases *> c.resumeUnreleasedLeases).when(leaseTableExists) *>
                      (if (leaseTableExists) awaitAndUpdateShards.fork else awaitAndUpdateShards)
                  }.toManaged_
-            _  = log.info("Begin first initialisation: takeLeases")
             _ <- logNamed(s"worker-${workerId}")(
                    // Initialization
                    (c.takeLeases) *>
@@ -630,6 +633,7 @@ object DefaultLeaseCoordinator {
                  ).forkManaged
           } yield c
       }
+      .tapCause(log.error("Error creating DefaultLeaseCoordinator", _))
 
   def logNamed[R, E, A](name: String)(f: ZIO[R, E, A]): ZIO[Logging with R, E, A] =
     log.locally(LogAnnotation.Name(name :: Nil))(f)
