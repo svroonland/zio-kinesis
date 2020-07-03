@@ -40,6 +40,7 @@ object LocalStackServices {
 
     httpClientLayer(
       maxConcurrency = 100, // localstack 11.2 has hardcoded limit of 128
+      maxPendingConnectionAcquires = 100,
       build = _.protocol(Protocol.HTTP1_1)
         .buildWithDefaults(
           AttributeMap.builder.put(SdkHttpConfigurationOption.TRUST_ALL_CERTIFICATES, java.lang.Boolean.TRUE).build
