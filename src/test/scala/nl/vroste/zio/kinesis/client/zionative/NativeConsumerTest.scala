@@ -556,8 +556,8 @@ object NativeConsumerTest extends DefaultRunnableSpec {
               } yield assertCompletes
           }
         }  // @@ TestAspect.ignore
-      ).map(_.provideSomeLayer(env.fresh)): _*
-    ) @@
+      ): _*
+    ).provideSomeLayer(env) @@
       TestAspect.timed @@
       TestAspect.sequential @@ // For CircleCI
       TestAspect.timeoutWarning(60.seconds) @@
@@ -565,7 +565,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
   val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some("NativeConsumerTest"))
 
-  val env = ((LocalStackServices.env.fresh.orDie >>>
+  val env = ((LocalStackServices.env.orDie >>>
     (AdminClient.live ++ Client.live ++ (ZLayer
       .requires[Has[DynamoDbAsyncClient]] >>> DynamoDbLeaseRepository.factory.passthrough))).orDie ++
     zio.test.environment.testEnvironment ++
