@@ -43,4 +43,8 @@ object TestUtil {
     } &&
       Schedule.recurs(5) &&
       Schedule.exponential(2.second)
+
+  def recordsForBatch(batchIndex: Int, batchSize: Int): Seq[Int] =
+    ((if (batchIndex == 1) 1 else (batchIndex - 1) * batchSize) to (batchSize * batchIndex) - 1)
+
 }
