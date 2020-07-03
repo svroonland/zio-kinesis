@@ -39,6 +39,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                          Seq(ProducerRecord("key1", "msg1"), ProducerRecord("key2", "msg2"))
                        )
                    )
+                   .tapError(e => putStrLn(s"error1: $e").provideLayer(Console.live))
                    .retry(retryOnResourceNotFound)
 
             _ <- putStrLn("Starting dynamic consumer")
@@ -146,7 +147,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                               _.get
                                 .putRecords(streamName, Serde.asciiString, records)
                             )
-                            .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
+                            .tapError(e => putStrLn(s"error2: $e").provideLayer(Console.live))
                             .retry(retryOnResourceNotFound)
                         }
                         .runDrain
@@ -170,9 +171,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
       val applicationName = "zio-test-" + UUID.randomUUID().toString
 
       val batchSize = 100
-      val nrBatches = 100
-      val records   =
-        (1 to batchSize).map(i => ProducerRecord(s"key$i", s"msg$i"))
+      val nrBatches = 8
 
       def streamConsumer(
         interrupted: Promise[Nothing, Unit],
@@ -196,6 +195,12 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                           shardStream
                             .tap(record => lastProcessedRecords.update(_ + (shardId -> record.sequenceNumber)))
                             .tap(checkpointer.stage)
+                            .tap(record =>
+                              ZIO.when(record.partitionKey == "key500")(
+                                putStrLn(s"Interrupting for partition key ${record.partitionKey}")
+                                  *> interrupted.succeed(())
+                              )
+                            )
                             // .tap(r => putStrLn(s"Shard ${shardId} got record ${r.data}"))
                             // It's important that the checkpointing is always done before flattening the stream, otherwise
                             // we cannot guarantee that the KCL has not yet shutdown the record processor and taken away the lease
@@ -215,35 +220,41 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
         } yield stream)
 
       createStream(streamName, 2)
-        .provideSomeLayer[Console](env)
+        .provideSomeLayer[Console](env.fresh)
         .use { _ =>
           for {
-            producing                 <- ZStream
-                           .fromIterable(1 to nrBatches)
-                           .schedule(Schedule.spaced(250.millis))
-                           .mapM { _ =>
-                             ZIO
-                               .accessM[Client](
-                                 _.get
-                                   .putRecords(streamName, Serde.asciiString, records)
-                               )
-                               //                             .tap(_ => putStrLn("Put records on stream"))
-                               .tapError(e => putStrLn(s"error: $e"))
-                               .retry(retryOnResourceNotFound)
-                           }
-                           .runDrain
-                           .tap(_ => ZIO(println("PRODUCING RECORDS DONE")))
-                           .forkAs("RecordProducing")
+            _                         <- ZStream
+                   .fromIterable(1 to nrBatches)
+                   .schedule(Schedule.spaced(250.millis))
+                   .mapM { batchIndex =>
+                     ZIO
+                       .accessM[Client](
+                         _.get
+                           .putRecords(
+                             streamName,
+                             Serde.asciiString,
+                             recordsForBatch(batchIndex, batchSize)
+                               .map(i => ProducerRecord(s"key$i", s"msg$i"))
+                           )
+                       )
+                       //                             .tap(_ => putStrLn("Put records on stream"))
+                       .tapError(e => putStrLn(s"error3: $e"))
+                       .retry(retryOnResourceNotFound)
+                   }
+                   .runDrain
+                   .tap(_ => ZIO(println("PRODUCING RECORDS DONE")))
+//                           .forkAs("RecordProducing")
 
             interrupted               <- Promise
                              .make[Nothing, Unit]
-                             .tap(p => (putStrLn("INTERRUPTING") *> p.succeed(())).delay(19.seconds + 333.millis).fork)
+//                             .tap(p => (putStrLn("INTERRUPTING") *> p.succeed(())).delay(19.seconds + 333.millis).fork)
             lastProcessedRecords      <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
             lastCheckpointedRecords   <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
             _                         <- putStrLn("ABOUT TO START CONSUMER")
             consumer                  <- streamConsumer(interrupted, lastProcessedRecords, lastCheckpointedRecords).runCollect.fork
-            _                         <- ZIO.unit.delay(30.seconds)
-            _                         <- producing.interrupt
+//            _                         <- ZIO.unit.delay(30.seconds)
+            _                         <- interrupted.await
+//            _                         <- producing.interrupt
             _                         <- consumer.join
             (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
           } yield assert(processed)(Assertion.equalTo(checkpointed))
