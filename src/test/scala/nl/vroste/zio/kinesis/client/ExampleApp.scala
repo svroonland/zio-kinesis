@@ -67,6 +67,7 @@ object ExampleApp extends zio.App {
               }) *> metrics.processEvent(ev),
             workerId = id
           )
+          .flatMap()
           .flatMapPar(Int.MaxValue) {
             case (shardID, shardStream, checkpointer) =>
               shardStream
@@ -178,7 +179,7 @@ object ExampleApp extends zio.App {
     CloudWatchMetricsPublisherConfig
   ]] = {
     val kinesis    = kinesisAsyncClientLayer(
-      Client.adjustKinesisClientBuilder(KinesisAsyncClient.builder(), maxConcurrency = 500)
+      Client.adjustKinesisClientBuilder(KinesisAsyncClient.builder(), maxConcurrency = 25)
     )
     val cloudWatch = cloudWatchAsyncClientLayer()
     val dynamo     = dynamoDbAsyncClientLayer()
