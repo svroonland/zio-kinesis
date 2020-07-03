@@ -27,13 +27,19 @@ object TestUtil {
              }
     } yield ()
 
-  def createStreamUnmanaged(streamName: String, nrShards: Int): ZIO[Console with AdminClient, Throwable, Unit] =
+  def createStreamUnmanaged(
+    streamName: String,
+    nrShards: Int
+  ): ZIO[Console with AdminClient with Clock, Throwable, Unit] =
     for {
       adminClient <- ZIO.service[AdminClient.Service]
-      _           <- adminClient.createStream(streamName, nrShards).catchSome {
-             case _: ResourceInUseException =>
-               putStrLn("Stream already exists")
-           }
+      _           <- adminClient
+             .createStream(streamName, nrShards)
+             .catchSome {
+               case _: ResourceInUseException =>
+                 putStrLn("Stream already exists")
+             }
+             .retry(Schedule.exponential(1.second) && Schedule.recurs(10))
     } yield ()
 
   val retryOnResourceNotFound: Schedule[Clock, Throwable, ((Throwable, Int), Duration)] =
