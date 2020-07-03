@@ -67,7 +67,6 @@ object ExampleApp extends zio.App {
               }) *> metrics.processEvent(ev),
             workerId = id
           )
-          .flatMap()
           .flatMapPar(Int.MaxValue) {
             case (shardID, shardStream, checkpointer) =>
               shardStream
