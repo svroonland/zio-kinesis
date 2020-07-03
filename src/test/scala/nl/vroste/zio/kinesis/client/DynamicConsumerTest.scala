@@ -265,17 +265,12 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
   // TODO check the order of received records is correct
 
-  override def spec = {
-    val s1 = suite("suite1 - first two tests")(
+  override def spec =
+    suite("DynamicConsumerTest")(
       testConsume1,
-      testConsume2
+      testConsume2,
+      testCheckpointAtShutdown
     ).provideCustomLayer(env.orDie) @@ timeout(5.minute) @@ sequential
-    val s2 = suite("suite2 - third test")(testCheckpointAtShutdown).provideCustomLayer(env.fresh.orDie) @@ timeout(
-      5.minute
-    ) @@ sequential
-
-    suite("DynamicConsumer")(s1, s2) @@ sequential
-  }
 
   def delayStream[R, E, O](s: ZStream[R, E, O], delay: Duration) =
     ZStream.fromEffect(ZIO.sleep(delay)).flatMap(_ => s)
