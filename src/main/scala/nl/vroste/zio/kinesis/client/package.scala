@@ -17,24 +17,24 @@ package object client {
   type DynamicConsumer = Has[DynamicConsumer.Service]
 
   def kinesisAsyncClientLayer(
-    builder: KinesisAsyncClientBuilder = KinesisAsyncClient.builder
+    build: KinesisAsyncClientBuilder => KinesisAsyncClient = _.build()
   ): ZLayer[Has[SdkAsyncHttpClient], Throwable, Has[KinesisAsyncClient]] =
     ZLayer.fromServiceManaged { (httpClient: SdkAsyncHttpClient) =>
-      ZManaged.fromAutoCloseable(ZIO.effect(builder.httpClient(httpClient).build))
+      ZManaged.fromAutoCloseable(ZIO.effect(build(KinesisAsyncClient.builder().httpClient(httpClient))))
     }
 
   def cloudWatchAsyncClientLayer(
-    builder: CloudWatchAsyncClientBuilder = CloudWatchAsyncClient.builder
+    build: CloudWatchAsyncClientBuilder => CloudWatchAsyncClient = _.build()
   ): ZLayer[Has[SdkAsyncHttpClient], Throwable, Has[CloudWatchAsyncClient]] =
     ZLayer.fromServiceManaged { (httpClient: SdkAsyncHttpClient) =>
-      ZManaged.fromAutoCloseable(ZIO.effect(builder.httpClient(httpClient).build))
+      ZManaged.fromAutoCloseable(ZIO.effect(build(CloudWatchAsyncClient.builder().httpClient(httpClient))))
     }
 
   def dynamoDbAsyncClientLayer(
-    builder: DynamoDbAsyncClientBuilder = DynamoDbAsyncClient.builder
+    build: DynamoDbAsyncClientBuilder => DynamoDbAsyncClient = _.build()
   ): ZLayer[Has[SdkAsyncHttpClient], Throwable, Has[DynamoDbAsyncClient]] =
     ZLayer.fromServiceManaged { (httpClient: SdkAsyncHttpClient) =>
-      ZManaged.fromAutoCloseable(ZIO.effect(builder.httpClient(httpClient).build))
+      ZManaged.fromAutoCloseable(ZIO.effect(build(DynamoDbAsyncClient.builder().httpClient(httpClient))))
     }
 
   /**
@@ -51,26 +51,28 @@ package object client {
     healthCheckPingPeriod: Duration = 10.seconds,
     maxPendingConnectionAcquires: Int = 10000,
     connectionAcquisitionTimeout: Duration = 30.seconds,
-    readTimeout: Duration = 30.seconds
+    readTimeout: Duration = 30.seconds,
+    build: NettyNioAsyncHttpClient.Builder => SdkAsyncHttpClient = _.build()
   ): ZLayer[Any, Throwable, Has[SdkAsyncHttpClient]] =
     ZLayer.fromEffect {
       ZIO.effect {
-        NettyNioAsyncHttpClient
-          .builder()
-          .maxConcurrency(maxConcurrency)
-          .connectionAcquisitionTimeout(connectionAcquisitionTimeout.asJava)
-          .maxPendingConnectionAcquires(maxPendingConnectionAcquires)
-          .readTimeout(readTimeout.asJava)
-          .http2Configuration(
-            Http2Configuration
-              .builder()
-              .initialWindowSize(initialWindowSize)
-              .maxStreams(maxConcurrency.toLong)
-              .healthCheckPingPeriod(healthCheckPingPeriod.asJava)
-              .build()
-          )
-          .protocol(Protocol.HTTP2)
-          .build()
+        build(
+          NettyNioAsyncHttpClient
+            .builder()
+            .maxConcurrency(maxConcurrency)
+            .connectionAcquisitionTimeout(connectionAcquisitionTimeout.asJava)
+            .maxPendingConnectionAcquires(maxPendingConnectionAcquires)
+            .readTimeout(readTimeout.asJava)
+            .http2Configuration(
+              Http2Configuration
+                .builder()
+                .initialWindowSize(initialWindowSize)
+                .maxStreams(maxConcurrency.toLong)
+                .healthCheckPingPeriod(healthCheckPingPeriod.asJava)
+                .build()
+            )
+            .protocol(Protocol.HTTP2)
+        )
       }
     }
 

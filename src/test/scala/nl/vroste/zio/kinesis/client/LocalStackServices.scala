@@ -16,6 +16,8 @@ import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.awssdk.utils.AttributeMap
 import zio.{ Has, ZIO, ZLayer, ZManaged }
+import software.amazon.awssdk.core.client.builder.SdkClientBuilder
+import software.amazon.awssdk.awscore.client.builder.AwsAsyncClientBuilder
 
 /**
  * Layers for connecting to a LocalStack (https://localstack.cloud/) environment on a local docker host
@@ -32,59 +34,53 @@ object LocalStackServices {
   val credsProvider: AwsCredentialsProvider =
     StaticCredentialsProvider.create(AwsBasicCredentials.create(accessKey, secretAccessKey))
 
-  val localHttpClient: SdkAsyncHttpClient = {
+  val localHttpClient = {
     import software.amazon.awssdk.http.Protocol
     import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient
-    NettyNioAsyncHttpClient
-      .builder()
-      .protocol(Protocol.HTTP1_1)
-      .buildWithDefaults(
-        AttributeMap.builder.put(SdkHttpConfigurationOption.TRUST_ALL_CERTIFICATES, java.lang.Boolean.TRUE).build
-      )
+
+    httpClientLayer(build =
+      _.protocol(Protocol.HTTP1_1)
+        .buildWithDefaults(
+          AttributeMap.builder.put(SdkHttpConfigurationOption.TRUST_ALL_CERTIFICATES, java.lang.Boolean.TRUE).build
+        )
+    )
   }
 
-  val kinesisAsyncClientLayer: ZLayer[Any, Throwable, Has[KinesisAsyncClient]] =
-    ZLayer.fromManaged(ZManaged.fromAutoCloseable {
-      ZIO.effect(
-        {
-          System.setProperty(SdkSystemSetting.CBOR_ENABLED.property, "false")
+  val kinesisAsyncClientLayer: ZLayer[Has[SdkAsyncHttpClient], Throwable, Has[KinesisAsyncClient]] =
+    ZLayer.fromServiceManaged { httpClient =>
+      ZManaged.fromAutoCloseable {
+        ZIO.effect(
+          {
+            System.setProperty(SdkSystemSetting.CBOR_ENABLED.property, "false")
 
-          KinesisAsyncClient
-            .builder()
-            .credentialsProvider(credsProvider)
-            .region(region)
-            .endpointOverride(kinesisUri)
-        }.httpClient(localHttpClient).build
-      )
-    })
+            KinesisAsyncClient
+              .builder()
+              .credentialsProvider(credsProvider)
+              .region(region)
+              .endpointOverride(kinesisUri)
+          }.httpClient(httpClient).build
+        )
+      }
+    }
 
-  val dynamoDbClientLayer: ZLayer[Any, Throwable, Has[DynamoDbAsyncClient]] =
-    ZLayer.fromManaged(ZManaged.fromAutoCloseable {
-      ZIO.effect(
-        DynamoDbAsyncClient
-          .builder()
-          .credentialsProvider(credsProvider)
-          .region(region)
-          .endpointOverride(dynamoDbUri)
-          .build
-      )
-    })
+  val dynamoDbClientLayer: ZLayer[Has[SdkAsyncHttpClient], Throwable, Has[DynamoDbAsyncClient]] =
+    nl.vroste.zio.kinesis.client.dynamoDbAsyncClientLayer(
+      _.credentialsProvider(credsProvider)
+        .region(region)
+        .endpointOverride(dynamoDbUri)
+        .build()
+    )
 
-  val cloudWatchClientLayer: ZLayer[Any, Throwable, Has[CloudWatchAsyncClient]] =
-    ZLayer.fromManaged(ZManaged.fromAutoCloseable {
-      ZIO.effect(
-        CloudWatchAsyncClient
-          .builder()
-          .credentialsProvider(credsProvider)
-          .region(region)
-          .endpointOverride(cloudwatchUri)
-          .build
-      )
-    })
+  val cloudWatchClientLayer: ZLayer[Has[SdkAsyncHttpClient], Throwable, Has[CloudWatchAsyncClient]] =
+    nl.vroste.zio.kinesis.client.cloudWatchAsyncClientLayer(
+      _.credentialsProvider(credsProvider)
+        .region(region)
+        .endpointOverride(cloudwatchUri)
+        .build
+    )
+
+  val env = localHttpClient >>> (cloudWatchClientLayer ++ kinesisAsyncClientLayer ++ dynamoDbClientLayer)
 
   val dynamicConsumerLayer: ZLayer[Any, Throwable, Has[DynamicConsumer.Service]] =
-    kinesisAsyncClientLayer ++ dynamoDbClientLayer ++ cloudWatchClientLayer >>> DynamicConsumer.live
-
-  val env = (cloudWatchClientLayer ++ kinesisAsyncClientLayer ++ dynamoDbClientLayer)
-
+    env >>> DynamicConsumer.live
 }
