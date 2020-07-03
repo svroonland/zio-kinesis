@@ -607,8 +607,8 @@ object DefaultLeaseCoordinator {
                      (if (leaseTableExists) awaitAndUpdateShards.fork else awaitAndUpdateShards)
                  }.toManaged_
             _ <- logNamed(s"worker-${workerId}")(
-                   // Initialization
-                   (c.takeLeases) *>
+                   // Initialization. If it fails, we will try in the loop
+                   (c.takeLeases).ignore *>
                      // Periodic refresh
                      (c.refreshLeases *> c.takeLeases)
                        .repeat(
