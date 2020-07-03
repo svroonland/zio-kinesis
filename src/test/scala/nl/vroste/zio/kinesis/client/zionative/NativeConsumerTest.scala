@@ -25,6 +25,7 @@ import zio.test.Assertion._
 import zio.test._
 import zio.logging.Logging
 import nl.vroste.zio.kinesis.client.ProducerSettings
+import nl.vroste.zio.kinesis.client.TestUtil
 
 object NativeConsumerTest extends DefaultRunnableSpec {
   /*
@@ -581,17 +582,19 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
   def withStream[R, A](name: String, shards: Int)(
     f: ZIO[R, Throwable, A]
-  ): ZIO[AdminClient with Client with Clock with R, Throwable, A]           =
-    (for {
-      client <- ZManaged.service[AdminClient.Service]
-      _      <- client.createStream(name, shards).toManaged(_ => client.deleteStream(name).orDie)
-      // Wait for the stream to have shards
-      _      <- {
+  ): ZIO[AdminClient with Client with Clock with Console with R, Throwable, A] =
+    TestUtil
+      .createStream(name, shards)
+      .tapM { _ =>
         def getShards: ZIO[Client with Clock, Throwable, Chunk[Shard]] =
-          ZIO.service[Client.Service].flatMap(_.listShards(name).runCollect).filterOrElse(_.nonEmpty)(_ => getShards)
-        getShards.toManaged_
+          ZIO
+            .service[Client.Service]
+            .flatMap(_.listShards(name).runCollect)
+            .filterOrElse(_.nonEmpty)(_ => getShards.delay(1.second))
+        getShards
       }
-    } yield ()).use_(f)
+      .use_(f)
+
   def produceSampleRecords(
     streamName: String,
     nrRecords: Int,
@@ -669,7 +672,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     nrShards: Int
   )(
     f: (String, String) => ZIO[R, Throwable, A]
-  ): ZIO[Client with AdminClient with Clock with R, Throwable, A] =
+  ): ZIO[Client with AdminClient with Clock with Console with R, Throwable, A] =
     ZIO.effectTotal((streamPrefix + "testStream", streamPrefix + "testApplication")).flatMap {
       case (streamName, applicationName) =>
         withStream(streamName, shards = nrShards) {

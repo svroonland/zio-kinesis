@@ -8,24 +8,14 @@ import zio.{ Schedule, ZIO, ZManaged }
 
 object TestUtil {
 
-  def createStream(streamName: String, nrShards: Int): ZManaged[Console with AdminClient, Throwable, Unit] =
-    for {
-      adminClient <- ZManaged.service[AdminClient.Service]
-      _           <- adminClient
-             .createStream(streamName, nrShards)
-             .catchSome {
-               case _: ResourceInUseException =>
-                 putStrLn("Stream already exists")
-             }
-             .toManaged { _ =>
-               adminClient
-                 .deleteStream(streamName, enforceConsumerDeletion = true)
-                 .catchSome {
-                   case _: ResourceNotFoundException => ZIO.unit
-                 }
-                 .orDie
-             }
-    } yield ()
+  def createStream(streamName: String, nrShards: Int): ZManaged[Console with AdminClient with Clock, Throwable, Unit] =
+    createStreamUnmanaged(streamName, nrShards).toManaged(_ =>
+      ZIO
+        .service[AdminClient.Service]
+        .flatMap(_.deleteStream(streamName, enforceConsumerDeletion = true).catchSome {
+          case _: ResourceNotFoundException => ZIO.unit
+        }.orDie)
+    )
 
   def createStreamUnmanaged(
     streamName: String,
