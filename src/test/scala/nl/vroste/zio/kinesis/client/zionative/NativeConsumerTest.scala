@@ -359,7 +359,9 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                   }
 
               for {
-                producer      <- produceSampleRecords(streamName, nrRecords, chunkSize = 50).fork
+                consumer1Done <- Promise.make[Throwable, Unit]
+                producer      <-
+                  produceSampleRecords(streamName, nrRecords, chunkSize = 50).tapError(consumer1Done.fail(_)).fork
                 events        <- Ref.make[List[(String, Instant, DiagnosticEvent)]](List.empty)
                 emitDiagnostic = (workerId: String) =>
                                    (event: DiagnosticEvent) =>
@@ -370,7 +372,6 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                          .flatMap(time => events.update(_ :+ ((workerId, time, event))))
                                          .provideLayer(Clock.live)
 
-                consumer1Done <- Promise.make[Nothing, Unit]
                 stream        <- ZStream
                             .mergeAll(3)(
                               consumer("worker1", emitDiagnostic("worker1"))
@@ -380,6 +381,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                               consumer("worker3", emitDiagnostic("worker3")).ensuringFirst(log.warn("Worker3 DONE"))
                             )
                             .runDrain
+                            .tapError(consumer1Done.fail(_))
                             .fork
                 _             <- consumer1Done.await *> ZIO.sleep(10.seconds)
                 _             <- putStrLn("Interrupting producer and stream")
