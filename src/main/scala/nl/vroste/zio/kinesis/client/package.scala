@@ -54,25 +54,27 @@ package object client {
     readTimeout: Duration = 30.seconds,
     build: NettyNioAsyncHttpClient.Builder => SdkAsyncHttpClient = _.build()
   ): ZLayer[Any, Throwable, Has[SdkAsyncHttpClient]] =
-    ZLayer.fromEffect {
-      ZIO.effect {
-        build(
-          NettyNioAsyncHttpClient
-            .builder()
-            .maxConcurrency(maxConcurrency)
-            .connectionAcquisitionTimeout(connectionAcquisitionTimeout.asJava)
-            .maxPendingConnectionAcquires(maxPendingConnectionAcquires)
-            .readTimeout(readTimeout.asJava)
-            .http2Configuration(
-              Http2Configuration
-                .builder()
-                .initialWindowSize(initialWindowSize)
-                .maxStreams(maxConcurrency.toLong)
-                .healthCheckPingPeriod(healthCheckPingPeriod.asJava)
-                .build()
-            )
-            .protocol(Protocol.HTTP2)
-        )
+    ZLayer.fromManaged {
+      ZManaged.fromAutoCloseable {
+        ZIO.effect {
+          build(
+            NettyNioAsyncHttpClient
+              .builder()
+              .maxConcurrency(maxConcurrency)
+              .connectionAcquisitionTimeout(connectionAcquisitionTimeout.asJava)
+              .maxPendingConnectionAcquires(maxPendingConnectionAcquires)
+              .readTimeout(readTimeout.asJava)
+              .http2Configuration(
+                Http2Configuration
+                  .builder()
+                  .initialWindowSize(initialWindowSize)
+                  .maxStreams(maxConcurrency.toLong)
+                  .healthCheckPingPeriod(healthCheckPingPeriod.asJava)
+                  .build()
+              )
+              .protocol(Protocol.HTTP2)
+          )
+        }
       }
     }
 
