@@ -23,6 +23,8 @@ import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import zio.clock.Clock
 import nl.vroste.zio.kinesis.client.zionative.metrics.CloudWatchMetricsPublisher
 import nl.vroste.zio.kinesis.client.zionative.metrics.CloudWatchMetricsPublisherConfig
+import software.amazon.awssdk.services.kinesis.KinesisAsyncClientBuilder
+import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient
 
 /**
  * Example app that shows the ZIO-native and KCL workers running in parallel
@@ -177,12 +179,11 @@ object ExampleApp extends zio.App {
   ] with LeaseRepositoryFactory with Has[CloudWatchAsyncClient] with Has[
     CloudWatchMetricsPublisherConfig
   ]] = {
-    val kinesis    = kinesisAsyncClientLayer(
-      Client.adjustKinesisClientBuilder(KinesisAsyncClient.builder(), maxConcurrency = 25)
-    )
-    val cloudWatch = cloudWatchAsyncClientLayer()
-    val dynamo     = dynamoDbAsyncClientLayer()
-    val awsClients = (kinesis ++ cloudWatch ++ dynamo).orDie
+    val httpClient    = httpClientLayer(maxConcurrency = 100)
+    val kinesisClient = kinesisAsyncClientLayer()
+    val cloudWatch    = cloudWatchAsyncClientLayer()
+    val dynamo        = dynamoDbAsyncClientLayer()
+    val awsClients    = (httpClient >>> (kinesisClient ++ cloudWatch ++ dynamo)).orDie
 
     val client      = Client.live.orDie
     val adminClient = AdminClient.live.orDie
