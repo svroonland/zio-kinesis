@@ -633,7 +633,7 @@ object DefaultLeaseCoordinator {
                  ).forkManaged
           } yield c
       }
-      .tapCause(log.error("Error creating DefaultLeaseCoordinator", _))
+      .tapCause(c => log.error("Error creating DefaultLeaseCoordinator", c).toManaged_)
 
   def logNamed[R, E, A](name: String)(f: ZIO[R, E, A]): ZIO[Logging with R, E, A] =
     log.locally(LogAnnotation.Name(name :: Nil))(f)
