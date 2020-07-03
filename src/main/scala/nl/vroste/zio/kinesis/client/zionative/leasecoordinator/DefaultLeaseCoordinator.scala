@@ -174,7 +174,7 @@ private class DefaultLeaseCoordinator(
   /**
    * Operations that update a held lease will interfere unless we run them sequentially for each shard
    */
-  val runloop = {
+  val runloop: ZStream[Logging with Clock, Nothing, Unit] = {
 
     def leaseLost(lease: Lease, leaseCompleted: Promise[Nothing, Unit]): ZIO[Clock, Throwable, Unit] =
       leaseCompleted.succeed(()) *>
@@ -290,13 +290,13 @@ private class DefaultLeaseCoordinator(
         case (shard @ _, command) =>
           command.mapM {
             case UpdateCheckpoint(shard, checkpoint, done, release) =>
-              doUpdateCheckpoint(shard, checkpoint, release).foldM(done.fail, done.succeed)
+              doUpdateCheckpoint(shard, checkpoint, release).foldM(done.fail, done.succeed).unit
             case RenewLease(shard, done)                            =>
-              doRenewLease(shard).foldM(done.fail, done.succeed)
+              doRenewLease(shard).foldM(done.fail, done.succeed).unit
             case RefreshLease(lease, done)                          =>
-              doRefreshLease(lease).tap(done.succeed) // Cannot fail
+              doRefreshLease(lease).tap(done.succeed).unit.orDie // Cannot fail
             case ReleaseLease(shard, done)                          =>
-              doReleaseLease(shard).foldM(done.fail, done.succeed)
+              doReleaseLease(shard).foldM(done.fail, done.succeed).unit
           }
       }
   }
