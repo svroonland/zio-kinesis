@@ -38,8 +38,9 @@ object LocalStackServices {
     import software.amazon.awssdk.http.Protocol
     import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient
 
-    httpClientLayer(build =
-      _.protocol(Protocol.HTTP1_1)
+    httpClientLayer(
+      maxConcurrency = 100, // localstack 11.2 has hardcoded limit of 128
+      build = _.protocol(Protocol.HTTP1_1)
         .buildWithDefaults(
           AttributeMap.builder.put(SdkHttpConfigurationOption.TRUST_ALL_CERTIFICATES, java.lang.Boolean.TRUE).build
         )
@@ -49,17 +50,17 @@ object LocalStackServices {
   val kinesisAsyncClientLayer: ZLayer[Has[SdkAsyncHttpClient], Throwable, Has[KinesisAsyncClient]] =
     ZLayer.fromServiceManaged { httpClient =>
       ZManaged.fromAutoCloseable {
-        ZIO.effect(
-          {
-            System.setProperty(SdkSystemSetting.CBOR_ENABLED.property, "false")
+        ZIO.effect {
+          System.setProperty(SdkSystemSetting.CBOR_ENABLED.property, "false")
 
-            KinesisAsyncClient
-              .builder()
-              .credentialsProvider(credsProvider)
-              .region(region)
-              .endpointOverride(kinesisUri)
-          }.httpClient(httpClient).build
-        )
+          KinesisAsyncClient
+            .builder()
+            .credentialsProvider(credsProvider)
+            .region(region)
+            .endpointOverride(kinesisUri)
+            .httpClient(httpClient)
+            .build
+        }
       }
     }
 
