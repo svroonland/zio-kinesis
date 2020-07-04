@@ -237,24 +237,18 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                                .map(i => ProducerRecord(s"key$i", s"msg$i"))
                            )
                        )
-                       //                             .tap(_ => putStrLn("Put records on stream"))
                        .tapError(e => putStrLn(s"error3: $e"))
                        .retry(retryOnResourceNotFound)
                    }
                    .runDrain
                    .tap(_ => ZIO(println("PRODUCING RECORDS DONE")))
-//                           .forkAs("RecordProducing")
 
             interrupted               <- Promise
                              .make[Nothing, Unit]
-//                             .tap(p => (putStrLn("INTERRUPTING") *> p.succeed(())).delay(19.seconds + 333.millis).fork)
             lastProcessedRecords      <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
             lastCheckpointedRecords   <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
-            _                         <- putStrLn("ABOUT TO START CONSUMER")
             consumer                  <- streamConsumer(interrupted, lastProcessedRecords, lastCheckpointedRecords).runCollect.fork
-//            _                         <- ZIO.unit.delay(30.seconds)
             _                         <- interrupted.await
-//            _                         <- producing.interrupt
             _                         <- consumer.join
             (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
           } yield assert(processed)(Assertion.equalTo(checkpointed))
@@ -265,10 +259,10 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
   override def spec =
     suite("DynamicConsumer")(
-      testConsume1 @@ TestAspect.ignore,
-      testConsume2 @@ TestAspect.ignore,
-      testCheckpointAtShutdown @@ TestAspect.ignore
-    ).provideCustomLayer(env.orDie) @@ timeout(5.minute) @@ sequential @@ ignore
+      testConsume1,
+      testConsume2,
+      testCheckpointAtShutdown
+    ).provideCustomLayer(env.orDie) @@ timeout(5.minute) @@ sequential
 
   def delayStream[R, E, O](s: ZStream[R, E, O], delay: Duration) =
     ZStream.fromEffect(ZIO.sleep(delay)).flatMap(_ => s)

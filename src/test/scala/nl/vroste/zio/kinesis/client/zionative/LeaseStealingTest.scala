@@ -33,7 +33,6 @@ object LeaseStealingTest extends DefaultRunnableSpec {
 
   import zio.test.Assertion._
   import DefaultLeaseCoordinator.leasesToTake
-  // import TestAspect.ignore
 
   override def spec =
     suite("Lease coordinator")(
@@ -41,7 +40,7 @@ object LeaseStealingTest extends DefaultRunnableSpec {
         checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.const(1))) { leases =>
           assertM(leasesToTake(leases, workerId(1)))(isEmpty)
         }
-      } @@ TestAspect.ignore,
+      },
       testM("Steals leases manually") {
         val leases = List(
           Lease("shard-0", Some("worker-1"), 1, 0, None, List(), None),
@@ -49,12 +48,12 @@ object LeaseStealingTest extends DefaultRunnableSpec {
         )
         assertM(leasesToTake(leases, workerId(2)))(isNonEmpty)
 
-      } @@ TestAspect.ignore,
+      },
       testM("steals some leases when its not the only worker") {
         checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.const(1))) { leases =>
           assertM(leasesToTake(leases, workerId(2)))(isNonEmpty)
         }
-      } @@ TestAspect.ignore,
+      },
       testM("takes leases if it has less than its equal share") {
         checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10), allOwned = false)) {
           leases =>
@@ -76,7 +75,7 @@ object LeaseStealingTest extends DefaultRunnableSpec {
               toSteal <- DefaultLeaseCoordinator.leasesToTake(leases, workerId(1))
             } yield assert(toSteal.size)(isWithin(minExpectedToSteal, maxExpectedToSteal))
         }
-      } @@ TestAspect.ignore,
+      },
       testM("takes unclaimed leases first") {
         checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10), allOwned = false)) { leases =>
           for {
@@ -84,7 +83,7 @@ object LeaseStealingTest extends DefaultRunnableSpec {
             fromOtherWorkers = toTake.dropWhile(_.owner.isEmpty)
           } yield assert(fromOtherWorkers)(forall(hasField("owner", _.owner, isNone)))
         }
-      } @@ TestAspect.ignore,
+      },
       testM("steals leases randomly to reduce contention for the same lease") {
         checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10), allOwned = true)) { leases =>
           for {
@@ -92,7 +91,7 @@ object LeaseStealingTest extends DefaultRunnableSpec {
             toSteal2 <- DefaultLeaseCoordinator.leasesToTake(leases, workerId(1))
           } yield assert(toSteal1)(not(equalTo(toSteal2))) || assert(toSteal1)(hasSize(isLessThanEqualTo(1)))
         }
-      } @@ TestAspect.ignore, // @@ TestAspect.flaky(3), // Randomness is randomly not-random
+      }, // @@ TestAspect.flaky(3), // Randomness is randomly not-random
       testM("steals from the busiest workers first") {
         checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10))) {
           leases =>

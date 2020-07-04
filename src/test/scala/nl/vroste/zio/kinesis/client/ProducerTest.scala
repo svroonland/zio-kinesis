@@ -54,7 +54,7 @@ object ProducerTest extends DefaultRunnableSpec {
             } yield assertCompletes
           )
         }.untraced
-      } @@ timeout(5.minute) @@ TestAspect.ignore,
+      } @@ timeout(5.minute),
       testM("fail when attempting to produce to a stream that does not exist") {
         val streamName = "zio-test-stream-not-existing"
 
