@@ -365,19 +365,17 @@ private class DefaultLeaseCoordinator(
                  parentShardIds = Seq.empty
                )
 
-               log.info(s"Creating lease for ${shard.shardId}") *>
-                 table
-                   .createLease(lease)
-                   .tap(_ => log.info(s"Created lease for ${shard.shardId}"))
-                   .catchAll {
-                     case Right(LeaseAlreadyExists) =>
-                       log
-                         .info(
-                           s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
-                         )
-                     case Left(e)                   =>
-                       log.error(s"Error creating lease: ${e}") *> ZIO.fail(e)
-                   } <* registerNewAcquiredLease(lease)
+               table
+                 .createLease(lease)
+                 .catchAll {
+                   case Right(LeaseAlreadyExists) =>
+                     log
+                       .info(
+                         s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
+                       )
+                   case Left(e)                   =>
+                     log.error(s"Error creating lease: ${e}") *> ZIO.fail(e)
+                 } <* registerNewAcquiredLease(lease)
              }
     } yield ()
 

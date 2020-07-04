@@ -91,7 +91,7 @@ object LeaseStealingTest extends DefaultRunnableSpec {
             toSteal2 <- DefaultLeaseCoordinator.leasesToTake(leases, workerId(1))
           } yield assert(toSteal1)(not(equalTo(toSteal2))) || assert(toSteal1)(hasSize(isLessThanEqualTo(1)))
         }
-      }, // @@ TestAspect.flaky(3), // Randomness is randomly not-random
+      } @@ TestAspect.flaky(3), // Randomness is randomly not-random
       testM("steals from the busiest workers first") {
         checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10))) {
           leases =>
@@ -108,7 +108,7 @@ object LeaseStealingTest extends DefaultRunnableSpec {
               toStealWorkers = changedElements(toSteal.map(_.owner.get))
             } yield assert(toStealWorkers)(equalTo(busiestWorkers.take(toStealWorkers.size)))
         }
-      } @@ TestAspect.ignore
+      }
     ).provideCustomLayer(loggingEnv)
 
   def changedElements[A](as: List[A]): List[A] =
