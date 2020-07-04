@@ -65,7 +65,6 @@ case class LeaseState(lease: Lease, completed: Option[Promise[Nothing, Unit]], l
 /**
  *
  * @param currentLeases Latest known state of all leases
- * @param heldLeases Leases held by this worker including a completion signal
  * @param shards List of all of the stream's shards
  */
 case class State(

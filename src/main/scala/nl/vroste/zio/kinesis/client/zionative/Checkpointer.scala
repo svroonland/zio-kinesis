@@ -47,6 +47,15 @@ trait Checkpointer {
   /**
    * Checkpoint the last staged checkpoint
    *
+   * Checkpointing has 'up to and including' semantics, meaning that after a restart, the worker will continue
+   * from the record after the last checkpointed record.
+   *
+   * Checkpointing may fail when another worker has taken over the lease. It is recommended that users catch this
+   * error and recover the stream with a `ZStream.empty` to stop processing the shard.
+   *
+   * Checkpointing may also fail due to transient connection/service issues. The retrySchedule determines if and when
+   * to retry.
+   *
    * @param retrySchedule When checkpointing fails with a Throwable, retry according to this schedule. This helps
    *                      to be robust against transient connection/service failures.
    *                      The schedule receives the Throwable as input, which can be used to ignore certain exceptions.
