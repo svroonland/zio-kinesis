@@ -54,11 +54,12 @@ package object client {
    */
   def httpClientLayer(
     maxConcurrency: Int = Int.MaxValue,
-    initialWindowSize: Int = 512 * 1024, // 512 KB, see https://github.com/awslabs/amazon-kinesis-client/pull/706
+    initialWindowSize: Int = 512 * 1024,   // 512 KB, see https://github.com/awslabs/amazon-kinesis-client/pull/706
     healthCheckPingPeriod: Duration = 10.seconds,
     maxPendingConnectionAcquires: Int = 10000,
     connectionAcquisitionTimeout: Duration = 30.seconds,
     readTimeout: Duration = 30.seconds,
+    protocol: Protocol = Protocol.HTTP1_1, // TODO how to support both?
     build: NettyNioAsyncHttpClient.Builder => SdkAsyncHttpClient = _.build()
   ): ZLayer[Any, Throwable, Has[SdkAsyncHttpClient]] =
     ZLayer.fromManaged {
@@ -79,7 +80,7 @@ package object client {
                   .healthCheckPingPeriod(healthCheckPingPeriod.asJava)
                   .build()
               )
-              .protocol(Protocol.HTTP2)
+              .protocol(protocol)
           )
         }
       }
