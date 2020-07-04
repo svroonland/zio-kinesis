@@ -12,19 +12,12 @@ import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test._
 import zio.{ Chunk, ZIO }
-import zio.logging.slf4j.Slf4jLogger
-import zio.ZLayer
 
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
 
-  val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
-
-  val env = ((LocalStackServices.env.orDie >>>
-    (AdminClient.live ++ Client.live)).orDie ++
-    zio.test.environment.testEnvironment ++
-    Clock.live) >>>
-    (ZLayer.identity ++ loggingEnv)
+  val env =
+    ((LocalStackServices.env.orDie >>> (AdminClient.live ++ Client.live)).orDie ++ zio.test.environment.testEnvironment ++ Clock.live)
 
   def spec =
     suite("Producer")(
@@ -66,6 +59,6 @@ object ProducerTest extends DefaultRunnableSpec {
           producer
             .produceChunk(Chunk.fromIterable(records)) *> putStrLn(s"Chunk completed")
         }.run.map(r => assert(r)(fails(isSubtype[KinesisException](anything))))
-      } @@ timeout(1.minute) @@ TestAspect.ignore
+      } @@ timeout(1.minute)
     ).provideCustomLayerShared(env) @@ sequential
 }
