@@ -9,7 +9,6 @@ import software.amazon.awssdk.auth.credentials.{
 }
 import software.amazon.awssdk.core.SdkSystemSetting
 import software.amazon.awssdk.http.SdkHttpConfigurationOption
-import software.amazon.awssdk.http.async.SdkAsyncHttpClient
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
@@ -33,40 +32,39 @@ object LocalStackServices {
   val credsProvider: AwsCredentialsProvider =
     StaticCredentialsProvider.create(AwsBasicCredentials.create(accessKey, secretAccessKey))
 
-  val localHttpClient = {
-    import software.amazon.awssdk.http.Protocol
-
-    httpClientLayer(
-      maxConcurrency = 25, // localstack 11.2 has hardcoded limit of 128
+  val localHttpClient: ZLayer[Any, Nothing, HttpClient] =
+    HttpClient.make(
+      maxConcurrency = 25, // localstack 11.2 has hardcoded limit of 128 and we need to share with a few clients below
       maxPendingConnectionAcquires = 20,
       readTimeout = 10.seconds,
-      build = _.protocol(Protocol.HTTP1_1)
-        .connectionMaxIdleTime(10.seconds.asJava)
+      allowHttp2 = false,  // Localstack does not support HTTP2
+      build = _.connectionMaxIdleTime(10.seconds.asJava)
         .writeTimeout(10.seconds.asJava)
         .buildWithDefaults(
           AttributeMap.builder.put(SdkHttpConfigurationOption.TRUST_ALL_CERTIFICATES, java.lang.Boolean.TRUE).build
         )
     )
-  }
 
-  val kinesisAsyncClientLayer: ZLayer[Has[SdkAsyncHttpClient], Throwable, Has[KinesisAsyncClient]] =
+  val kinesisAsyncClientLayer: ZLayer[HttpClient, Throwable, Has[KinesisAsyncClient]] =
     ZLayer.fromServiceManaged { httpClient =>
-      ZManaged.fromAutoCloseable {
-        ZIO.effect {
-          System.setProperty(SdkSystemSetting.CBOR_ENABLED.property, "false")
+      httpClient.createSdkHttpClient().flatMap { sdkHttpClient =>
+        ZManaged.fromAutoCloseable {
+          ZIO.effect {
+            System.setProperty(SdkSystemSetting.CBOR_ENABLED.property, "false")
 
-          KinesisAsyncClient
-            .builder()
-            .credentialsProvider(credsProvider)
-            .region(region)
-            .endpointOverride(kinesisUri)
-            .httpClient(httpClient)
-            .build
+            KinesisAsyncClient
+              .builder()
+              .credentialsProvider(credsProvider)
+              .region(region)
+              .endpointOverride(kinesisUri)
+              .httpClient(sdkHttpClient)
+              .build
+          }
         }
       }
     }
 
-  val dynamoDbClientLayer: ZLayer[Has[SdkAsyncHttpClient], Throwable, Has[DynamoDbAsyncClient]] =
+  val dynamoDbClientLayer: ZLayer[HttpClient, Throwable, Has[DynamoDbAsyncClient]] =
     nl.vroste.zio.kinesis.client.dynamoDbAsyncClientLayer(
       _.credentialsProvider(credsProvider)
         .region(region)
@@ -74,7 +72,7 @@ object LocalStackServices {
         .build()
     )
 
-  val cloudWatchClientLayer: ZLayer[Has[SdkAsyncHttpClient], Throwable, Has[CloudWatchAsyncClient]] =
+  val cloudWatchClientLayer: ZLayer[HttpClient, Throwable, Has[CloudWatchAsyncClient]] =
     nl.vroste.zio.kinesis.client.cloudWatchAsyncClientLayer(
       _.credentialsProvider(credsProvider)
         .region(region)
