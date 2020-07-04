@@ -73,8 +73,8 @@ Compile / doc / scalacOptions ++= {
   else Seq.empty
 }
 
- // Suppresses problems with Scaladoc @throws links
-scalacOptions in (Compile, doc) ++= Seq( "-no-link-warnings")
+// Suppresses problems with Scaladoc @throws links
+scalacOptions in (Compile, doc) ++= Seq("-no-link-warnings")
 
 testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework")
 
