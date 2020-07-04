@@ -265,6 +265,7 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient, applicationNa
 
 object DynamoDbLeaseRepository {
 
+// TODO get rid of factory and pass application name to individual client methods
   val factory: ZLayer[Has[DynamoDbAsyncClient], Nothing, LeaseRepositoryFactory] =
     ZLayer.fromService(client => applicationName => new DynamoDbLeaseRepository(client, applicationName))
 }

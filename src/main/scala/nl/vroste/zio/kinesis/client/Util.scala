@@ -13,6 +13,7 @@ import zio.ZManaged
 import zio.Task
 import zio.IO
 import java.util.concurrent.CompletionException
+import software.amazon.awssdk.core.exception.SdkException
 
 object Util {
   implicit class ZStreamExtensions[-R, +E, +O](val stream: ZStream[R, E, O]) extends AnyVal {
@@ -62,6 +63,8 @@ object Util {
       .flatMap(ZIO.fromCompletionStage(_))
       .catchSome {
         case e: CompletionException =>
+          ZIO.fail(Option(e.getCause()).getOrElse(e))
+        case e: SdkException        =>
           ZIO.fail(Option(e.getCause()).getOrElse(e))
       }
 

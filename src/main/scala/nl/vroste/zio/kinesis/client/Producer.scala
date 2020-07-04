@@ -1,6 +1,8 @@
 package nl.vroste.zio.kinesis.client
+import java.io.IOException
 import java.time.Instant
 
+import io.netty.handler.timeout.ReadTimeoutException
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.serde.Serializer
@@ -9,13 +11,11 @@ import software.amazon.awssdk.services.kinesis.model.{ KinesisException, PutReco
 import zio._
 import zio.clock.Clock
 import zio.duration.{ Duration, _ }
-import zio.stream.{ ZSink, ZStream, ZTransducer }
 import zio.logging._
+import zio.stream.{ ZSink, ZStream, ZTransducer }
 
 import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
-import io.netty.handler.timeout.ReadTimeoutException
-import software.amazon.awssdk.core.exception.SdkClientException
 
 /**
  * Producer for Kinesis records
@@ -207,7 +207,7 @@ object Producer {
     Schedule.doWhile {
       case e: KinesisException if e.statusCode() / 100 != 4 => true
       case _: ReadTimeoutException                          => true
-      case e: SdkClientException                            => true
+      case _: IOException                                   => true
       case _                                                => false
     }
 }

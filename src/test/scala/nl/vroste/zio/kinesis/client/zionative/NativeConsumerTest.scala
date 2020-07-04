@@ -25,6 +25,7 @@ import zio.test.Assertion._
 import zio.test._
 import zio.logging.Logging
 import nl.vroste.zio.kinesis.client.ProducerSettings
+import nl.vroste.zio.kinesis.client.TestUtil
 
 object NativeConsumerTest extends DefaultRunnableSpec {
   /*
@@ -339,8 +340,12 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                   Serde.asciiString,
                   workerId = workerId,
                   emitDiagnostic = emitDiagnostic,
-                  leaseCoordinationSettings =
-                    LeaseCoordinationSettings(10.seconds, 3.seconds, refreshAndTakeInterval = 3.seconds)
+                  leaseCoordinationSettings = LeaseCoordinationSettings(
+                    10.seconds,
+                    3.seconds,
+                    refreshAndTakeInterval = 3.seconds,
+                    maxParallelLeaseAcquisitions = 1
+                  )
                 )
                 .flatMapPar(Int.MaxValue) {
                   case (shard @ _, shardStream, checkpointer) =>
@@ -358,7 +363,9 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                 }
 
             for {
-              producer      <- produceSampleRecords(streamName, nrRecords, chunkSize = 50).fork
+              consumer1Done <- Promise.make[Throwable, Unit]
+              producer      <-
+                produceSampleRecords(streamName, nrRecords, chunkSize = 50).tapError(consumer1Done.fail(_)).fork
               events        <- Ref.make[List[(String, Instant, DiagnosticEvent)]](List.empty)
               emitDiagnostic = (workerId: String) =>
                                  (event: DiagnosticEvent) =>
@@ -369,30 +376,35 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                        .flatMap(time => events.update(_ :+ ((workerId, time, event))))
                                        .provideLayer(Clock.live)
 
-              consumer1Done <- Promise.make[Nothing, Unit]
               stream        <- ZStream
                           .mergeAll(3)(
                             consumer("worker1", emitDiagnostic("worker1"))
                               .take(10) // Such that it has had time to claim some leases
                               .ensuringFirst(log.warn("worker1 done") *> consumer1Done.succeed(())),
-                            consumer("worker2", emitDiagnostic("worker2")).ensuringFirst(log.warn("worker2 DONE")),
-                            consumer("worker3", emitDiagnostic("worker3")).ensuringFirst(log.warn("Worker3 DONE"))
+                            consumer("worker2", emitDiagnostic("worker2")).ensuringFirst(
+                              log.warn("worker2 DONE")
+                            ),
+                            consumer("worker3", emitDiagnostic("worker3")).ensuringFirst(
+                              log.warn("Worker3 DONE")
+                            )
                           )
                           .runDrain
+                          .tapError(consumer1Done.fail(_))
                           .fork
               _             <- consumer1Done.await *> ZIO.sleep(10.seconds)
               _             <- putStrLn("Interrupting producer and stream")
               _             <- producer.interrupt
               _             <- stream.interrupt
-              allEvents     <-
-                events.get.map(
-                  _.filterNot(_._3.isInstanceOf[PollComplete]).filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
-                )
+              allEvents     <- events.get.map(
+                             _.filterNot(_._3.isInstanceOf[PollComplete])
+                               .filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
+                           )
               // _                           = println(allEvents.mkString("\n"))
 
               // Workers 2 and 3 should have later-timestamped LeaseAcquired for all shards that were released by Worker 1
               worker1Released      = allEvents.collect {
-                                  case ("worker1", time, DiagnosticEvent.LeaseReleased(shard)) => time -> shard
+                                  case ("worker1", time, DiagnosticEvent.LeaseReleased(shard)) =>
+                                    time -> shard
                                 }
               releaseTime          = worker1Released.last._1
               acquiredAfterRelease = allEvents.collect {
@@ -424,7 +436,8 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                   Serde.asciiString,
                   workerId = workerId,
                   emitDiagnostic = emitDiagnostic,
-                  leaseCoordinationSettings = LeaseCoordinationSettings(expirationTime, renewInterval)
+                  leaseCoordinationSettings =
+                    LeaseCoordinationSettings(expirationTime, renewInterval, maxParallelLeaseAcquisitions = 1)
                 )
                 .flatMapPar(Int.MaxValue) {
                   case (shard @ _, shardStream, checkpointer) =>
@@ -491,10 +504,10 @@ object NativeConsumerTest extends DefaultRunnableSpec {
               _          <- putStrLn("Interrupting producer and stream")
               _          <- producer.interrupt
               _          <- stream.interrupt
-              allEvents  <-
-                events.get.map(
-                  _.filterNot(_._3.isInstanceOf[PollComplete]).filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
-                )
+              allEvents  <- events.get.map(
+                             _.filterNot(_._3.isInstanceOf[PollComplete])
+                               .filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
+                           )
               _           = println(allEvents.mkString("\n"))
             } yield assertCompletes
         }
@@ -513,7 +526,8 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                   Serde.asciiString,
                   workerId = workerId,
                   emitDiagnostic = emitDiagnostic,
-                  leaseCoordinationSettings = LeaseCoordinationSettings(10.seconds, 3.seconds)
+                  leaseCoordinationSettings =
+                    LeaseCoordinationSettings(10.seconds, 3.seconds, maxParallelLeaseAcquisitions = 1)
                 )
                 .flatMapPar(Int.MaxValue) {
                   case (shard @ _, shardStream, checkpointer) =>
@@ -554,7 +568,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
             } yield assertCompletes
         }
       }
-    ).provideSomeLayer(env) @@
+    ).provideSomeLayerShared(env) @@
       TestAspect.timed @@
       TestAspect.sequential @@ // For CircleCI
       TestAspect.timeoutWarning(60.seconds) @@
@@ -571,17 +585,19 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
   def withStream[R, A](name: String, shards: Int)(
     f: ZIO[R, Throwable, A]
-  ): ZIO[AdminClient with Client with Clock with R, Throwable, A]           =
-    (for {
-      client <- ZManaged.service[AdminClient.Service]
-      _      <- client.createStream(name, shards).toManaged(_ => client.deleteStream(name).orDie)
-      // Wait for the stream to have shards
-      _      <- {
+  ): ZIO[AdminClient with Client with Clock with Console with R, Throwable, A] =
+    TestUtil
+      .createStream(name, shards)
+      .tapM { _ =>
         def getShards: ZIO[Client with Clock, Throwable, Chunk[Shard]] =
-          ZIO.service[Client.Service].flatMap(_.listShards(name).runCollect).filterOrElse(_.nonEmpty)(_ => getShards)
-        getShards.toManaged_
+          ZIO
+            .service[Client.Service]
+            .flatMap(_.listShards(name).runCollect)
+            .filterOrElse(_.nonEmpty)(_ => getShards.delay(1.second))
+        getShards
       }
-    } yield ()).use_(f)
+      .use_(f)
+
   def produceSampleRecords(
     streamName: String,
     nrRecords: Int,
@@ -659,7 +675,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     nrShards: Int
   )(
     f: (String, String) => ZIO[R, Throwable, A]
-  ): ZIO[Client with AdminClient with Clock with R, Throwable, A] =
+  ): ZIO[Client with AdminClient with Clock with Console with R, Throwable, A] =
     ZIO.effectTotal((streamPrefix + "testStream", streamPrefix + "testApplication")).flatMap {
       case (streamName, applicationName) =>
         withStream(streamName, shards = nrShards) {

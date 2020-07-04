@@ -2,6 +2,8 @@ package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
 
 import java.time.Instant
 
+import scala.collection.compat._
+
 import nl.vroste.zio.kinesis.client.DynamicConsumer.Record
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative._
@@ -20,7 +22,6 @@ import zio.duration._
 import zio.logging._
 import zio.random.{ shuffle, Random }
 import zio.stream.ZStream
-import scala.collection.compat._
 
 object ZioExtensions {
   implicit class OnSuccessSyntax[R, E, A](val zio: ZIO[R, E, A]) extends AnyVal {
@@ -175,7 +176,7 @@ private class DefaultLeaseCoordinator(
   /**
    * Operations that update a held lease will interfere unless we run them sequentially for each shard
    */
-  val runloop = {
+  val runloop: ZStream[Logging with Clock, Nothing, Unit] = {
 
     def leaseLost(lease: Lease, leaseCompleted: Promise[Nothing, Unit]): ZIO[Clock, Throwable, Unit] =
       leaseCompleted.succeed(()) *>
@@ -291,13 +292,13 @@ private class DefaultLeaseCoordinator(
         case (shard @ _, command) =>
           command.mapM {
             case UpdateCheckpoint(shard, checkpoint, done, release) =>
-              doUpdateCheckpoint(shard, checkpoint, release).foldM(done.fail, done.succeed)
+              doUpdateCheckpoint(shard, checkpoint, release).foldM(done.fail, done.succeed).unit
             case RenewLease(shard, done)                            =>
-              doRenewLease(shard).foldM(done.fail, done.succeed)
+              doRenewLease(shard).foldM(done.fail, done.succeed).unit
             case RefreshLease(lease, done)                          =>
-              doRefreshLease(lease).tap(done.succeed) // Cannot fail
+              doRefreshLease(lease).tap(done.succeed).unit.orDie // Cannot fail
             case ReleaseLease(shard, done)                          =>
-              doReleaseLease(shard).foldM(done.fail, done.succeed)
+              doReleaseLease(shard).foldM(done.fail, done.succeed).unit
           }
       }
   }
@@ -364,15 +365,17 @@ private class DefaultLeaseCoordinator(
                  parentShardIds = Seq.empty
                )
 
-               (table.createLease(lease) <* registerNewAcquiredLease(lease)).catchAll {
-                 case Right(LeaseAlreadyExists) =>
-                   log
-                     .info(
-                       s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
-                     )
-                 case Left(e)                   =>
-                   ZIO.fail(e)
-               }
+               table
+                 .createLease(lease)
+                 .catchAll {
+                   case Right(LeaseAlreadyExists) =>
+                     log
+                       .info(
+                         s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
+                       )
+                   case Left(e)                   =>
+                     log.error(s"Error creating lease: ${e}") *> ZIO.fail(e)
+                 } <* registerNewAcquiredLease(lease)
              }
     } yield ()
 
@@ -603,10 +606,9 @@ object DefaultLeaseCoordinator {
                    (c.refreshLeases *> c.resumeUnreleasedLeases).when(leaseTableExists) *>
                      (if (leaseTableExists) awaitAndUpdateShards.fork else awaitAndUpdateShards)
                  }.toManaged_
-            _  = log.info("Begin first initialisation: takeLeases")
             _ <- logNamed(s"worker-${workerId}")(
-                   // Initialization
-                   (c.takeLeases) *>
+                   // Initialization. If it fails, we will try in the loop
+                   (c.takeLeases).ignore *>
                      // Periodic refresh
                      (c.refreshLeases *> c.takeLeases)
                        .repeat(
@@ -631,6 +633,7 @@ object DefaultLeaseCoordinator {
                  ).forkManaged
           } yield c
       }
+      .tapCause(c => log.error("Error creating DefaultLeaseCoordinator", c).toManaged_)
 
   def logNamed[R, E, A](name: String)(f: ZIO[R, E, A]): ZIO[Logging with R, E, A] =
     log.locally(LogAnnotation.Name(name :: Nil))(f)
