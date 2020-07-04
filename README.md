@@ -212,48 +212,6 @@ val clientLayer = kinesisAsyncClientLayer() >>> Client.live
 }
 ```
 
-## Consuming a stream (low level)
-This example shows how the low-level `Client` can be used for more control over the consuming process. 
-
-Process all shards of a stream from the beginning, using an existing registered consumer. You will have to track current 
-shard positions yourself using some external storage mechanism.
-
-```scala
-import nl.vroste.zio.kinesis.client._
-import nl.vroste.zio.kinesis.client.{Client, ClientLive}
-import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
-import nl.vroste.zio.kinesis.client.serde.Serde
-import zio.clock.Clock
-import zio.{Task, ZIO}
-
-val streamName  = "my_stream"
-val consumerARN = "arn:aws:etc"
-val clientLayer = kinesisAsyncClientLayer() >>> Client.live
-
-(for {
-  client <- ZIO.service[Client.Service]
-  _ <- client
-    .listShards("zio-test")
-    .map { shard =>
-      client.subscribeToShard(
-        consumerARN,
-        shard.shardId(),
-        ShardIteratorType.TrimHorizon,
-        Serde.asciiString
-      )
-    }
-    .flatMapPar(Int.MaxValue) { shardStream =>
-      shardStream.mapM { record =>
-        // Do something with the record here
-        // println(record.data)
-        // and finally checkpoint the sequence number
-        // customCheckpointer.checkpoint(record.shardID, record.sequenceNumber)
-        Task.unit
-      }
-    }.runDrain
-} yield ()).provideLayer(Clock.live ++ clientLayer)
-```
-
 ## Admin client
 The more administrative operations like creating and deleting streams are available in the `AdminClient`.
 

@@ -21,9 +21,9 @@ import zio._
  */
 object DynamicConsumer {
 
-  val live: ZLayer[Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[DynamoDbAsyncClient], Nothing, Has[
-    DynamicConsumer.Service
-  ]] =
+  val live: ZLayer[Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[
+    DynamoDbAsyncClient
+  ], Nothing, DynamicConsumer] =
     ZLayer.fromServices[KinesisAsyncClient, CloudWatchAsyncClient, DynamoDbAsyncClient, DynamicConsumer.Service] {
       new DynamicConsumerLive(_, _, _)
     }
@@ -70,6 +70,41 @@ object DynamicConsumer {
       (String, ZStream[Blocking, Throwable, Record[T]], Checkpointer)
     ]
   }
+
+  // Accessor
+  def shardedStream[R, T](
+    streamName: String,
+    applicationName: String,
+    deserializer: Deserializer[R, T], // TODO make Deserializer a ZLayer too
+    requestShutdown: UIO[Unit] = UIO.never,
+    initialPosition: InitialPositionInStreamExtended =
+      InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON),
+    isEnhancedFanOut: Boolean = true,
+    leaseTableName: Option[String] = None,
+    workerIdentifier: String = UUID.randomUUID().toString,
+    maxShardBufferSize: Int = 1024    // Prefer powers of 2
+  ): ZStream[
+    DynamicConsumer with Blocking with R,
+    Throwable,
+    (String, ZStream[Blocking, Throwable, Record[T]], Checkpointer)
+  ] =
+    ZStream.unwrap(
+      ZIO
+        .service[DynamicConsumer.Service]
+        .map(
+          _.shardedStream(
+            streamName,
+            applicationName,
+            deserializer,
+            requestShutdown,
+            initialPosition,
+            isEnhancedFanOut,
+            leaseTableName,
+            workerIdentifier,
+            maxShardBufferSize
+          )
+        )
+    )
 
   case class Record[T](
     shardId: String,

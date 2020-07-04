@@ -1,6 +1,8 @@
 package nl.vroste.zio.kinesis.client
+import java.io.IOException
 import java.time.Instant
 
+import io.netty.handler.timeout.ReadTimeoutException
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.serde.Serializer
@@ -9,6 +11,7 @@ import software.amazon.awssdk.services.kinesis.model.{ KinesisException, PutReco
 import zio._
 import zio.clock.Clock
 import zio.duration.{ Duration, _ }
+import zio.logging._
 import zio.stream.{ ZSink, ZStream, ZTransducer }
 
 import scala.jdk.CollectionConverters._
@@ -76,12 +79,13 @@ final case class ProducerSettings(
   failedDelay: Duration = 100.millis
 )
 
+// TODO add logging
 object Producer {
   def make[R, T](
     streamName: String,
     serializer: Serializer[R, T],
     settings: ProducerSettings = ProducerSettings()
-  ): ZManaged[R with Clock with Client, Throwable, Producer[T]] =
+  ): ZManaged[R with Clock with Client with Logging, Throwable, Producer[T]] =
     for {
       client <- ZManaged.service[Client.Service]
       env    <- ZIO.environment[R with Clock].toManaged_
@@ -100,13 +104,14 @@ object Producer {
              .mapMPar(settings.maxParallelRequests) { batch: PutRecordsBatch =>
                (for {
                  response              <- client
-                               .putRecords(streamName, batch.entries.map(_.r))
+                               .putRecords(streamName, batch.entries.map(_.r).reverse)
+                               .tapError(e => log.warn(s"Error producing records, will retry if recoverable: ${e}"))
                                .retry(scheduleCatchRecoverable && settings.backoffRequests)
 
                  maybeSucceeded         = response
                                     .records()
                                     .asScala
-                                    .zip(batch.entries)
+                                    .zip(batch.entries.reverse)
                  (newFailed, succeeded) = if (response.failedRecordCount() > 0)
                                             maybeSucceeded.partition {
                                               case (result, _) =>
@@ -117,12 +122,13 @@ object Producer {
                                           else
                                             (Seq.empty, maybeSucceeded)
 
+                 _                     <- log.info(s"Failed to produce ${newFailed.size} records").when(newFailed.nonEmpty)
                  // TODO backoff for shard limit stuff
                  _                     <- failedQueue
                         .offerAll(newFailed.map(_._2))
                         .delay(settings.failedDelay)
                         .fork // TODO should be per shard
-                 _                     <- ZIO.foreach(succeeded) {
+                 _                     <- ZIO.foreachPar_(succeeded) {
                         case (response, request) =>
                           request.done.succeed(ProduceResponse(response.shardId(), response.sequenceNumber()))
                       }
@@ -167,7 +173,7 @@ object Producer {
           .flatMap(requests => queue.offerAll(requests) *> ZIO.foreachPar(requests)(_.done.await))
     }
 
-  val maxRecordsPerRequest     = 500             // This is a Kinesis API limitation
+  val maxRecordsPerRequest     = 499             // This is a Kinesis API limitation // TODO because of fold issue, reduced by 1
   val maxPayloadSizePerRequest = 5 * 1024 * 1024 // 5 MB
 
   val recoverableErrorCodes = Set("ProvisionedThroughputExceededException", "InternalFailure", "ServiceUnavailable");
@@ -200,6 +206,8 @@ object Producer {
   private final def scheduleCatchRecoverable: Schedule[Any, Throwable, Throwable] =
     Schedule.doWhile {
       case e: KinesisException if e.statusCode() / 100 != 4 => true
+      case _: ReadTimeoutException                          => true
+      case _: IOException                                   => true
       case _                                                => false
     }
 }

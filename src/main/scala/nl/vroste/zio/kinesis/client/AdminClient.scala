@@ -8,6 +8,7 @@ import zio.clock.Clock
 import zio.duration._
 import zio.stream.ZStream
 import zio.{ Has, Schedule, Task, ZLayer }
+import zio.ZIO
 
 object AdminClient {
 
@@ -96,6 +97,14 @@ object AdminClient {
     ): Task[UpdateShardCountResponse]
 
   }
+
+  // Accessors
+  def describeStream(
+    streamName: String,
+    shardLimit: Int = 100,
+    exclusiveStartShardId: Option[String] = None
+  ): ZIO[AdminClient, Throwable, StreamDescription] =
+    ZIO.service[Service].flatMap(_.describeStream(streamName, shardLimit, exclusiveStartShardId))
 
   case class DescribeLimitsResponse(shardLimit: Int, openShardCount: Int)
 
