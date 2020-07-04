@@ -3,8 +3,8 @@ package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
 import java.time.Instant
 
 import scala.collection.compat._
-
 import nl.vroste.zio.kinesis.client.DynamicConsumer.Record
+import nl.vroste.zio.kinesis.client.Util
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative._
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator.LeaseCommand.{
@@ -461,13 +461,16 @@ private class DefaultLeaseCoordinator(
       staged <- Ref.make[Option[ExtendedSequenceNumber]](None)
       permit <- Semaphore.make(1)
     } yield new Checkpointer {
-      override def checkpoint: ZIO[Any, Either[Throwable, ShardLeaseLost.type], Unit] =
-        doCheckpoint()
+      def checkpoint[R](
+        retrySchedule: Schedule[Clock with R, Throwable, Any] = Util.exponentialBackoff(1.second, 1.minute)
+      ): ZIO[Clock with R, Either[Throwable, ShardLeaseLost.type], Unit] =
+        doCheckpoint(false)
+          .retry(retrySchedule.left[ShardLeaseLost.type])
 
-      override def checkpointAndRelease: ZIO[zio.blocking.Blocking, Either[Throwable, ShardLeaseLost.type], Unit] =
+      override def checkpointAndRelease: ZIO[Any, Either[Throwable, ShardLeaseLost.type], Unit] =
         doCheckpoint(release = true)
 
-      private def doCheckpoint(release: Boolean = false) =
+      private def doCheckpoint(release: Boolean = false): ZIO[Any, Either[Throwable, ShardLeaseLost.type], Unit] =
         /**
          * This uses a semaphore to ensure that two concurrent calls to `checkpoint` do not attempt
          * to process the last staged record

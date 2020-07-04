@@ -1,10 +1,11 @@
 package nl.vroste.zio.kinesis.client.zionative
 
-import zio.ZIO
+import zio.{ Exit, Schedule, UIO, ZIO }
 import zio.blocking.Blocking
 import nl.vroste.zio.kinesis.client.DynamicConsumer.Record
-import zio.UIO
-import zio.Exit
+import nl.vroste.zio.kinesis.client.Util
+import zio.clock.Clock
+import zio.duration._
 
 /**
  * Error indicating that while checkpointing it was discovered that the lease for a shard was stolen
@@ -45,14 +46,33 @@ trait Checkpointer {
 
   /**
    * Checkpoint the last staged checkpoint
+   *
+   * @param retrySchedule When checkpointing fails with a Throwable, retry according to this schedule. This helps
+   *                      to be robust against transient connection/service failures.
+   *                      The schedule receives the Throwable as input, which can be used to ignore certain exceptions.
+   *                      The default value is an infinite exponential backoff between 1 second and 1 minute.
+   *                      Note that ShardLeaseLost is not handled by this retry schedule.
    */
-  def checkpoint: ZIO[Any, Either[Throwable, ShardLeaseLost.type], Unit]
+  def checkpoint[R](
+    retrySchedule: Schedule[Clock with R, Throwable, Any] = Util.exponentialBackoff(1.second, 1.minute)
+  ): ZIO[Clock with R, Either[Throwable, ShardLeaseLost.type], Unit]
 
   private[client] def checkpointAndRelease: ZIO[Blocking, Either[Throwable, ShardLeaseLost.type], Unit]
 
   /**
    * Immediately checkpoint this record
+   *
+   * For performance benefits it is recommended to batch checkpoints
+   *
+   * @param retrySchedule When checkpointing fails with a Throwable, retry according to this schedule. This helps
+   *                      to be robust against transient connection/service failures.
+   *                      The schedule receives the Throwable as input, which can be used to ignore certain exceptions.
+   *                      The default value is an infinite exponential backoff between 1 second and 1 minute.
+   *                      Note that ShardLeaseLost is not handled by this retry schedule.
    */
-  def checkpointNow(r: Record[_]): ZIO[Blocking, Either[Throwable, ShardLeaseLost.type], Unit] =
-    stage(r) *> checkpoint
+  def checkpointNow[R](
+    r: Record[_],
+    retrySchedule: Schedule[Clock with R, Throwable, Any] = Util.exponentialBackoff(1.second, 1.minute)
+  ): ZIO[Clock with R, Either[Throwable, ShardLeaseLost.type], Unit] =
+    stage(r) *> checkpoint()
 }

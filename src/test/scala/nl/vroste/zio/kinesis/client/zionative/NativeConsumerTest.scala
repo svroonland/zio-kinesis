@@ -33,7 +33,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
   - [X] Support both polling and enhanced fanout
   - [X] Must restart from the given initial start point if no lease yet
   - [X] Must restart from the record after the last checkpointed record for each shard
-  - [X] Should release leases at shutdown (another worker should aquicre all leases directly without having to steal)
+  - [X] Should release leases at shutdown (another worker should acquire all leases directly without having to steal)
   - [X] Must checkpoint the last staged checkpoint before shutdown
   - [ ] Correctly deserialize the records
   - [ ] something about rate limits: maybe if we have multiple consumers active and run into rate limits?
@@ -212,7 +212,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                   .tap(_ => consumer1Started.succeed(()))
                                   .aggregateAsyncWithin(ZTransducer.collectAllN(20), Schedule.fixed(1.second))
                                   .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-                                  .tap(_ => checkpointer.checkpoint)
+                                  .tap(_ => checkpointer.checkpoint())
                                   .catchAll {
                                     case Right(e) =>
                                       println(s"Got error ${e}")
@@ -242,7 +242,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                     .tap(checkpointer.stage)
                                     .aggregateAsyncWithin(ZTransducer.collectAllN(20), Schedule.fixed(1.second))
                                     .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-                                    .tap(_ => checkpointer.checkpoint)
+                                    .tap(_ => checkpointer.checkpoint())
                                     .catchAll {
                                       case Right(_) =>
                                         ZStream.empty
@@ -286,7 +286,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                   .tap(checkpointer.stage)
                                   .aggregateAsyncWithin(ZTransducer.collectAllN(200), Schedule.fixed(1.second))
                                   .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-                                  .tap(_ => checkpointer.checkpoint)
+                                  .tap(_ => checkpointer.checkpoint())
                                   .catchAll {
                                     case Right(_) =>
                                       ZStream.empty
@@ -310,7 +310,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                     .tap(checkpointer.stage)
                                     .aggregateAsyncWithin(ZTransducer.collectAllN(200), Schedule.fixed(1.second))
                                     .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-                                    .tap(_ => checkpointer.checkpoint)
+                                    .tap(_ => checkpointer.checkpoint())
                                     .catchAll {
                                       case Right(_) =>
                                         ZStream.empty
@@ -354,7 +354,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                       .aggregateAsyncWithin(ZTransducer.collectAllN(200), Schedule.fixed(1.second))
                       .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
                       .map(_.last)
-                      .tap(_ => checkpointer.checkpoint)
+                      .tap(_ => checkpointer.checkpoint())
                       .catchAll {
                         case Right(_) =>
                           ZStream.empty
@@ -446,7 +446,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                       .aggregateAsyncWithin(ZTransducer.collectAllN(200000), Schedule.fixed(checkpointInterval))
                       .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
                       .map(_.last)
-                      .tap(_ => checkpointer.checkpoint)
+                      .tap(_ => checkpointer.checkpoint())
                       .catchAll {
                         case Right(_) =>
                           ZStream.empty
@@ -536,7 +536,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                       .aggregateAsyncWithin(ZTransducer.collectAllN(200), Schedule.fixed(1.second))
                       .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
                       .map(_.last)
-                      .tap(_ => checkpointer.checkpoint)
+                      .tap(_ => checkpointer.checkpoint())
                       .catchAll {
                         case Right(_) =>
                           ZStream.empty

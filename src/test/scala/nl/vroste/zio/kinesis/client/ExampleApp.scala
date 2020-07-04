@@ -74,7 +74,7 @@ object ExampleApp extends zio.App {
                 .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
                 .tap(_ =>
                   // TODO what if checkpointing fails due to a network error..?
-                  checkpointer.checkpoint.catchAll {
+                  checkpointer.checkpoint().catchAll {
                     case Right(ShardLeaseLost) =>
                       ZIO.unit
                     case Left(e)               =>
