@@ -326,11 +326,14 @@ private class DefaultLeaseCoordinator(
   val renewLeases: ZIO[Any, Throwable, Unit] = for {
     // TODO we could skip renewing leases that were recently checkpointed, save a few DynamoDB credits
     heldLeases <- state.get.map(_.heldLeases.keySet)
-    _          <- ZIO.foreachParN(settings.maxParallelLeaseRenewals)(heldLeases)(shardId =>
-           processCommand[Throwable, Unit](
-             LeaseCommand.RenewLease(shardId, _)
-           ).either // Do not interrupt the foreach on failure
-         ) >>= (ZIO.foreach(_)(ZIO.fromEither(_))) // Collect failures
+    _          <- ZIO
+           .foreachParN(settings.maxParallelLeaseRenewals)(heldLeases)(shardId =>
+             processCommand[Throwable, Unit](
+               LeaseCommand.RenewLease(shardId, _)
+             ).cause // Do not interrupt the foreach on failure
+           )
+           .map(_.reduce(_ && _))
+           .uncause
   } yield ()
 
   /**
@@ -409,29 +412,31 @@ private class DefaultLeaseCoordinator(
    *
    * The effect fails with a Throwable when having failed to take one or more leases
    */
-  val takeLeases =
+  val takeLeases: ZIO[Clock with Logging with Random, Throwable, Unit] =
     for {
-      _              <- claimLeasesForShardsWithoutLease
-      state          <- state.get
-      expiredLeases  <- getExpiredLeases
-      toTake         <- leasesToTake(state.currentLeases.map(_._2.lease).toList, workerId, expiredLeases)
-      _              <- log.info(s"Going to take ${toTake.size} leases: ${toTake.mkString(",")}").when(toTake.nonEmpty)
-      claimedLeasesE <- ZIO
-                          .foreachParN(settings.maxParallelLeaseAcquisitions)(toTake) { lease =>
-                            val updatedLease = lease.claim(workerId)
-                            (table
-                              .claimLease(applicationName, updatedLease)
-                              .as(Some(updatedLease)) *> registerNewAcquiredLease(updatedLease)).catchAll {
-                              case Right(UnableToClaimLease) =>
-                                log
-                                  .info(
-                                    s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
-                                  )
-                                  .as(None)
-                              case Left(e)                   =>
-                                log.error(s"Got error ${e}") *> ZIO.fail(e)
-                            }.either // To avoid aborting interrupting the other claims on failure
-                          } >>= (ZIO.foreach(_)(ZIO.fromEither(_))) // Get the first failure
+      _             <- claimLeasesForShardsWithoutLease
+      state         <- state.get
+      expiredLeases <- getExpiredLeases
+      toTake        <- leasesToTake(state.currentLeases.map(_._2.lease).toList, workerId, expiredLeases)
+      _             <- log.info(s"Going to take ${toTake.size} leases: ${toTake.mkString(",")}").when(toTake.nonEmpty)
+      _             <- ZIO
+             .foreachParN(settings.maxParallelLeaseAcquisitions)(toTake) { lease =>
+               val updatedLease = lease.claim(workerId)
+               (table
+                 .claimLease(applicationName, updatedLease)
+                 .as(Some(updatedLease)) *> registerNewAcquiredLease(updatedLease)).catchAll {
+                 case Right(UnableToClaimLease) =>
+                   log
+                     .info(
+                       s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
+                     )
+                     .as(None)
+                 case Left(e)                   =>
+                   log.error(s"Got error ${e}") *> ZIO.fail(e)
+               }.cause // To avoid aborting interrupting the other claims on failure
+             }
+             .map(_.reduce(_ && _))
+             .uncause // Fails with a cause of all errors
     } yield ()
 
   // Puts it in the state and the queue
