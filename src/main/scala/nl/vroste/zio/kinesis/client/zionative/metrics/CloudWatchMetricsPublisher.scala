@@ -7,12 +7,12 @@ import nl.vroste.zio.kinesis.client.Util.asZIO
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent._
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
-import software.amazon.awssdk.services.cloudwatch.model.{Dimension, MetricDatum, PutMetricDataRequest, StandardUnit}
+import software.amazon.awssdk.services.cloudwatch.model.{ Dimension, MetricDatum, PutMetricDataRequest, StandardUnit }
 import zio._
 import zio.clock.Clock
 import zio.duration._
-import zio.logging.{Logging, log}
-import zio.stream.{ZStream, ZTransducer}
+import zio.logging.{ log, Logging }
+import zio.stream.{ ZStream, ZTransducer }
 
 import scala.jdk.CollectionConverters._
 

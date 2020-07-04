@@ -7,12 +7,12 @@ import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.serde.Serializer
 import software.amazon.awssdk.core.SdkBytes
-import software.amazon.awssdk.services.kinesis.model.{KinesisException, PutRecordsRequestEntry}
+import software.amazon.awssdk.services.kinesis.model.{ KinesisException, PutRecordsRequestEntry }
 import zio._
 import zio.clock.Clock
-import zio.duration.{Duration, _}
+import zio.duration.{ Duration, _ }
 import zio.logging._
-import zio.stream.{ZSink, ZStream, ZTransducer}
+import zio.stream.{ ZSink, ZStream, ZTransducer }
 
 import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
