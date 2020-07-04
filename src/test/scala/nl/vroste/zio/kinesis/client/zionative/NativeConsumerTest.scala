@@ -437,7 +437,8 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                     Serde.asciiString,
                     workerId = workerId,
                     emitDiagnostic = emitDiagnostic,
-                    leaseCoordinationSettings = LeaseCoordinationSettings(expirationTime, renewInterval)
+                    leaseCoordinationSettings =
+                      LeaseCoordinationSettings(expirationTime, renewInterval, maxParallelLeaseAcquisitions = 1)
                   )
                   .flatMapPar(Int.MaxValue) {
                     case (shard @ _, shardStream, checkpointer) =>
@@ -527,7 +528,8 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                     Serde.asciiString,
                     workerId = workerId,
                     emitDiagnostic = emitDiagnostic,
-                    leaseCoordinationSettings = LeaseCoordinationSettings(10.seconds, 3.seconds)
+                    leaseCoordinationSettings =
+                      LeaseCoordinationSettings(10.seconds, 3.seconds, maxParallelLeaseAcquisitions = 1)
                   )
                   .flatMapPar(Int.MaxValue) {
                     case (shard @ _, shardStream, checkpointer) =>
