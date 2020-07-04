@@ -332,7 +332,7 @@ private class DefaultLeaseCoordinator(
                LeaseCommand.RenewLease(shardId, _)
              ).cause // Do not interrupt the foreach on failure
            )
-           .map(_.reduce(_ && _))
+           .map(_.reduceOption(_ && _).getOrElse(Cause.empty))
            .uncause
   } yield ()
 
@@ -435,7 +435,7 @@ private class DefaultLeaseCoordinator(
                    log.error(s"Got error ${e}") *> ZIO.fail(e)
                }.cause // To avoid aborting interrupting the other claims on failure
              }
-             .map(_.reduce(_ && _))
+             .map(_.reduceOption(_ && _).getOrElse(Cause.empty))
              .uncause // Fails with a cause of all errors
     } yield ()
 
