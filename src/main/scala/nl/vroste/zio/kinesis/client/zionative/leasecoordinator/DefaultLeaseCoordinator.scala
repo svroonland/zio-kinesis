@@ -60,6 +60,9 @@ case class LeaseCoordinationSettings(
 case class LeaseState(lease: Lease, completed: Option[Promise[Nothing, Unit]], lastUpdated: Instant) {
   def update(updatedLease: Lease, now: Instant) =
     copy(lease = updatedLease, lastUpdated = if (updatedLease.counter > lease.counter) now else lastUpdated)
+
+  def isExpired(now: Instant, expirationTime: Duration) =
+    lastUpdated.isBefore(now.minusMillis(expirationTime.toMillis))
 }
 
 /**
@@ -232,7 +235,20 @@ private class DefaultLeaseCoordinator(
                             leaseLost(lease, leaseCompleted) *>
                               log.info(s"Unable to renew lease for shard, lease counter was obsolete").as(false)
                           case Left(e)              =>
-                            ZIO.fail(e)
+                            // Release the lease if we failed to renew it a few times already
+                            for {
+                              state    <- state.get
+                              now      <- now
+                              isExpired = state.currentLeases(shard).isExpired(now, settings.expirationTime)
+                              _        <- ZIO.when(isExpired) {
+                                     log.warn(
+                                       s"Lease for shard ${shard} has expired after failing to be renewed, releasing"
+                                     ) *>
+                                       updateState(_.releaseLease(updatedLease.copy(owner = None), _)) *>
+                                       emitDiagnostic(DiagnosticEvent.LeaseReleased(lease.key))
+                                   }
+                              _        <- ZIO.fail(e)
+                            } yield false
                         }
                         .timed
             (duration, success) = result
@@ -307,14 +323,14 @@ private class DefaultLeaseCoordinator(
    * If our application does not checkpoint, we still need to periodically renew leases, otherwise other workers
    * will think ours are expired
    */
-  // TODO if renewing fails because of connection issues after a few attempts, we should release the lease
   val renewLeases: ZIO[Any, Throwable, Unit] = for {
     // TODO we could skip renewing leases that were recently checkpointed, save a few DynamoDB credits
     heldLeases <- state.get.map(_.heldLeases.keySet)
-    _          <- ZIO
-           .foreachParN_(settings.maxParallelLeaseRenewals)(heldLeases)(shardId =>
-             processCommand(LeaseCommand.RenewLease(shardId, _))
-           )
+    _          <- ZIO.foreachParN(settings.maxParallelLeaseRenewals)(heldLeases)(shardId =>
+           processCommand[Throwable, Unit](
+             LeaseCommand.RenewLease(shardId, _)
+           ).either // Do not interrupt the foreach on failure
+         ) >>= (ZIO.foreach(_)(ZIO.fromEither(_))) // Collect failures
   } yield ()
 
   /**
@@ -379,42 +395,43 @@ private class DefaultLeaseCoordinator(
              }
     } yield ()
 
+  val getExpiredLeases = (state.get zipWith now) { (state, now) =>
+    state.currentLeases.values
+      .filter(_.isExpired(now, settings.expirationTime))
+      .map(_.lease)
+      .toList
+  }
+
   /**
    * Takes leases, unowned or from other workers, to get this worker's number of leases to the target value (nr leases / nr workers)
    *
    * Taking individual leases may fail, but the others will still be tried. Only in the next round of lease taking will we try again.
+   *
+   * The effect fails with a Throwable when having failed to take one or more leases
    */
   val takeLeases =
     for {
-      _             <- claimLeasesForShardsWithoutLease
-      state         <- state.get
-      expiredLeases <- now.map(now =>
-                         state.currentLeases.values
-                           .filter(_.lastUpdated.isBefore(now.minusMillis(settings.expirationTime.toMillis)))
-                           .map(_.lease)
-                           .toList
-                       )
-      toTake        <- leasesToTake(state.currentLeases.map(_._2.lease).toList, workerId, expiredLeases)
-      _             <- log.info(s"Going to take ${toTake.size} leases: ${toTake.mkString(",")}").when(toTake.nonEmpty)
-      claimedLeases <- ZIO
-                         .foreachParN(settings.maxParallelLeaseAcquisitions)(toTake) { lease =>
-                           val updatedLease = lease.claim(workerId)
-                           table
-                             .claimLease(applicationName, updatedLease)
-                             .as(Some(updatedLease))
-                             .catchAll {
-                               case Right(UnableToClaimLease) =>
-                                 log
-                                   .info(
-                                     s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
-                                   )
-                                   .as(None)
-                               case Left(e)                   =>
-                                 log.error(s"Got error ${e}") *> ZIO.fail(e)
-                             }
-                         }
-                         .map(_.flatten)
-      _             <- ZIO.foreachPar_(claimedLeases)(registerNewAcquiredLease)
+      _              <- claimLeasesForShardsWithoutLease
+      state          <- state.get
+      expiredLeases  <- getExpiredLeases
+      toTake         <- leasesToTake(state.currentLeases.map(_._2.lease).toList, workerId, expiredLeases)
+      _              <- log.info(s"Going to take ${toTake.size} leases: ${toTake.mkString(",")}").when(toTake.nonEmpty)
+      claimedLeasesE <- ZIO
+                          .foreachParN(settings.maxParallelLeaseAcquisitions)(toTake) { lease =>
+                            val updatedLease = lease.claim(workerId)
+                            (table
+                              .claimLease(applicationName, updatedLease)
+                              .as(Some(updatedLease)) *> registerNewAcquiredLease(updatedLease)).catchAll {
+                              case Right(UnableToClaimLease) =>
+                                log
+                                  .info(
+                                    s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
+                                  )
+                                  .as(None)
+                              case Left(e)                   =>
+                                log.error(s"Got error ${e}") *> ZIO.fail(e)
+                            }.either // To avoid aborting interrupting the other claims on failure
+                          } >>= (ZIO.foreach(_)(ZIO.fromEither(_))) // Get the first failure
     } yield ()
 
   // Puts it in the state and the queue
@@ -614,7 +631,12 @@ object DefaultLeaseCoordinator {
                    // Initialization. If it fails, we will try in the loop
                    (c.takeLeases).ignore *>
                      // Periodic refresh
-                     (c.refreshLeases *> c.takeLeases)
+                     /**
+                      * resumeUnreleasedLeases is here because after a temporary connection failure,
+                      * we may have 'internally' released the lease but if no other worker has claimed
+                      * the lease, it will still be in the lease table with us as owner.
+                      */
+                     (c.refreshLeases *> c.resumeUnreleasedLeases *> c.takeLeases)
                        .repeat(
                          Schedule
                            .fixed(settings.refreshAndTakeInterval)

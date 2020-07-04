@@ -41,6 +41,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
   - [X] When one of a group of workers fail, the others must take over its leases
   - [X] When one of two workers stops gracefully, the other must take over the shards
   - [X] Restart a shard stream when the user has ended it
+  - [ ] Release leases after they have expired during a connection failure
   - [ ] Recover from a lost connection
    */
 
