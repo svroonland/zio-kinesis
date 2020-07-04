@@ -12,9 +12,11 @@ object TestUtil {
     createStreamUnmanaged(streamName, nrShards).toManaged(_ =>
       ZIO
         .service[AdminClient.Service]
-        .flatMap(_.deleteStream(streamName, enforceConsumerDeletion = true).catchSome {
+        .flatMap(_.deleteStream(streamName, enforceConsumerDeletion = true))
+        .catchSome {
           case _: ResourceNotFoundException => ZIO.unit
-        }.orDie)
+        }
+        .orDie
     )
 
   def createStreamUnmanaged(

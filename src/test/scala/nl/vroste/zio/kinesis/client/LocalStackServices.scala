@@ -15,10 +15,8 @@ import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.awssdk.utils.AttributeMap
-import zio.{ Has, ZIO, ZLayer, ZManaged }
-import software.amazon.awssdk.core.client.builder.SdkClientBuilder
-import software.amazon.awssdk.awscore.client.builder.AwsAsyncClientBuilder
 import zio.duration._
+import zio.{ Has, ZIO, ZLayer, ZManaged }
 
 /**
  * Layers for connecting to a LocalStack (https://localstack.cloud/) environment on a local docker host
@@ -37,7 +35,6 @@ object LocalStackServices {
 
   val localHttpClient = {
     import software.amazon.awssdk.http.Protocol
-    import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient
 
     httpClientLayer(
       maxConcurrency = 25, // localstack 11.2 has hardcoded limit of 128

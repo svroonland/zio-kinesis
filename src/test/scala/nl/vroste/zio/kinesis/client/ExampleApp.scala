@@ -3,28 +3,18 @@ import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.TestUtil.retryOnResourceNotFound
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
-import nl.vroste.zio.kinesis.client.zionative.{
-  Consumer,
-  DiagnosticEvent,
-  FetchMode,
-  LeaseRepositoryFactory,
-  ShardLeaseLost
-}
+import nl.vroste.zio.kinesis.client.zionative.metrics.{ CloudWatchMetricsPublisher, CloudWatchMetricsPublisherConfig }
+import nl.vroste.zio.kinesis.client.zionative._
+import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
-import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.kinesis.exceptions.ShutdownException
+import zio._
+import zio.clock.Clock
 import zio.console._
 import zio.duration._
 import zio.logging.slf4j.Slf4jLogger
 import zio.logging.{ log, Logging }
 import zio.stream.{ ZStream, ZTransducer }
-import zio._
-import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
-import zio.clock.Clock
-import nl.vroste.zio.kinesis.client.zionative.metrics.CloudWatchMetricsPublisher
-import nl.vroste.zio.kinesis.client.zionative.metrics.CloudWatchMetricsPublisherConfig
-import software.amazon.awssdk.services.kinesis.KinesisAsyncClientBuilder
-import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient
 
 /**
  * Example app that shows the ZIO-native and KCL workers running in parallel

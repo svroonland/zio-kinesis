@@ -207,7 +207,7 @@ object Producer {
     Schedule.doWhile {
       case e: KinesisException if e.statusCode() / 100 != 4 => true
       case _: ReadTimeoutException                          => true
-      case e: IOException                                   => true
+      case _: IOException                                   => true
       case _                                                => false
     }
 }

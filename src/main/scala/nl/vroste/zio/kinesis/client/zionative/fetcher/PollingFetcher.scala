@@ -2,7 +2,7 @@ package nl.vroste.zio.kinesis.client.zionative.fetcher
 import nl.vroste.zio.kinesis.client.AdminClient.StreamDescription
 import nl.vroste.zio.kinesis.client.{ Client, Util }
 import nl.vroste.zio.kinesis.client.zionative.{ Consumer, DiagnosticEvent, FetchMode, Fetcher }
-import software.amazon.awssdk.services.kinesis.model.Record
+import software.amazon.awssdk.services.kinesis.model.ExpiredIteratorException
 import zio._
 import zio.clock.Clock
 import zio.duration._
@@ -10,9 +10,6 @@ import zio.logging.{ log, Logging }
 import zio.stream.ZStream
 
 import scala.jdk.CollectionConverters._
-import nl.vroste.zio.kinesis.client.Util
-import zio.logging.Logging
-import software.amazon.awssdk.services.kinesis.model.ExpiredIteratorException
 
 object PollingFetcher {
   import Consumer.retryOnThrottledWithSchedule

@@ -58,9 +58,8 @@ private class CloudWatchMetricsPublisher(
         shardFetchMetrics(shardId, nrRecords, behindLatest, duration, timestamp)
       case SubscribeToShardEvent(shardId, nrRecords, behindLatest)  =>
         shardFetchMetrics(shardId, nrRecords, behindLatest, 0.millis, timestamp) // TODO what to do with duration
-      case LeaseAcquired(shardId, checkpoint)                       => List.empty // Processed in periodic metrics
-      case ShardLeaseLost(shardId)                                  =>
-        List.empty
+      case LeaseAcquired(shardId @ _, checkpoint @ _)               => List.empty // Processed in periodic metrics
+      case ShardLeaseLost(shardId @ _)                              =>
         List(
           metric(
             "LostLeases",
@@ -70,11 +69,11 @@ private class CloudWatchMetricsPublisher(
             StandardUnit.COUNT
           )
         )
-      case LeaseRenewed(shardId, duration)                          =>
+      case LeaseRenewed(shardId @ _, duration)                      =>
         List(
           metric(
             "RenewLease.Time",
-            duration.toMillis,
+            duration.toMillis.toDouble,
             timestamp,
             Seq("WorkerIdentifier" -> workerId, "Operation" -> "RenewAllLeases"),
             StandardUnit.MILLISECONDS
@@ -87,10 +86,10 @@ private class CloudWatchMetricsPublisher(
             StandardUnit.COUNT
           )
         )
-      case LeaseReleased(shardId)                                   => List.empty // Processed in periodic metrics
-      case Checkpoint(shardId, checkpoint)                          => List.empty
-      case WorkerJoined(workerId)                                   => List.empty // Processed in periodic metrics
-      case WorkerLeft(workerId)                                     => List.empty // Processed in periodic metrics
+      case LeaseReleased(shardId @ _)                               => List.empty // Processed in periodic metrics
+      case Checkpoint(shardId @ _, checkpoint @ _)                  => List.empty
+      case WorkerJoined(workerId @ _)                               => List.empty // Processed in periodic metrics
+      case WorkerLeft(workerId @ _)                                 => List.empty // Processed in periodic metrics
       // TODO LeaseCreated (for new leases)
       // TODO lease taken
     }
@@ -105,21 +104,21 @@ private class CloudWatchMetricsPublisher(
     List(
       metric(
         "RecordsProcessed",
-        nrRecords,
+        nrRecords.toDouble,
         timestamp,
         Seq("ShardId" -> shardId, "Operation" -> "ProcessTask"),
         StandardUnit.COUNT
       ), // TODO fetched != quite processed
       metric(
         "Time",
-        duration.toMillis,
+        duration.toMillis.toDouble,
         timestamp,
         Seq("ShardId" -> shardId, "Operation" -> "ProcessTask"),
         StandardUnit.MILLISECONDS
       ),
       metric(
         "MillisBehindLatest",
-        behindLatest.toMillis,
+        behindLatest.toMillis.toDouble,
         timestamp,
         Seq("ShardId" -> shardId, "Operation" -> "ProcessTask"),
         StandardUnit.MILLISECONDS
@@ -128,27 +127,30 @@ private class CloudWatchMetricsPublisher(
 
   val now = zio.clock.currentDateTime.map(_.toInstant())
 
-  def collectPeriodicMetrics(event: DiagnosticEvent, timestamp: Instant): UIO[Unit] =
+  def collectPeriodicMetrics(event: DiagnosticEvent): UIO[Unit] =
     event match {
-      case PollComplete(shardId, nrRecords, behindLatest, duration) => UIO.unit
-      case SubscribeToShardEvent(shardId, nrRecords, behindLatest)  => UIO.unit
+      case PollComplete(_, _, _, _)       => UIO.unit
+      case SubscribeToShardEvent(_, _, _) => UIO.unit
 
-      case LeaseAcquired(shardId, checkpoint) => heldLeases.update(_ + shardId)
-      case ShardLeaseLost(shardId)            => heldLeases.update(_ - shardId)
-      case LeaseRenewed(shardId, duration)    => UIO.unit
-      case LeaseReleased(shardId)             => heldLeases.update(_ - shardId)
-      case Checkpoint(shardId, checkpoint)    => UIO.unit
-      case WorkerJoined(workerId)             => workers.update(_ + workerId)
-      case WorkerLeft(workerId)               => workers.update(_ - workerId)
+      case LeaseAcquired(shardId, _) => heldLeases.update(_ + shardId)
+      case ShardLeaseLost(shardId)   => heldLeases.update(_ - shardId)
+      case LeaseRenewed(_, _)        => UIO.unit
+      case LeaseReleased(shardId)    => heldLeases.update(_ - shardId)
+      case Checkpoint(_, _)          => UIO.unit
+      case WorkerJoined(workerId)    => workers.update(_ + workerId)
+      case WorkerLeft(workerId)      => workers.update(_ - workerId)
     }
 
   val processQueue =
     (ZStream
       .fromQueue(eventQueue)
       .mapM(event => now.map((event, _)))
-      .tap(Function.tupled(collectPeriodicMetrics))
+      .tap { case (e, _) => collectPeriodicMetrics(e) }
       .mapConcat(Function.tupled(toMetrics)) merge ZStream.fromQueue(periodicMetricsQueue))
-      .aggregateAsyncWithin(ZTransducer.collectAllN(config.maxBatchSize), Schedule.fixed(config.maxFlushInterval))
+      .aggregateAsyncWithin(
+        ZTransducer.collectAllN(config.maxBatchSize.toLong),
+        Schedule.fixed(config.maxFlushInterval)
+      )
       .mapMPar(config.maxParallelUploads) { metrics =>
         putMetricData(metrics)
           .tapError(e => log.warn(s"Failed to upload metrics, will retry: ${e}"))
@@ -166,21 +168,21 @@ private class CloudWatchMetricsPublisher(
       _               = println(s"Worker ${workerId} has ${nrLeases} leases")
       nrWorkersMetric = metric(
                           "NumWorkers",
-                          nrWorkers,
+                          nrWorkers.toDouble,
                           now,
                           Seq("Operation" -> "TakeLeases", "WorkerIdentifier" -> workerId),
                           StandardUnit.COUNT
                         )
       nrLeasesMetric  = metric(
                          "TotalLeases",
-                         nrLeases,
+                         nrLeases.toDouble,
                          now,
                          Seq("Operation" -> "TakeLeases", "WorkerIdentifier" -> workerId),
                          StandardUnit.COUNT
                        )
       nrLeasesMetric2 = metric(
                           "CurrentLeases",
-                          nrLeases,
+                          nrLeases.toDouble,
                           now,
                           Seq("Operation" -> "RenewAllLeases", "WorkerIdentifier" -> workerId),
                           StandardUnit.COUNT
