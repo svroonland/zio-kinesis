@@ -323,11 +323,17 @@ private class DefaultLeaseCoordinator(
    * If our application does not checkpoint, we still need to periodically renew leases, otherwise other workers
    * will think ours are expired
    */
-  val renewLeases: ZIO[Any, Throwable, Unit] = for {
-    // TODO we could skip renewing leases that were recently checkpointed, save a few DynamoDB credits
-    heldLeases <- state.get.map(_.heldLeases.keySet)
-    _          <- ZIO
-           .foreachParN(settings.maxParallelLeaseRenewals)(heldLeases)(shardId =>
+  val renewLeases: ZIO[Clock, Throwable, Unit] = for {
+    currentLeases <- state.get.map(_.currentLeases)
+    now           <- now
+    // Only renew leases that weren't checkpointed in the meantime
+    leasesToRenew  = currentLeases.view.collect {
+                      case (shard, LeaseState(lease, _, lastUpdated))
+                          if now.minusMillis(settings.renewInterval.toMillis) isBefore lastUpdated =>
+                        shard
+                    }
+    _             <- ZIO
+           .foreachParN(settings.maxParallelLeaseRenewals)(leasesToRenew)(shardId =>
              processCommand[Throwable, Unit](
                LeaseCommand.RenewLease(shardId, _)
              ).cause // Do not interrupt the foreach on failure
@@ -484,7 +490,8 @@ private class DefaultLeaseCoordinator(
       permit <- Semaphore.make(1)
     } yield new Checkpointer {
       def checkpoint[R](
-        retrySchedule: Schedule[Clock with R, Throwable, Any] = Util.exponentialBackoff(1.second, 1.minute)
+        retrySchedule: Schedule[Clock with R, Throwable, Any] =
+          Util.exponentialBackoff(1.second, 1.minute, maxRecurs = Some(5))
       ): ZIO[Clock with R, Either[Throwable, ShardLeaseLost.type], Unit] =
         doCheckpoint(false)
           .retry(retrySchedule.left[ShardLeaseLost.type])
