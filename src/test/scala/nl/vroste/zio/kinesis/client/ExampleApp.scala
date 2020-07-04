@@ -161,14 +161,13 @@ object ExampleApp extends zio.App {
   val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
   val localStackEnv =
-    (LocalStackServices.kinesisAsyncClientLayer >>> (AdminClient.live ++ Client.live)).orDie ++ (LocalStackServices.dynamoDbClientLayer.orDie >>> (ZLayer
-      .requires[Has[DynamoDbAsyncClient]] ++ DynamoDbLeaseRepository.factory)) ++ loggingEnv
+    LocalStackServices.env >+>
+      (AdminClient.live ++ Client.live ++ DynamoDbLeaseRepository.live).orDie ++
+        loggingEnv
 
   val awsEnv: ZLayer[Clock, Nothing, AdminClient with Client with DynamicConsumer with Logging with Has[
     DynamoDbAsyncClient
-  ] with LeaseRepositoryFactory with Has[CloudWatchAsyncClient] with Has[
-    CloudWatchMetricsPublisherConfig
-  ]] = {
+  ] with LeaseRepository with Has[CloudWatchAsyncClient] with Has[CloudWatchMetricsPublisherConfig]] = {
     val httpClient    = httpClientLayer(maxConcurrency = 100)
     val kinesisClient = kinesisAsyncClientLayer()
     val cloudWatch    = cloudWatchAsyncClientLayer()
@@ -178,7 +177,7 @@ object ExampleApp extends zio.App {
     val client      = Client.live.orDie
     val adminClient = AdminClient.live.orDie
 
-    val repoFactory     = DynamoDbLeaseRepository.factory
+    val leaseRepo       = DynamoDbLeaseRepository.live
     val dynamicConsumer = DynamicConsumer.live
     val logging         = loggingEnv
 
@@ -186,7 +185,7 @@ object ExampleApp extends zio.App {
 
     ZLayer.requires[Clock] >+>
       awsClients >+>
-      (client ++ adminClient ++ dynamicConsumer ++ repoFactory ++ logging ++ metricsPublisherConfig)
+      (client ++ adminClient ++ dynamicConsumer ++ leaseRepo ++ logging ++ metricsPublisherConfig)
   }
 
   def produceRecords(streamName: String, nrRecords: Int) =

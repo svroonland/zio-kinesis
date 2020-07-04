@@ -154,6 +154,7 @@ object State {
  */
 private class DefaultLeaseCoordinator(
   table: LeaseRepository.Service,
+  applicationName: String,
   workerId: String,
   state: Ref[State],
   acquiredLeasesQueue: Queue[(Lease, Promise[Nothing, Unit])],
@@ -198,7 +199,7 @@ private class DefaultLeaseCoordinator(
                          owner = lease.owner.filterNot(_ => release)
                        )
         _                      <- (table
-                 .updateCheckpoint(updatedLease) <* emitDiagnostic(
+                 .updateCheckpoint(applicationName, updatedLease) <* emitDiagnostic(
                  DiagnosticEvent.Checkpoint(shard, checkpoint)
                )).catchAll {
                case Right(LeaseObsolete) =>
@@ -223,7 +224,7 @@ private class DefaultLeaseCoordinator(
           val updatedLease = lease.increaseCounter
           for {
             result             <- table
-                        .renewLease(updatedLease)
+                        .renewLease(applicationName, updatedLease)
                         .as(true)
                         .catchAll {
                           // This means the lease was updated by another worker
@@ -274,7 +275,7 @@ private class DefaultLeaseCoordinator(
       case (lease, completed) =>
         val updatedLease = lease.copy(owner = None).increaseCounter
 
-        table.releaseLease(updatedLease).catchAll {
+        table.releaseLease(applicationName, updatedLease).catchAll {
           case Right(LeaseObsolete) => // This is fine at shutdown
             ZIO.unit
           case Left(e)              =>
@@ -326,7 +327,7 @@ private class DefaultLeaseCoordinator(
       _             <- log.info("Refreshing leases")
       currentLeases <- state.get.map(_.currentLeases.values.map(_.lease))
       currentWorkers = currentLeases.map(_.owner).collect { case Some(owner) => owner }.toSet
-      leases        <- table.getLeases
+      leases        <- table.getLeases(applicationName)
       _             <- ZIO.foreachPar_(leases)(lease => processCommand(LeaseCommand.RefreshLease(lease, _)))
       newWorkers     = leases.map(_.owner).collect { case Some(owner) => owner }.toSet
       workersJoined  = newWorkers -- currentWorkers
@@ -365,7 +366,7 @@ private class DefaultLeaseCoordinator(
                )
 
                table
-                 .createLease(lease)
+                 .createLease(applicationName, lease)
                  .catchAll {
                    case Right(LeaseAlreadyExists) =>
                      log
@@ -399,7 +400,7 @@ private class DefaultLeaseCoordinator(
                          .foreachParN(settings.maxParallelLeaseAcquisitions)(toTake) { lease =>
                            val updatedLease = lease.claim(workerId)
                            table
-                             .claimLease(updatedLease)
+                             .claimLease(applicationName, updatedLease)
                              .as(Some(updatedLease))
                              .catchAll {
                                case Right(UnableToClaimLease) =>
@@ -568,7 +569,7 @@ object DefaultLeaseCoordinator {
     emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit,
     settings: LeaseCoordinationSettings,
     shards: Task[Map[String, Shard]]
-  ): ZManaged[Clock with Random with Logging with LeaseRepositoryFactory, Throwable, LeaseCoordinator] =
+  ): ZManaged[Clock with Random with Logging with LeaseRepository, Throwable, LeaseCoordinator] =
     Queue
       .unbounded[(Lease, Promise[Nothing, Unit])]
       .toManaged(_.shutdown)
@@ -576,13 +577,14 @@ object DefaultLeaseCoordinator {
         ZManaged.make {
           log.locally(LogAnnotation.Name(s"worker-${workerId}" :: Nil)) {
             for {
-              table            <- ZIO.service[LeaseRepository.Factory].map(_.make(applicationName))
-              leaseTableExists <- table.createLeaseTableIfNotExists
+              table            <- ZIO.service[LeaseRepository.Service]
+              leaseTableExists <- table.createLeaseTableIfNotExists(applicationName)
               state            <- Ref.make(State.empty)
               commandQueue     <- Queue.unbounded[LeaseCommand]
 
               coordinator = new DefaultLeaseCoordinator(
                               table,
+                              applicationName,
                               workerId,
                               state,
                               acquiredLeases,

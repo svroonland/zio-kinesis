@@ -154,7 +154,7 @@ object Consumer {
     initialPosition: ShardIteratorType = ShardIteratorType.TrimHorizon,
     emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit
   ): ZStream[
-    Blocking with Clock with Random with Client with AdminClient with LeaseRepositoryFactory with Logging,
+    Blocking with Clock with Random with Client with AdminClient with LeaseRepository with Logging,
     Throwable,
     (
       String,

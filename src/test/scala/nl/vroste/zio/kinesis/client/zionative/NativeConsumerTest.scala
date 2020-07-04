@@ -12,7 +12,6 @@ import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.LeaseCoordinationSettings
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
-import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
 import software.amazon.awssdk.services.kinesis.model.Shard
 import zio._
 import zio.clock.Clock
@@ -576,9 +575,8 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
   val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some("NativeConsumerTest"))
 
-  val env = ((LocalStackServices.env.orDie >>>
-    (AdminClient.live ++ Client.live ++ (ZLayer
-      .requires[Has[DynamoDbAsyncClient]] >>> DynamoDbLeaseRepository.factory.passthrough))).orDie ++
+  val env = ((LocalStackServices.env.orDie >+>
+    (AdminClient.live ++ Client.live ++ DynamoDbLeaseRepository.live)).orDie ++
     zio.test.environment.testEnvironment ++
     Clock.live) >>>
     (ZLayer.identity ++ loggingEnv)
@@ -658,14 +656,14 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
   def assertAllLeasesReleased(applicationName: String) =
     for {
-      table  <- ZIO.service[LeaseRepository.Factory].map(_.make(applicationName))
-      leases <- table.getLeases
+      table  <- ZIO.service[LeaseRepository.Service]
+      leases <- table.getLeases(applicationName)
     } yield assert(leases)(forall(hasField("owner", _.owner, isNone)))
 
   def getCheckpoints(applicationName: String) =
     for {
-      table      <- ZIO.service[LeaseRepository.Factory].map(_.make(applicationName))
-      leases     <- table.getLeases
+      table      <- ZIO.service[LeaseRepository.Service]
+      leases     <- table.getLeases(applicationName)
       checkpoints = leases.collect {
                       case l if l.checkpoint.isDefined => l.key -> l.checkpoint.get.sequenceNumber
                     }.toMap
