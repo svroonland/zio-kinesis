@@ -74,5 +74,5 @@ trait Checkpointer {
     r: Record[_],
     retrySchedule: Schedule[Clock with R, Throwable, Any] = Util.exponentialBackoff(1.second, 1.minute)
   ): ZIO[Clock with R, Either[Throwable, ShardLeaseLost.type], Unit] =
-    stage(r) *> checkpoint()
+    stage(r) *> checkpoint[R](retrySchedule)
 }

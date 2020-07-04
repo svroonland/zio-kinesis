@@ -470,7 +470,7 @@ private class DefaultLeaseCoordinator(
       override def checkpointAndRelease: ZIO[Any, Either[Throwable, ShardLeaseLost.type], Unit] =
         doCheckpoint(release = true)
 
-      private def doCheckpoint(release: Boolean = false): ZIO[Any, Either[Throwable, ShardLeaseLost.type], Unit] =
+      private def doCheckpoint(release: Boolean): ZIO[Any, Either[Throwable, ShardLeaseLost.type], Unit] =
         /**
          * This uses a semaphore to ensure that two concurrent calls to `checkpoint` do not attempt
          * to process the last staged record
