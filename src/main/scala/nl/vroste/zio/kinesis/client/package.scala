@@ -57,6 +57,7 @@ package object client {
     ZLayer.fromManaged {
       ZManaged.fromAutoCloseable {
         ZIO.effect {
+          println(s"Building httpCLientLayer with maxConcurrency ${maxConcurrency}")
           build(
             NettyNioAsyncHttpClient
               .builder()
