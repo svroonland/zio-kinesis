@@ -83,7 +83,9 @@ val applicationName ="my_awesome_zio_application"
     }.provideLayer(Blocking.live)
     .runDrain
 } yield ()).provideLayer(
-  kinesisAsyncClientLayer() ++ cloudWatchAsyncClientLayer() ++ dynamoDbAsyncClientLayer() >>> DynamicConsumer.live
+  httpClientLayer() >>> 
+    (kinesisAsyncClientLayer() ++ cloudWatchAsyncClientLayer() ++ dynamoDbAsyncClientLayer()) >>> 
+    DynamicConsumer.live
 )
 ```
 
@@ -135,7 +137,9 @@ _ <- dynamicConsumer
   .provideLayer(Blocking.live ++ Clock.live)
   .runDrain
 } yield ()).provideLayer(
-  kinesisAsyncClientLayer() ++ cloudWatchAsyncClientLayer() ++ dynamoDbAsyncClientLayer() >>> DynamicConsumer.live
+  httpClientLayer() >>> 
+    (kinesisAsyncClientLayer() ++ cloudWatchAsyncClientLayer() ++ dynamoDbAsyncClientLayer()) >>> 
+    DynamicConsumer.live
 )
 ```
 

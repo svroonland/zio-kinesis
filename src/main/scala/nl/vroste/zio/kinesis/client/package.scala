@@ -38,12 +38,19 @@ package object client {
     }
 
   /**
-   * Creates an optimized HTTP client for parallel shard streaming
+   * ZLayer for SdkAsyncHttpClient that can be shared between the AWS SDK service clients
    *
-   * @param builder
-   * @param maxConcurrency Set this to something like the number of leases + a bit more
+   * Some settings' defaults are recommended settings for Kinesis streaming using HTTP 2
+   *
+   * @param maxConcurrency Maximum concurrent connections.
+   *                       Recommended to set higher than the amount of shards you expect to process
    * @param initialWindowSize
    * @param healthCheckPingPeriod
+   * @param maxPendingConnectionAcquires
+   * @param connectionAcquisitionTimeout
+   * @param readTimeout
+   * @param build Custom build steps
+   * @return
    */
   def httpClientLayer(
     maxConcurrency: Int = Int.MaxValue,
