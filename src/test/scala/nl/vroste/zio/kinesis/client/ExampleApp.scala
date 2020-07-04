@@ -5,8 +5,11 @@ import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
 import nl.vroste.zio.kinesis.client.zionative.metrics.{ CloudWatchMetricsPublisher, CloudWatchMetricsPublisherConfig }
 import nl.vroste.zio.kinesis.client.zionative._
+import software.amazon.awssdk.http.SdkHttpConfigurationOption
+import software.amazon.awssdk.http.nio.netty.ProxyConfiguration
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
+import software.amazon.awssdk.utils.AttributeMap
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio._
 import zio.clock.Clock
@@ -23,13 +26,13 @@ object ExampleApp extends zio.App {
   val streamName                      = "zio-test-stream-10" // + java.util.UUID.randomUUID().toString
   val nrRecords                       = 2000000
   val nrShards                        = 2
-  val enhancedFanout                  = false
+  val enhancedFanout                  = true
   val nrNativeWorkers                 = 1
   val nrKclWorkers                    = 0
   val applicationName                 = "testApp-1"          // + java.util.UUID.randomUUID().toString(),
   val runtime                         = 20.minute
   val maxRandomWorkerStartDelayMillis = 1 + 0 * 60 * 1000    // 20000
-  val recordProcessingTime: Duration  = 5.seconds
+  val recordProcessingTime: Duration  = 1.millisecond
 
   override def run(
     args: List[String]
@@ -65,7 +68,7 @@ object ExampleApp extends zio.App {
                 .tap(r =>
                   checkpointer
                     .stageOnSuccess(
-                      (putStrLn(s"${id} Processing record $r") *> ZIO.sleep(recordProcessingTime)).when(true)
+                      (log.info(s"${id} Processing record $r") *> ZIO.sleep(recordProcessingTime)).when(true)
                     )(r)
                 )
                 .aggregateAsyncWithin(ZTransducer.collectAllN(1000), Schedule.fixed(5.second))
@@ -113,7 +116,7 @@ object ExampleApp extends zio.App {
             shardStream
               .tap(r =>
                 checkpointer
-                  .stageOnSuccess(putStrLn(s"${id} Processing record $r").when(false))(r)
+                  .stageOnSuccess(log.info(s"${id} Processing record $r").when(false))(r)
               )
               .aggregateAsyncWithin(ZTransducer.collectAllN(1000), Schedule.fixed(5.second))
               .mapConcat(_.toList)
@@ -168,7 +171,13 @@ object ExampleApp extends zio.App {
   val awsEnv: ZLayer[Clock, Nothing, AdminClient with Client with DynamicConsumer with Logging with Has[
     DynamoDbAsyncClient
   ] with LeaseRepository with Has[CloudWatchAsyncClient] with Has[CloudWatchMetricsPublisherConfig]] = {
-    val httpClient    = httpClientLayer(maxConcurrency = 100)
+    val httpClient    = HttpClient.make(
+      maxConcurrency = 100,
+      build = // _.proxyConfiguration(ProxyConfiguration.builder().host("localhost").port(9090).build())
+        _.buildWithDefaults(
+          AttributeMap.builder.put(SdkHttpConfigurationOption.TRUST_ALL_CERTIFICATES, java.lang.Boolean.TRUE).build()
+        )
+    )
     val kinesisClient = kinesisAsyncClientLayer()
     val cloudWatch    = cloudWatchAsyncClientLayer()
     val dynamo        = dynamoDbAsyncClientLayer()
