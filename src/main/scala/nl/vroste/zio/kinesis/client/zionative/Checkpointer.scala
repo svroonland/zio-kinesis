@@ -63,7 +63,8 @@ trait Checkpointer {
    *                      Note that ShardLeaseLost is not handled by this retry schedule.
    */
   def checkpoint[R](
-    retrySchedule: Schedule[Clock with R, Throwable, Any] = Util.exponentialBackoff(1.second, 1.minute)
+    retrySchedule: Schedule[Clock with R, Throwable, Any] =
+      Util.exponentialBackoff(1.second, 1.minute, maxRecurs = Some(5))
   ): ZIO[Clock with R, Either[Throwable, ShardLeaseLost.type], Unit]
 
   private[client] def checkpointAndRelease: ZIO[Blocking, Either[Throwable, ShardLeaseLost.type], Unit]
@@ -81,7 +82,8 @@ trait Checkpointer {
    */
   def checkpointNow[R](
     r: Record[_],
-    retrySchedule: Schedule[Clock with R, Throwable, Any] = Util.exponentialBackoff(1.second, 1.minute)
+    retrySchedule: Schedule[Clock with R, Throwable, Any] =
+      Util.exponentialBackoff(1.second, 1.minute, maxRecurs = Some(5))
   ): ZIO[Clock with R, Either[Throwable, ShardLeaseLost.type], Unit] =
     stage(r) *> checkpoint[R](retrySchedule)
 }
