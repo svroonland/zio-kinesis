@@ -1,43 +1,20 @@
 package nl.vroste.zio.kinesis.client.zionative.metrics
 
-import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
-
-import nl.vroste.zio.kinesis.client.Util.asZIO
-import software.amazon.awssdk.services.cloudwatch.model.PutMetricDataRequest
-import software.amazon.awssdk.services.cloudwatch.model.MetricDatum
-
-import scala.jdk.CollectionConverters._
-import zio.Task
-import zio.Queue
-import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent
-import zio.stream.ZStream
-import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
-import zio.stream.ZTransducer
-import zio.Schedule
-import zio.duration._
-import zio.ZIO
-import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.SubscribeToShardEvent
-import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.LeaseAcquired
-import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.ShardLeaseLost
-import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.LeaseRenewed
-import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.LeaseReleased
-import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.Checkpoint
-import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.WorkerJoined
-import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.WorkerLeft
-import software.amazon.awssdk.services.cloudwatch.model.Dimension
-import scala.jdk.CollectionConverters._
 import java.time.Instant
-import zio.ZManaged
-import zio.UIO
-import zio.ZLayer
-import zio.clock.Clock
-import zio.Has
-import zio.logging.{ log, Logging }
-import software.amazon.awssdk.services.cloudwatch.model.StandardUnit
-import zio.Ref
-import zio.stream.Take
-import zio.Chunk
+
 import nl.vroste.zio.kinesis.client.Util
+import nl.vroste.zio.kinesis.client.Util.asZIO
+import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent
+import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent._
+import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
+import software.amazon.awssdk.services.cloudwatch.model.{Dimension, MetricDatum, PutMetricDataRequest, StandardUnit}
+import zio._
+import zio.clock.Clock
+import zio.duration._
+import zio.logging.{Logging, log}
+import zio.stream.{ZStream, ZTransducer}
+
+import scala.jdk.CollectionConverters._
 
 /**
  * Configuration for CloudWatch metrics publishing

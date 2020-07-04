@@ -9,7 +9,6 @@ import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient
 import software.amazon.awssdk.http.nio.netty.Http2Configuration
 import software.amazon.awssdk.http.Protocol
 import software.amazon.awssdk.http.async.SdkAsyncHttpClient
-import zio.UIO
 
 package object client {
 
@@ -58,7 +57,6 @@ package object client {
     ZLayer.fromManaged {
       ZManaged.fromAutoCloseable {
         ZIO.effect {
-          println(s"Building httpCLientLayer with maxConcurrency ${maxConcurrency}")
           build(
             NettyNioAsyncHttpClient
               .builder()
@@ -77,7 +75,7 @@ package object client {
               .protocol(Protocol.HTTP2)
           )
         }
-      }.ensuringFirst(UIO(println("Closing http client layer")))
+      }
     }
 
 }
