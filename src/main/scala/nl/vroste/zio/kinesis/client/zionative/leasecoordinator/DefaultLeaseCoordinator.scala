@@ -226,34 +226,32 @@ private class DefaultLeaseCoordinator(
         case Some((lease, leaseCompleted)) =>
           val updatedLease = lease.increaseCounter
           for {
-            result             <- table
-                        .renewLease(applicationName, updatedLease)
-                        .as(true)
-                        .catchAll {
-                          // This means the lease was updated by another worker
-                          case Right(LeaseObsolete) =>
-                            leaseLost(lease, leaseCompleted) *>
-                              log.info(s"Unable to renew lease for shard, lease counter was obsolete").as(false)
-                          case Left(e)              =>
-                            // Release the lease if we failed to renew it a few times already
-                            for {
-                              state    <- state.get
-                              now      <- now
-                              isExpired = state.currentLeases(shard).isExpired(now, settings.expirationTime)
-                              _        <- ZIO.when(isExpired) {
-                                     log.warn(
-                                       s"Lease for shard ${shard} has expired after failing to be renewed, releasing"
-                                     ) *>
-                                       updateState(_.releaseLease(updatedLease.copy(owner = None), _)) *>
-                                       emitDiagnostic(DiagnosticEvent.LeaseReleased(lease.key))
-                                   }
-                              _        <- ZIO.fail(e)
-                            } yield false
-                        }
-                        .timed
-            (duration, success) = result
-            _                  <- updateState(_.updateLease(updatedLease, _)).when(success)
-            _                  <- emitDiagnostic(DiagnosticEvent.LeaseRenewed(updatedLease.key, duration)).when(success)
+            duration <- table
+                          .renewLease(applicationName, updatedLease)
+                          .catchAll {
+                            // This means the lease was updated by another worker
+                            case Right(LeaseObsolete) =>
+                              leaseLost(lease, leaseCompleted) *>
+                                log.info(s"Unable to renew lease for shard, lease counter was obsolete").as(false)
+                            case Left(e)              =>
+                              // Release the lease if we failed to renew it a few times already
+                              (for {
+                                state    <- state.get
+                                now      <- now
+                                isExpired = state.currentLeases(shard).isExpired(now, settings.expirationTime)
+                                _        <- ZIO.when(isExpired) {
+                                       log.warn(
+                                         s"Lease for shard ${shard} has expired after failing to be renewed, releasing"
+                                       ) *>
+                                         updateState(_.releaseLease(updatedLease.copy(owner = None), _)) *>
+                                         emitDiagnostic(DiagnosticEvent.LeaseReleased(lease.key))
+                                     }
+                              } yield ()) *> ZIO.fail(e)
+                          }
+                          .timed
+                          .map(_._1)
+            _        <- updateState(_.updateLease(updatedLease, _))
+            _        <- emitDiagnostic(DiagnosticEvent.LeaseRenewed(updatedLease.key, duration))
           } yield ()
         case None                          =>
           ZIO.fail(new Exception(s"Unknown lease for shard ${shard}! This indicates a programming error"))
@@ -328,7 +326,7 @@ private class DefaultLeaseCoordinator(
     now           <- now
     // Only renew leases that weren't checkpointed in the meantime
     leasesToRenew  = currentLeases.view.collect {
-                      case (shard, LeaseState(lease, _, lastUpdated))
+                      case (shard, LeaseState(_, _, lastUpdated))
                           if now.minusMillis(settings.renewInterval.toMillis) isBefore lastUpdated =>
                         shard
                     }

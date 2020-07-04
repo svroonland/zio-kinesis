@@ -6,7 +6,6 @@ import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepos
 import nl.vroste.zio.kinesis.client.zionative.metrics.{ CloudWatchMetricsPublisher, CloudWatchMetricsPublisherConfig }
 import nl.vroste.zio.kinesis.client.zionative._
 import software.amazon.awssdk.http.SdkHttpConfigurationOption
-import software.amazon.awssdk.http.nio.netty.ProxyConfiguration
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
 import software.amazon.awssdk.utils.AttributeMap
