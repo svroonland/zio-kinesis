@@ -87,7 +87,7 @@ object FetchUtil {
   )(stream: Token => ZStream[R, E, O]): ZStream[R, E, O] =
     ZStream.unwrap {
       token.get.map {
-        case Some(t) => stream(t) *> repeatWhileNotNone(token)(stream)
+        case Some(t) => stream(t) ++ repeatWhileNotNone(token)(stream)
         case None    => ZStream.empty
       }
     }
