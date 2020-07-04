@@ -168,7 +168,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                  streamName,
                                  applicationName,
                                  Serde.asciiString,
-                                 workerId = "worker2",
+                                 workerIdentifier = "worker2",
                                  emitDiagnostic = onDiagnostic("worker2")
                                )
                                .flatMapPar(Int.MaxValue) {
@@ -201,7 +201,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                               streamName,
                               applicationName,
                               Serde.asciiString,
-                              workerId = "worker1",
+                              workerIdentifier = "worker1",
                               emitDiagnostic = onDiagnostic("worker1")
                             )
                             .flatMapPar(Int.MaxValue) {
@@ -229,7 +229,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                               streamName,
                               applicationName,
                               Serde.asciiString,
-                              workerId = "worker2",
+                              workerIdentifier = "worker2",
                               emitDiagnostic = onDiagnostic("worker2")
                             )
                             .flatMapPar(Int.MaxValue) {
@@ -277,7 +277,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                               streamName,
                               applicationName,
                               Serde.asciiString,
-                              workerId = "worker1",
+                              workerIdentifier = "worker1",
                               emitDiagnostic = onDiagnostic("worker1")
                             )
                             .flatMapPar(Int.MaxValue) {
@@ -300,7 +300,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                               streamName,
                               applicationName,
                               Serde.asciiString,
-                              workerId = "worker2",
+                              workerIdentifier = "worker2",
                               emitDiagnostic = onDiagnostic("worker2")
                             )
                             .flatMapPar(Int.MaxValue) {
@@ -338,14 +338,14 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                   streamName,
                   applicationName,
                   Serde.asciiString,
-                  workerId = workerId,
-                  emitDiagnostic = emitDiagnostic,
+                  workerIdentifier = workerId,
                   leaseCoordinationSettings = LeaseCoordinationSettings(
                     10.seconds,
                     3.seconds,
                     refreshAndTakeInterval = 3.seconds,
                     maxParallelLeaseAcquisitions = 1
-                  )
+                  ),
+                  emitDiagnostic = emitDiagnostic
                 )
                 .flatMapPar(Int.MaxValue) {
                   case (shard @ _, shardStream, checkpointer) =>
@@ -434,10 +434,10 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                   streamName,
                   applicationName,
                   Serde.asciiString,
-                  workerId = workerId,
-                  emitDiagnostic = emitDiagnostic,
+                  workerIdentifier = workerId,
                   leaseCoordinationSettings =
-                    LeaseCoordinationSettings(expirationTime, renewInterval, maxParallelLeaseAcquisitions = 1)
+                    LeaseCoordinationSettings(expirationTime, renewInterval, maxParallelLeaseAcquisitions = 1),
+                  emitDiagnostic = emitDiagnostic
                 )
                 .flatMapPar(Int.MaxValue) {
                   case (shard @ _, shardStream, checkpointer) =>
@@ -524,10 +524,10 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                   streamName,
                   applicationName,
                   Serde.asciiString,
-                  workerId = workerId,
-                  emitDiagnostic = emitDiagnostic,
+                  workerIdentifier = workerId,
                   leaseCoordinationSettings =
-                    LeaseCoordinationSettings(10.seconds, 3.seconds, maxParallelLeaseAcquisitions = 1)
+                    LeaseCoordinationSettings(10.seconds, 3.seconds, maxParallelLeaseAcquisitions = 1),
+                  emitDiagnostic = emitDiagnostic
                 )
                 .flatMapPar(Int.MaxValue) {
                   case (shard @ _, shardStream, checkpointer) =>

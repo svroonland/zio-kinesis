@@ -46,7 +46,7 @@ trait Checkpointer {
   /**
    * Checkpoint the last staged checkpoint
    */
-  def checkpoint: ZIO[Blocking, Either[Throwable, ShardLeaseLost.type], Unit]
+  def checkpoint: ZIO[Any, Either[Throwable, ShardLeaseLost.type], Unit]
 
   private[client] def checkpointAndRelease: ZIO[Blocking, Either[Throwable, ShardLeaseLost.type], Unit]
 

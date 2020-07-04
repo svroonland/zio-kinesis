@@ -461,7 +461,7 @@ private class DefaultLeaseCoordinator(
       staged <- Ref.make[Option[ExtendedSequenceNumber]](None)
       permit <- Semaphore.make(1)
     } yield new Checkpointer {
-      override def checkpoint: ZIO[zio.blocking.Blocking, Either[Throwable, ShardLeaseLost.type], Unit] =
+      override def checkpoint: ZIO[Any, Either[Throwable, ShardLeaseLost.type], Unit] =
         doCheckpoint()
 
       override def checkpointAndRelease: ZIO[zio.blocking.Blocking, Either[Throwable, ShardLeaseLost.type], Unit] =

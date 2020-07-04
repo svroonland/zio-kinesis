@@ -87,15 +87,23 @@ object Consumer {
     streamName: String,
     applicationName: String,
     deserializer: Deserializer[R, T],
+    workerIdentifier: String = "worker1",
     fetchMode: FetchMode = FetchMode.Polling(),
     leaseCoordinationSettings: LeaseCoordinationSettings = LeaseCoordinationSettings(),
-    initialStartingPosition: ShardIteratorType = ShardIteratorType.TrimHorizon,
-    workerId: String = "worker1",
+    initialPosition: ShardIteratorType = ShardIteratorType.TrimHorizon,
     emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit
   ): ZStream[
     Blocking with Clock with Random with Client with AdminClient with LeaseRepositoryFactory with Logging,
     Throwable,
-    (String, ZStream[R with Blocking with Clock with Logging, Throwable, Record[T]], Checkpointer)
+    (
+      String,
+      ZStream[
+        R with Blocking with Clock with Logging,
+        Throwable,
+        Record[T]
+      ],
+      Checkpointer
+    )
   ] = {
     def toRecord(shardId: String, r: KinesisRecord): ZIO[R, Throwable, Record[T]] =
       deserializer.deserialize(r.data.asByteBuffer()).map { data =>
@@ -117,7 +125,7 @@ object Consumer {
     ): ZManaged[Clock with Client with Logging, Throwable, Fetcher] =
       fetchMode match {
         case c: Polling        => PollingFetcher.make(streamDescription, c, emitDiagnostic)
-        case c: EnhancedFanOut => EnhancedFanOutFetcher.make(streamDescription, workerId, c, emitDiagnostic)
+        case c: EnhancedFanOut => EnhancedFanOutFetcher.make(streamDescription, workerIdentifier, c, emitDiagnostic)
       }
 
     def createDependencies =
@@ -147,7 +155,7 @@ object Consumer {
                              .forkManaged
             leaseCoordinator <-
               DefaultLeaseCoordinator
-                .make(applicationName, workerId, emitDiagnostic, leaseCoordinationSettings, fetchShards.join)
+                .make(applicationName, workerIdentifier, emitDiagnostic, leaseCoordinationSettings, fetchShards.join)
           } yield leaseCoordinator
         )(_ -> _)
 
@@ -165,7 +173,7 @@ object Consumer {
                 startingPositionOpt <- leaseCoordinator.getCheckpointForShard(shardId)
                 startingPosition     = startingPositionOpt
                                      .map(s => ShardIteratorType.AfterSequenceNumber(s.sequenceNumber))
-                                     .getOrElse(initialStartingPosition)
+                                     .getOrElse(initialPosition)
                 stop                 = ZStream.fromEffect(leaseLost.await).as(Exit.fail(None))
                 shardStream          = (stop merge fetcher
                                   .shardRecordStream(shardId, startingPosition)

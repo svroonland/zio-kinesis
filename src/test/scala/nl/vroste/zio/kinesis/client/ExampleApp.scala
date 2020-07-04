@@ -46,6 +46,7 @@ object ExampleApp extends zio.App {
             streamName,
             applicationName = applicationName,
             deserializer = Serde.asciiString,
+            workerIdentifier = id,
             fetchMode = if (enhancedFanout) FetchMode.EnhancedFanOut() else FetchMode.Polling(batchSize = 100),
             emitDiagnostic = ev =>
               (ev match {
@@ -56,8 +57,7 @@ object ExampleApp extends zio.App {
                     )
                     .provideLayer(loggingEnv)
                 case ev                               => log.info(id + ": " + ev.toString).provideLayer(loggingEnv)
-              }) *> metrics.processEvent(ev),
-            workerId = id
+              }) *> metrics.processEvent(ev)
           )
           .flatMapPar(Int.MaxValue) {
             case (shardID, shardStream, checkpointer) =>
