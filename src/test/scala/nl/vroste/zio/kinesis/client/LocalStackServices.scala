@@ -40,11 +40,12 @@ object LocalStackServices {
     import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient
 
     httpClientLayer(
-      maxConcurrency = 100, // localstack 11.2 has hardcoded limit of 128
+      maxConcurrency = 25, // localstack 11.2 has hardcoded limit of 128
       maxPendingConnectionAcquires = 20,
+      readTimeout = 10.seconds,
       build = _.protocol(Protocol.HTTP1_1)
-        .connectionMaxIdleTime(30.seconds.asJava)
-        .writeTimeout(30.seconds.asJava)
+        .connectionMaxIdleTime(10.seconds.asJava)
+        .writeTimeout(10.seconds.asJava)
         .buildWithDefaults(
           AttributeMap.builder.put(SdkHttpConfigurationOption.TRUST_ALL_CERTIFICATES, java.lang.Boolean.TRUE).build
         )
