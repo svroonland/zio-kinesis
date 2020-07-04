@@ -83,6 +83,67 @@ object LeaseCoordinator {
 }
 
 object Consumer {
+
+  /**
+   * Creates a stream that emits streams for each Kinesis shard that this worker holds a lease for.
+   *
+   * Upon initialization, a lease table is created if it does not yet exist. For each shard of the stream
+   * a lease is
+   *
+   * CHECKPOINTING
+   *
+   * Clients should periodically checkpoint their progress using the `Checkpointer`. Each processed record
+   * may be staged with the Checkpointer to ensure that when the stream is interrupted, the last staged record
+   * will be checkpointed.
+   *
+   * When the stream is interrupted, the last staged checkpoint for each shard will be checkpointed and
+   * leases for that shard are released.
+   *
+   * Checkpointing may fail by two (expected) causes:
+   * - Connection failures
+   * - Shard lease taken by another worker (see MULTIPLE WORKERS)
+   *
+   * In both cases, clients should end the shard stream by catching the error and continuing with an empty ZStream.
+   *
+   * MULTIPLE WORKERS
+   *
+   * Upon initialization, the Consumer will check existing leases to see how many workers are currently active.
+   * It will immediately steal its fair share of leases from other workers, in such a way that all workers end up with a
+   * new fair share of leases. When it is the only active worker, it will take all leases. The leases per worker
+   * are randomized to reduce the chance of lease stealing contention.
+   *
+   * This procedure is safe against multiple workers initializing concurrently.
+   *
+   * Leases are periodically renewed and leases of other workers are refreshed. When another worker's lease has not been
+   * updated for some time, it is considered expired and the worker considered a zombie. The new fair share of leases
+   * for all workers is then determined and this worker will try to claim some of the expired leases.
+   *
+   * Each of the shard streams may end when the lease for that shard is lost.
+   *
+   * CONNECTION FAILURES
+   *
+   * The consumer will keep on running when there are connection issues to Kinesis or DynamoDB. An exponential
+   * backoff schedule (user-customizable) is applied to retry in case of such failures. When leases expire due
+   * to being unable to renew them under these circumstances, the shard lease is released and the shard stream is
+   * ended. When the connection is restored, the lease coordinator will try to take leases again to get to the
+   * target number of leases.
+   *
+   * DIAGNOSTIC EVENTS
+   * An optional function `emitDiagnostic` can be passed to be called when interesting events happen in the Consumer.
+   * This is useful for logging and for metrics.
+   *
+   * @param streamName Name of the kinesis stream
+   * @param applicationName Name of the application. This is used as the table name for lease coordination (DynamoDB)
+   * @param deserializer Record deserializer
+   * @param workerIdentifier Identifier of this worker, used for lease coordination
+   * @param fetchMode How to fetch records: Polling or EnhancedFanOut, including config parameters
+   * @param leaseCoordinationSettings Config parameters for lease coordination
+   * @param initialPosition When no checkpoint exists yet for a shard, start processing from this position
+   * @param emitDiagnostic Function that is called for events happening in the Consumer. For diagnostics / metrics.
+   * @tparam R
+   * @tparam T Record type
+   * @return Stream of tuples of (shard ID, shard stream, checkpointer)
+   */
   def shardedStream[R, T](
     streamName: String,
     applicationName: String,
