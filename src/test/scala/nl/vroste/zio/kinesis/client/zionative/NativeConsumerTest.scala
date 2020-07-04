@@ -569,7 +569,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
           }
         }  // @@ TestAspect.ignore
       ): _*
-    ).provideSomeLayerShared(env) @@
+    ).provideSomeLayer(env) @@
       TestAspect.timed @@
       TestAspect.sequential @@ // For CircleCI
       TestAspect.timeoutWarning(60.seconds) @@
