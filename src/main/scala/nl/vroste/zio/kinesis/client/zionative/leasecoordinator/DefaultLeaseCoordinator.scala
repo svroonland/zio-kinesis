@@ -23,16 +23,6 @@ import zio.logging._
 import zio.random.{ shuffle, Random }
 import zio.stream.ZStream
 
-object ZioExtensions {
-  implicit class OnSuccessSyntax[R, E, A](val zio: ZIO[R, E, A]) extends AnyVal {
-    final def onSuccess(cleanup: A => URIO[R, Any]): ZIO[R, E, A] =
-      zio.onExit {
-        case Exit.Success(a) => cleanup(a)
-        case _               => ZIO.unit
-      }
-  }
-}
-
 /**
  * Default values are compatible with KCL defaults (TODO not quite yet)
  *
