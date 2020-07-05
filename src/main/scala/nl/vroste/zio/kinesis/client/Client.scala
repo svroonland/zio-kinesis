@@ -2,12 +2,13 @@ package nl.vroste.zio.kinesis.client
 
 import java.time.Instant
 
-import nl.vroste.zio.kinesis.client.serde.{ Deserializer, Serializer }
+import nl.vroste.zio.kinesis.client.serde.Serializer
+import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.awssdk.services.kinesis.model._
+import zio._
 import zio.clock.Clock
 import zio.stream.ZStream
-import zio._
 
 object Client {
 
@@ -33,11 +34,15 @@ object Client {
     /**
      * Registers a stream consumer for use during the lifetime of the managed resource
      *
+     * If the consumer already exists, it will be reused
+     *
      * @param streamARN    ARN of the stream to consume
      * @param consumerName Name of the consumer
      * @return Managed resource that unregisters the stream consumer after use
      */
     def createConsumer(streamARN: String, consumerName: String): ZManaged[Any, Throwable, Consumer]
+
+    def describeStreamConsumer(streamARN: String, consumerName: String): ZIO[Any, Throwable, ConsumerDescription]
 
     /**
      * List all shards in a stream
@@ -72,18 +77,14 @@ object Client {
      * @param consumerARN
      * @param shardID
      * @param startingPosition
-     * @param deserializer Converter of record's data bytes to a value of type T
-     * @tparam R Environment required by the deserializer
-     * @tparam T Type of values
-     * @return Stream of records. When exceptions occur in the subscription or the streaming, the
-     *         stream will fail.
+     * @return Stream of SubscribeToShardEvents, each of which contain records.
+     *         When exceptions occur in the subscription or the streaming, the stream will fail.
      */
-    def subscribeToShard[R, T](
+    def subscribeToShard(
       consumerARN: String,
       shardID: String,
-      startingPosition: ShardIteratorType,
-      deserializer: Deserializer[R, T]
-    ): ZStream[R, Throwable, ConsumerRecord[T]]
+      startingPosition: ShardIteratorType
+    ): ZStream[Any, Throwable, SubscribeToShardEvent]
 
     /**
      * @see [[createConsumer]] for automatic deregistration of the consumer
@@ -97,6 +98,8 @@ object Client {
      * @see [[createConsumer]] for automatic deregistration of the consumer
      */
     def deregisterStreamConsumer(consumerARN: String): Task[Unit]
+
+    def getRecords(shardIterator: String, limit: Int): Task[GetRecordsResponse]
 
     def putRecord[R, T](
       streamName: String,
@@ -113,10 +116,28 @@ object Client {
     def putRecords(streamName: String, entries: List[PutRecordsRequestEntry]): Task[PutRecordsResponse]
   }
 
-  case class ConsumerRecord[T](
+  // Accessor methods
+  def listShards(
+    streamName: String,
+    streamCreationTimestamp: Option[Instant] = None,
+    chunkSize: Int = 10000
+  ): ZStream[Clock with Client, Throwable, Shard] =
+    ZStream.unwrap {
+      ZIO.service[Service].map(_.listShards(streamName, streamCreationTimestamp, chunkSize))
+    }
+
+  def getShardIterator(streamName: String, shardId: String, iteratorType: ShardIteratorType): ClientTask[String] =
+    ZIO.service[Client.Service].flatMap(_.getShardIterator(streamName, shardId, iteratorType))
+
+  def getRecords(shardIterator: String, limit: Int): ClientTask[GetRecordsResponse] =
+    ZIO.service[Client.Service].flatMap(_.getRecords(shardIterator, limit))
+
+  type ClientTask[+A] = ZIO[Client, Throwable, A]
+
+  case class ConsumerRecord(
     sequenceNumber: String,
     approximateArrivalTimestamp: Instant,
-    data: T,
+    data: SdkBytes,
     partitionKey: String,
     encryptionType: EncryptionType,
     shardID: String
@@ -132,5 +153,4 @@ object Client {
     case class AfterSequenceNumber(sequenceNumber: String) extends ShardIteratorType
     case class AtTimestamp(timestamp: Instant)             extends ShardIteratorType
   }
-
 }

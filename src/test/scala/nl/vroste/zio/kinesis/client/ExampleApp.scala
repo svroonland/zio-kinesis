@@ -13,7 +13,7 @@ import zio.{ Chunk, ExitCode, Schedule, ZIO }
 
 object ExampleApp extends zio.App {
   private val env =
-    LocalStackServices.kinesisAsyncClientLayer >>> (Client.live ++ AdminClient.live ++ LocalStackServices.dynamicConsumerLayer)
+    LocalStackServices.localHttpClient >>> LocalStackServices.kinesisAsyncClientLayer >>> (Client.live ++ AdminClient.live ++ LocalStackServices.dynamicConsumerLayer)
 
   override def run(
     args: List[String]

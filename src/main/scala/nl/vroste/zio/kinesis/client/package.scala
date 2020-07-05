@@ -10,20 +10,33 @@ package object client {
   type AdminClient     = Has[AdminClient.Service]
   type Client          = Has[Client.Service]
   type DynamicConsumer = Has[DynamicConsumer.Service]
+  type HttpClient      = Has[HttpClient.Service]
 
   def kinesisAsyncClientLayer(
-    builder: KinesisAsyncClientBuilder = KinesisAsyncClient.builder
-  ): ZLayer[Any, Throwable, Has[KinesisAsyncClient]] =
-    ZManaged.fromAutoCloseable(ZIO.effect(builder.build)).toLayer
+    build: KinesisAsyncClientBuilder => KinesisAsyncClient = _.build()
+  ): ZLayer[HttpClient, Throwable, Has[KinesisAsyncClient]] =
+    ZLayer.fromServiceManaged { httpClient =>
+      httpClient.createSdkHttpClient(http2Supported = true).flatMap { client =>
+        ZManaged.fromAutoCloseable(ZIO.effect(build(KinesisAsyncClient.builder().httpClient(client))))
+      }
+    }
 
   def cloudWatchAsyncClientLayer(
-    builder: CloudWatchAsyncClientBuilder = CloudWatchAsyncClient.builder
-  ): ZLayer[Any, Throwable, Has[CloudWatchAsyncClient]] =
-    ZManaged.fromAutoCloseable(ZIO.effect(builder.build)).toLayer
+    build: CloudWatchAsyncClientBuilder => CloudWatchAsyncClient = _.build()
+  ): ZLayer[HttpClient, Throwable, Has[CloudWatchAsyncClient]] =
+    ZLayer.fromServiceManaged { httpClient =>
+      httpClient.createSdkHttpClient(http2Supported = false).flatMap { client =>
+        ZManaged.fromAutoCloseable(ZIO.effect(build(CloudWatchAsyncClient.builder().httpClient(client))))
+      }
+    }
 
   def dynamoDbAsyncClientLayer(
-    builder: DynamoDbAsyncClientBuilder = DynamoDbAsyncClient.builder
-  ): ZLayer[Any, Throwable, Has[DynamoDbAsyncClient]] =
-    ZManaged.fromAutoCloseable(ZIO.effect(builder.build)).toLayer
-
+    build: DynamoDbAsyncClientBuilder => DynamoDbAsyncClient = _.build()
+  ): ZLayer[HttpClient, Throwable, Has[DynamoDbAsyncClient]] =
+    ZLayer.fromServiceManaged { httpClient =>
+      // DynamoDB does not support HTTP 2
+      httpClient.createSdkHttpClient(http2Supported = false).flatMap { client =>
+        ZManaged.fromAutoCloseable(ZIO.effect(build(DynamoDbAsyncClient.builder().httpClient(client))))
+      }
+    }
 }

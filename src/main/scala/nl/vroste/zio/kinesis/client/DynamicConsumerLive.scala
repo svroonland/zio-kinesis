@@ -91,26 +91,27 @@ private[client] class DynamicConsumerLive(
     }
 
     class ZioShardProcessor(queues: Queues) extends ShardRecordProcessor {
-      var shardId: String        = _
-      var shardQueue: ShardQueue = _
+      var shardId: Option[String]        = None
+      var shardQueue: Option[ShardQueue] = None
 
       override def initialize(input: InitializationInput): Unit =
-        shardId = input.shardId()
+        shardId = Some(input.shardId())
 
       override def processRecords(processRecordsInput: ProcessRecordsInput): Unit = {
-        if (shardQueue == null)
-          shardQueue = queues.newShard(shardId, processRecordsInput.checkpointer())
-        shardQueue.offerRecords(processRecordsInput.records())
+        if (shardQueue.isEmpty)
+          shardQueue = shardId.map(shardId => queues.newShard(shardId, processRecordsInput.checkpointer()))
+
+        shardQueue.foreach(_.offerRecords(processRecordsInput.records()))
       }
 
       override def leaseLost(leaseLostInput: LeaseLostInput): Unit =
-        shardQueue.stop("lease lost")
+        shardQueue.foreach(_.stop("lease lost"))
 
       override def shardEnded(shardEndedInput: ShardEndedInput): Unit =
-        shardQueue.stop("shard ended")
+        shardQueue.foreach(_.stop("shard ended"))
 
       override def shutdownRequested(shutdownRequestedInput: ShutdownRequestedInput): Unit =
-        shardQueue.stop("shutdown requested")
+        shardQueue.foreach(_.stop("shutdown requested"))
     }
 
     class Queues(
@@ -144,7 +145,10 @@ private[client] class DynamicConsumerLive(
 
     def retrievalConfig(kinesisClient: KinesisAsyncClient) =
       if (isEnhancedFanOut)
-        new FanOutConfig(kinesisClient).streamName(streamName).applicationName(applicationName)
+        new FanOutConfig(kinesisClient)
+          .streamName(streamName)
+          .applicationName(applicationName)
+          .consumerName(workerIdentifier)
       else
         new PollingConfig(streamName, kinesisClient)
 

@@ -1,9 +1,8 @@
 package nl.vroste.zio.kinesis.client
 
 import java.time.Instant
-import java.util.concurrent.CompletableFuture
 
-import nl.vroste.zio.kinesis.client.serde.{ Deserializer, Serializer }
+import nl.vroste.zio.kinesis.client.serde.Serializer
 import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.core.async.SdkPublisher
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
@@ -15,21 +14,41 @@ import zio.interop.reactivestreams._
 import zio.stream.ZStream
 
 import scala.jdk.CollectionConverters._
+import java.util.concurrent.CompletionException
 
 private[client] class ClientLive(kinesisClient: KinesisAsyncClient) extends Client.Service {
   import Client._
   import Util._
 
   def createConsumer(streamARN: String, consumerName: String): ZManaged[Any, Throwable, Consumer] =
-    registerStreamConsumer(streamARN, consumerName)
-      .toManaged(consumer => deregisterStreamConsumer(consumer.consumerARN()).ignore)
+    registerStreamConsumer(streamARN, consumerName).catchSome {
+      case e: ResourceInUseException =>
+        // Consumer already exists, retrieve it
+        describeStreamConsumer(streamARN, consumerName).map { description =>
+          Consumer
+            .builder()
+            .consumerARN(description.consumerARN())
+            .consumerCreationTimestamp(description.consumerCreationTimestamp())
+            .consumerName(description.consumerName())
+            .consumerStatus(description.consumerStatus())
+            .build()
+        }.filterOrElse(_.consumerStatus() != ConsumerStatus.DELETING)(_ => ZIO.fail(e))
+    }.toManaged(consumer => deregisterStreamConsumer(consumer.consumerARN()).ignore)
+
+  def describeStreamConsumer(
+    streamARN: String,
+    consumerName: String
+  ): ZIO[Any, Throwable, ConsumerDescription] = {
+    val request = DescribeStreamConsumerRequest.builder().streamARN(streamARN).consumerName(consumerName).build()
+    asZIO(kinesisClient.describeStreamConsumer(request)).map(_.consumerDescription())
+  }
 
   def listShards(
     streamName: String,
     streamCreationTimestamp: Option[Instant] = None,
     chunkSize: Int = 10000
   ): ZStream[Clock, Throwable, Shard] =
-    paginatedRequest { token =>
+    paginatedRequest { (token: Option[String]) =>
       val request = ListShardsRequest
         .builder()
         .maxResults(chunkSize)
@@ -66,12 +85,11 @@ private[client] class ClientLive(kinesisClient: KinesisAsyncClient) extends Clie
       .map(_.shardIterator())
   }
 
-  def subscribeToShard[R, T](
+  def subscribeToShard(
     consumerARN: String,
     shardID: String,
-    startingPosition: ShardIteratorType,
-    deserializer: Deserializer[R, T]
-  ): ZStream[R, Throwable, ConsumerRecord[T]] = {
+    startingPosition: ShardIteratorType
+  ): ZStream[Any, Throwable, SubscribeToShardEvent] = {
 
     val b = StartingPosition.builder()
 
@@ -86,10 +104,11 @@ private[client] class ClientLive(kinesisClient: KinesisAsyncClient) extends Clie
         b.`type`(JIteratorType.AT_TIMESTAMP).timestamp(timestamp)
     }
 
-    ZStream.fromEffect {
+    ZStream.unwrap {
       for {
-        streamP <- Promise.make[Throwable, ZStream[Any, Throwable, Record]]
-        runtime <- ZIO.runtime[Any]
+        streamP                 <- Promise.make[Throwable, ZStream[Any, Throwable, SubscribeToShardEvent]]
+        streamExceptionOccurred <- Promise.make[Nothing, Throwable]
+        runtime                 <- ZIO.runtime[Any]
 
         subscribeResponse = asZIO {
                               kinesisClient.subscribeToShard(
@@ -99,44 +118,42 @@ private[client] class ClientLive(kinesisClient: KinesisAsyncClient) extends Clie
                                   .shardId(shardID)
                                   .startingPosition(jStartingPosition.build())
                                   .build(),
-                                subscribeToShardResponseHandler(runtime, streamP)
+                                subscribeToShardResponseHandler(runtime, streamP, streamExceptionOccurred)
                               )
                             }
-        // subscribeResponse only completes with failure, not with success. It does not contain information of value anyway
-        _                <- subscribeResponse.unit race streamP.await
-        stream           <- streamP.await
-      } yield stream
-    }.flatMap(identity).mapM { record =>
-      deserializer.deserialize(record.data().asByteBuffer()).map { data =>
-        ConsumerRecord(
-          record.sequenceNumber(),
-          record.approximateArrivalTimestamp(),
-          data,
-          record.partitionKey(),
-          record.encryptionType(),
-          shardID
-        )
-      }
+        // subscribeResponse only completes with failure during stream initialization, not with success.
+        // It does not contain information of value when succeeding
+        _                <- subscribeResponse.unit raceFirst streamP.await raceFirst streamExceptionOccurred.await
+        stream           <- (streamExceptionOccurred.await.map(Left(_)) raceFirst streamP.await.either).absolve
+      } yield (stream merge ZStream.unwrap(streamExceptionOccurred.await.map(ZStream.fail(_))))
+    }.catchSome {
+      case e: CompletionException =>
+        ZStream.fail(Option(e.getCause).getOrElse(e))
     }
+
   }
 
   private def subscribeToShardResponseHandler(
     runtime: zio.Runtime[Any],
-    streamP: Promise[Throwable, ZStream[Any, Throwable, Record]]
+    streamP: Promise[Throwable, ZStream[Any, Throwable, SubscribeToShardEvent]],
+    streamExceptionOccurred: Promise[Nothing, Throwable]
   ) =
     new SubscribeToShardResponseHandler {
       override def responseReceived(response: SubscribeToShardResponse): Unit =
         ()
 
       override def onEventStream(publisher: SdkPublisher[SubscribeToShardEventStream]): Unit = {
-        val streamOfRecords: ZStream[Any, Throwable, SubscribeToShardEvent] =
-          publisher.filter(classOf[SubscribeToShardEvent]).toStream()
-        runtime.unsafeRun(streamP.succeed(streamOfRecords.mapConcat(_.records().asScala)).unit)
+        val streamOfRecords = publisher.filter(classOf[SubscribeToShardEvent]).toStream()
+        runtime.unsafeRun(streamP.succeed(streamOfRecords).unit)
       }
 
-      override def exceptionOccurred(throwable: Throwable): Unit = ()
+      // For some reason these exceptions are not published by the publisher on onEventStream
+      // so we have to merge them into our ZStream ourselves
+      override def exceptionOccurred(throwable: Throwable): Unit =
+        runtime.unsafeRun(streamExceptionOccurred.succeed(throwable).unit)
 
-      override def complete(): Unit = () // We only observe the subscriber's onComplete
+      override def complete(): Unit =
+        () // We only observe the subscriber's onComplete
     }
 
   /**
@@ -156,6 +173,16 @@ private[client] class ClientLive(kinesisClient: KinesisAsyncClient) extends Clie
   def deregisterStreamConsumer(consumerARN: String): Task[Unit] = {
     val request = DeregisterStreamConsumerRequest.builder().consumerARN(consumerARN).build()
     asZIO(kinesisClient.deregisterStreamConsumer(request)).unit
+  }
+
+  def getRecords(shardIterator: String, limit: Int): Task[GetRecordsResponse] = {
+    val request = GetRecordsRequest
+      .builder()
+      .shardIterator(shardIterator)
+      .limit(limit)
+      .build()
+
+    asZIO(kinesisClient.getRecords(request))
   }
 
   private def putRecord(request: PutRecordRequest): Task[PutRecordResponse] =
@@ -201,22 +228,4 @@ private[client] class ClientLive(kinesisClient: KinesisAsyncClient) extends Clie
   def putRecords(streamName: String, entries: List[PutRecordsRequestEntry]): Task[PutRecordsResponse] =
     putRecords(PutRecordsRequest.builder().streamName(streamName).records(entries: _*).build())
 
-}
-
-private object Util {
-  def asZIO[T](f: => CompletableFuture[T]): Task[T] = ZIO.fromCompletionStage(f)
-
-  type Token = String
-
-  def paginatedRequest[R, E, A](fetch: Option[Token] => ZIO[R, E, (A, Option[Token])])(
-    throttling: Schedule[Clock, Any, Int] = Schedule.forever
-  ): ZStream[Clock with R, E, A] =
-    ZStream.fromEffect(fetch(None)).flatMap {
-      case (results, nextTokenOpt) =>
-        ZStream.succeed(results) ++ (nextTokenOpt match {
-          case None            => ZStream.empty
-          case Some(nextToken) =>
-            ZStream.paginateM[R, E, A, Token](nextToken)(token => fetch(Some(token))).scheduleElements(throttling)
-        })
-    }
 }

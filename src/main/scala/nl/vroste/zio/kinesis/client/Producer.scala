@@ -1,6 +1,8 @@
 package nl.vroste.zio.kinesis.client
+import java.io.IOException
 import java.time.Instant
 
+import io.netty.handler.timeout.ReadTimeoutException
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.serde.Serializer
@@ -100,13 +102,13 @@ object Producer {
              .mapMPar(settings.maxParallelRequests) { batch: PutRecordsBatch =>
                (for {
                  response              <- client
-                               .putRecords(streamName, batch.entries.map(_.r))
+                               .putRecords(streamName, batch.entries.map(_.r).reverse)
                                .retry(scheduleCatchRecoverable && settings.backoffRequests)
 
                  maybeSucceeded         = response
                                     .records()
                                     .asScala
-                                    .zip(batch.entries)
+                                    .zip(batch.entries.reverse)
                  (newFailed, succeeded) = if (response.failedRecordCount() > 0)
                                             maybeSucceeded.partition {
                                               case (result, _) =>
@@ -122,7 +124,7 @@ object Producer {
                         .offerAll(newFailed.map(_._2))
                         .delay(settings.failedDelay)
                         .fork // TODO should be per shard
-                 _                     <- ZIO.foreach(succeeded) {
+                 _                     <- ZIO.foreachPar_(succeeded) {
                         case (response, request) =>
                           request.done.succeed(ProduceResponse(response.shardId(), response.sequenceNumber()))
                       }
@@ -167,7 +169,7 @@ object Producer {
           .flatMap(requests => queue.offerAll(requests) *> ZIO.foreachPar(requests)(_.done.await))
     }
 
-  val maxRecordsPerRequest     = 500             // This is a Kinesis API limitation
+  val maxRecordsPerRequest     = 499             // This is a Kinesis API limitation // TODO because of fold issue, reduced by 1
   val maxPayloadSizePerRequest = 5 * 1024 * 1024 // 5 MB
 
   val recoverableErrorCodes = Set("ProvisionedThroughputExceededException", "InternalFailure", "ServiceUnavailable");
@@ -200,6 +202,8 @@ object Producer {
   private final def scheduleCatchRecoverable: Schedule[Any, Throwable, Throwable] =
     Schedule.doWhile {
       case e: KinesisException if e.statusCode() / 100 != 4 => true
+      case _: ReadTimeoutException                          => true
+      case _: IOException                                   => true
       case _                                                => false
     }
 }
