@@ -285,12 +285,20 @@ private class DefaultLeaseCoordinator(
       case (lease, completed) =>
         val updatedLease = lease.copy(owner = None).increaseCounter
 
-        table.releaseLease(applicationName, updatedLease).catchAll {
-          case Right(LeaseObsolete) => // This is fine at shutdown
-            ZIO.unit
-          case Left(e)              =>
-            ZIO.fail(e)
-        } *> completed.succeed(()) *>
+        table
+          .releaseLease(applicationName, updatedLease)
+          .timeout(settings.releaseLeaseTimeout)
+          .tap(result =>
+            log.warn(s"Timeout while releasing lease for shard ${lease.key}, ignored").when(result.isEmpty)
+          )
+          .tapError {
+            case Right(LeaseObsolete) => // This is fine at shutdown
+              ZIO.unit
+            case Left(e)              =>
+              log.error(s"Error releasing lease for shard ${lease.key}, ignored: ${e}")
+          }
+          .ignore *>
+          completed.succeed(()) *>
           updateState(_.releaseLease(updatedLease, _)) *>
           emitDiagnostic(DiagnosticEvent.LeaseReleased(lease.key))
     }
@@ -535,9 +543,7 @@ private class DefaultLeaseCoordinator(
       .map(_.heldLeases.values)
       .flatMap(ZIO.foreachPar_(_) {
         case (lease, _) =>
-          releaseLease(lease.key)
-            .timeout(settings.releaseLeaseTimeout)
-            .ignore // We do our best to release the lease
+          releaseLease(lease.key).ignore // We do our best to release the lease
       })
 
   override def releaseLease(shard: String) =
