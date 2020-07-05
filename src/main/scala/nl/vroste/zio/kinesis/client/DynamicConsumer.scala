@@ -22,6 +22,8 @@ import zio.stream.ZTransducer
  * Ensures proper resource shutdown and failure handling
  */
 object DynamicConsumer {
+  // For (some) backwards compatibility
+  type Record[T] = nl.vroste.zio.kinesis.client.Record[T]
 
   val live: ZLayer[Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[
     DynamoDbAsyncClient
