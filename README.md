@@ -2,32 +2,41 @@
 
 # ZIO Kinesis
 
-ZIO Kinesis is a ZIO-based wrapper around the AWS Kinesis SDK. All operations are non-blocking. It provides a streaming 
-interface to Kinesis streams.
+ZIO Kinesis is a ZIO-based interface to Amazon Kinesis Data Streams for consuming and producing.
 
-The project is in beta stage. Although already being used in production by a small number of organisations, expect some issues to pop up.
-More beta customers are welcome.
+The project is in beta stage. Although already being used in production by a small number of organisations, expect some issues to pop up and some changes to the interface.
+More beta users and feedback are of course welcome.
 
-* [Features](#features)
-* [Installation](#installation)
-* [DynamicConsumer](#dynamicconsumer)
-  + [Checkpointing](#checkpointing)
-  + [Clean Shutdown](#clean-shutdown)
-  + [Configuration](#configuration)
-* [Producer](#producer)
-* [Consuming a stream (low level)](#consuming-a-stream--low-level-)
-* [Admin client](#admin-client)
-* [Running tests and usage examples](#running-tests-and-usage-examples)
-* [Credits](#credits)
-
+- [Features](#features)
+- [Installation](#installation)
+- [Consumer](#consumer)
+  * [Basic usage](#basic-usage)
+  * [Checkpointing](#checkpointing)
+  * [Customization](#customization)
+  * [Diagnostic event & metrics](#diagnostic-event---metrics)
+  * [KCL compatibility](#kcl-compatibility)
+- [DynamicConsumer](#dynamicconsumer)
+  * [Configuration](#configuration)
+- [Producer](#producer)
+- [Client and AdminClient](#client-and-adminclient)
+- [Running tests and usage examples](#running-tests-and-usage-examples)
+- [Credits](#credits)
 ## Features
 
-The library consists of 3 major components:
+The library consists of:
 
-* `Client` and `AdminClient`: ZLayer ZIO wrappers around the low level AWS Kinesis SDK methods. Methods offer a 
-  ZIO-native interface with ZStream where applicable, taking care of paginated request and AWS rate limits. 
-* `DynamicConsumer`: a ZStream-based ZLayer interface to the Kinesis Client Library; an auto-rebalancing and checkpointing consumer.
-* `Producer`: used to produce efficiently and reliably to Kinesis while respecting Kinesis limits. Features batching and failure handling.
+* `Consumer`  
+  A ZStream interface to Kinesis streams, including checkpointing , lease coordination and metrics. This is a ZIO-native client built on top of the AWS SDK, designed for compatibility with KCL clients. Both polling and enhanced fanout (HTTP2 streaming) are supported.
+  
+* `Producer`  
+  Put records efficiently and reliably on Kinesis while respecting Kinesis throughput limits. Features batching and failure handling.
+
+* `Client` and `AdminClient`  
+  ZIO wrappers around the low level AWS SDK methods for Kinesis. Methods offer a ZIO-native interface with ZStream where applicable, taking care of paginated request and AWS rate limits. 
+  
+* `DynamicConsumer`  
+  A ZStream-based wrapper around the Kinesis Client Library; an auto-rebalancing and checkpointing consumer.  
+  _NOTE_ Although `DynamicConsumer` will be included in this library for some time to come, it will eventually be deprecated and removed in favour of the ZIO native `Consumer`. Users are recommended to upgrade.
 
 
 ## Installation
@@ -39,146 +48,210 @@ resolvers += Resolver.jcenterRepo
 libraryDependencies += "nl.vroste" %% "zio-kinesis" % "<version>"
 ```
 
-The latest version works with ZIO 1.0.0-RC21.
+The latest version is built against ZIO 1.0.0-RC21-2.
 
-## DynamicConsumer
-`DynamicConsumer` offers a `ZStream`-based interface to Kinesis Streams, backed by AWS's 
-[Kinesis Client Library (KCL)](https://docs.aws.amazon.com/streams/latest/dev/shared-throughput-kcl-consumers.html). 
-It supports supports shard sequence number checkpoint storage in DynamoDB and automatic rebalancing of shard consumers 
-between multiple workers within an application group. 
+## Consumer
 
-This is modeled as a stream of streams, where the inner streams represent the individual shards. The inner streams can 
-complete when the shard is assigned to another worker or the shard is ended. The outer stream can emit new elements as 
-shards are assigned to this worker or the stream is resharded. The inner streams can be processed in parallel.
+`Consumer` offers a fully parallel streaming interface to Kinesis Data Streams. 
 
-`DynamicConsumer` will handle deserialization of the data bytes as part of the stream via the `Deserializer` (or `Serde`) 
-you pass it. In the example below a deserializer for ASCII strings is used. It's easy to define custom (de)serializers for, 
-for example, JSON data using a JSON library of your choice.
+Features:
+* Record streaming from multiple shards in parallel
+* Multiple worker support: lease rebalancing / stealing / renewing (compatible with KCL)
+* Polling fetching and enhanced fanout (HTTP2 streaming)
+* Deserialization of records to any data type
+* Checkpointing of records according to user-defined Schedules
+* Automatic checkpointing at shard stream shutdown due to error or interruption
+* Handling of Kinesis resource limits (throttling and backoff)
+* Optimized parallel initialization for fast startup
+* KCL compatible metrics publishing to CloudWatch
+* Compatibility for running alongside KCL consumers
+* Emission of diagnostic events for custom logging / metrics / testing
+* Pluggable lease/checkpoint storage backend
+* Pluggable shard assignment strategy (future support)
 
-Usage example:
+### Basic usage
+
+The following example shows a simple ZIO App that consumes from a stream, prints a record and periodically checkpoints.
 
 ```scala
-import zio._
-import zio.blocking.Blocking
-import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client._
-import nl.vroste.zio.kinesis.client.DynamicConsumer
+import nl.vroste.zio.kinesis.client.zionative._
+import nl.vroste.zio.kinesis.client.serde.Serde
+import zio._
+import zio.console.{ putStrLn, Console }
+import zio.duration._
+import zio.logging.Logging
+import zio.logging.slf4j.Slf4jLogger
 
-val streamName  = "my_stream"
-val applicationName ="my_awesome_zio_application"
+object BasicUsage extends zio.App {
+  override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
+    Consumer
+      .shardedStream(
+        streamName = "my-stream",
+        applicationName = "my-application",
+        deserializer = Serde.asciiString,
+        workerIdentifier = "worker1"
+      )
+      .flatMapPar(Int.MaxValue) {
+        case (shardId, shardStream, checkpointer) =>
+          shardStream
+            .tap(record => putStrLn(s"Processing record ${record} on shard ${shardId}"))
+            .tap(checkpointer.stage(_))
+            .via(checkpointer.checkpointBatched[Console](nr = 1000, interval = 5.second))
+      }
+      .runDrain
+      .provideCustomLayer(Consumer.defaultEnvironment ++ Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName)))
+      .exitCode
 
-(for {
-  dynamicConsumer <- ZIO.service[DynamicConsumer.Service]
-  _ <- dynamicConsumer
-    .shardedStream(
-      streamName,
-      applicationName = applicationName,
-      deserializer = Serde.asciiString
-    )
-    .flatMapPar(Int.MaxValue) { case (shardId: String, shardStream, checkpointer) =>
-      shardStream
-        .tap { r: DynamicConsumer.Record[String] =>
-          ZIO(println(s"Got record ${r} on shard ${shardId}")) *> checkpointer.checkpointNow
-        }
-    }.provideLayer(Blocking.live)
-    .runDrain
-} yield ()).provideLayer(
-  httpClientLayer() >>> 
-    (kinesisAsyncClientLayer() ++ cloudWatchAsyncClientLayer() ++ dynamoDbAsyncClientLayer()) >>> 
-    DynamicConsumer.live
-)
+  }
+
 ```
 
-DynamicConsumer is built on `ZManaged` and therefore resource-safe: after stream completion all resources acquired will be shutdown.
+Let's go over some particulars of this example:
+* `Consumer.shardedStream` is a stream of streams. Each of the inner stream represents a Kinesis Shard. Along with this inner stream, the shard ID and a `Checkpointer` are emitted. Each of the shard streams are processed in parallel. 
+* The `deserializer` parameter takes care of deserializing records from bytes to a data type of your choice, in this case an ASCII string. You can easily define custom (de)serializers for, 
+for example, JSON data using a JSON library of your choice.
+* After processing the record (here: printing to the console), the record is staged for checkpointing. This is useful to ensure that when the shard stream is interrupted or fails, a checkpoint call is made. 
+* The `checkpointBatched` method on the `Checkpointer` is a helper method that batches records up to 1000 or within 5 seconds, whichever comes earlier. At the end of that window, the last staged record will be checkpointed. It also takes care of ending the shard stream when the lease has been lost or there is some other error in checkpointing. The `Console` type parameter is unfortunately necessary for correct type inference.
+* `runDrain` will run the stream until the application is interrupted or until the stream fails.
+* `provideCustomLayer` provides the environment (dependencies via [ZLayer](https://zio.dev/docs/howto/howto_use_layers)) necessary to run the `Consumer`. The default environment uses AWS SDK default settings (i.e. default credential provider)
+* `exitCode` maps the failure or success of the stream to a system exit code. 
+* A logging environment is provided for debug logging. See [zio-logging](https://github.com/zio/zio-logging) for more information on how to customize this.
 
 ### Checkpointing
 
-You need to manually checkpoints records that your application has processed so far. Kinesis works with sequence numbers
- instead of something like ACKs; checkpointing for sequence number X means 'all records up to and including X'. 
- Therefore you don't have to checkpoint each individual record, periodic checkpointing is sufficient.
+Checkpointing is a mechanism that ensures that stream processing can be resumed correctly after application restart. Checkpointing has 'up to and including' semantics, which means that checkpointing records with sequence number 100 means acknowledging processing of records 1 to 100. 
 
-In fact, it is [recommended](https://github.com/awslabs/amazon-kinesis-client/blob/master/amazon-kinesis-client/src/main/java/software/amazon/kinesis/processor/RecordProcessorCheckpointer.java#L35)
+It is [recommended](https://github.com/awslabs/amazon-kinesis-client/blob/master/amazon-kinesis-client/src/main/java/software/amazon/kinesis/processor/RecordProcessorCheckpointer.java#L35)
 not to checkpoint too frequently. It depends on your application and stream volume what is a good checkpoint frequency 
-(in terms of number of records and/or interval). ZStream's `aggregateAsyncWithin` is useful for such a checkpointing scheme.
+(in terms of number of records and/or interval). 
 
 `zio-kinesis` has some mechanisms to improve checkpointing safety in the case of interruption or failures:
 
 * To guarantee that the last processed record is checkpointed when the stream shuts down, because of failure or interruption 
 for example, checkpoints for every record should be staged by calling `checkpointer.stage(record)`. A periodic call to 
-`checkpointer.checkpoint` will 'flush' the last staged checkpoint.
+`checkpointer.checkpoint` will 'flush' the last staged checkpoint. 
 
 * To ensure that processing of a record is always followed by a checkpoint stage, even in the face of fiber interruption, 
 use the utility method `Checkpointer.stageOnSuccess(processingEffect)(r)`. 
 
-The example below shows how to combine this and checkpoint every max every 500 records or 1 second, whichever comes sooner:
+* When checkpointing fails, it is retried according to the provided Schedule. By default this is an exponential backoff schedule with a maximum number of attempts.
+
+* Taking into account retries, checkpointing may fail due to:
+  * `ShardLeaseLost`: this indicates that while attempting to update the lease, it was discovered that another worker has stolen the lease. The shard should no longer be processed. This can be achieved by recovering the stream with a `ZStream.empty` via `catchAll`.
+  * Transient connection / AWS issues. `Checkpointer.checkpoint` will fail with a `Throwable`. 
+  
+  
+### Lease coordination
+
+`Consumer` supports checkpointing and lease coordination between multiple workers. Leases and checkpoints for each shard are stored in a table (DynamoDB by default). These leases are periodically renewed, unless they were recently (less than the renewal interval) checkpointed already. 
+
+When a new worker joins, it will take some leases from other workers so that all workers get a fair share. The other workers will notice this either during checkpointing or lease renewal and will end their processing of the stream. Because of this, records are processed 'at least once'; for a brief time (at most the renew interval) two workers may be processing records from the same shard. When your application has multiple workers, it must be able to handle records being processed more than once because of this.
+
+When one worker fails or loses connectivity, the other workers will detect that the lease has not been updated for some time and will take over some of its leases, so that all workers have a fair share again.
+
+When a worker is stopped, its leases are released so that other workers may pick them up.
+
+### Customization
+
+The following parameters can be customized:
+
+* Initial position  
+  When no checkpoint is found for a shard, start from this position in the stream. The default is to start with the oldest message on each shard (`TRIM_HORIZON`). 
+* Use enhanced fanout or polling  
+  See the [AWS docs](https://aws.amazon.com/blogs/aws/kds-enhanced-fanout/)
+* Polling:
+    * Maximum batch size
+    * Poll interval
+    * Backoff schedule in case of throttling (Kinesis limits)
+    * Retry schedule in case of other issues
+* Enhanced fanout:
+    * Maximum shard subscriptions to make per second.  
+      Although there is no Kinesis limit, this prevents a stream of 1000 shards from making 1000 simultaneous HTTP requests.
+    * Retry schedule in case of issues
+* Lease coordination
+    * Lease expiration time
+    * Lease renewal interval
+    * Lease refresh & take interval
+    
+### Diagnostic event & metrics
+
+`Consumer.shardedStream` has a parameter for a function that is called with a `DiagnosticEvent` whenever something of interest happens in the Consumer. This is useful for diagnostic purposes and for metrics.
+
+A KCL compatible CloudWatch metrics publisher is included, which can optionally be hooked on to these diagnostic events.
+
+See `src/test/nl/vroste/zio/kinesis/client/examples/NativeConsumerWithMetricsExample.scala` for an example.
+
+### KCL compatibility
+Lease coordination and metrics are fully compatible for running along other KCL workers.
+
+### Unsupported features
+
+Features that are supported by `DynamicConsumer` but not by `Consumer`:
+* Handling resharding (split and merged shards)  
+  As a workaround the workers will have to be restarted to start processing the new shards.
+* KPL record aggregation via Protobuf + subsequence number checkpointing  
+  Users can manually deserialize records via Protobuf if desired. Kinesis streams has a at-least once model anyway, so the lack of subsequence number checkpointing does not break that.
+* DynamoDB lease table billing mode configuration  
+  This can be adjusted in AWS Console if desired.
+* Some metrics  
+  Not all metrics published by the KCL are implemented yet. Some of them are not applicable because of different implementations.
+
+
+## DynamicConsumer
+`DynamicConsumer` is an alternative to `Consumer`, backed by the 
+[Kinesis Client Library (KCL)](https://docs.aws.amazon.com/streams/latest/dev/shared-throughput-kcl-consumers.html). 
+
+_NOTE: Although `DynamicConsumer` will be included in this library for some time to come for backwards compatility, it will eventually be deprecated and removed in favour of the ZIO native `Consumer`. Users are recommended to upgrade._
+  
+The interface is largely the same as `Consumer`, except for:
+ * Some parameters for configuration 
+ * The ZIO environment
+ * Checkpointing is an effect that can fail with a `Throwable` instead of `Either[Throwable, ShardLeaseLost.type]`. A `ShutdownException` indicates that the shard should no longer be processed. See the documentation on `Checkpointer.checkpoint` for more details.
+ * Retrying is not done automatically by DynamicConsumer's Checkpointer.
+  
+Usage example:
 
 ```scala
-(for {
-dynamicConsumer <- ZIO.service[DynamicConsumer.Service]
-_ <- dynamicConsumer
-  .shardedStream(
-    streamName,
-    applicationName = applicationName,
-    deserializer = Serde.byteBuffer
-  )
-  .flatMapPar(maxParallel) {
-    case (shardId: String, shardStream: ZStream[Any, Throwable, DynamicConsumer.Record[ByteBuffer]], checkpointer: Checkpointer) =>
-      shardStream
-        .tap { record => checkpointer.stageOnSuccess(processMyRecord(shardId, record))(record) }
-        .as(())
-        .aggregateAsyncWithin(ZTransducer.collectAllN(500), Schedule.fixed(1.second))
-        .mapConcat(_.toList)
-        .tap(_ => checkpointer.checkpoint)
-        .catchSome {
-          // This happens when the lease for the shard is lost. Best we can do is end the stream.
-          case _: ShutdownException => ZStream.empty
-        }
-  }
-  .provideLayer(Blocking.live ++ Clock.live)
-  .runDrain
-} yield ()).provideLayer(
-  httpClientLayer() >>> 
-    (kinesisAsyncClientLayer() ++ cloudWatchAsyncClientLayer() ++ dynamoDbAsyncClientLayer()) >>> 
-    DynamicConsumer.live
-)
+import nl.vroste.zio.kinesis.client.DynamicConsumer
+import nl.vroste.zio.kinesis.client.serde.Serde
+import zio._
+import zio.blocking.Blocking
+import zio.console.{Console, putStrLn}
+import zio.duration._
+
+/**
+ * Basic usage example for DynamicConsumer
+ */
+object DynamicConsumerBasicUsageExample extends zio.App {
+  override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
+    DynamicConsumer
+      .shardedStream(
+        streamName = "my-stream",
+        applicationName = "my-application",
+        deserializer = Serde.asciiString,
+        workerIdentifier = "worker1"
+      )
+      .flatMapPar(Int.MaxValue) {
+        case (shardId, shardStream, checkpointer) =>
+          shardStream
+            .tap(record => putStrLn(s"Processing record ${record} on shard ${shardId}"))
+            .tap(checkpointer.stage(_))
+            .via(checkpointer.checkpointBatched[Blocking with Console](nr = 1000, interval = 5.second))
+      }
+      .runDrain
+      .provideCustomLayer(DynamicConsumer.defaultEnvironment)
+      .exitCode
+}
 ```
 
-Checkpointing may fail with a `ShutdownException` when another worker has stolen the lease for a shard. Your application 
-should handle this, otherwise your stream will fail with this exception. Note that the shard stream may still emit some 
-buffered records in this situation, before it is completed. 
+DynamicConsumer is built on `ZManaged` and therefore resource-safe: after stream completion all resources acquired will be shutdown.
 
 ### Configuration
-By default `Client`, `AdminClient`, `DynamicConsumer` and `Producer` will load AWS credentials and regions via the
-[Default Credential/Region Provider](https://docs.aws.amazon.com/sdk-for-java/v1/developer-guide/credentials.html).
-Using the client builders, many parameters can be customized. Refer to the AWS documentation for more information.
-Default client ZLayers are provided in `nl.vroste.zio.kinesis.client` package object for production and for integration 
-tests are provided in `LocalStackServices`
+The default environments for `Client`, `AdminClient`, `Consumer`, `DynamicConsumer` and `Producer` will use the [Default Credential/Region Provider](https://docs.aws.amazon.com/sdk-for-java/v1/developer-guide/credentials.html).
+Using the client builders, many parameters can be customized. Refer to the AWS documentation for more information on the possible parameters.
 
-The following snippet shows the full range of parameters to `DynamicConsumer.Service.shardedStream`
-
-```scala
-val initialPosition = InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON)
-
-dynamicConsumer
-  .shardedStream(
-    streamName,
-    applicationName = applicationName,
-    deserializer = Serde.byteBuffer,
-    requestShutdown = UIO.never,
-    initialPosition = initialPosition,
-    isEnhancedFanout = true,
-    leaseTableName = None,
-    workerIdentifier = "machine-001",
-    maxShardBufferSize = 1024 
-  )
-```
-
-The KCL underlying `DynamicConsumer.Service.shardedStream` by default starts with the oldest message on each shard (`TRIM_HORIZON`). 
-The initial position is only used during initial lease creation. When an application restarts, it will resume from the previous checkpoint,
-and so will continue from where it left off in the Kinesis stream.
-
-[Enhanced Fan Out capability](https://docs.aws.amazon.com/streams/latest/dev/enhanced-consumers.html) is set by the
- `isEnhancedFanOut` flag, which defaults to `true`.   
+Default client ZLayers are provided in `nl.vroste.zio.kinesis.client` package object for production and for integration tests are provided in `LocalStackServices`
 
 ## Producer
 The low-level `Client` offers a `putRecords` method to put records on Kinesis. Although simple to use for a small number of records, 
@@ -191,7 +264,6 @@ All of this of course with the robust failure handling you can expect from a ZIO
 
 Usage example:
 
-
 ```scala
 import zio._
 import nl.vroste.zio.kinesis.client._
@@ -201,7 +273,7 @@ import zio.clock.Clock
 
 val streamName  = "my_stream"
 val applicationName ="my_awesome_zio_application"
-val clientLayer = kinesisAsyncClientLayer() >>> Client.live
+val clientLayer = HTTPClient.make() >>> kinesisAsyncClientLayer() >>> Client.live
 
 (for {
   producer <- Producer
@@ -216,15 +288,15 @@ val clientLayer = kinesisAsyncClientLayer() >>> Client.live
 }
 ```
 
-## Admin client
-The more administrative operations like creating and deleting streams are available in the `AdminClient`.
+## Client and AdminClient
+More low-level operations for consuming, producing and administering streams are available in `Client` and `AdminClient`.
 
 Refer to the [AWS Kinesis Streams API Reference](https://docs.aws.amazon.com/kinesis/latest/APIReference/Welcome.html) 
 for more information.
 
 ## Running tests and usage examples 
 
-[Note the tests are also good usage examples](src/test/scala/nl/vroste/zio/kinesis/client)
+See [src/test/nl/vroste/zio/kinesis/client/examples](src/test/nl/vroste/zio/kinesis/client/examples) for some examples. The [integration tests](src/test/scala/nl/vroste/zio/kinesis/client) are also good usage examples.
 
 The tests run against a [`localstack`](https://github.com/localstack/localstack) docker image to access 
 `kinesis`, `dynamoDb` and `cloudwatch` endpoints locally. In order to run the tests you need to have `docker` and `docker-compose` 

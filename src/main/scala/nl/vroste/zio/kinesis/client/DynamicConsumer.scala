@@ -1,18 +1,20 @@
 package nl.vroste.zio.kinesis.client
 
-import java.time.Instant
 import java.util.UUID
 
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
-import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import software.amazon.kinesis.common.{ InitialPositionInStream, InitialPositionInStreamExtended }
 import software.amazon.kinesis.processor.RecordProcessorCheckpointer
+import zio._
 import zio.blocking.Blocking
 import zio.stream.ZStream
-import zio._
+import zio.duration.Duration
+import zio.clock.Clock
+import software.amazon.kinesis.exceptions.ShutdownException
+import zio.stream.ZTransducer
 
 /**
  * Offers a ZStream based interface to the Amazon Kinesis Client Library (KCL)
@@ -106,18 +108,6 @@ object DynamicConsumer {
         )
     )
 
-  case class Record[T](
-    shardId: String,
-    sequenceNumber: String,
-    approximateArrivalTimestamp: Instant,
-    data: T,
-    partitionKey: String,
-    encryptionType: EncryptionType,
-    subSequenceNumber: Long,
-    explicitHashKey: String,
-    aggregated: Boolean
-  )
-
   /**
    * Staging area for checkpoints
    *
@@ -167,6 +157,27 @@ object DynamicConsumer {
      */
     def checkpointNow(r: Record[_]): ZIO[Blocking, Throwable, Unit] =
       stage(r) *> checkpoint
+
+    /**
+     * Helper method to add batch checkpointing to a stream
+     *
+   * @param nr
+     * @param interval
+     * @tparam R
+     * @return
+     */
+    def checkpointBatched[R](
+      nr: Int,
+      interval: Duration
+    ): ZStream[R, Throwable, Any] => ZStream[R with Clock with Blocking, Throwable, Unit] =
+      _.aggregateAsyncWithin(ZTransducer.foldUntil((), nr)((_, _) => ()), Schedule.fixed(interval))
+        .tap(_ => checkpoint)
+        .catchAll {
+          case _: ShutdownException =>
+            ZStream.empty
+          case e                    =>
+            ZStream.fail(e)
+        }
   }
 
   object Checkpointer {
@@ -190,5 +201,10 @@ object DynamicConsumer {
           }
       }
   }
+
+  val defaultEnvironment: ZLayer[Any, Throwable, DynamicConsumer] =
+    HttpClient.make() >>>
+      sdkClients >>>
+      DynamicConsumer.live
 
 }

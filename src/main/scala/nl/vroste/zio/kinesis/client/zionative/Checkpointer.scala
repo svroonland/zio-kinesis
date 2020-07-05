@@ -2,10 +2,10 @@ package nl.vroste.zio.kinesis.client.zionative
 
 import zio.{ Exit, Schedule, UIO, ZIO }
 import zio.blocking.Blocking
-import nl.vroste.zio.kinesis.client.DynamicConsumer.Record
-import nl.vroste.zio.kinesis.client.Util
+import nl.vroste.zio.kinesis.client.{ Record, Util }
 import zio.clock.Clock
 import zio.duration._
+import zio.stream.{ ZStream, ZTransducer }
 
 /**
  * Error indicating that while checkpointing it was discovered that the lease for a shard was stolen
@@ -86,4 +86,33 @@ trait Checkpointer {
       Util.exponentialBackoff(1.second, 1.minute, maxRecurs = Some(5))
   ): ZIO[Clock with R, Either[Throwable, ShardLeaseLost.type], Unit] =
     stage(r) *> checkpoint[R](retrySchedule)
+
+  /**
+   * Helper method to add batch checkpointing to a stream
+   *
+   * The record
+   *
+   * @param nr
+   * @param interval
+   * @tparam R
+   * @return
+   */
+  def checkpointBatched[R](
+    nr: Int,
+    interval: Duration,
+    retrySchedule: Schedule[Clock, Throwable, Any] = Util.exponentialBackoff(1.second, 1.minute, maxRecurs = Some(5))
+  ): ZStream[R, Throwable, Any] => ZStream[R with Clock, Throwable, Unit] =
+    _.aggregateAsyncWithin(ZTransducer.foldUntil((), nr)((_, _) => ()), Schedule.fixed(interval))
+      .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
+      .tap { _ =>
+        checkpoint(retrySchedule)
+      }
+      .catchAll {
+        case Left(e)               =>
+          ZStream.fail(e)
+        case Right(ShardLeaseLost) =>
+          ZStream.empty
+
+      }
+
 }

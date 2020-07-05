@@ -1,14 +1,15 @@
 package nl.vroste.zio.kinesis.client.zionative
 
 import nl.vroste.zio.kinesis.client.AdminClient.StreamDescription
-import nl.vroste.zio.kinesis.client.Client.{ ConsumerRecord, ShardIteratorType }
-import nl.vroste.zio.kinesis.client.DynamicConsumer.Record
+import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.{ EnhancedFanOut, Polling }
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative.fetcher.{ EnhancedFanOutFetcher, PollingFetcher }
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.{ DefaultLeaseCoordinator, LeaseCoordinationSettings }
-import nl.vroste.zio.kinesis.client.{ AdminClient, Client, Util }
+import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
+import nl.vroste.zio.kinesis.client.{ sdkClients, AdminClient, Client, HttpClient, Record, Util }
+import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.kinesis.model.{
   KmsThrottlingException,
   LimitExceededException,
@@ -36,50 +37,25 @@ object FetchMode {
    *        the distribution of data size of your records (i.e. avg and max).
    * @param interval Interval between polls
    * @param throttlingBackoff When getting a Provisioned Throughput Exception or KmsThrottlingException, schedule to apply for backoff
+   * @param retrySchedule Schedule for retrying in case of non-throttling related issues
    */
   case class Polling(
     batchSize: Int = 1000,
     interval: Duration = 1.second,
-    throttlingBackoff: Schedule[Clock, Any, (Duration, Int)] = Util.exponentialBackoff(1.second, 1.minute)
+    throttlingBackoff: Schedule[Clock, Any, (Duration, Int)] = Util.exponentialBackoff(1.second, 1.minute),
+    retrySchedule: Schedule[Clock, Any, (Duration, Int)] = Util.exponentialBackoff(1.second, 1.minute)
   ) extends FetchMode
 
   /**
    * Fetch data using enhanced fanout
+   *
+   * @param retrySchedule Schedule for retrying in case of connection issues
    */
   case class EnhancedFanOut(
-    deregisterConsumerAtShutdown: Boolean = false,
+    deregisterConsumerAtShutdown: Boolean = false, // TODO
     maxSubscriptionsPerSecond: Int = 10,
     retrySchedule: Schedule[Clock, Any, (Duration, Int)] = Util.exponentialBackoff(1.second, 1.minute)
   ) extends FetchMode
-}
-
-trait Fetcher {
-
-  /**
-   * Stream of records on the shard with the given ID, starting from the startingPosition
-   *
-   * May complete when the shard ends
-   */
-  def shardRecordStream(shardId: String, startingPosition: ShardIteratorType): ZStream[Clock, Throwable, KinesisRecord]
-}
-
-object Fetcher {
-  def apply(f: (String, ShardIteratorType) => ZStream[Clock, Throwable, KinesisRecord]): Fetcher =
-    (shard, startingPosition) => f(shard, startingPosition)
-}
-
-trait LeaseCoordinator {
-  def makeCheckpointer(shardId: String): ZIO[Clock with Logging, Throwable, Checkpointer]
-
-  def getCheckpointForShard(shardId: String): UIO[Option[ExtendedSequenceNumber]]
-
-  def acquiredLeases: ZStream[Clock, Throwable, AcquiredLease]
-
-  def releaseLease(shardId: String): ZIO[Logging, Throwable, Unit]
-}
-
-object LeaseCoordinator {
-  case class AcquiredLease(shardId: String, leaseLost: Promise[Nothing, Unit])
 }
 
 object Consumer {
@@ -154,12 +130,12 @@ object Consumer {
     initialPosition: ShardIteratorType = ShardIteratorType.TrimHorizon,
     emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit
   ): ZStream[
-    Blocking with Clock with Random with Client with AdminClient with LeaseRepository with Logging,
+    Blocking with Clock with Random with Client with AdminClient with LeaseRepository with Logging with R,
     Throwable,
     (
       String,
       ZStream[
-        R with Blocking with Clock with Logging,
+        Any,
         Throwable,
         Record[T]
       ],
@@ -230,7 +206,7 @@ object Consumer {
             case (shardId, leaseLost) =>
               for {
                 checkpointer        <- leaseCoordinator.makeCheckpointer(shardId)
-                env                 <- ZIO.environment[Blocking with Logging]
+                env                 <- ZIO.environment[Blocking with Logging with Clock with R]
                 startingPositionOpt <- leaseCoordinator.getCheckpointForShard(shardId)
                 startingPosition     = startingPositionOpt
                                      .map(s => ShardIteratorType.AfterSequenceNumber(s.sequenceNumber))
@@ -249,8 +225,8 @@ object Consumer {
                     case Left(e)               =>
                       log.error(s"Error in checkpoint and release: ${e}").unit
                     case Right(ShardLeaseLost) => ZIO.unit // This is fine during shutdown
-                  }.provide(env)
-                },
+                  }
+                }.provide(env),
                 checkpointer
               )
           }
@@ -258,27 +234,25 @@ object Consumer {
     }
   }
 
-  def toConsumerRecord(record: KinesisRecord, shardId: String): ConsumerRecord =
-    ConsumerRecord(
-      record.sequenceNumber(),
-      record.approximateArrivalTimestamp(),
-      record.data(),
-      record.partitionKey(),
-      record.encryptionType(),
-      shardId
-    )
-
-  val isThrottlingException: PartialFunction[Throwable, Unit] = {
+  private[zionative] val isThrottlingException: PartialFunction[Throwable, Unit] = {
     case _: KmsThrottlingException                 => ()
     case _: ProvisionedThroughputExceededException => ()
     case _: LimitExceededException                 => ()
   }
 
-  def retryOnThrottledWithSchedule[R, A](schedule: Schedule[R, Throwable, A]): Schedule[R, Throwable, (Throwable, A)] =
+  private[zionative] def retryOnThrottledWithSchedule[R, A](
+    schedule: Schedule[R, Throwable, A]
+  ): Schedule[R, Throwable, (Throwable, A)] =
     Schedule.doWhile[Throwable](e => isThrottlingException.lift(e).isDefined).tapInput[R, Throwable] { e =>
       if (isThrottlingException.isDefinedAt(e))
         UIO(println("Got throttled!"))
       else ZIO.unit
     } && schedule
+
+  val defaultEnvironment
+    : ZLayer[Any, Throwable, AdminClient with Client with LeaseRepository with Has[CloudWatchAsyncClient]] =
+    HttpClient.make() >>>
+      sdkClients >+>
+      (AdminClient.live ++ Client.live ++ DynamoDbLeaseRepository.live)
 
 }

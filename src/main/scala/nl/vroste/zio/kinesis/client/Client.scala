@@ -134,15 +134,6 @@ object Client {
 
   type ClientTask[+A] = ZIO[Client, Throwable, A]
 
-  case class ConsumerRecord(
-    sequenceNumber: String,
-    approximateArrivalTimestamp: Instant,
-    data: SdkBytes,
-    partitionKey: String,
-    encryptionType: EncryptionType,
-    shardID: String
-  )
-
   case class ProducerRecord[T](partitionKey: String, data: T)
 
   sealed trait ShardIteratorType

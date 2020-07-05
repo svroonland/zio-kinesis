@@ -3,8 +3,7 @@ package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
 import java.time.Instant
 
 import scala.collection.compat._
-import nl.vroste.zio.kinesis.client.DynamicConsumer.Record
-import nl.vroste.zio.kinesis.client.Util
+import nl.vroste.zio.kinesis.client.{ Record, Util }
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative._
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator.LeaseCommand.{

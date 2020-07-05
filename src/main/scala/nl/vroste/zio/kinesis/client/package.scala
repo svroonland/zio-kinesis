@@ -39,4 +39,8 @@ package object client {
         ZManaged.fromAutoCloseable(ZIO.effect(build(DynamoDbAsyncClient.builder().httpClient(client))))
       }
     }
+
+  val sdkClients: ZLayer[HttpClient, Throwable, Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[
+    DynamoDbAsyncClient
+  ]] = kinesisAsyncClientLayer() ++ cloudWatchAsyncClientLayer() ++ dynamoDbAsyncClientLayer()
 }

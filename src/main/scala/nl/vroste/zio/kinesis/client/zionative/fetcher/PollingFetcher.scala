@@ -85,6 +85,7 @@ object PollingFetcher {
                                             }
 
         } yield ZStream
+        // TODO schedule that can examine the nr of records
           .repeatEffectWith(doPollAndRetryOnExpiredIterator, Schedule.fixed(config.interval))
           .catchAll {
             case None    => ZStream.empty

@@ -9,6 +9,7 @@ object LeaseRepository {
 
   /**
    * Service for storage and retrieval of leases
+   * TODO cleanup
    */
   trait Service {
 

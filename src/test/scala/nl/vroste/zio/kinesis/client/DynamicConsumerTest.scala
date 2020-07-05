@@ -83,7 +83,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
       ): ZStream[Console with Blocking with DynamicConsumer with Clock, Throwable, (String, String)] = {
         val checkpointDivisor = 1
 
-        def handler(shardId: String, r: DynamicConsumer.Record[String]) =
+        def handler(shardId: String, r: Record[String]) =
           for {
             id <- ZIO.fiberId
             _  <- putStrLn(s"Consumer $workerIdentifier on fiber $id got record $r on shard $shardId")
@@ -107,7 +107,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                           .flatMapPar(Int.MaxValue) {
                             case (shardId, shardStream, checkpointer @ _) =>
                               shardStream.zipWithIndex.tap {
-                                case (r: DynamicConsumer.Record[String], sequenceNumberForShard: Long) =>
+                                case (r: Record[String], sequenceNumberForShard: Long) =>
                                   checkpointer.stageOnSuccess(handler(shardId, r))(r).as(r) <*
                                     (putStrLn(
                                       s"Checkpointing at offset ${sequenceNumberForShard} in consumer ${workerIdentifier}, shard ${shardId}"
@@ -177,7 +177,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
         interrupted: Promise[Nothing, Unit],
         lastProcessedRecords: Ref[Map[String, String]],
         lastCheckpointedRecords: Ref[Map[String, String]]
-      ): ZStream[Console with Blocking with Clock with DynamicConsumer, Throwable, DynamicConsumer.Record[
+      ): ZStream[Console with Blocking with Clock with DynamicConsumer, Throwable, Record[
         String
       ]] =
         (for {
