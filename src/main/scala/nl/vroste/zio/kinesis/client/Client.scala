@@ -3,7 +3,6 @@ package nl.vroste.zio.kinesis.client
 import java.time.Instant
 
 import nl.vroste.zio.kinesis.client.serde.Serializer
-import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.awssdk.services.kinesis.model._
 import zio._
