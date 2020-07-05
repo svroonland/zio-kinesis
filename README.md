@@ -12,15 +12,18 @@ More beta users and feedback are of course welcome.
 - [Consumer](#consumer)
   * [Basic usage](#basic-usage)
   * [Checkpointing](#checkpointing)
+  * [Lease coordination](#lease-coordination)
   * [Customization](#customization)
   * [Diagnostic event & metrics](#diagnostic-event---metrics)
   * [KCL compatibility](#kcl-compatibility)
-- [DynamicConsumer](#dynamicconsumer)
-  * [Configuration](#configuration)
+  * [Unsupported features](#unsupported-features)
+- [Configuration](#configuration)
 - [Producer](#producer)
+- [DynamicConsumer](#dynamicconsumer)
 - [Client and AdminClient](#client-and-adminclient)
 - [Running tests and usage examples](#running-tests-and-usage-examples)
 - [Credits](#credits)
+
 ## Features
 
 The library consists of:
@@ -36,7 +39,7 @@ The library consists of:
   
 * `DynamicConsumer`  
   A ZStream-based wrapper around the Kinesis Client Library; an auto-rebalancing and checkpointing consumer.  
-  _NOTE_ Although `DynamicConsumer` will be included in this library for some time to come, it will eventually be deprecated and removed in favour of the ZIO native `Consumer`. Users are recommended to upgrade.
+  _NOTE Although `DynamicConsumer` will be included in this library for some time to come, it will eventually be deprecated and removed in favour of the ZIO-native `Consumer`. Users are recommended to upgrade._
 
 
 ## Installation
@@ -198,6 +201,47 @@ Features that are supported by `DynamicConsumer` but not by `Consumer`:
   Not all metrics published by the KCL are implemented yet. Some of them are not applicable because of different implementations.
 
 
+## Configuration
+The default environments for `Client`, `AdminClient`, `Consumer`, `DynamicConsumer` and `Producer` will use the [Default Credential/Region Provider](https://docs.aws.amazon.com/sdk-for-java/v1/developer-guide/credentials.html).
+Using the client builders, many parameters can be customized. Refer to the AWS documentation for more information on the possible parameters.
+
+Default client ZLayers are provided in `nl.vroste.zio.kinesis.client` package object for production and for integration tests are provided in `LocalStackServices`
+
+## Producer
+The low-level `Client` offers a `putRecords` method to put records on Kinesis. Although simple to use for a small number of records, 
+there are many catches when it comes to efficiently and reliably producing a high volume of records. 
+
+`Producer` helps you achieve high throughput by batching records and respecting the Kinesis request (rate) limits. Records 
+that cannot be produced due to temporary errors, like shard rate limits, will be retried.
+
+All of this of course with the robust failure handling you can expect from a ZIO-based library.
+
+Usage example:
+
+```scala
+import zio._
+import nl.vroste.zio.kinesis.client._
+import serde._
+import Client.ProducerRecord
+import zio.clock.Clock
+
+val streamName  = "my_stream"
+val applicationName ="my_awesome_zio_application"
+val clientLayer = HTTPClient.make() >>> kinesisAsyncClientLayer() >>> Client.live
+
+(for {
+  producer <- Producer
+    .make(streamName, Serde.asciiString)
+} yield producer)
+  .provideLayer(Clock.live ++ clientLayer)
+  .use { producer =>
+  val records = (1 to 100).map(j => ProducerRecord(s"key${j}", s"message${j}"))
+  producer
+    .produceChunk(Chunk.fromIterable(records)) *>
+    ZIO(println(s"All records in the chunk were produced"))
+}
+```
+
 ## DynamicConsumer
 `DynamicConsumer` is an alternative to `Consumer`, backed by the 
 [Kinesis Client Library (KCL)](https://docs.aws.amazon.com/streams/latest/dev/shared-throughput-kcl-consumers.html). 
@@ -247,46 +291,6 @@ object DynamicConsumerBasicUsageExample extends zio.App {
 
 DynamicConsumer is built on `ZManaged` and therefore resource-safe: after stream completion all resources acquired will be shutdown.
 
-### Configuration
-The default environments for `Client`, `AdminClient`, `Consumer`, `DynamicConsumer` and `Producer` will use the [Default Credential/Region Provider](https://docs.aws.amazon.com/sdk-for-java/v1/developer-guide/credentials.html).
-Using the client builders, many parameters can be customized. Refer to the AWS documentation for more information on the possible parameters.
-
-Default client ZLayers are provided in `nl.vroste.zio.kinesis.client` package object for production and for integration tests are provided in `LocalStackServices`
-
-## Producer
-The low-level `Client` offers a `putRecords` method to put records on Kinesis. Although simple to use for a small number of records, 
-there are many catches when it comes to efficiently and reliably producing a high volume of records. 
-
-`Producer` helps you achieve high throughput by batching records and respecting the Kinesis request (rate) limits. Records 
-that cannot be produced due to temporary errors, like shard rate limits, will be retried.
-
-All of this of course with the robust failure handling you can expect from a ZIO-based library.
-
-Usage example:
-
-```scala
-import zio._
-import nl.vroste.zio.kinesis.client._
-import serde._
-import Client.ProducerRecord
-import zio.clock.Clock
-
-val streamName  = "my_stream"
-val applicationName ="my_awesome_zio_application"
-val clientLayer = HTTPClient.make() >>> kinesisAsyncClientLayer() >>> Client.live
-
-(for {
-  producer <- Producer
-    .make(streamName, Serde.asciiString)
-} yield producer)
-  .provideLayer(Clock.live ++ clientLayer)
-  .use { producer =>
-  val records = (1 to 100).map(j => ProducerRecord(s"key${j}", s"message${j}"))
-  producer
-    .produceChunk(Chunk.fromIterable(records)) *>
-    ZIO(println(s"All records in the chunk were produced"))
-}
-```
 
 ## Client and AdminClient
 More low-level operations for consuming, producing and administering streams are available in `Client` and `AdminClient`.
@@ -316,3 +320,6 @@ Don't forget to shut down the docker container after you have finished. In the t
 
 The Serde construct in this library is inspired by [zio-kafka](https://github.com/zio/zio-kafka), the producer by
  [this AWS blog post](https://aws.amazon.com/blogs/big-data/implementing-efficient-and-reliable-producers-with-the-amazon-kinesis-producer-library/)
+ 
+Table of contents generated with [markdown-toc](http://ecotrust-canada.github.io/markdown-toc/).
+

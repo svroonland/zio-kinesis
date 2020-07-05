@@ -159,15 +159,19 @@ object DynamicConsumer {
       stage(r) *> checkpoint
 
     /**
-     * Helper method to add batch checkpointing to a stream
+     * Helper method to add batch checkpointing to a shard stream
      *
-   * @param nr
-     * @param interval
-     * @tparam R
-     * @return
+     * Usage:
+     *    shardStream.via(checkpointer.checkpointBatched(1000, 1.second))
+     *
+     * @param nr Maximum number of records before checkpointing
+     * @param interval Maximum interval before checkpointing
+     * @return Function that results in a ZStream that produces Unit values for successful checkpoints,
+     *         fails with an exception when checkpointing fails or becomes an empty stream
+     *         when the lease for this shard is lost, thereby ending the stream.
      */
     def checkpointBatched[R](
-      nr: Int,
+      nr: Long,
       interval: Duration
     ): ZStream[R, Throwable, Any] => ZStream[R with Clock with Blocking, Throwable, Unit] =
       _.aggregateAsyncWithin(ZTransducer.foldUntil((), nr)((_, _) => ()), Schedule.fixed(interval))

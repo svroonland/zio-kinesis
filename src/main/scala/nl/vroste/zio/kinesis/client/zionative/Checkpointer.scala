@@ -88,17 +88,20 @@ trait Checkpointer {
     stage(r) *> checkpoint[R](retrySchedule)
 
   /**
-   * Helper method to add batch checkpointing to a stream
+   * Helper method to add batch checkpointing to a shard stream
    *
-   * The record
+   * Usage:
+   *    shardStream.via(checkpointer.checkpointBatched(1000, 1.second))
    *
-   * @param nr
-   * @param interval
-   * @tparam R
-   * @return
+   * @param nr Maximum number of records before checkpointing
+   * @param interval Maximum interval before checkpointing
+   * @param retrySchedule Schedule to apply for retrying when checkpointing fails with an exception
+   * @return Function that results in a ZStream that produces Unit values for successful checkpoints,
+   *         fails with an exception when the retry schedule is exhausted or becomes an empty stream
+   *         when the lease for this shard is lost, thereby ending the stream.
    */
   def checkpointBatched[R](
-    nr: Int,
+    nr: Long,
     interval: Duration,
     retrySchedule: Schedule[Clock, Throwable, Any] = Util.exponentialBackoff(1.second, 1.minute, maxRecurs = Some(5))
   ): ZStream[R, Throwable, Any] => ZStream[R with Clock, Throwable, Unit] =
