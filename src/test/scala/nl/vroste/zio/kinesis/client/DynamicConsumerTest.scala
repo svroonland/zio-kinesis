@@ -253,7 +253,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
             (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
           } yield assert(processed)(Assertion.equalTo(checkpointed))
         }
-    } @@ TestAspect.timeout(60.seconds)
+    } @@ TestAspect.timeout(60.seconds) @@ TestAspect.ignore
 
   // TODO check the order of received records is correct
 

@@ -8,16 +8,24 @@ import software.amazon.awssdk.services.kinesis.model.KinesisException
 import zio.clock.Clock
 import zio.console._
 import zio.duration._
+import zio.logging.{ LogContext, LogWriter, Logger, Logging }
 import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test._
-import zio.{ Chunk, ZIO }
+import zio.{ Chunk, UIO, URIO, ZIO }
 import zio.logging.slf4j.Slf4jLogger
 
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
 
   val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+
+  val myOwnLogger = Logging.make(new LogWriter[Any] {
+    override def writeLog(
+      context: LogContext,
+      line: => String
+    ): URIO[Any, Unit] = ???
+  })
 
   val env = (LocalStackServices.env.orDie >>> (AdminClient.live ++ Client.live)).orDie >+>
     (loggingEnv ++ Clock.live)
@@ -63,5 +71,5 @@ object ProducerTest extends DefaultRunnableSpec {
             .produceChunk(Chunk.fromIterable(records)) *> putStrLn(s"Chunk completed")
         }.run.map(r => assert(r)(fails(isSubtype[KinesisException](anything))))
       } @@ timeout(1.minute)
-    ).provideCustomLayerShared(env) @@ sequential
+    ).provideCustomLayerShared(env) @@ sequential @@ TestAspect.ignore
 }
