@@ -8,12 +8,12 @@ import software.amazon.awssdk.services.kinesis.model.KinesisException
 import zio.clock.Clock
 import zio.console._
 import zio.duration._
-import zio.logging.{ LogContext, LogWriter, Logger, Logging }
+import zio.logging.slf4j.Slf4jLogger
+import zio.logging.{ LogContext, LogWriter, Logging }
 import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test._
-import zio.{ Chunk, UIO, URIO, ZIO }
-import zio.logging.slf4j.Slf4jLogger
+import zio.{ Chunk, URIO, ZIO }
 
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
