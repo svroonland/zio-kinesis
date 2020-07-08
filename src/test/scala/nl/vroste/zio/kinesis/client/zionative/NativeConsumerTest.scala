@@ -449,8 +449,11 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                       .tap(_ => checkpointer.checkpoint())
                       .catchAll {
                         case Right(_) =>
+                          println(s"Worker appears to have lost the lease?")
                           ZStream.empty
-                        case Left(e)  => ZStream.fail(e)
+                        case Left(e)  =>
+                          println(s"Worker ${workerId} failed with ${e}")
+                          ZStream.fail(e)
                       }
                 }
 
