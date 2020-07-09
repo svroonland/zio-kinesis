@@ -215,39 +215,38 @@ private class DefaultLeaseCoordinator(
              }
       } yield ()
 
+    def releaseLeaseIfExpired(shard: String, lease: Lease, updatedLease: Lease) =
+      for {
+        state    <- state.get
+        now      <- now
+        isExpired = state.currentLeases(shard).isExpired(now, settings.expirationTime)
+        _        <- ZIO.when(isExpired) {
+               log.warn(s"Lease for shard ${shard} has expired after failing to be renewed, releasing") *>
+                 updateState(_.releaseLease(updatedLease.copy(owner = None), _)) *>
+                 emitDiagnostic(DiagnosticEvent.LeaseReleased(lease.key))
+             }
+      } yield ()
+
     // Lease renewal increases the counter only. May detect that lease was stolen
     def doRenewLease(shard: String) =
       state.get.map(_.getHeldLease(shard)).flatMap {
         case Some((lease, leaseCompleted)) =>
           val updatedLease = lease.increaseCounter
-          for {
+          (for {
             duration <- table
                           .renewLease(applicationName, updatedLease)
-                          .catchAll {
-                            // This means the lease was updated by another worker
-                            case Right(LeaseObsolete) =>
-                              leaseLost(lease, leaseCompleted) *>
-                                log.info(s"Unable to renew lease for shard, lease counter was obsolete").as(false)
-                            case Left(e)              =>
-                              // Release the lease if we failed to renew it a few times already
-                              (for {
-                                state    <- state.get
-                                now      <- now
-                                isExpired = state.currentLeases(shard).isExpired(now, settings.expirationTime)
-                                _        <- ZIO.when(isExpired) {
-                                       log.warn(
-                                         s"Lease for shard ${shard} has expired after failing to be renewed, releasing"
-                                       ) *>
-                                         updateState(_.releaseLease(updatedLease.copy(owner = None), _)) *>
-                                         emitDiagnostic(DiagnosticEvent.LeaseReleased(lease.key))
-                                     }
-                              } yield ()) *> ZIO.fail(e)
-                          }
                           .timed
                           .map(_._1)
             _        <- updateState(_.updateLease(updatedLease, _))
             _        <- emitDiagnostic(DiagnosticEvent.LeaseRenewed(updatedLease.key, duration))
-          } yield ()
+          } yield ()).catchAll {
+            // This means the lease was updated by another worker
+            case Right(LeaseObsolete) =>
+              leaseLost(lease, leaseCompleted) *>
+                log.info(s"Unable to renew lease for shard, lease counter was obsolete")
+            case Left(e)              =>
+              releaseLeaseIfExpired(shard, lease, updatedLease) *> ZIO.fail(e)
+          }
         case None                          =>
           ZIO.fail(new Exception(s"Unknown lease for shard ${shard}! This indicates a programming error"))
       }
