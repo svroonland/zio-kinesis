@@ -105,7 +105,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
               result <- assertAllLeasesReleased(applicationName)
             } yield result
         }
-      },
+      } @@ TestAspect.ignore,
       testM("checkpoint the last staged record at shutdown") {
         val nrRecords = 200
         val nrShards  = 5
@@ -457,7 +457,9 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                       }
                 }
 
-            // The events we have to wait for: 1. At least one LeaseAcquired by worker 1. 2. LeaseAcquired for the same shard by another worker, but it's not a steal (?)
+            // The events we have to wait for:
+            // 1. At least one LeaseAcquired by worker 1.
+            // 2. LeaseAcquired for the same shard by another worker, but it's not a steal (?)
             // maybe NOT a LeaseReleased by worker 1
             def testIsComplete(events: List[(String, Instant, DiagnosticEvent)]) = {
               for {
