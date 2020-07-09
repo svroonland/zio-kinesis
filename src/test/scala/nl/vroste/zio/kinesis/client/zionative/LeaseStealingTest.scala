@@ -109,7 +109,7 @@ object LeaseStealingTest extends DefaultRunnableSpec {
             } yield assert(toStealWorkers)(equalTo(busiestWorkers.take(toStealWorkers.size)))
         }
       }
-    ).provideCustomLayer(loggingEnv) @@ TestAspect.ignore
+    ).provideCustomLayer(loggingEnv)
 
   def changedElements[A](as: List[A]): List[A] =
     as.foldLeft(List.empty[A]) { case (acc, a) => if (acc.lastOption.contains(a)) acc else acc :+ a }

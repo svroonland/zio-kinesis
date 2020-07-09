@@ -78,7 +78,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
             } yield assert(records.map(_.shardId).toSet)(equalTo(shardIds.toSet))
         }
-      } @@ TestAspect.ignore,
+      },
       testM("release leases at shutdown") {
         val nrRecords = 200
         val nrShards  = 5
@@ -105,7 +105,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
               result <- assertAllLeasesReleased(applicationName)
             } yield result
         }
-      } @@ TestAspect.ignore,
+      },
       testM("checkpoint the last staged record at shutdown") {
         val nrRecords = 200
         val nrShards  = 5
@@ -134,7 +134,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
             } yield assert(checkpoints)(Assertion.hasSameElements(expectedCheckpoints))
         }
-      } @@ TestAspect.ignore,
+      },
       testM("continue from the next message after the last checkpoint") {
         val nrRecords = 200
         val nrShards  = 1
@@ -183,7 +183,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
             } yield assert(firstRecord)(isSome(hasField("key", _.partitionKey, equalTo(s"key${nrRecords + 3}"))))
         }
-      } @@ TestAspect.ignore,
+      },
       testM("worker steals leases from other worker until they both have an equal share") {
         val nrRecords = 2000
         val nrShards  = 5
@@ -260,7 +260,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
             } yield assert(shardsConsumer2)(contains(completedShard))
         }
-      } @@ TestAspect.ignore,
+      },
       testM("workers should be able to start concurrently and both get some shards") {
         val nrRecords = 2000
         val nrShards  = 5
@@ -325,7 +325,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
               _        <- producer.interrupt
             } yield assertCompletes
         }
-      } @@ TestAspect.ignore,
+      },
       testM("workers must take over from a stopped consumer") {
         val nrRecords = 2000
         val nrShards  = 7
@@ -415,7 +415,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
             } yield assert(acquiredAfterRelease)(hasSameElements(worker1Released.map(_._2)))
         }
-      } @@ TestAspect.ignore,
+      },
       testM("workers must take over from a zombie consumer") {
         val nrRecords = 2000
         val nrShards  = 7
@@ -572,7 +572,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
               _             <- stream.interrupt
             } yield assertCompletes
         }
-      } @@ TestAspect.ignore
+      }
     ).provideSomeLayerShared(env) @@
       TestAspect.timed @@
       TestAspect.sequential @@ // For CircleCI

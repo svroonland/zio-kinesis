@@ -71,5 +71,5 @@ object ProducerTest extends DefaultRunnableSpec {
             .produceChunk(Chunk.fromIterable(records)) *> putStrLn(s"Chunk completed")
         }.run.map(r => assert(r)(fails(isSubtype[KinesisException](anything))))
       } @@ timeout(1.minute)
-    ).provideCustomLayerShared(env) @@ sequential @@ TestAspect.ignore
+    ).provideCustomLayerShared(env) @@ sequential
 }
