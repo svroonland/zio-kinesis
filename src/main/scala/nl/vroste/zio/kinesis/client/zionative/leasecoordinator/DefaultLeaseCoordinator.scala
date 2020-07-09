@@ -1,6 +1,6 @@
 package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
 
-import java.time.Instant
+import java.time.{ DateTimeException, Instant }
 
 import scala.collection.compat._
 import nl.vroste.zio.kinesis.client.{ Record, Util }
@@ -185,7 +185,7 @@ private class DefaultLeaseCoordinator(
       shard: String,
       checkpoint: ExtendedSequenceNumber,
       release: Boolean
-    ) =
+    ): ZIO[Logging with Clock, Either[Throwable, ShardLeaseLost.type], Unit] =
       for {
         heldleaseWithComplete  <- state.get
                                    .map(_.heldLeases.get(shard))
@@ -215,7 +215,11 @@ private class DefaultLeaseCoordinator(
              }
       } yield ()
 
-    def releaseLeaseIfExpired(shard: String, lease: Lease, updatedLease: Lease) =
+    def releaseLeaseIfExpired(
+      shard: String,
+      lease: Lease,
+      updatedLease: Lease
+    ): ZIO[Clock with Logging, DateTimeException, Unit] =
       for {
         state    <- state.get
         now      <- now
@@ -228,7 +232,7 @@ private class DefaultLeaseCoordinator(
       } yield ()
 
     // Lease renewal increases the counter only. May detect that lease was stolen
-    def doRenewLease(shard: String) =
+    def doRenewLease(shard: String): ZIO[Logging with Clock, Throwable, Unit] =
       state.get.map(_.getHeldLease(shard)).flatMap {
         case Some((lease, leaseCompleted)) =>
           val updatedLease = lease.increaseCounter
@@ -237,7 +241,7 @@ private class DefaultLeaseCoordinator(
                           .renewLease(applicationName, updatedLease)
                           .timed
                           .map(_._1)
-            _        <- updateState(_.updateLease(updatedLease, _))
+            _        <- updateState(_.updateLease(updatedLease, _)).mapError(Left(_))
             _        <- emitDiagnostic(DiagnosticEvent.LeaseRenewed(updatedLease.key, duration))
           } yield ()).catchAll {
             // This means the lease was updated by another worker
