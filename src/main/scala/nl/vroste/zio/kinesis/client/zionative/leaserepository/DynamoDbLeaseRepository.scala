@@ -129,9 +129,8 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient) extends Lease
       )
       .attributeUpdates(
         Map(
-          "leaseOwner"                   -> putAttributeValueUpdate(lease.owner.get),
-          "leaseCounter"                 -> putAttributeValueUpdate(lease.counter),
-          "ownerSwitchesSinceCheckpoint" -> putAttributeValueUpdate(lease.ownerSwitchesSinceCheckpoint)
+          "leaseOwner"   -> putAttributeValueUpdate(lease.owner.get),
+          "leaseCounter" -> putAttributeValueUpdate(lease.counter)
         ).asJava
       )
       .build()
@@ -167,17 +166,16 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient) extends Lease
       )
       .attributeUpdates(
         Map(
-          "leaseOwner"                   -> lease.owner.map(putAttributeValueUpdate(_)).getOrElse(deleteAttributeValueUpdate),
-          "leaseCounter"                 -> putAttributeValueUpdate(lease.counter),
-          "checkpoint"                   -> lease.checkpoint
+          "leaseOwner"                  -> lease.owner.map(putAttributeValueUpdate(_)).getOrElse(deleteAttributeValueUpdate),
+          "leaseCounter"                -> putAttributeValueUpdate(lease.counter),
+          "checkpoint"                  -> lease.checkpoint
             .map(_.sequenceNumber)
             .map(putAttributeValueUpdate)
             .getOrElse(putAttributeValueUpdate(null)),
-          "checkpointSubSequenceNumber"  -> lease.checkpoint
+          "checkpointSubSequenceNumber" -> lease.checkpoint
             .map(_.subSequenceNumber)
             .map(putAttributeValueUpdate)
-            .getOrElse(putAttributeValueUpdate(0L)),
-          "ownerSwitchesSinceCheckpoint" -> putAttributeValueUpdate(0L)
+            .getOrElse(putAttributeValueUpdate(0L))
         ).asJava
       )
       .build()
@@ -244,7 +242,6 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient) extends Lease
         key = item("leaseKey").s(),
         owner = item.get("leaseOwner").map(_.s()),
         counter = item("leaseCounter").n().toLong,
-        ownerSwitchesSinceCheckpoint = item("ownerSwitchesSinceCheckpoint").n().toLong,
         checkpoint = item
           .get("checkpoint")
           .filterNot(_.nul())
@@ -255,11 +252,7 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient) extends Lease
               subSequenceNumber = item("checkpointSubSequenceNumber").n().toLong
             )
           ),
-        parentShardIds = item.get("parentShardIds").map(_.ss().asScala.toList).getOrElse(List.empty),
-        pendingCheckpoint = item
-          .get("pendingCheckpoint")
-          .map(_.s())
-          .map(ExtendedSequenceNumber(_, item("pendingCheckpointSubSequenceNumber").n().toLong))
+        parentShardIds = item.get("parentShardIds").map(_.ss().asScala.toList).getOrElse(List.empty)
       )
     }.recoverWith {
       case e =>
@@ -270,11 +263,10 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient) extends Lease
   private def toDynamoItem(lease: Lease): DynamoDbItem = {
     import DynamoDbUtil.ImplicitConversions.toAttributeValue
     DynamoDbItem(
-      "leaseKey"                     -> lease.key,
-      "leaseCounter"                 -> lease.counter,
-      "checkpoint"                   -> lease.checkpoint.map(_.sequenceNumber).getOrElse(null),
-      "checkpointSubSequenceNumber"  -> lease.checkpoint.map(_.subSequenceNumber).getOrElse(null),
-      "ownerSwitchesSinceCheckpoint" -> 0L
+      "leaseKey"                    -> lease.key,
+      "leaseCounter"                -> lease.counter,
+      "checkpoint"                  -> lease.checkpoint.map(_.sequenceNumber).getOrElse(null),
+      "checkpointSubSequenceNumber" -> lease.checkpoint.map(_.subSequenceNumber).getOrElse(null)
     ) ++ (if (lease.parentShardIds.nonEmpty) DynamoDbItem("parentShardIds" -> lease.parentShardIds)
           else DynamoDbItem.empty) ++
       lease.owner.fold(DynamoDbItem.empty)(owner => DynamoDbItem("leaseOwner" -> owner))

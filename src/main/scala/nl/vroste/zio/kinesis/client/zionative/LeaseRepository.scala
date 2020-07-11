@@ -9,15 +9,13 @@ object LeaseRepository {
     key: String,
     owner: Option[String],
     counter: Long,
-    ownerSwitchesSinceCheckpoint: Long,
     checkpoint: Option[ExtendedSequenceNumber],
-    parentShardIds: Seq[String],
-    pendingCheckpoint: Option[ExtendedSequenceNumber] = None
+    parentShardIds: Seq[String]
   ) {
     def increaseCounter: Lease = copy(counter = counter + 1)
 
     def claim(owner: String): Lease =
-      copy(owner = Some(owner), counter = counter + 1, ownerSwitchesSinceCheckpoint = ownerSwitchesSinceCheckpoint + 1)
+      copy(owner = Some(owner), counter = counter + 1)
   }
 
   /**
