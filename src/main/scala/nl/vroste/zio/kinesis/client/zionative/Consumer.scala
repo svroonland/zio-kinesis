@@ -54,7 +54,7 @@ object FetchMode {
   case class EnhancedFanOut(
     deregisterConsumerAtShutdown: Boolean = false, // TODO
     maxSubscriptionsPerSecond: Int = 10,
-    retrySchedule: Schedule[Clock, Any, (Duration, Int)] = Util.exponentialBackoff(1.second, 1.minute)
+    retrySchedule: Schedule[Clock, Any, (Duration, Int)] = Util.exponentialBackoff(5.second, 1.minute)
   ) extends FetchMode
 }
 
