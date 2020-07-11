@@ -133,8 +133,8 @@ private class DefaultLeaseCoordinator(
 
     def releaseLeaseIfExpired(
       shard: String,
-      lease: Lease,
-      updatedLease: Lease
+      updatedLease: Lease,
+      completed: Promise[Nothing, Unit]
     ): ZIO[Clock with Logging, DateTimeException, Unit] =
       for {
         state    <- state.get
@@ -142,8 +142,9 @@ private class DefaultLeaseCoordinator(
         isExpired = state.currentLeases(shard).isExpired(now, settings.expirationTime)
         _        <- ZIO.when(isExpired) {
                log.warn(s"Lease for shard ${shard} has expired after failing to be renewed, releasing") *>
+                 completed.succeed(()) *>
                  updateState(_.releaseLease(updatedLease.copy(owner = None), _)) *>
-                 emitDiagnostic(DiagnosticEvent.LeaseReleased(lease.key))
+                 emitDiagnostic(DiagnosticEvent.LeaseReleased(updatedLease.key))
              }
       } yield ()
 
@@ -165,7 +166,7 @@ private class DefaultLeaseCoordinator(
               leaseLost(lease, leaseCompleted) *>
                 log.info(s"Unable to renew lease for shard, lease counter was obsolete")
             case Left(e)              =>
-              releaseLeaseIfExpired(shard, lease, updatedLease) *> ZIO.fail(e)
+              releaseLeaseIfExpired(shard, updatedLease, leaseCompleted) *> ZIO.fail(e)
           }
         case None                          =>
           ZIO.fail(new Exception(s"Unknown lease for shard ${shard}! This indicates a programming error"))
