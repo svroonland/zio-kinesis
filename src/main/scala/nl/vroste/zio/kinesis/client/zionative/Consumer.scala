@@ -11,6 +11,7 @@ import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepos
 import nl.vroste.zio.kinesis.client.{ sdkClients, AdminClient, Client, HttpClient, Record, Util }
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.kinesis.model.{
+  GetRecordsResponse,
   KmsThrottlingException,
   LimitExceededException,
   ProvisionedThroughputExceededException,
@@ -35,16 +36,30 @@ object FetchMode {
    * @param batchSize The maximum number of records to retrieve in one call to GetRecords. Note that Kinesis
    *        defines limits in terms of the maximum size in bytes of this call, so you need to take into account
    *        the distribution of data size of your records (i.e. avg and max).
-   * @param interval Interval between polls
-   * @param throttlingBackoff When getting a Provisioned Throughput Exception or KmsThrottlingException, schedule to apply for backoff
+   * @param pollSchedule Schedule for polling. The default schedule repeats immediately when there are more
+   *                     records available (millisBehindLatest > 0), otherwise it polls at a fixed interval of 1 second
+   * @param throttlingBackoff When getting a Provisioned Throughput Exception or KmsThrottlingException,
+   *                          schedule to apply for backoff
    * @param retrySchedule Schedule for retrying in case of non-throttling related issues
    */
   case class Polling(
     batchSize: Int = 1000,
-    interval: Duration = 1.second,
+    pollSchedule: Schedule[Clock, GetRecordsResponse, Any] = Polling.dynamicSchedule(1.second),
     throttlingBackoff: Schedule[Clock, Any, (Duration, Int)] = Util.exponentialBackoff(1.second, 1.minute),
     retrySchedule: Schedule[Clock, Any, (Duration, Int)] = Util.exponentialBackoff(1.second, 1.minute)
   ) extends FetchMode
+
+  object Polling {
+
+    /**
+     * Creates a polling schedule that immediately repeats when there are more records available
+     * (millisBehindLatest > 0), otherwise polls at a fixed interval.
+     *
+     * @param interval Fixed interval for polling when no more records are currently available
+     */
+    def dynamicSchedule(interval: Duration): Schedule[Clock, GetRecordsResponse, Any] =
+      Schedule.doWhile((_: GetRecordsResponse).millisBehindLatest() != 0) || Schedule.fixed(interval)
+  }
 
   /**
    * Fetch data using enhanced fanout
@@ -161,7 +176,7 @@ object Consumer {
       streamDescription: StreamDescription
     ): ZManaged[Clock with Client with Logging, Throwable, Fetcher] =
       fetchMode match {
-        case c: Polling        => PollingFetcher.make(streamDescription, c, emitDiagnostic)
+        case c: Polling        => PollingFetcher.make(streamDescription.streamName, c, emitDiagnostic)
         case c: EnhancedFanOut => EnhancedFanOutFetcher.make(streamDescription, workerIdentifier, c, emitDiagnostic)
       }
 
