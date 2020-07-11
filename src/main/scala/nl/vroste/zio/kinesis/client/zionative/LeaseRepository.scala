@@ -1,11 +1,24 @@
 package nl.vroste.zio.kinesis.client.zionative
 
-import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator.Lease
 import zio.ZIO
 import zio.clock.Clock
 import zio.logging.Logging
 
 object LeaseRepository {
+  case class Lease(
+    key: String,
+    owner: Option[String],
+    counter: Long,
+    ownerSwitchesSinceCheckpoint: Long,
+    checkpoint: Option[ExtendedSequenceNumber],
+    parentShardIds: Seq[String],
+    pendingCheckpoint: Option[ExtendedSequenceNumber] = None
+  ) {
+    def increaseCounter: Lease = copy(counter = counter + 1)
+
+    def claim(owner: String): Lease =
+      copy(owner = Some(owner), counter = counter + 1, ownerSwitchesSinceCheckpoint = ownerSwitchesSinceCheckpoint + 1)
+  }
 
   /**
    * Service for storage and retrieval of leases

@@ -12,8 +12,13 @@ import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoord
   RenewLease,
   UpdateCheckpoint
 }
-import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator.{ Lease, LeaseCommand }
-import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.{ LeaseAlreadyExists, LeaseObsolete, UnableToClaimLease }
+import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator.LeaseCommand
+import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.{
+  Lease,
+  LeaseAlreadyExists,
+  LeaseObsolete,
+  UnableToClaimLease
+}
 import software.amazon.awssdk.services.kinesis.model.Shard
 import zio._
 import zio.clock.Clock
@@ -576,21 +581,6 @@ object DefaultLeaseCoordinator {
 
     case class ReleaseLease(shard: String, done: Promise[Throwable, Unit]) extends LeaseCommand
 
-  }
-
-  case class Lease(
-    key: String,
-    owner: Option[String],
-    counter: Long,
-    ownerSwitchesSinceCheckpoint: Long,
-    checkpoint: Option[ExtendedSequenceNumber],
-    parentShardIds: Seq[String],
-    pendingCheckpoint: Option[ExtendedSequenceNumber] = None
-  ) {
-    def increaseCounter: Lease = copy(counter = counter + 1)
-
-    def claim(owner: String): Lease =
-      copy(owner = Some(owner), counter = counter + 1, ownerSwitchesSinceCheckpoint = ownerSwitchesSinceCheckpoint + 1)
   }
 
   def make(

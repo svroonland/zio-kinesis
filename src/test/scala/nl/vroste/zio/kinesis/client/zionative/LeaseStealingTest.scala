@@ -1,13 +1,11 @@
 package nl.vroste.zio.kinesis.client.zionative
 
+import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.Lease
 import zio.test._
 import zio.test.Gen
-
 import zio.test.DefaultRunnableSpec
-import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator.Lease
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator
 import zio.logging.slf4j.Slf4jLogger
-// import zio.UIO
 import zio.random.Random
 
 object LeaseStealingTest extends DefaultRunnableSpec {

@@ -1,8 +1,12 @@
 package nl.vroste.zio.kinesis.client.zionative.leaserepository
 
 import nl.vroste.zio.kinesis.client.Util.{ asZIO, paginatedRequest }
-import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.{ LeaseAlreadyExists, LeaseObsolete, UnableToClaimLease }
-import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator.Lease
+import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.{
+  Lease,
+  LeaseAlreadyExists,
+  LeaseObsolete,
+  UnableToClaimLease
+}
 import DynamoDbUtil._
 import nl.vroste.zio.kinesis.client.zionative.{ ExtendedSequenceNumber, LeaseRepository }
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
