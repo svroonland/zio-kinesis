@@ -252,15 +252,20 @@ private class DefaultLeaseCoordinator(
     for {
       _             <- log.info("Refreshing leases")
       currentLeases <- state.get.map(_.currentLeases.values.map(_.lease))
-      currentWorkers = currentLeases.map(_.owner).collect { case Some(owner) => owner }.toSet
       leases        <- table.getLeases(applicationName)
       _             <- ZIO.foreachPar_(leases)(lease => processCommand(LeaseCommand.RefreshLease(lease, _)))
-      newWorkers     = leases.map(_.owner).collect { case Some(owner) => owner }.toSet
-      workersJoined  = newWorkers -- currentWorkers
-      workersLeft    = currentWorkers -- newWorkers
-      _             <- ZIO.foreach(workersJoined)(w => emitDiagnostic(DiagnosticEvent.WorkerJoined(w)))
-      _             <- ZIO.foreach(workersLeft)(w => emitDiagnostic(DiagnosticEvent.WorkerLeft(w))) // TODO also for zombie workers
+      _             <- emitWorkerPoolDiagnostics(currentLeases, leases)
     } yield ()
+  }
+
+  def emitWorkerPoolDiagnostics(currentLeases: Iterable[Lease], newLeases: Iterable[Lease]) = {
+    val currentWorkers = currentLeases.map(_.owner).collect { case Some(owner) => owner }.toSet
+    val newWorkers     = newLeases.map(_.owner).collect { case Some(owner) => owner }.toSet
+    val workersJoined  = newWorkers -- currentWorkers
+    val workersLeft    = currentWorkers -- newWorkers
+
+    ZIO.foreach_(workersJoined)(w => emitDiagnostic(DiagnosticEvent.WorkerJoined(w))) *>
+      ZIO.foreach_(workersLeft)(w => emitDiagnostic(DiagnosticEvent.WorkerLeft(w))) // TODO also for zombie workers
   }
 
   /**
@@ -324,24 +329,18 @@ private class DefaultLeaseCoordinator(
       expiredLeases <- getExpiredLeases
       toTake        <- leasesToTake(state.currentLeases.map(_._2.lease).toList, workerId, expiredLeases)
       _             <- log.info(s"Going to take ${toTake.size} leases: ${toTake.mkString(",")}").when(toTake.nonEmpty)
-      _             <- ZIO
-             .foreachParN(settings.maxParallelLeaseAcquisitions)(toTake) { lease =>
-               val updatedLease = lease.claim(workerId)
-               (table
-                 .claimLease(applicationName, updatedLease)
-                 .as(Some(updatedLease)) *> registerNewAcquiredLease(updatedLease)).catchAll {
-                 case Right(UnableToClaimLease) =>
-                   log
-                     .info(
-                       s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
-                     )
-                     .as(None)
-                 case Left(e)                   =>
-                   log.error(s"Got error ${e}") *> ZIO.fail(e)
-               }.cause // To avoid aborting interrupting the other claims on failure
+      _             <- foreachParNUninterrupted_(settings.maxParallelLeaseAcquisitions)(toTake) { lease =>
+             val updatedLease = lease.claim(workerId)
+             (table.claimLease(applicationName, updatedLease) *> registerNewAcquiredLease(updatedLease)).catchAll {
+               case Right(UnableToClaimLease) =>
+                 log
+                   .info(
+                     s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
+                   )
+               case Left(e)                   =>
+                 log.error(s"Got error ${e}") *> ZIO.fail(e)
              }
-             .map(_.reduceOption(_ && _).getOrElse(Cause.empty))
-             .uncause // Fails with a cause of all errors
+           }
     } yield ()
 
   // Puts it in the state and the queue
@@ -389,8 +388,7 @@ private class DefaultLeaseCoordinator(
       permit <- Semaphore.make(1)
     } yield new Checkpointer {
       def checkpoint[R](
-        retrySchedule: Schedule[Clock with R, Throwable, Any] =
-          Util.exponentialBackoff(1.second, 1.minute, maxRecurs = Some(5))
+        retrySchedule: Schedule[Clock with R, Throwable, Any]
       ): ZIO[Clock with R, Either[Throwable, ShardLeaseLost.type], Unit] =
         doCheckpoint(false)
           .retry(retrySchedule.left[ShardLeaseLost.type])
@@ -440,11 +438,8 @@ private class DefaultLeaseCoordinator(
       .map(_.heldLeases.values)
       .flatMap(ZIO.foreachPar_(_) {
         case (lease, _) =>
-          releaseLease(lease.key).ignore // We do our best to release the lease
+          processCommand(LeaseCommand.ReleaseLease(lease.key, _)).ignore // We do our best to release the lease
       })
-
-  override def releaseLease(shard: String) =
-    processCommand(LeaseCommand.ReleaseLease(shard, _))
 }
 
 object DefaultLeaseCoordinator {
@@ -500,7 +495,7 @@ object DefaultLeaseCoordinator {
                       )
       } yield coordinator
     }(_.releaseLeases).flatMap { c =>
-      // Do all initalization in parallel
+      // Optimized to do initalization in parallel as much as possible
       for {
         leaseTableExists    <-
           ZIO.service[LeaseRepository.Service].flatMap(_.createLeaseTableIfNotExists(applicationName)).toManaged_
@@ -519,28 +514,20 @@ object DefaultLeaseCoordinator {
                   * we may have 'internally' released the lease but if no other worker has claimed
                   * the lease, it will still be in the lease table with us as owner.
                   */
-                 (c.refreshLeases *> c.resumeUnreleasedLeases *> c.takeLeases)
-                   .repeat(
-                     Schedule
-                       .fixed(settings.refreshAndTakeInterval)
-                       .jittered(0.95, 1.05)
-                   )
-                   .delay(settings.refreshAndTakeInterval)
-                   .tapCause(e => log.error("Refresh & take leases failed, will retry", e))
-                   .retry(Schedule.forever)).forkManaged
-        _                   <- c.renewLeases
-               .repeat(
-                 Schedule
-                   .fixed(settings.renewInterval)
-                   .jittered(0.95, 1.05)
-               )
-               .delay(settings.renewInterval)
-               .tapCause(e => log.error("Renewing leases failed, will retry", e))
-               .retry(Schedule.forever)
-               .forkManaged
+                 repeatAndRetry(settings.refreshAndTakeInterval) {
+                   (c.refreshLeases *> c.resumeUnreleasedLeases *> c.takeLeases)
+                     .tapCause(e => log.error("Refresh & take leases failed, will retry", e))
+                 }).forkManaged
+        _                   <- repeatAndRetry(settings.renewInterval) {
+               c.renewLeases
+                 .tapCause(e => log.error("Renewing leases failed, will retry", e))
+             }.forkManaged
       } yield c
     }.tapCause(c => log.error("Error creating DefaultLeaseCoordinator", c).toManaged_)
       .updateService[Logger[String]](_.named(s"worker-${workerId}"))
+
+  private def repeatAndRetry[R, E, A](interval: Duration)(effect: ZIO[R, E, A]) =
+    effect.repeat(Schedule.fixed(interval)).delay(interval).retry(Schedule.forever)
 
   /**
    * Compute which leases to take, either without owner or from other workers
@@ -645,7 +632,7 @@ object DefaultLeaseCoordinator {
     for {
       leasesToStealByWorker <- ZIO.foreach(nrLeasesToStealByWorker) {
                                  case (worker, nrLeasesToTake) =>
-                                   shuffle(leasesByWorker.get(worker).getOrElse(List.empty))
+                                   shuffle(leasesByWorker.getOrElse(worker, List.empty))
                                      .map(_.take(nrLeasesToTake))
                                }
       leasesToSteal          = leasesToStealByWorker.flatten

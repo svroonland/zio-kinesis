@@ -25,7 +25,7 @@ object LeaseStealingTest extends DefaultRunnableSpec {
                     counter    <- Gen.long(1, 1000)
                     sequenceNr <-
                       Gen.option(Gen.int(0, Int.MaxValue / 2).map(_.toString).map(ExtendedSequenceNumber(_, 0L)))
-                  } yield Lease(s"shard-${shard}", worker, counter, 0L, sequenceNr, Seq.empty, None)
+                  } yield Lease(s"shard-${shard}", worker, counter, sequenceNr, Seq.empty)
                 }
     } yield leases
 
@@ -41,8 +41,8 @@ object LeaseStealingTest extends DefaultRunnableSpec {
       },
       testM("Steals leases manually") {
         val leases = List(
-          Lease("shard-0", Some("worker-1"), 1, 0, None, List(), None),
-          Lease("shard-1", Some("worker-1"), 1, 0, None, List(), None)
+          Lease("shard-0", Some("worker-1"), 1, None, List()),
+          Lease("shard-1", Some("worker-1"), 1, None, List())
         )
         assertM(leasesToTake(leases, workerId(2)))(isNonEmpty)
 

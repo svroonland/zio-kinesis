@@ -11,8 +11,6 @@ private[zionative] trait LeaseCoordinator {
   def getCheckpointForShard(shardId: String): UIO[Option[ExtendedSequenceNumber]]
 
   def acquiredLeases: ZStream[Clock, Throwable, AcquiredLease]
-
-  def releaseLease(shardId: String): ZIO[Logging, Throwable, Unit]
 }
 
 private[zionative] object LeaseCoordinator {
