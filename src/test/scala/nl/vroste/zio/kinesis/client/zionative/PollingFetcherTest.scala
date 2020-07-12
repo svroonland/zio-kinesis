@@ -22,6 +22,19 @@ object PollingFetcherTest extends DefaultRunnableSpec {
 
   val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some("PollingFetcherTest"))
 
+  /**
+   * PollingFetcher must:
+   * - immediately emit all records that were fetched in the first call in one Chunk
+   * - immediately poll again when there are more records available
+   * - delay polling when there are no more records available
+   * - make no more than 5 calls per second to GetShardIterator
+   * - make no more than 5 calls per second per shard to GetRecords
+   * - retry after some time on being throttled
+   * - make the next call with the previous response's nextShardIterator
+   * - end the shard stream when the shard has ended
+   *
+   * @return
+   */
   override def spec =
     suite("PollingFetcher")(
       testM("immediately emits all records that were fetched in the first call in one Chunk") {
@@ -116,6 +129,43 @@ object PollingFetcherTest extends DefaultRunnableSpec {
           _                         <- chunksFib.join
         } yield assert(chunksReceivedImmediately)(equalTo(nrBatches)) && assert(chunksReceivedLater)(
           equalTo(nrBatches + 1)
+        )).provideSomeLayer[ZTestEnv with Clock with Logging](ZLayer.succeed(mockClient(records)))
+      },
+      testM("make no more than 5 calls per second per shard to GetRecords") {
+        val batchSize    = 10
+        val nrBatches    = 6 // More than 5, the GetRecords limit
+        val pollInterval = 1.second
+
+        val records = (0 until nrBatches * batchSize).map { i =>
+          Record
+            .builder()
+            .data(SdkBytes.fromString("test", Charset.defaultCharset()))
+            .partitionKey(s"key${i}")
+            .sequenceNumber(s"${i}")
+            .build()
+        }
+
+        (for {
+          chunksReceived            <- Ref.make[Int](0)
+          chunksFib                 <-
+            PollingFetcher
+              .make("my-stream-1", FetchMode.Polling(batchSize, Polling.dynamicSchedule(pollInterval)), _ => UIO.unit)
+              .use { fetcher =>
+                fetcher
+                  .shardRecordStream("shard1", ShardIteratorType.TrimHorizon)
+                  .mapChunks(Chunk.single)
+                  .tap(_ => chunksReceived.update(_ + 1))
+                  .take(nrBatches)
+                  .runDrain
+              }
+              .fork
+          _                         <- TestClock.adjust(0.seconds)
+          chunksReceivedImmediately <- chunksReceived.get
+          _                         <- TestClock.adjust(pollInterval)
+          chunksReceivedLater       <- chunksReceived.get
+          _                         <- chunksFib.join
+        } yield assert(chunksReceivedImmediately)(equalTo(5)) && assert(chunksReceivedLater)(
+          equalTo(nrBatches)
         )).provideSomeLayer[ZTestEnv with Clock with Logging](ZLayer.succeed(mockClient(records)))
       }
     ).provideCustomLayer(loggingEnv ++ TestClock.default)

@@ -9,6 +9,18 @@ import zio.stream.ZStream
 
 import scala.jdk.CollectionConverters._
 
+/**
+ * Fetcher that uses GetRecords
+ *
+ * Limits (from https://docs.aws.amazon.com/streams/latest/dev/service-sizes-and-limits.html):
+ * - GetRecords can retrieve up to 10 MB of data per call from a single shard, and up to 10,000 records per call.
+ *   Each call to GetRecords is counted as one read transaction.
+ * - Each shard can support up to five read transactions per second.
+ *   Each read transaction can provide up to 10,000 records with an upper quota of 10 MB per transaction.
+ * - Each shard can support up to a maximum total data read rate of 2 MB per second via GetRecords. i
+ *   If a call to GetRecords returns 10 MB, subsequent calls made within the next 5 seconds throw an exception.
+ * - GetShardIterator: max 5 calls per second globally
+ */
 object PollingFetcher {
   import Consumer.retryOnThrottledWithSchedule
   import Util._
@@ -19,27 +31,29 @@ object PollingFetcher {
     emitDiagnostic: DiagnosticEvent => UIO[Unit]
   ): ZManaged[Clock with Client with Logging, Throwable, Fetcher] =
     for {
-      // Max 5 calls per second (globally)
-      getShardIterator <- throttledFunction(5, 1.second)((Client.getShardIterator _).tupled)
+      getShardIterator <- throttledFunction(getShardIteratorRateLimit, 1.second)(Client.getShardIterator _)
+                            .map(_.andThen(_.retry(retryOnThrottledWithSchedule(config.throttlingBackoff))))
       env              <- ZIO.environment[Client with Clock with Logging].toManaged_
     } yield Fetcher { (shardId, startingPosition) =>
       ZStream.unwrapManaged {
         for {
-          // GetRecords can be called up to 5 times per second per shard
-          getRecordsThrottled  <- throttledFunction(5, 1.second)((Client.getRecords _).tupled)
-          initialShardIterator <- getShardIterator((streamName, shardId, startingPosition))
-                                    .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
-                                    .toManaged_
+          getRecordsThrottled  <- throttledFunction(getRecordsRateLimit, 1.second)(Client.getRecords _)
+                                   .map(
+                                     _.andThen(
+                                       _.tapError(e => log.warn(s"Error GetRecords for shard ${shardId}: ${e}"))
+                                         .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
+                                     )
+                                   )
+          initialShardIterator <- getShardIterator((streamName, shardId, startingPosition)).toManaged_
           shardIterator        <- Ref.make[Option[String]](Some(initialShardIterator)).toManaged_
 
           // Failure with None indicates that there's no next shard iterator and the shard has ended
-          doPoll = for {
+          doPoll      = for {
                      currentIterator      <- shardIterator.get
                      currentIterator      <- ZIO.fromOption(currentIterator)
                      responseWithDuration <-
-                       getRecordsThrottled(
-                         (currentIterator, config.batchSize)
-                       ).retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
+                       getRecordsThrottled(currentIterator, config.batchSize)
+                         .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
                          .asSomeError
                          .retry(
                            Schedule.fixed(100.millis) && Schedule.recurs(3)
@@ -57,18 +71,16 @@ object PollingFetcher {
                           )
                    } yield response
 
-        } yield repeatEffectWith(doPoll, config.pollSchedule).catchAll {
-          case None    =>
-            ZStream.empty
-          case Some(e) =>
-            ZStream.fromEffect(log.warn(s"Error in PollingFetcher for shard ${shardId}: ${e}")) *> ZStream.fail(e)
-        }.mapConcatChunk(response => Chunk.fromIterable(response.records.asScala))
-          .retry(
-            config.throttlingBackoff.tapOutput {
-              case (delay, retryNr) =>
-                log.info(s"PollingFetcher will make make retry attempt nr ${retryNr} in ${delay.toMillis} millis")
-            }
-          )
+          shardStream = repeatEffectWith(doPoll, config.pollSchedule).catchAll {
+                          case None    =>
+                            ZStream.empty
+                          case Some(e) =>
+                            ZStream.fromEffect(
+                              log.warn(s"Error in PollingFetcher for shard ${shardId}: ${e}")
+                            ) *> ZStream.fail(e)
+                        }.mapConcatChunk(response => Chunk.fromIterable(response.records.asScala))
+                          .retry(config.throttlingBackoff)
+        } yield shardStream
       }.provide(env)
     }
 
@@ -84,4 +96,7 @@ object PollingFetcher {
               .foldM(_ => ZIO.succeed(Option.empty), newState => effect.map(value => Some((value, (newState, value)))))
         }
     }
+
+  private val getShardIteratorRateLimit = 5
+  private val getRecordsRateLimit       = 5
 }

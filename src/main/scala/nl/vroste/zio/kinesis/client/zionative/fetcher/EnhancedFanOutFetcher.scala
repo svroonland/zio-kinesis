@@ -28,7 +28,7 @@ object EnhancedFanOutFetcher {
       client             <- ZIO.service[Client.Service].toManaged_
       env                <- ZIO.environment[Logging with Clock].toManaged_
       consumerARN        <- registerConsumerIfNotExists(streamDescription.streamARN, workerId).toManaged_
-      subscribeThrottled <- Util.throttledFunctionN(config.maxSubscriptionsPerSecond.toLong, 1.second) {
+      subscribeThrottled <- Util.throttledFunction(config.maxSubscriptionsPerSecond.toLong, 1.second) {
                               (pos: ShardIteratorType, shardId: String) =>
                                 ZIO.succeed(client.subscribeToShard(consumerARN, shardId, pos))
                             }
@@ -38,7 +38,7 @@ object EnhancedFanOutFetcher {
           currentPosition <- Ref.make[Option[ShardIteratorType]](Some(startingPosition)) // None means shard has ended
         } yield repeatWhileNotNone(currentPosition) { pos =>
           ZStream
-            .unwrap(subscribeThrottled((pos, shardId)))
+            .unwrap(subscribeThrottled(pos, shardId))
             .tap { e =>
               currentPosition.set(
                 Option(e.continuationSequenceNumber()).map(ShardIteratorType.AfterSequenceNumber)
