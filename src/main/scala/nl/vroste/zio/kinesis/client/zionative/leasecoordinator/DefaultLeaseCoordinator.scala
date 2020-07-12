@@ -273,7 +273,8 @@ private class DefaultLeaseCoordinator(
     currentLeases <- state.get.map(_.currentLeases)
     now           <- now
     leasesToRenew  = currentLeases.view.collect {
-                      case (shard, s @ LeaseState(_, _, _)) if s.wasUpdatedLessThan(settings.renewInterval, now) =>
+                      case (shard, s @ LeaseState(lease, _, _))
+                          if !s.wasUpdatedLessThan(settings.renewInterval, now) && s.lease.owner.contains(workerId) =>
                         shard
                     }
     _             <- foreachParNUninterrupted_(settings.maxParallelLeaseRenewals)(leasesToRenew) { shardId =>
