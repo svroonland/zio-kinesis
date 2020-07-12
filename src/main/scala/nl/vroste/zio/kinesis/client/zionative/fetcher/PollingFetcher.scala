@@ -1,7 +1,6 @@
 package nl.vroste.zio.kinesis.client.zionative.fetcher
 import nl.vroste.zio.kinesis.client.zionative.{ Consumer, DiagnosticEvent, FetchMode, Fetcher }
 import nl.vroste.zio.kinesis.client.{ Client, Util }
-import software.amazon.awssdk.services.kinesis.model.ExpiredIteratorException
 import zio._
 import zio.clock.Clock
 import zio.duration._
@@ -34,7 +33,7 @@ object PollingFetcher {
           shardIterator        <- Ref.make[Option[String]](Some(initialShardIterator)).toManaged_
 
           // Failure with None indicates that there's no next shard iterator and the shard has ended
-          doPoll                          = for {
+          doPoll = for {
                      currentIterator      <- shardIterator.get
                      currentIterator      <- ZIO.fromOption(currentIterator)
                      responseWithDuration <-
@@ -58,23 +57,11 @@ object PollingFetcher {
                           )
                    } yield response
 
-          doPollAndRetryOnExpiredIterator = doPoll.catchSome {
-                                              case Some(e: ExpiredIteratorException) =>
-                                                log.warn(s"Shard iterator expired: ${e}") *>
-                                                  getShardIterator(
-                                                    (streamName, shardId, startingPosition)
-                                                  ).retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
-                                                    .asSomeError
-                                                    .flatMap(it => shardIterator.set(Some(it))) *> doPoll
-                                            }
-
-        } yield repeatEffectWith(doPollAndRetryOnExpiredIterator, config.pollSchedule).catchAll {
+        } yield repeatEffectWith(doPoll, config.pollSchedule).catchAll {
           case None    =>
             ZStream.empty
           case Some(e) =>
-            ZStream.unwrap(
-              log.warn(s"Error in PollingFetcher for shard ${shardId}: ${e}").as(ZStream.fail(e))
-            )
+            ZStream.fromEffect(log.warn(s"Error in PollingFetcher for shard ${shardId}: ${e}")) *> ZStream.fail(e)
         }.mapConcatChunk(response => Chunk.fromIterable(response.records.asScala))
           .retry(
             config.throttlingBackoff.tapOutput {

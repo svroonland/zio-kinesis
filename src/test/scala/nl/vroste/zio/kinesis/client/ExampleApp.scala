@@ -22,15 +22,15 @@ import zio.stream.{ ZStream, ZTransducer }
  * Example app that shows the ZIO-native and KCL workers running in parallel
  */
 object ExampleApp extends zio.App {
-  val streamName                      = "zio-test-stream-10" // + java.util.UUID.randomUUID().toString
+  val streamName                      = "zio-test-stream-12" // + java.util.UUID.randomUUID().toString
   val nrRecords                       = 2000000
   val nrShards                        = 2
-  val enhancedFanout                  = true
+  val enhancedFanout                  = false
   val nrNativeWorkers                 = 1
   val nrKclWorkers                    = 0
   val applicationName                 = "testApp-1"          // + java.util.UUID.randomUUID().toString(),
   val runtime                         = 20.minute
-  val maxRandomWorkerStartDelayMillis = 1 + 0 * 60 * 1000    // 20000
+  val maxRandomWorkerStartDelayMillis = 1 + 0 * 30 * 1000    // 20000
   val recordProcessingTime: Duration  = 1.millisecond
 
   override def run(
@@ -67,7 +67,7 @@ object ExampleApp extends zio.App {
                 .tap(r =>
                   checkpointer
                     .stageOnSuccess(
-                      (log.info(s"${id} Processing record $r") *> ZIO.sleep(recordProcessingTime)).when(true)
+                      (log.info(s"${id} Processing record $r") *> ZIO.sleep(recordProcessingTime)).when(false)
                     )(r)
                 )
                 .aggregateAsyncWithin(ZTransducer.collectAllN(1000), Schedule.fixed(5.second))
