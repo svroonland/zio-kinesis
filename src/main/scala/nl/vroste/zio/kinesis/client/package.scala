@@ -1,5 +1,7 @@
 package nl.vroste.zio.kinesis
 
+import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
+import software.amazon.awssdk.core.retry.RetryPolicy
 import software.amazon.awssdk.services.cloudwatch.{ CloudWatchAsyncClient, CloudWatchAsyncClientBuilder }
 import software.amazon.awssdk.services.dynamodb.{ DynamoDbAsyncClient, DynamoDbAsyncClientBuilder }
 import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyncClientBuilder }
@@ -17,7 +19,17 @@ package object client {
   ): ZLayer[HttpClient, Throwable, Has[KinesisAsyncClient]] =
     ZLayer.fromServiceManaged { httpClient =>
       httpClient.createSdkHttpClient(http2Supported = true).flatMap { client =>
-        ZManaged.fromAutoCloseable(ZIO.effect(build(KinesisAsyncClient.builder().httpClient(client))))
+        ZManaged.fromAutoCloseable(
+          ZIO.effect(
+            build(
+              KinesisAsyncClient
+                .builder()
+                // We do our own retries for the purposes of logging and metrics
+                .overrideConfiguration(ClientOverrideConfiguration.builder().retryPolicy(RetryPolicy.none()).build())
+                .httpClient(client)
+            )
+          )
+        )
       }
     }
 

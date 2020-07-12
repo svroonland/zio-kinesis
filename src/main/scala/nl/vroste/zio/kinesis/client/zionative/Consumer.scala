@@ -259,11 +259,7 @@ object Consumer {
   private[zionative] def retryOnThrottledWithSchedule[R, A](
     schedule: Schedule[R, Throwable, A]
   ): Schedule[R, Throwable, (Throwable, A)] =
-    Schedule.doWhile[Throwable](e => isThrottlingException.lift(e).isDefined).tapInput[R, Throwable] { e =>
-      if (isThrottlingException.isDefinedAt(e))
-        UIO(println("Got throttled!"))
-      else ZIO.unit
-    } && schedule
+    Schedule.doWhile[Throwable](e => isThrottlingException.lift(e).isDefined) && schedule
 
   val defaultEnvironment
     : ZLayer[Any, Throwable, AdminClient with Client with LeaseRepository with Has[CloudWatchAsyncClient]] =
