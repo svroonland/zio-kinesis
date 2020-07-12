@@ -4,7 +4,6 @@ import java.nio.charset.Charset
 import nl.vroste.zio.kinesis.client.Client
 import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.Polling
-import nl.vroste.zio.kinesis.client.zionative.PollingFetcherTest.mockClient
 import nl.vroste.zio.kinesis.client.zionative.fetcher.PollingFetcher
 import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.services.kinesis.model.{ GetRecordsResponse, Record }
@@ -31,8 +30,8 @@ object PollingFetcherTest extends DefaultRunnableSpec {
    * - [ ] make no more than 5 calls per second to GetShardIterator
    * - [X] make no more than 5 calls per second per shard to GetRecords
    * - [ ] retry after some time on being throttled
-   * - [ ] make the next call with the previous response's nextShardIterator
-   * - [ ] end the shard stream when the shard has ended
+   * - [X] make the next call with the previous response's nextShardIterator
+   * - [X] end the shard stream when the shard has ended
    * - [ ] emit a diagnostic event for every completed poll
    *
    * @return
@@ -169,6 +168,34 @@ object PollingFetcherTest extends DefaultRunnableSpec {
         } yield assert(chunksReceivedImmediately)(equalTo(5)) && assert(chunksReceivedLater)(
           equalTo(nrBatches)
         )).provideSomeLayer[ZTestEnv with Clock with Logging](ZLayer.succeed(mockClient(records)))
+      },
+      testM("make the next call with the previous response's nextShardIterator") {
+        val batchSize = 10
+        val nrBatches = 2
+
+        val records = (0 until nrBatches * batchSize).map { i =>
+          Record
+            .builder()
+            .data(SdkBytes.fromString("test", Charset.defaultCharset()))
+            .partitionKey(s"key${i}")
+            .sequenceNumber(s"${i}")
+            .build()
+        }
+
+        (for {
+          fetched      <- PollingFetcher
+                       .make("my-stream-1", FetchMode.Polling(batchSize), _ => UIO.unit)
+                       .use { fetcher =>
+                         fetcher
+                           .shardRecordStream("shard1", ShardIteratorType.TrimHorizon)
+                           .mapChunks(Chunk.single)
+                           .take(nrBatches)
+                           .flattenChunks
+                           .runCollect
+                       }
+          partitionKeys = fetched.map(_.partitionKey)
+        } yield assert(partitionKeys)(equalTo(records.map(_.partitionKey))))
+          .provideSomeLayer[ZTestEnv with Clock with Logging](ZLayer.succeed(mockClient(records)))
       },
       testM("end the shard stream when the shard has ended") {
         val batchSize = 10
