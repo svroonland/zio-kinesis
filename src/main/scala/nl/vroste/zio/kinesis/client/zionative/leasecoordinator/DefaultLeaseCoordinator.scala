@@ -1,6 +1,7 @@
 package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
 
 import java.time.{ DateTimeException, Instant }
+import java.util.concurrent.TimeoutException
 
 import scala.collection.compat._
 import nl.vroste.zio.kinesis.client.Record
@@ -120,7 +121,7 @@ private class DefaultLeaseCoordinator(
                  leaseLost(updatedLease, leaseCompleted).orDie *>
                    ZIO.fail(Right(ShardLeaseLost))
                case Left(e)              =>
-                 ZIO.fail(Left(e))
+                 log.warn(s"Error updating checkpoint: $e") *> ZIO.fail(Left(e))
              }.onSuccess { _ =>
                (updateState(_.updateLease(updatedLease, _)) *>
                  (
@@ -413,7 +414,7 @@ private class DefaultLeaseCoordinator(
         retrySchedule: Schedule[Clock with R, Throwable, Any]
       ): ZIO[Clock with R, Either[Throwable, ShardLeaseLost.type], Unit] =
         doCheckpoint(false)
-          .retry(retrySchedule.left[ShardLeaseLost.type])
+          .retry(retrySchedule +++ Schedule.stop) // Only retry Left[Throwable]
 
       override def checkpointAndRelease: ZIO[Any, Either[Throwable, ShardLeaseLost.type], Unit] =
         doCheckpoint(release = true)
