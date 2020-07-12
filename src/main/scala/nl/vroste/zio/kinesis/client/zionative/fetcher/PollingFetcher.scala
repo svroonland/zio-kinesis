@@ -78,7 +78,9 @@ object PollingFetcher {
                           .mapConcatChunk(response => Chunk.fromIterable(response.records.asScala))
                           .retry(config.throttlingBackoff)
         } yield shardStream
-      }.provide(env)
+      }.ensuring(log.info(s"PollingFetcher for shard ${shardId} closed"))
+        .provide(env)
+
     }
 
   // Like ZStream.repeatEffectWith but does not delay the outputs

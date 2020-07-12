@@ -227,7 +227,7 @@ object Consumer {
                                      .map(s => ShardIteratorType.AfterSequenceNumber(s.sequenceNumber))
                                      .getOrElse(initialPosition)
                 stop                 = ZStream.fromEffect(leaseLost.await).as(Exit.fail(None))
-                shardStream          = (stop merge fetcher
+                shardStream          = (stop mergeTerminateEither fetcher
                                   .shardRecordStream(shardId, startingPosition)
                                   .mapChunksM { chunk => // mapM is slow
                                     chunk.mapM(record => toRecord(shardId, record))
@@ -238,8 +238,9 @@ object Consumer {
                 shardStream.ensuringFirst {
                   checkpointer.checkpointAndRelease.catchAll {
                     case Left(e)               =>
-                      log.error(s"Error in checkpoint and release: ${e}").unit
-                    case Right(ShardLeaseLost) => ZIO.unit // This is fine during shutdown
+                      log.warn(s"Error in checkpoint and release: ${e}").unit
+                    case Right(ShardLeaseLost) =>
+                      ZIO.unit // This is fine during shutdown
                   }
                 }.provide(env),
                 checkpointer

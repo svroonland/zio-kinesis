@@ -28,7 +28,6 @@ object LeaseRepository {
      * Returns whether the table already existed
      */
     def createLeaseTableIfNotExists(tableName: String): ZIO[Clock with Logging, Throwable, Boolean]
-//    def leaseTableExists(tableName: String): ZIO[Logging, Throwable, Boolean]
     def getLeases(tableName: String): ZIO[Clock, Throwable, List[Lease]]
 
     /**
@@ -39,17 +38,32 @@ object LeaseRepository {
    * @param lease
      * @return
      */
-    def releaseLease(tableName: String, lease: Lease): ZIO[Logging, Either[Throwable, LeaseObsolete.type], Unit]
+    def releaseLease(
+      tableName: String,
+      lease: Lease
+    ): ZIO[Logging with Clock, Either[Throwable, LeaseObsolete.type], Unit]
 
 // Returns the updated lease
-    def claimLease(tableName: String, lease: Lease): ZIO[Logging, Either[Throwable, UnableToClaimLease.type], Unit]
+    def claimLease(
+      tableName: String,
+      lease: Lease
+    ): ZIO[Logging with Clock, Either[Throwable, UnableToClaimLease.type], Unit]
 
 // Puts the lease counter to the given lease's counter and expects counter - 1
-    def updateCheckpoint(tableName: String, lease: Lease): ZIO[Logging, Either[Throwable, LeaseObsolete.type], Unit]
+    def updateCheckpoint(
+      tableName: String,
+      lease: Lease
+    ): ZIO[Logging with Clock, Either[Throwable, LeaseObsolete.type], Unit]
 
-    def renewLease(tableName: String, lease: Lease): ZIO[Logging, Either[Throwable, LeaseObsolete.type], Unit]
+    def renewLease(
+      tableName: String,
+      lease: Lease
+    ): ZIO[Logging with Clock, Either[Throwable, LeaseObsolete.type], Unit]
 
-    def createLease(tableName: String, lease: Lease): ZIO[Logging, Either[Throwable, LeaseAlreadyExists.type], Unit]
+    def createLease(
+      tableName: String,
+      lease: Lease
+    ): ZIO[Logging with Clock, Either[Throwable, LeaseAlreadyExists.type], Unit]
   }
 
   case object LeaseAlreadyExists
