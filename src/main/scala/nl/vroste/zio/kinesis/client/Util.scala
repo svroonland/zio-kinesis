@@ -106,15 +106,15 @@ object Util {
    * @return The original function with rate limiting applied, as a managed resource
    */
 
-  def throttledFunction[R, I, E, A](units: Long, duration: Duration)(
+  def throttledFunction[R, I, E, A](units: Int, duration: Duration)(
     f: I => ZIO[R, E, A]
   ): ZManaged[Clock, Nothing, I => ZIO[R, E, A]] =
     for {
-      requestsQueue <- Queue.unbounded[(IO[E, A], Promise[E, A])].toManaged_
+      requestsQueue <- Queue.bounded[(IO[E, A], Promise[E, A])](units / 2 * 2).toManaged_
       _             <- ZStream
              .fromQueueWithShutdown(requestsQueue)
              .throttleShape(units, duration, units)(_ => 1)
-             .mapM { case (effect, promise) => promise.complete(effect) }
+             .mapM { case (effect, promise) => promise.completeWith(effect) }
              .runDrain
              .forkManaged
     } yield (input: I) =>
@@ -125,10 +125,10 @@ object Util {
         result  <- promise.await
       } yield result
 
-  def throttledFunctionN(units: Long, duration: Duration): ThrottledFunctionPartial =
+  def throttledFunctionN(units: Int, duration: Duration): ThrottledFunctionPartial =
     ThrottledFunctionPartial(units, duration)
 
-  case class ThrottledFunctionPartial(units: Long, duration: Duration) {
+  case class ThrottledFunctionPartial(units: Int, duration: Duration) {
     def apply[R, I0, I1, E, A](f: (I0, I1) => ZIO[R, E, A]): ZManaged[Clock, Nothing, (I0, I1) => ZIO[R, E, A]] =
       throttledFunction[R, (I0, I1), E, A](units, duration) {
         case (i0, i1) => f(i0, i1)

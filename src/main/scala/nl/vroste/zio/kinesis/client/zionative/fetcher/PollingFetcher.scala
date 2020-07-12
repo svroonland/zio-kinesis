@@ -75,6 +75,7 @@ object PollingFetcher {
                               log.warn(s"Error in PollingFetcher for shard ${shardId}: ${e}")
                             ) *> ZStream.fail(e)
                         }.takeUntil(_.nextShardIterator == null)
+                          .buffer(config.bufferNrBatches)
                           .mapConcatChunk(response => Chunk.fromIterable(response.records.asScala))
                           .retry(config.throttlingBackoff)
         } yield shardStream
@@ -96,6 +97,6 @@ object PollingFetcher {
         }
     }
 
-  private val getShardIteratorRateLimit = 5L
-  private val getRecordsRateLimit       = 5L
+  private val getShardIteratorRateLimit = 5
+  private val getRecordsRateLimit       = 5
 }

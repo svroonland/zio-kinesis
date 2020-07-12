@@ -28,7 +28,7 @@ object EnhancedFanOutFetcher {
       client             <- ZIO.service[Client.Service].toManaged_
       env                <- ZIO.environment[Logging with Clock].toManaged_
       consumerARN        <- registerConsumerIfNotExists(streamDescription.streamARN, workerId).toManaged_
-      subscribeThrottled <- Util.throttledFunctionN(config.maxSubscriptionsPerSecond.toLong, 1.second) {
+      subscribeThrottled <- Util.throttledFunctionN(config.maxSubscriptionsPerSecond, 1.second) {
                               (pos: ShardIteratorType, shardId: String) =>
                                 ZIO.succeed(client.subscribeToShard(consumerARN, shardId, pos))
                             }

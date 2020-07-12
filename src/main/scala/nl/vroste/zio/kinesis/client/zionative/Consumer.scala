@@ -31,7 +31,7 @@ sealed trait FetchMode
 object FetchMode {
 
   /**
-   * Fetches data in a polling manner
+   * Fetches records in a polling manner
    *
    * @param batchSize The maximum number of records to retrieve in one call to GetRecords. Note that Kinesis
    *        defines limits in terms of the maximum size in bytes of this call, so you need to take into account
@@ -39,14 +39,20 @@ object FetchMode {
    * @param pollSchedule Schedule for polling. The default schedule repeats immediately when there are more
    *                     records available (millisBehindLatest > 0), otherwise it polls at a fixed interval of 1 second
    * @param throttlingBackoff When getting a Provisioned Throughput Exception or KmsThrottlingException,
-   *                          schedule to apply for backoff
+   *                          schedule to apply for backoff. Although zio-kinesis will make no more than 5 calls
+   *                          to GetRecords per second (the AWS limit), some limits depend on the size of the records
+   *                          being fetched.
    * @param retrySchedule Schedule for retrying in case of non-throttling related issues
+   * @param bufferNrBatches The number of fetched batches (chunks) to buffer. A buffer allows downstream to process the
+   *                        records while a new poll call is being made concurrently. A batch will contain
+   *                        up to `batchSize` records. Prefer powers of 2 for this value for performance reasons.
    */
   case class Polling(
     batchSize: Int = 1000,
     pollSchedule: Schedule[Clock, GetRecordsResponse, Any] = Polling.dynamicSchedule(1.second),
-    throttlingBackoff: Schedule[Clock, Any, (Duration, Int)] = Util.exponentialBackoff(1.second, 1.minute),
-    retrySchedule: Schedule[Clock, Any, (Duration, Int)] = Util.exponentialBackoff(1.second, 1.minute)
+    throttlingBackoff: Schedule[Clock, Any, (Duration, Int)] = Util.exponentialBackoff(5.seconds, 30.seconds),
+    retrySchedule: Schedule[Clock, Any, (Duration, Int)] = Util.exponentialBackoff(1.second, 1.minute),
+    bufferNrBatches: Int = 2
   ) extends FetchMode
 
   object Polling {
