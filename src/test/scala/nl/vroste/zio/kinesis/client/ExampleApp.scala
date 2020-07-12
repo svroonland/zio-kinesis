@@ -67,27 +67,20 @@ object ExampleApp extends zio.App {
                 .tap(r =>
                   checkpointer
                     .stageOnSuccess(
-                      (log.info(s"${id} Processing record $r") *> ZIO.sleep(recordProcessingTime)).when(false)
+                      (log.info(s"${id} Processing record $r") *> ZIO
+                        .sleep(recordProcessingTime)
+                        .when(recordProcessingTime >= 1.millis)).when(false)
                     )(r)
                 )
                 .aggregateAsyncWithin(ZTransducer.collectAllN(1000), Schedule.fixed(5.second))
                 .tap(rs => log.info(s"${id} processed ${rs.size} records on shard ${shardID}"))
                 .mapConcat(_.lastOption.toList)
                 .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-                .tap(_ =>
-                  // TODO what if checkpointing fails due to a network error..?
-                  checkpointer.checkpoint().catchAll {
-                    case Right(ShardLeaseLost) =>
-                      ZIO.unit
-                    case Left(e)               =>
-                      log.error(
-                        s"${id} shard ${shardID} stream failed checkpointing with" + e + ": " + e.getStackTrace
-                      ) *> ZIO.fail(Left(e))
-                  }
-                )
+                .tap(_ => checkpointer.checkpoint())
                 .catchAll {
                   case Right(ShardLeaseLost) =>
-                    ZStream.empty
+                    ZStream.fromEffect(log.info(s"${id} Doing checkpoint for ${shardID}: shard lease lost")) *>
+                      ZStream.empty
 
                   case Left(e)               =>
                     ZStream.fromEffect(
