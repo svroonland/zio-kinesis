@@ -1,19 +1,12 @@
 package nl.vroste.zio.kinesis.client
 
-import zio.stream.ZStream
-import zio.Schedule
-import zio.Ref
-import zio.ZIO
-import java.util.concurrent.CompletableFuture
+import java.util.concurrent.{ CompletableFuture, CompletionException }
+
+import software.amazon.awssdk.core.exception.SdkException
 import zio.clock.Clock
 import zio.duration.Duration
-import zio.Queue
-import zio.Promise
-import zio.ZManaged
-import zio.Task
-import zio.IO
-import java.util.concurrent.CompletionException
-import software.amazon.awssdk.core.exception.SdkException
+import zio.stream.ZStream
+import zio._
 
 object Util {
   implicit class ZStreamExtensions[-R, +E, +O](val stream: ZStream[R, E, O]) extends AnyVal {
@@ -28,32 +21,37 @@ object Util {
       * @param schedule Schedule receiving as input the errors of the stream
      * @return Stream outputting elements of all attempts of the stream
      */
+    // To be included in ZIO with https://github.com/zio/zio/pull/3902
     def retry[R1 <: R](schedule: Schedule[R1, E, _]): ZStream[R1, E, O] =
-      ZStream.unwrap {
+      ZStream {
         for {
-          s0    <- schedule.initial
-          state <- Ref.make[schedule.State](s0)
-        } yield {
-          def go: ZStream[R1, E, O] =
-            stream
-              .catchAll(e =>
-                ZStream.unwrap {
+          s0           <- schedule.initial.toManaged_
+          state        <- Ref.make[schedule.State](s0).toManaged_
+          currStream   <- Ref.make[ZIO[R, Option[E], Chunk[O]]](IO.fail(None)).toManaged_ // IO.fail(None) = Pull.end
+          switchStream <- ZManaged.switchable[R, Nothing, ZIO[R, Option[E], Chunk[O]]]
+          _            <- switchStream(stream.process).flatMap(currStream.set).toManaged_
+          pull          = {
+            def go: ZIO[R1, Option[E], Chunk[O]] =
+              currStream.get.flatten.catchSome {
+                case Some(e) =>
                   (for {
                     s        <- state.get
                     newState <- schedule.update(e, s)
-                  } yield newState).fold(
-                    _ => ZStream.fail(e), // Failure of the schedule indicates it doesn't accept the input
-                    newState =>
-                      ZStream.fromEffect(state.set(newState)) *> go.mapChunksM { chunk =>
-                        // Reset the schedule to its initial state when a chunk is successfully pulled
-                        state.set(s0).as(chunk)
-                      }
-                  )
-                }
-              )
+                    _        <- state.set(newState)
+                  } yield ())
+                    .foldM(
+                      // Failure of the schedule indicates it doesn't accept the input
+                      _ => IO.fail(Some(e)), // TODO = Pull.fail
+                      _ =>
+                        switchStream(stream.process).flatMap(currStream.set) *>
+                          // Reset the schedule to its initial state when a chunk is successfully pulled
+                          go.tap(_ => state.set(s0))
+                    )
+              }
 
-          go
-        }
+            go
+          }
+        } yield pull
       }
   }
 
