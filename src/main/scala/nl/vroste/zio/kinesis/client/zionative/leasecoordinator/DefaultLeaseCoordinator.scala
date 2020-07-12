@@ -1,7 +1,6 @@
 package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
 
 import java.time.{ DateTimeException, Instant }
-import java.util.concurrent.TimeoutException
 
 import scala.collection.compat._
 import nl.vroste.zio.kinesis.client.Record
@@ -274,8 +273,9 @@ private class DefaultLeaseCoordinator(
     currentLeases <- state.get.map(_.currentLeases)
     now           <- now
     leasesToRenew  = currentLeases.view.collect {
-                      case (shard, s @ LeaseState(lease, _, _))
-                          if !s.wasUpdatedLessThan(settings.renewInterval, now) && s.lease.owner.contains(workerId) =>
+                      case (shard, leaseState)
+                          if !leaseState.wasUpdatedLessThan(settings.renewInterval, now) && leaseState.lease.owner
+                            .contains(workerId) =>
                         shard
                     }
     _             <- foreachParNUninterrupted_(settings.maxParallelLeaseRenewals)(leasesToRenew) { shardId =>

@@ -50,10 +50,10 @@ object PollingFetcher {
                        getRecordsThrottled(currentIterator, config.batchSize)
                          .tapError(e => log.warn(s"Error GetRecords for shard ${shardId}: ${e}"))
                          .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
-                         .asSomeError
                          .retry(
                            Schedule.fixed(100.millis) && Schedule.recurs(3)
                          ) // There is a race condition in kinesalite, see https://github.com/mhart/kinesalite/issues/25
+                         .asSomeError
                          .timed
                      (duration, response)  = responseWithDuration
                      _                    <- shardIterator.set(Option(response.nextShardIterator))
