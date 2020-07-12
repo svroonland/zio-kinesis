@@ -4,6 +4,7 @@ import java.nio.charset.Charset
 import nl.vroste.zio.kinesis.client.Client
 import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.Polling
+import nl.vroste.zio.kinesis.client.zionative.PollingFetcherTest.mockClient
 import nl.vroste.zio.kinesis.client.zionative.fetcher.PollingFetcher
 import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.services.kinesis.model.{ GetRecordsResponse, Record }
@@ -24,14 +25,15 @@ object PollingFetcherTest extends DefaultRunnableSpec {
 
   /**
    * PollingFetcher must:
-   * - immediately emit all records that were fetched in the first call in one Chunk
-   * - immediately poll again when there are more records available
-   * - delay polling when there are no more records available
-   * - make no more than 5 calls per second to GetShardIterator
-   * - make no more than 5 calls per second per shard to GetRecords
-   * - retry after some time on being throttled
-   * - make the next call with the previous response's nextShardIterator
-   * - end the shard stream when the shard has ended
+   * - [X] immediately emit all records that were fetched in the first call in one Chunk
+   * - [X] immediately poll again when there are more records available
+   * - [X] delay polling when there are no more records available
+   * - [ ] make no more than 5 calls per second to GetShardIterator
+   * - [X] make no more than 5 calls per second per shard to GetRecords
+   * - [ ] retry after some time on being throttled
+   * - [ ] make the next call with the previous response's nextShardIterator
+   * - [ ] end the shard stream when the shard has ended
+   * - [ ] emit a diagnostic event for every completed poll
    *
    * @return
    */
@@ -167,11 +169,37 @@ object PollingFetcherTest extends DefaultRunnableSpec {
         } yield assert(chunksReceivedImmediately)(equalTo(5)) && assert(chunksReceivedLater)(
           equalTo(nrBatches)
         )).provideSomeLayer[ZTestEnv with Clock with Logging](ZLayer.succeed(mockClient(records)))
+      },
+      testM("end the shard stream when the shard has ended") {
+        val batchSize = 10
+        val nrBatches = 3
+        val records   = (0 until nrBatches * batchSize).map { i =>
+          Record
+            .builder()
+            .data(SdkBytes.fromString("test", Charset.defaultCharset()))
+            .partitionKey(s"key${i}")
+            .sequenceNumber(s"${i}")
+            .build()
+        }
+
+        (for {
+          _ <- PollingFetcher
+                 .make("my-stream-1", FetchMode.Polling(batchSize), _ => UIO.unit)
+                 .use { fetcher =>
+                   fetcher
+                     .shardRecordStream("shard1", ShardIteratorType.TrimHorizon)
+                     .mapChunks(Chunk.single)
+                     .runCollect
+                 }
+        } yield assertCompletes)
+          .provideSomeLayer[ZTestEnv with Clock with Logging](
+            ZLayer.succeed(mockClient(records, endAfterRecords = true))
+          )
       }
     ).provideCustomLayer(loggingEnv ++ TestClock.default)
 
   // Simple single-shard GetRecords mock that uses the sequence number as shard iterator
-  def mockClient(records: Seq[Record]): Client.Service =
+  def mockClient(records: Seq[Record], endAfterRecords: Boolean = false): Client.Service =
     new StubClient {
       override def getShardIterator(
         streamName: String,
@@ -181,14 +209,20 @@ object PollingFetcherTest extends DefaultRunnableSpec {
 
       override def getRecords(shardIterator: String, limit: Int): Task[GetRecordsResponse] =
         Task {
-          val offset            = shardIterator.toInt
-          val lastRecordOffset  = offset + limit
-          val recordsInResponse = records.slice(offset, offset + limit)
+          val offset             = shardIterator.toInt
+          val lastRecordOffset   = offset + limit
+          val recordsInResponse  = records.slice(offset, offset + limit)
+          val nextShardIterator  =
+            if (lastRecordOffset >= records.size && endAfterRecords) null else lastRecordOffset.toString
+          val millisBehindLatest = if (lastRecordOffset >= records.size) 0 else records.size - lastRecordOffset
+
+          println(s"GetRecords from ${shardIterator} (max ${limit}. Next iterator: ${nextShardIterator}")
+
           GetRecordsResponse
             .builder()
             .records(recordsInResponse.asJava)
-            .millisBehindLatest(if (lastRecordOffset >= records.size) 0 else records.size - lastRecordOffset)
-            .nextShardIterator(lastRecordOffset.toString)
+            .millisBehindLatest(millisBehindLatest)
+            .nextShardIterator(nextShardIterator)
             .build()
         }
     }

@@ -78,7 +78,8 @@ object PollingFetcher {
                             ZStream.fromEffect(
                               log.warn(s"Error in PollingFetcher for shard ${shardId}: ${e}")
                             ) *> ZStream.fail(e)
-                        }.mapConcatChunk(response => Chunk.fromIterable(response.records.asScala))
+                        }.takeUntil(_.nextShardIterator == null)
+                          .mapConcatChunk(response => Chunk.fromIterable(response.records.asScala))
                           .retry(config.throttlingBackoff)
         } yield shardStream
       }.provide(env)
