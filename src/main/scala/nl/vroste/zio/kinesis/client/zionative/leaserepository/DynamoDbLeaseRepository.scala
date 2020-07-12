@@ -1,5 +1,7 @@
 package nl.vroste.zio.kinesis.client.zionative.leaserepository
 
+import java.util.concurrent.TimeoutException
+
 import nl.vroste.zio.kinesis.client.Util.{ asZIO, paginatedRequest }
 import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.{
   Lease,
@@ -19,7 +21,7 @@ import zio.logging._
 import scala.jdk.CollectionConverters._
 import scala.util.{ Failure, Try }
 
-private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient) extends LeaseRepository.Service {
+private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient, timeout: Duration) extends LeaseRepository.Service {
 
   /**
    * Returns whether the table already existed
@@ -116,7 +118,7 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient) extends Lease
   override def claimLease(
     tableName: String,
     lease: Lease
-  ): ZIO[Logging, Either[Throwable, UnableToClaimLease.type], Unit] = {
+  ): ZIO[Logging with Clock, Either[Throwable, UnableToClaimLease.type], Unit] = {
     import ImplicitConversions.toAttributeValue
     val request = UpdateItemRequest
       .builder()
@@ -136,13 +138,15 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient) extends Lease
       .build()
 
     asZIO(client.updateItem(request))
-    // .tapError(e => log.warn(s"Got error claiming lease: ${e}"))
-    .unit.catchAll {
-      case _: ConditionalCheckFailedException =>
-        ZIO.fail(Right(UnableToClaimLease))
-      case e                                  =>
-        ZIO.fail(Left(e))
-    }
+      .timeoutFail(new TimeoutException(s"Timeout claiming lease"))(timeout)
+      // .tapError(e => log.warn(s"Got error claiming lease: ${e}"))
+      .unit
+      .catchAll {
+        case _: ConditionalCheckFailedException =>
+          ZIO.fail(Right(UnableToClaimLease))
+        case e                                  =>
+          ZIO.fail(Left(e))
+      }
 
   }
 
@@ -150,7 +154,7 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient) extends Lease
   override def updateCheckpoint(
     tableName: String,
     lease: Lease
-  ): ZIO[Logging, Either[Throwable, LeaseObsolete.type], Unit] = {
+  ): ZIO[Logging with Clock, Either[Throwable, LeaseObsolete.type], Unit] = {
     require(lease.checkpoint.isDefined, "Cannot update checkpoint without Lease.checkpoint property set")
 
     import ImplicitConversions.toAttributeValue
@@ -180,18 +184,21 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient) extends Lease
       )
       .build()
 
-    asZIO(client.updateItem(request)).unit.catchAll {
-      case _: ConditionalCheckFailedException =>
-        ZIO.fail(Right(LeaseObsolete))
-      case e                                  =>
-        ZIO.fail(Left(e))
-    }
+    asZIO(client.updateItem(request))
+      .timeoutFail(new TimeoutException(s"Timeout updating checkpoint"))(timeout)
+      .unit
+      .catchAll {
+        case _: ConditionalCheckFailedException =>
+          ZIO.fail(Right(LeaseObsolete))
+        case e                                  =>
+          ZIO.fail(Left(e))
+      }
   }
 
   override def renewLease(
     tableName: String,
     lease: Lease
-  ): ZIO[Logging, Either[Throwable, LeaseObsolete.type], Unit] = {
+  ): ZIO[Logging with Clock, Either[Throwable, LeaseObsolete.type], Unit] = {
     import ImplicitConversions.toAttributeValue
 
     val request = UpdateItemRequest
@@ -207,6 +214,7 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient) extends Lease
       .build()
 
     asZIO(client.updateItem(request))
+      .timeoutFail(new TimeoutException(s"Timeout renewing lease"))(timeout)
       .tapError(e => log.warn(s"Got error updating lease: ${e}"))
       .unit
       .catchAll {
@@ -220,7 +228,7 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient) extends Lease
   override def createLease(
     tableName: String,
     lease: Lease
-  ): ZIO[Logging, Either[Throwable, LeaseAlreadyExists.type], Unit] = {
+  ): ZIO[Logging with Clock, Either[Throwable, LeaseAlreadyExists.type], Unit] = {
     val request = PutItemRequest
       .builder()
       .tableName(tableName)
@@ -228,12 +236,15 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient) extends Lease
       .conditionExpression("attribute_not_exists(leaseKey)")
       .build()
 
-    asZIO(client.putItem(request)).unit.mapError {
-      case _: ConditionalCheckFailedException =>
-        Right(LeaseAlreadyExists)
-      case e                                  =>
-        Left(e)
-    }
+    asZIO(client.putItem(request))
+      .timeoutFail(new TimeoutException(s"Timeout creating lease"))(timeout)
+      .unit
+      .mapError {
+        case _: ConditionalCheckFailedException =>
+          Right(LeaseAlreadyExists)
+        case e                                  =>
+          Left(e)
+      }
   }
 
   private def toLease(item: DynamoDbItem): Try[Lease] =
@@ -274,6 +285,11 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient) extends Lease
 }
 
 object DynamoDbLeaseRepository {
-  val live: ZLayer[Has[DynamoDbAsyncClient], Nothing, LeaseRepository] =
-    ZLayer.fromService(new DynamoDbLeaseRepository(_))
+  val defaultTimeout = 10.seconds
+
+  val live: ZLayer[Has[DynamoDbAsyncClient], Nothing, LeaseRepository] = make(defaultTimeout)
+
+  def make(timeout: Duration = defaultTimeout): ZLayer[Has[DynamoDbAsyncClient], Nothing, LeaseRepository] =
+    ZLayer.fromService(new DynamoDbLeaseRepository(_, timeout))
+
 }
