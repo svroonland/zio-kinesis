@@ -35,43 +35,28 @@ object PollingFetcher {
 
           // Failure with None indicates that there's no next shard iterator and the shard has ended
           doPoll                          = for {
-                     currentIterator <- shardIterator.get
-                     _               <- log.info(s"Doing poll for ${currentIterator}")
-                     result          <- currentIterator match {
-                                 case Some(currentIterator) =>
-                                   for {
-                                     responseWithDuration <-
-                                       getRecordsThrottled(
-                                         (currentIterator, config.batchSize)
-                                       ).retry(
-                                           retryOnThrottledWithSchedule(
-                                             config.throttlingBackoff
-                                           )
-                                         )
-                                         .asSomeError
-                                         .retry(
-                                           Schedule.fixed(
-                                             100.millis
-                                           ) && Schedule.recurs(3)
-                                         ) // There is a race condition in kinesalite, see https://github.com/mhart/kinesalite/issues/25
-                                         .timed
-                                     (duration, response)  = responseWithDuration
-                                     _                    <- shardIterator.set(Option(response.nextShardIterator))
-                                     _                    <- emitDiagnostic(
-                                            DiagnosticEvent.PollComplete(
-                                              shardId,
-                                              response.records.size,
-                                              response
-                                                .millisBehindLatest()
-                                                .toLong
-                                                .millis,
-                                              duration
-                                            )
-                                          )
-                                   } yield response
-                                 case None                  => ZIO.fail(None)
-                               }
-                   } yield result
+                     currentIterator      <- shardIterator.get
+                     currentIterator      <- ZIO.fromOption(currentIterator)
+                     responseWithDuration <-
+                       getRecordsThrottled(
+                         (currentIterator, config.batchSize)
+                       ).retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
+                         .asSomeError
+                         .retry(
+                           Schedule.fixed(100.millis) && Schedule.recurs(3)
+                         ) // There is a race condition in kinesalite, see https://github.com/mhart/kinesalite/issues/25
+                         .timed
+                     (duration, response)  = responseWithDuration
+                     _                    <- shardIterator.set(Option(response.nextShardIterator))
+                     _                    <- emitDiagnostic(
+                            DiagnosticEvent.PollComplete(
+                              shardId,
+                              response.records.size,
+                              response.millisBehindLatest().toLong.millis,
+                              duration
+                            )
+                          )
+                   } yield response
 
           doPollAndRetryOnExpiredIterator = doPoll.catchSome {
                                               case Some(e: ExpiredIteratorException) =>
