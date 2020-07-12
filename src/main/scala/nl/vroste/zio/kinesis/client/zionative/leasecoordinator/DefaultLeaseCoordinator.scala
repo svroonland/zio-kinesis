@@ -3,7 +3,7 @@ package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
 import java.time.{ DateTimeException, Instant }
 
 import scala.collection.compat._
-import nl.vroste.zio.kinesis.client.{ Record, Util }
+import nl.vroste.zio.kinesis.client.Record
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative._
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator.LeaseCommand.{

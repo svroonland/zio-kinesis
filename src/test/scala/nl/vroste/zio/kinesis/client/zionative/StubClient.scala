@@ -7,18 +7,17 @@ import zio.clock.Clock
 import zio.stream.ZStream
 import zio.{ Task, ZIO, ZManaged }
 
-import software.amazon.awssdk.services.kinesis.model.{
-  Consumer,
-  ConsumerDescription,
-  GetRecordsResponse,
-  PutRecordResponse,
-  PutRecordsRequestEntry,
-  PutRecordsResponse,
-  Shard,
-  SubscribeToShardEvent
-}
-
 class StubClient extends Client.Service {
+  import software.amazon.awssdk.services.kinesis.model.{
+    Consumer,
+    ConsumerDescription,
+    GetRecordsResponse,
+    PutRecordResponse,
+    PutRecordsRequestEntry,
+    PutRecordsResponse,
+    Shard,
+    SubscribeToShardEvent
+  }
 
   override def createConsumer(streamARN: String, consumerName: String): ZManaged[Any, Throwable, Consumer] =
     ???

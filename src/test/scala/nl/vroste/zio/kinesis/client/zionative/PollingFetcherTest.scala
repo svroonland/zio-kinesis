@@ -40,7 +40,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
     suite("PollingFetcher")(
       testM("immediately emits all records that were fetched in the first call in one Chunk") {
         val batchSize = 10
-        val nrBatches = 1
+        val nrBatches = 1L
         val records   = makeRecords(nrBatches * batchSize)
 
         (for {
@@ -61,7 +61,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
       },
       testM("immediately polls again when there are more records available") {
         val batchSize = 10
-        val nrBatches = 5
+        val nrBatches = 5L
 
         val records = makeRecords(nrBatches * batchSize)
 
@@ -73,23 +73,22 @@ object PollingFetcherTest extends DefaultRunnableSpec {
                              .shardRecordStream("shard1", ShardIteratorType.TrimHorizon)
                              .mapChunks(Chunk.single)
                              .take(nrBatches)
-                             .runCollect
-
+                             .runDrain
                          }
                          .fork
-          chunks    <- chunksFib.join
+          _         <- chunksFib.join
         } yield assertCompletes // The fact that we don't have to adjust our test clock suffices
         ).provideSomeLayer[ZEnv with Logging](ZLayer.succeed(stubClient(records)))
       },
       testM("delay polling when there are no more records available") {
         val batchSize    = 10
-        val nrBatches    = 2
+        val nrBatches    = 2L
         val pollInterval = 1.second
 
         val records = makeRecords(nrBatches * batchSize)
 
         (for {
-          chunksReceived            <- Ref.make[Int](0)
+          chunksReceived            <- Ref.make[Long](0)
           chunksFib                 <-
             PollingFetcher
               .make("my-stream-1", FetchMode.Polling(batchSize, Polling.dynamicSchedule(pollInterval)), _ => UIO.unit)
@@ -109,17 +108,17 @@ object PollingFetcherTest extends DefaultRunnableSpec {
           _                         <- chunksFib.join
         } yield assert(chunksReceivedImmediately)(equalTo(nrBatches)) && assert(chunksReceivedLater)(
           equalTo(nrBatches + 1)
-        )).provideSomeLayer[ZEnv with Logging](ZLayer.succeed(stubClient(records)))
+        )).provideSomeLayer[ZEnv with Logging with TestClock](ZLayer.succeed(stubClient(records)))
       },
       testM("make no more than 5 calls per second per shard to GetRecords") {
         val batchSize    = 10
-        val nrBatches    = 6 // More than 5, the GetRecords limit
+        val nrBatches    = 6L // More than 5, the GetRecords limit
         val pollInterval = 1.second
 
         val records = makeRecords(nrBatches * batchSize)
 
         (for {
-          chunksReceived            <- Ref.make[Int](0)
+          chunksReceived            <- Ref.make[Long](0)
           chunksFib                 <-
             PollingFetcher
               .make("my-stream-1", FetchMode.Polling(batchSize, Polling.dynamicSchedule(pollInterval)), _ => UIO.unit)
@@ -137,13 +136,13 @@ object PollingFetcherTest extends DefaultRunnableSpec {
           _                         <- TestClock.adjust(pollInterval)
           chunksReceivedLater       <- chunksReceived.get
           _                         <- chunksFib.join
-        } yield assert(chunksReceivedImmediately)(equalTo(5)) && assert(chunksReceivedLater)(
+        } yield assert(chunksReceivedImmediately)(equalTo(5L)) && assert(chunksReceivedLater)(
           equalTo(nrBatches)
-        )).provideSomeLayer[ZEnv with Logging](ZLayer.succeed(stubClient(records)))
+        )).provideSomeLayer[ZEnv with Logging with TestClock](ZLayer.succeed(stubClient(records)))
       },
       testM("make the next call with the previous response's nextShardIterator") {
         val batchSize = 10
-        val nrBatches = 2
+        val nrBatches = 2L
 
         val records = makeRecords(nrBatches * batchSize)
 
@@ -164,7 +163,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
       },
       testM("end the shard stream when the shard has ended") {
         val batchSize = 10
-        val nrBatches = 3
+        val nrBatches = 3L
         val records   = makeRecords(nrBatches * batchSize)
 
         (for {
@@ -183,7 +182,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
       },
       testM("emit a diagnostic event for every poll") {
         val batchSize = 10
-        val nrBatches = 3
+        val nrBatches = 3L
         val records   = makeRecords(nrBatches * batchSize)
 
         (for {
@@ -205,8 +204,8 @@ object PollingFetcherTest extends DefaultRunnableSpec {
       }
     ).provideCustomLayer(loggingEnv ++ TestClock.default)
 
-  private def makeRecords(nrRecords: Int) =
-    (0 until nrRecords).map { i =>
+  private def makeRecords(nrRecords: Long): Seq[Record] =
+    (0 until nrRecords.toInt).map { i =>
       Record
         .builder()
         .data(SdkBytes.fromString("test", Charset.defaultCharset()))

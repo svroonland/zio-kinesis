@@ -31,20 +31,15 @@ object PollingFetcher {
     emitDiagnostic: DiagnosticEvent => UIO[Unit]
   ): ZManaged[Clock with Client with Logging, Throwable, Fetcher] =
     for {
-      getShardIterator <- throttledFunction(getShardIteratorRateLimit, 1.second)(Client.getShardIterator _)
-                            .map(_.andThen(_.retry(retryOnThrottledWithSchedule(config.throttlingBackoff))))
+      getShardIterator <- throttledFunctionN(getShardIteratorRateLimit, 1.second)(Client.getShardIterator _)
       env              <- ZIO.environment[Client with Clock with Logging].toManaged_
     } yield Fetcher { (shardId, startingPosition) =>
       ZStream.unwrapManaged {
         for {
-          getRecordsThrottled  <- throttledFunction(getRecordsRateLimit, 1.second)(Client.getRecords _)
-                                   .map(
-                                     _.andThen(
-                                       _.tapError(e => log.warn(s"Error GetRecords for shard ${shardId}: ${e}"))
-                                         .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
-                                     )
-                                   )
-          initialShardIterator <- getShardIterator((streamName, shardId, startingPosition)).toManaged_
+          getRecordsThrottled  <- throttledFunctionN(getRecordsRateLimit, 1.second)(Client.getRecords _)
+          initialShardIterator <- getShardIterator(streamName, shardId, startingPosition)
+                                    .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
+                                    .toManaged_
           shardIterator        <- Ref.make[Option[String]](Some(initialShardIterator)).toManaged_
 
           // Failure with None indicates that there's no next shard iterator and the shard has ended
@@ -53,6 +48,7 @@ object PollingFetcher {
                      currentIterator      <- ZIO.fromOption(currentIterator)
                      responseWithDuration <-
                        getRecordsThrottled(currentIterator, config.batchSize)
+                         .tapError(e => log.warn(s"Error GetRecords for shard ${shardId}: ${e}"))
                          .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
                          .asSomeError
                          .retry(
@@ -98,6 +94,6 @@ object PollingFetcher {
         }
     }
 
-  private val getShardIteratorRateLimit = 5
-  private val getRecordsRateLimit       = 5
+  private val getShardIteratorRateLimit = 5L
+  private val getRecordsRateLimit       = 5L
 }
