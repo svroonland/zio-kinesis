@@ -7,7 +7,11 @@ import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.Polling
 import nl.vroste.zio.kinesis.client.zionative.fetcher.PollingFetcher
 import software.amazon.awssdk.core.SdkBytes
-import software.amazon.awssdk.services.kinesis.model.{ GetRecordsResponse, Record }
+import software.amazon.awssdk.services.kinesis.model.{
+  GetRecordsResponse,
+  ProvisionedThroughputExceededException,
+  Record
+}
 import zio._
 import zio.logging.Logging
 import zio.logging.slf4j.Slf4jLogger
@@ -201,6 +205,42 @@ object PollingFetcherTest extends DefaultRunnableSpec {
           emittedEvents <- events.get
         } yield assert(emittedEvents)(forall(isSubtype[PollComplete](anything))))
           .provideSomeLayer[ZEnv with Logging](ZLayer.succeed(stubClient(records)))
+      },
+      testM("retry after some time when throttled") {
+        val batchSize    = 10
+        val nrBatches    = 3L
+        val pollInterval = 1.second
+
+        val records = makeRecords(nrBatches * batchSize)
+
+        (for {
+          chunksReceived            <- Ref.make[Long](0)
+          requestNr                 <- Ref.make[Int](0)
+          doThrottle                 = (_: String, _: Int) => requestNr.getAndUpdate(_ + 1).map(_ == 1)
+          chunksFib                 <-
+            PollingFetcher
+              .make("my-stream-1", FetchMode.Polling(batchSize, Polling.dynamicSchedule(pollInterval)), _ => UIO.unit)
+              .use { fetcher =>
+                fetcher
+                  .shardRecordStream("shard1", ShardIteratorType.TrimHorizon)
+                  .mapChunks(Chunk.single)
+                  .tap(_ => chunksReceived.update(_ + 1))
+                  .take(nrBatches + 1)
+                  .runDrain
+              }
+              .provideSomeLayer[ZEnv with Logging with TestClock](
+                ZLayer.succeed(stubClient(records, doThrottle = doThrottle))
+              )
+              .fork
+          _                         <- TestClock.adjust(0.seconds)
+          chunksReceivedImmediately <- chunksReceived.get
+          _                          = println(chunksReceivedImmediately)
+          _                         <- TestClock.adjust(5.second)
+          chunksReceivedLater       <- chunksReceived.get
+          _                         <- chunksFib.join
+        } yield assert(chunksReceivedImmediately)(equalTo(1L)) && assert(chunksReceivedLater)(
+          equalTo(nrBatches + 1)
+        ))
       }
     ).provideCustomLayer(loggingEnv ++ TestClock.default)
 
@@ -215,7 +255,11 @@ object PollingFetcherTest extends DefaultRunnableSpec {
     }
 
 // Simple single-shard GetRecords mock that uses the sequence number as shard iterator
-  private def stubClient(records: Seq[Record], endAfterRecords: Boolean = false): Client.Service =
+  private def stubClient(
+    records: Seq[Record],
+    endAfterRecords: Boolean = false,
+    doThrottle: (String, Int) => UIO[Boolean] = (_, _) => UIO(false)
+  ): Client.Service =
     new StubClient {
       override def getShardIterator(
         streamName: String,
@@ -224,22 +268,27 @@ object PollingFetcherTest extends DefaultRunnableSpec {
       ): Task[String] = Task.succeed("0")
 
       override def getRecords(shardIterator: String, limit: Int): Task[GetRecordsResponse] =
-        Task {
-          val offset             = shardIterator.toInt
-          val lastRecordOffset   = offset + limit
-          val recordsInResponse  = records.slice(offset, offset + limit)
-          val nextShardIterator  =
-            if (lastRecordOffset >= records.size && endAfterRecords) null else lastRecordOffset.toString
-          val millisBehindLatest = if (lastRecordOffset >= records.size) 0 else records.size - lastRecordOffset
+        doThrottle(shardIterator, limit).flatMap { throttle =>
+          if (throttle)
+            Task.fail(ProvisionedThroughputExceededException.builder.message("take it easy").build())
+          else
+            Task {
+              val offset             = shardIterator.toInt
+              val lastRecordOffset   = offset + limit
+              val recordsInResponse  = records.slice(offset, offset + limit)
+              val nextShardIterator  =
+                if (lastRecordOffset >= records.size && endAfterRecords) null else lastRecordOffset.toString
+              val millisBehindLatest = if (lastRecordOffset >= records.size) 0 else records.size - lastRecordOffset
 
-//          println(s"GetRecords from ${shardIterator} (max ${limit}. Next iterator: ${nextShardIterator}")
+              //          println(s"GetRecords from ${shardIterator} (max ${limit}. Next iterator: ${nextShardIterator}")
 
-          GetRecordsResponse
-            .builder()
-            .records(recordsInResponse.asJava)
-            .millisBehindLatest(millisBehindLatest)
-            .nextShardIterator(nextShardIterator)
-            .build()
+              GetRecordsResponse
+                .builder()
+                .records(recordsInResponse.asJava)
+                .millisBehindLatest(millisBehindLatest)
+                .nextShardIterator(nextShardIterator)
+                .build()
+            }
         }
     }
 }
