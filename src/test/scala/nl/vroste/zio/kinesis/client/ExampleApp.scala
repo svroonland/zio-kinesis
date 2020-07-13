@@ -5,10 +5,8 @@ import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
 import nl.vroste.zio.kinesis.client.zionative.metrics.{ CloudWatchMetricsPublisher, CloudWatchMetricsPublisherConfig }
 import nl.vroste.zio.kinesis.client.zionative._
-import software.amazon.awssdk.http.SdkHttpConfigurationOption
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
-import software.amazon.awssdk.utils.AttributeMap
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio._
 import zio.clock.Clock

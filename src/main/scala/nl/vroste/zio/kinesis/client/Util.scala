@@ -113,7 +113,7 @@ object Util {
       requestsQueue <- Queue.bounded[(IO[E, A], Promise[E, A])](units / 2 * 2).toManaged_
       _             <- ZStream
              .fromQueueWithShutdown(requestsQueue)
-             .throttleShape(units, duration, units)(_ => 1)
+             .throttleShape(units.toLong, duration, units.toLong)(_ => 1)
              .mapM { case (effect, promise) => promise.completeWith(effect) }
              .runDrain
              .forkManaged
