@@ -22,13 +22,14 @@ import zio.stream.{ ZStream, ZTransducer }
 object ExampleApp extends zio.App {
   val streamName                      = "zio-test-stream-12" // + java.util.UUID.randomUUID().toString
   val nrRecords                       = 2000000
+  val produceRate                     = 400                  // Nr records to produce per second
   val nrShards                        = 2
   val enhancedFanout                  = false
-  val nrNativeWorkers                 = 1
+  val nrNativeWorkers                 = 2
   val nrKclWorkers                    = 0
   val applicationName                 = "testApp-1"          // + java.util.UUID.randomUUID().toString(),
-  val runtime                         = 20.minute
-  val maxRandomWorkerStartDelayMillis = 1 + 0 * 30 * 1000    // 20000
+  val runtime                         = 3.minute
+  val maxRandomWorkerStartDelayMillis = 1 + 1 * 60 * 1000
   val recordProcessingTime: Duration  = 1.millisecond
 
   override def run(
@@ -47,7 +48,7 @@ object ExampleApp extends zio.App {
             applicationName = applicationName,
             deserializer = Serde.asciiString,
             workerIdentifier = id,
-            fetchMode = if (enhancedFanout) FetchMode.EnhancedFanOut() else FetchMode.Polling(batchSize = 100),
+            fetchMode = if (enhancedFanout) FetchMode.EnhancedFanOut() else FetchMode.Polling(batchSize = 1000),
             emitDiagnostic = ev =>
               (ev match {
                 case ev: DiagnosticEvent.PollComplete =>
@@ -70,7 +71,7 @@ object ExampleApp extends zio.App {
                         .when(recordProcessingTime >= 1.millis)).when(false)
                     )(r)
                 )
-                .aggregateAsyncWithin(ZTransducer.collectAllN(1000), Schedule.fixed(5.second))
+                .aggregateAsyncWithin(ZTransducer.collectAllN(100), Schedule.fixed(5.second))
                 .tap(rs => log.info(s"${id} processed ${rs.size} records on shard ${shardID}"))
                 .mapConcat(_.lastOption.toList)
                 .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
@@ -163,10 +164,11 @@ object ExampleApp extends zio.App {
   ] with LeaseRepository with Has[CloudWatchAsyncClient] with Has[CloudWatchMetricsPublisherConfig]] = {
     val httpClient    = HttpClient.make(
       maxConcurrency = 100,
-      build = // _.proxyConfiguration(ProxyConfiguration.builder().host("localhost").port(9090).build())
-        _.buildWithDefaults(
-          AttributeMap.builder.put(SdkHttpConfigurationOption.TRUST_ALL_CERTIFICATES, java.lang.Boolean.TRUE).build()
-        )
+      allowHttp2 = false
+//      build = _.proxyConfiguration(ProxyConfiguration.builder().host("localhost").port(9090).build())
+//        .buildWithDefaults(
+//          AttributeMap.builder.put(SdkHttpConfigurationOption.TRUST_ALL_CERTIFICATES, java.lang.Boolean.TRUE).build()
+//        )
     )
     val kinesisClient = kinesisAsyncClientLayer()
     val cloudWatch    = cloudWatchAsyncClientLayer()
@@ -192,7 +194,7 @@ object ExampleApp extends zio.App {
       ZStream
         .range(1, nrRecords)
         .map(i => ProducerRecord(s"key$i", s"msg$i"))
-        .chunkN(30)
+        .chunkN(produceRate)
         .mapChunksM(
           producer
             .produceChunk(_)
