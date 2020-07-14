@@ -2,13 +2,14 @@ package nl.vroste.zio.kinesis.client.zionative
 
 import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.Lease
 import zio.test._
+import zio.test.Assertion._
 import zio.test.Gen
 import zio.test.DefaultRunnableSpec
-import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator
 import zio.logging.slf4j.Slf4jLogger
 import zio.random.Random
+import ShardAssignmentStrategy.leasesToTake
 
-object LeaseStealingTest extends DefaultRunnableSpec {
+object ShardAssignmentStrategyTest extends DefaultRunnableSpec {
   val leaseDistributionGen = leases(Gen.int(2, 100), Gen.int(2, 10))
 
   def workerId(w: Int): String = s"worker-${w}"
@@ -29,23 +30,12 @@ object LeaseStealingTest extends DefaultRunnableSpec {
                 }
     } yield leases
 
-  import zio.test.Assertion._
-  import DefaultLeaseCoordinator.leasesToTake
-
   override def spec =
     suite("Lease coordinator")(
       testM("does not want to steal leases if its the only worker") {
         checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.const(1))) { leases =>
           assertM(leasesToTake(leases, workerId(1)))(isEmpty)
         }
-      },
-      testM("Steals leases manually") {
-        val leases = List(
-          Lease("shard-0", Some("worker-1"), 1, None, List()),
-          Lease("shard-1", Some("worker-1"), 1, None, List())
-        )
-        assertM(leasesToTake(leases, workerId(2)))(isNonEmpty)
-
       },
       testM("steals some leases when its not the only worker") {
         checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.const(1))) { leases =>
@@ -70,23 +60,23 @@ object LeaseStealingTest extends DefaultRunnableSpec {
               Math.max(0, maxExpectedShare - nrOwnedLeases) // We could own more than our fair share
 
             for {
-              toSteal <- DefaultLeaseCoordinator.leasesToTake(leases, workerId(1))
+              toSteal <- leasesToTake(leases, workerId(1))
             } yield assert(toSteal.size)(isWithin(minExpectedToSteal, maxExpectedToSteal))
         }
       },
       testM("takes unclaimed leases first") {
         checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10), allOwned = false)) { leases =>
           for {
-            toTake          <- DefaultLeaseCoordinator.leasesToTake(leases, workerId(1))
-            fromOtherWorkers = toTake.dropWhile(_.owner.isEmpty)
+            toTake          <- leasesToTake(leases, workerId(1))
+            fromOtherWorkers = toTake.map(shard => leases.find(_.key == shard).get).dropWhile(_.owner.isEmpty)
           } yield assert(fromOtherWorkers)(forall(hasField("owner", _.owner, isNone)))
         }
       },
       testM("steals leases randomly to reduce contention for the same lease") {
         checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10), allOwned = true)) { leases =>
           for {
-            toSteal1 <- DefaultLeaseCoordinator.leasesToTake(leases, workerId(1))
-            toSteal2 <- DefaultLeaseCoordinator.leasesToTake(leases, workerId(1))
+            toSteal1 <- leasesToTake(leases, workerId(1))
+            toSteal2 <- leasesToTake(leases, workerId(1))
           } yield assert(toSteal1)(not(equalTo(toSteal2))) || assert(toSteal1)(hasSize(isLessThanEqualTo(1)))
         }
       } @@ TestAspect.flaky(3), // Randomness is randomly not-random
@@ -101,9 +91,10 @@ object LeaseStealingTest extends DefaultRunnableSpec {
             val busiestWorkers = leasesByWorker.map(_._1)
 
             for {
-              toSteal       <- DefaultLeaseCoordinator.leasesToTake(leases, workerId(1))
+              toSteal       <- leasesToTake(leases, workerId(1))
               // The order of workers should be equal to the order of busiest workers
-              toStealWorkers = changedElements(toSteal.map(_.owner.get))
+              toStealWorkers =
+                changedElements(toSteal.map(shard => leases.find(_.key == shard).get).map(_.owner.get).toList)
             } yield assert(toStealWorkers)(equalTo(busiestWorkers.take(toStealWorkers.size)))
         }
       }

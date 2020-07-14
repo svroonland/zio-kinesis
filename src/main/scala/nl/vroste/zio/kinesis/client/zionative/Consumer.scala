@@ -137,6 +137,7 @@ object Consumer {
    * @param leaseCoordinationSettings Config parameters for lease coordination
    * @param initialPosition When no checkpoint exists yet for a shard, start processing from this position
    * @param emitDiagnostic Function that is called for events happening in the Consumer. For diagnostics / metrics.
+   * @param shardAssignmentStrategy How to assign shards to this worker
    * @tparam R
    * @tparam T Record type
    * @return Stream of tuples of (shard ID, shard stream, checkpointer)
@@ -149,7 +150,8 @@ object Consumer {
     fetchMode: FetchMode = FetchMode.Polling(),
     leaseCoordinationSettings: LeaseCoordinationSettings = LeaseCoordinationSettings(),
     initialPosition: ShardIteratorType = ShardIteratorType.TrimHorizon,
-    emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit
+    emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit,
+    shardAssignmentStrategy: ShardAssignmentStrategy = ShardAssignmentStrategy.balanced()
   ): ZStream[
     Blocking with Clock with Random with Client with AdminClient with LeaseRepository with Logging with R,
     Throwable,
@@ -211,9 +213,15 @@ object Consumer {
                                else ZIO.succeed(shards)
                              }
                              .forkManaged
-            leaseCoordinator <-
-              DefaultLeaseCoordinator
-                .make(applicationName, workerIdentifier, emitDiagnostic, leaseCoordinationSettings, fetchShards.join)
+            leaseCoordinator <- DefaultLeaseCoordinator
+                                  .make(
+                                    applicationName,
+                                    workerIdentifier,
+                                    emitDiagnostic,
+                                    leaseCoordinationSettings,
+                                    fetchShards.join,
+                                    shardAssignmentStrategy
+                                  )
           } yield leaseCoordinator
         )(_ -> _)
 

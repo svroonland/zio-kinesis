@@ -21,6 +21,9 @@ import zio.logging._
 import scala.jdk.CollectionConverters._
 import scala.util.{ Failure, Try }
 
+// TODO this thing should have a global throttling / backoff
+// via a Tap that tries to find the optimal maximal throughput
+// See https://degoes.net/articles/zio-challenge
 private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient, timeout: Duration) extends LeaseRepository.Service {
 
   /**
@@ -102,7 +105,11 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient, timeout: Dura
           "leaseCounter" -> expectedAttributeValue(lease.counter - 1)
         ).asJava
       )
-      .attributeUpdates(Map("leaseOwner" -> deleteAttributeValueUpdate).asJava)
+      .attributeUpdates(
+        Map(
+          "leaseOwner" -> deleteAttributeValueUpdate
+        ).asJava
+      )
       .build()
 
     asZIO(client.updateItem(request)).unit.catchAll {
@@ -131,8 +138,9 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient, timeout: Dura
       )
       .attributeUpdates(
         Map(
-          "leaseOwner"   -> putAttributeValueUpdate(lease.owner.get),
-          "leaseCounter" -> putAttributeValueUpdate(lease.counter)
+          "leaseOwner"                   -> putAttributeValueUpdate(lease.owner.get),
+          "leaseCounter"                 -> putAttributeValueUpdate(lease.counter),
+          "ownerSwitchesSinceCheckpoint" -> putAttributeValueUpdate(0L) // Just for KCL compatibility
         ).asJava
       )
       .build()
@@ -170,16 +178,17 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient, timeout: Dura
       )
       .attributeUpdates(
         Map(
-          "leaseOwner"                  -> lease.owner.map(putAttributeValueUpdate(_)).getOrElse(deleteAttributeValueUpdate),
-          "leaseCounter"                -> putAttributeValueUpdate(lease.counter),
-          "checkpoint"                  -> lease.checkpoint
+          "leaseOwner"                   -> lease.owner.map(putAttributeValueUpdate(_)).getOrElse(deleteAttributeValueUpdate),
+          "leaseCounter"                 -> putAttributeValueUpdate(lease.counter),
+          "checkpoint"                   -> lease.checkpoint
             .map(_.sequenceNumber)
             .map(putAttributeValueUpdate)
             .getOrElse(putAttributeValueUpdate(null)),
-          "checkpointSubSequenceNumber" -> lease.checkpoint
+          "checkpointSubSequenceNumber"  -> lease.checkpoint
             .map(_.subSequenceNumber)
             .map(putAttributeValueUpdate)
-            .getOrElse(putAttributeValueUpdate(0L))
+            .getOrElse(putAttributeValueUpdate(0L)),
+          "ownerSwitchesSinceCheckpoint" -> putAttributeValueUpdate(0L) // Just for KCL compatibility
         ).asJava
       )
       .build()

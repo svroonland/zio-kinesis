@@ -340,7 +340,6 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                   Serde.asciiString,
                   workerIdentifier = workerId,
                   leaseCoordinationSettings = LeaseCoordinationSettings(
-                    10.seconds,
                     3.seconds,
                     refreshAndTakeInterval = 3.seconds,
                     maxParallelLeaseAcquisitions = 1
