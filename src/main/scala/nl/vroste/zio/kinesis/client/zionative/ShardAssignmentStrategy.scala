@@ -21,6 +21,8 @@ trait ShardAssignmentStrategy {
    * will be stolen. Note that all of this may fail when other workers are active in the pool,
    * so it is not guaranteed that this worker actually gets its desired shards. However, on the
    * next lease assignment interval, the strategy can indicate its desired shards again based.
+   * 
+   * Leases for shards that are not desired (anymore) will be released.
    *
     * @param leases Current lease assignments + time of last update
    * @param shards IDs of all shards of the stream
@@ -80,17 +82,19 @@ object ShardAssignmentStrategy {
         workerId: String
       ): ZIO[zio.random.Random with zio.clock.Clock with Logging, Nothing, Set[String]] =
         for {
-          now               <- zio.clock.currentDateTime.map(_.toInstant()).orDie
-          expiredLeases      = leases.collect {
+          now          <- zio.clock.currentDateTime.map(_.toInstant()).orDie
+          expiredLeases = leases.collect {
                             case (lease, lastUpdated)
                                 if lastUpdated.isBefore(now.minusMillis(expirationTime.toMillis)) =>
                               lease
                           }.toSet
+          _            <- log.info(s"Found expired leases: ${expiredLeases.map(_.key).mkString(",")}").when(expiredLeases.nonEmpty)
 
-          shardsWithoutLease = shards.filterNot(shard => leases.map(_._1).toList.contains(shard))
+          shardsWithoutLease = shards.filterNot(shard => leases.map(_._1.key).toList.contains(shard))
 
-          toTake <- leasesToTake(leases.map(_._1).toList, workerId, List.empty)
-        } yield shardsWithoutLease ++ toTake
+          toTake <- leasesToTake(leases.map(_._1).toList, workerId, expiredLeases.toList)
+          shardsWeAlreadyHave = leases.collect { case (lease, _) if lease.owner.contains(workerId) => lease.key}
+        } yield shardsWeAlreadyHave ++ shardsWithoutLease ++ toTake
 
     }
 

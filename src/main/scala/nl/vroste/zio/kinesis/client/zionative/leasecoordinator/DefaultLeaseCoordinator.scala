@@ -95,7 +95,7 @@ private class DefaultLeaseCoordinator(
 
     def leaseLost(lease: Lease, leaseCompleted: Promise[Nothing, Unit]): ZIO[Clock, Throwable, Unit] =
       leaseCompleted.succeed(()) *>
-        updateState((s, now) => s.releaseLease(lease, now).updateLease(lease, now)) *>
+        updateState((s, now) => s.releaseLease(lease, now).updateLease(lease.release, now)) *>
         emitDiagnostic(DiagnosticEvent.ShardLeaseLost(lease.key))
 
     def doUpdateCheckpoint(
@@ -262,13 +262,16 @@ private class DefaultLeaseCoordinator(
                             .contains(workerId) =>
                         shard
                     }
+    _             <- log.debug(s"Renewing ${leasesToRenew.size} leases")
     _             <- foreachParNUninterrupted_(settings.maxParallelLeaseRenewals)(leasesToRenew) { shardId =>
            processCommand[Throwable, Unit](LeaseCommand.RenewLease(shardId, _))
+             .tapError(e => log.error(s"Error renewing lease: ${e}"))
              .retry(settings.renewRetrySchedule) orElse (
              log.warn(s"Failed to renew lease for shard ${shardId}, releasing") *>
                processCommand[Throwable, Unit](LeaseCommand.ReleaseLease(shardId, _))
            )
          }
+    _             <- log.debug(s"Renewing ${leasesToRenew.size} leases done")
   } yield ()
 
   /**
@@ -340,10 +343,11 @@ private class DefaultLeaseCoordinator(
                          shards,
                          workerId
                        )
+      _             <- log.debug(s"Desired shards: ${desiredShards}")
       _             <- claimLeasesForShardsWithoutLease(desiredShards)
       state         <- state.get
       toTake         = leases.filter(l => desiredShards.contains(l.lease.key))
-      _             <- log.info(s"Going to take ${toTake.size} leases: ${toTake.mkString(",")}").when(toTake.nonEmpty)
+      _             <- log.info(s"Going to take ${toTake.size} leases: ${toTake.map(_.lease).mkString(",")}").when(toTake.nonEmpty)
       _             <- foreachParNUninterrupted_(settings.maxParallelLeaseAcquisitions)(toTake) { leaseState =>
              val updatedLease = leaseState.lease.claim(workerId)
              (table.claimLease(applicationName, updatedLease) *> registerNewAcquiredLease(updatedLease)).catchAll {
@@ -517,6 +521,7 @@ object DefaultLeaseCoordinator {
     }(_.releaseLeases).flatMap { c =>
       // Optimized to do initalization in parallel as much as possible
       for {
+        // TODO we could also find out by refreshing all leases
         leaseTableExists    <-
           ZIO.service[LeaseRepository.Service].flatMap(_.createLeaseTableIfNotExists(applicationName)).toManaged_
         _                   <- c.runloop.runDrain.forkManaged

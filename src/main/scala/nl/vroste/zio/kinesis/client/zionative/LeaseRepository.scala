@@ -16,6 +16,9 @@ object LeaseRepository {
 
     def claim(owner: String): Lease =
       copy(owner = Some(owner), counter = counter + 1)
+
+    def release: Lease =
+      copy(owner = None)
   }
 
   /**
