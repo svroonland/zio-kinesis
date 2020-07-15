@@ -237,11 +237,11 @@ private class DefaultLeaseCoordinator(
             case RenewLease(shard, done)                            =>
               doRenewLease(shard).foldM(done.fail, done.succeed).unit
             case RefreshLease(lease, done)                          =>
-                doRefreshLease(lease).tap(done.succeed).unit.orDie // Cannot fail
+              doRefreshLease(lease).tap(done.succeed).unit.orDie // Cannot fail
             case ReleaseLease(shard, done)                          =>
               doReleaseLease(shard).foldM(done.fail, done.succeed).unit
             case RegisterNewAcquiredLease(lease, done)              =>
-                doRegisterNewAcquiredLease(lease).tap(done.succeed).unit // Cannot fail
+              doRegisterNewAcquiredLease(lease).tap(done.succeed).unit // Cannot fail
           }
       }
   }
