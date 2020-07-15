@@ -3,6 +3,7 @@ package nl.vroste.zio.kinesis.client.zionative
 import zio.ZIO
 import zio.clock.Clock
 import zio.logging.Logging
+import zio.stream.ZStream
 
 object LeaseRepository {
   case class Lease(
@@ -31,7 +32,8 @@ object LeaseRepository {
      * Returns whether the table already existed
      */
     def createLeaseTableIfNotExists(tableName: String): ZIO[Clock with Logging, Throwable, Boolean]
-    def getLeases(tableName: String): ZIO[Clock, Throwable, List[Lease]]
+
+    def getLeases(tableName: String): ZStream[Clock, Throwable, Lease]
 
     /**
      * Removes the leaseOwner property

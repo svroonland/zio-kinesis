@@ -151,7 +151,7 @@ private class CloudWatchMetricsPublisher(
         ZTransducer.collectAllN(config.maxBatchSize.toLong),
         Schedule.fixed(config.maxFlushInterval)
       )
-      .mapMPar(config.maxParallelUploads) { metrics =>
+      .mapMParUnordered(config.maxParallelUploads) { metrics =>
         putMetricData(metrics)
           .tapError(e => log.warn(s"Failed to upload metrics, will retry: ${e}"))
           .retry(config.retrySchedule)

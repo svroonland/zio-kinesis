@@ -20,6 +20,7 @@ import zio.logging._
 
 import scala.jdk.CollectionConverters._
 import scala.util.{ Failure, Try }
+import zio.stream.ZStream
 
 // TODO this thing should have a global throttling / backoff
 // via a Tap that tries to find the optimal maximal throughput
@@ -67,21 +68,25 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient, timeout: Dura
     }.timeoutFail(new Exception("Timeout creating lease table"))(10.minute) // I dunno
   }
 
-  override def getLeases(tableName: String): ZIO[Clock, Throwable, List[Lease]] =
-    paginatedRequest { (lastItem: Option[DynamoDbItem]) =>
-      val builder     = ScanRequest.builder().tableName(tableName)
-      val scanRequest = lastItem.map(_.asJava).fold(builder)(builder.exclusiveStartKey).build()
+  override def getLeases(tableName: String): ZStream[Clock, Throwable, Lease] =
+    // paginatedRequest { (lastItem: Option[DynamoDbItem]) =>
+    ZStream.fromEffect {
+      val lastItem: Option[DynamoDbItem] = None
+      val builder                        = ScanRequest.builder().tableName(tableName)
+      val scanRequest                    = lastItem.map(_.asJava).fold(builder)(builder.exclusiveStartKey).build()
 
       asZIO(client.scan(scanRequest)).map { response =>
         val items: Chunk[DynamoDbItem] = Chunk.fromIterable(response.items().asScala).map(_.asScala)
 
         (items, Option(response.lastEvaluatedKey()).map(_.asScala).filter(_.nonEmpty))
-      }
+      }.timed.map {
+        case (timing, result) =>
+          println(s"GetLeases took ${timing.toMillis}")
+          result
+      }.map(_._1)
 
-    }(Schedule.forever).flattenChunks.runCollect
-      .flatMap(
-        ZIO.foreach(_)(i => ZIO.fromTry(toLease(i))).map(_.toList)
-      )
+      // }(Schedule.forever)
+    }.flattenChunks.mapM(l => ZIO.fromTry(toLease(l)))
 
   /**
    * Removes the leaseOwner property

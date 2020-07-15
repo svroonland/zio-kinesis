@@ -21,7 +21,7 @@ trait ShardAssignmentStrategy {
    * will be stolen. Note that all of this may fail when other workers are active in the pool,
    * so it is not guaranteed that this worker actually gets its desired shards. However, on the
    * next lease assignment interval, the strategy can indicate its desired shards again based.
-   * 
+   *
    * Leases for shards that are not desired (anymore) will be released.
    *
     * @param leases Current lease assignments + time of last update
@@ -92,8 +92,8 @@ object ShardAssignmentStrategy {
 
           shardsWithoutLease = shards.filterNot(shard => leases.map(_._1.key).toList.contains(shard))
 
-          toTake <- leasesToTake(leases.map(_._1).toList, workerId, expiredLeases.toList)
-          shardsWeAlreadyHave = leases.collect { case (lease, _) if lease.owner.contains(workerId) => lease.key}
+          toTake             <- leasesToTake(leases.map(_._1).toList, workerId, expiredLeases.toList)
+          shardsWeAlreadyHave = leases.collect { case (lease, _) if lease.owner.contains(workerId) => lease.key }
         } yield shardsWeAlreadyHave ++ shardsWithoutLease ++ toTake
 
     }

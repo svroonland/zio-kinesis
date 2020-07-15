@@ -662,13 +662,13 @@ object NativeConsumerTest extends DefaultRunnableSpec {
   def assertAllLeasesReleased(applicationName: String) =
     for {
       table  <- ZIO.service[LeaseRepository.Service]
-      leases <- table.getLeases(applicationName)
+      leases <- table.getLeases(applicationName).runCollect
     } yield assert(leases)(forall(hasField("owner", _.owner, isNone)))
 
   def getCheckpoints(applicationName: String) =
     for {
       table      <- ZIO.service[LeaseRepository.Service]
-      leases     <- table.getLeases(applicationName)
+      leases     <- table.getLeases(applicationName).runCollect
       checkpoints = leases.collect {
                       case l if l.checkpoint.isDefined => l.key -> l.checkpoint.get.sequenceNumber
                     }.toMap

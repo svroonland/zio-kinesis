@@ -210,8 +210,8 @@ private class DefaultLeaseCoordinator(
       for {
         completed <- Promise.make[Nothing, Unit]
         _         <- updateState((s, now) => s.updateLease(lease, now).holdLease(lease, completed, now)).orDie
-        _         <- emitDiagnostic(DiagnosticEvent.LeaseAcquired(lease.key, lease.checkpoint))
-        _         <- acquiredLeasesQueue.offer(lease -> completed)
+        _         <- emitDiagnostic(DiagnosticEvent.LeaseAcquired(lease.key, lease.checkpoint)).fork
+        _         <- acquiredLeasesQueue.offer(lease -> completed).fork
       } yield ()
 
     // Emits WorkerJoined and WorkerLeft after each lease operation
@@ -229,7 +229,6 @@ private class DefaultLeaseCoordinator(
 
     ZStream
       .fromQueue(commandQueue)
-      .buffer(100)
       .groupByKey(_.shard) {
         case (shard @ _, command) =>
           command.mapM {
@@ -238,11 +237,11 @@ private class DefaultLeaseCoordinator(
             case RenewLease(shard, done)                            =>
               doRenewLease(shard).foldM(done.fail, done.succeed).unit
             case RefreshLease(lease, done)                          =>
-              doRefreshLease(lease).tap(done.succeed).unit.orDie // Cannot fail
+                doRefreshLease(lease).tap(done.succeed).unit.orDie // Cannot fail
             case ReleaseLease(shard, done)                          =>
               doReleaseLease(shard).foldM(done.fail, done.succeed).unit
             case RegisterNewAcquiredLease(lease, done)              =>
-              doRegisterNewAcquiredLease(lease).tap(done.succeed).unit // Cannot fail
+                doRegisterNewAcquiredLease(lease).tap(done.succeed).unit // Cannot fail
           }
       }
   }
@@ -281,9 +280,21 @@ private class DefaultLeaseCoordinator(
    */
   val refreshLeases = {
     for {
-      _      <- log.info("Refreshing leases")
-      leases <- table.getLeases(applicationName)
-      _      <- ZIO.foreachPar_(leases)(lease => processCommand(LeaseCommand.RefreshLease(lease, _)))
+      _                 <- log.info("Refreshing leases")
+      result            <- table
+                  .getLeases(applicationName)
+                  .mapM { lease =>
+                    (processCommand(LeaseCommand.RefreshLease(lease, _)) *>
+                      /**
+                       * For leases that we found in the lease table that have our worker ID as owner but we don't
+                       * currently have in our state as acquired
+                       */
+                      registerNewAcquiredLease(lease).when(lease.owner.contains(workerId))).fork
+                  }
+                  .runDrain
+                  .timed
+      (duration, leases) = result
+      _                 <- log.debug(s"Refreshing leases took ${duration.toMillis}")
     } yield ()
   }
 
@@ -343,11 +354,13 @@ private class DefaultLeaseCoordinator(
                          shards,
                          workerId
                        )
-      _             <- log.debug(s"Desired shards: ${desiredShards}")
+      _             <- log.info(s"Desired shard assignment: ${desiredShards.mkString(",")}")
       _             <- claimLeasesForShardsWithoutLease(desiredShards)
       state         <- state.get
-      toTake         = leases.filter(l => desiredShards.contains(l.lease.key))
-      _             <- log.info(s"Going to take ${toTake.size} leases: ${toTake.map(_.lease).mkString(",")}").when(toTake.nonEmpty)
+      toTake         = leases.filter(l => desiredShards.contains(l.lease.key) && !l.lease.owner.contains(workerId))
+      _             <- log
+             .info(s"Going to take ${toTake.size} leases: ${toTake.map(_.lease).mkString(",")}")
+             .when(toTake.nonEmpty)
       _             <- foreachParNUninterrupted_(settings.maxParallelLeaseAcquisitions)(toTake) { leaseState =>
              val updatedLease = leaseState.lease.claim(workerId)
              (table.claimLease(applicationName, updatedLease) *> registerNewAcquiredLease(updatedLease)).catchAll {
@@ -365,18 +378,6 @@ private class DefaultLeaseCoordinator(
   // Puts it in the state and the queue
   private def registerNewAcquiredLease(lease: Lease): ZIO[Clock with Logging, Nothing, Unit] =
     processCommand(LeaseCommand.RegisterNewAcquiredLease(lease, _))
-
-  /**
-   * For leases that we found in the lease table that have our worker ID as owner but we don't
-   * currently have in our state as acquired
-   */
-  val resumeUnreleasedLeases = for {
-    s             <- state.get
-    leasesToResume = s.currentLeases.collect {
-                       case (shardId @ _, LeaseState(lease, None, _)) if lease.owner.contains(workerId) => lease
-                     }
-    _             <- ZIO.foreachPar_(leasesToResume)(registerNewAcquiredLease)
-  } yield ()
 
   override def acquiredLeases: ZStream[zio.clock.Clock, Throwable, AcquiredLease]          =
     ZStream
@@ -522,31 +523,35 @@ object DefaultLeaseCoordinator {
       // Optimized to do initalization in parallel as much as possible
       for {
         // TODO we could also find out by refreshing all leases
-        leaseTableExists    <-
-          ZIO.service[LeaseRepository.Service].flatMap(_.createLeaseTableIfNotExists(applicationName)).toManaged_
-        _                   <- c.runloop.runDrain.forkManaged
-        // Wait for shards if the lease table does not exist yet, otherwise we assume there's leases
-        // for all shards already, so just fork it. If there's new shards, the next `takeLeases` will
-        // claim leases for them.
-        awaitAndUpdateShards = shards.flatMap(c.updateShards)
-        _                   <- ((c.refreshLeases *> c.resumeUnreleasedLeases).when(leaseTableExists) *>
-                 (if (leaseTableExists) awaitAndUpdateShards.fork else awaitAndUpdateShards)).toManaged_
-        // Initialization. If it fails, we will try in the loop
-        _                   <- (c.takeLeases.ignore *>
-                 // Periodic refresh
-                 /**
-                  * resumeUnreleasedLeases is here because after a temporary connection failure,
-                  * we may have 'internally' released the lease but if no other worker has claimed
-                  * the lease, it will still be in the lease table with us as owner.
-                  */
-                 repeatAndRetry(settings.refreshAndTakeInterval) {
-                   (c.refreshLeases *> c.resumeUnreleasedLeases *> c.takeLeases)
-                     .tapCause(e => log.error("Refresh & take leases failed, will retry", e))
-                 }).forkManaged
-        _                   <- repeatAndRetry(settings.renewInterval) {
-               c.renewLeases
-                 .tapCause(e => log.error("Renewing leases failed, will retry", e))
-             }.forkManaged
+        _ <- c.runloop.runDrain.forkManaged
+        _ <- (for {
+                 leaseTableExists    <-
+                   ZIO.service[LeaseRepository.Service].flatMap(_.createLeaseTableIfNotExists(applicationName))
+                 // Wait for shards if the lease table does not exist yet, otherwise we assume there's leases
+                 // for all shards already, so just fork it. If there's new shards, the next `takeLeases` will
+                 // claim leases for them.
+                 awaitAndUpdateShards = shards.flatMap(c.updateShards)
+                 // TODO do we have to await all this stuff..? Just fork it
+                 _                   <- (c.refreshLeases.when(leaseTableExists) *>
+                          (if (leaseTableExists) awaitAndUpdateShards.fork else awaitAndUpdateShards))
+
+                 // Initialization. If it fails, we will try in the loop
+                 _                   <- (c.takeLeases.ignore *>
+                          // Periodic refresh
+                          /**
+                           * resumeUnreleasedLeases is here because after a temporary connection failure,
+                           * we may have 'internally' released the lease but if no other worker has claimed
+                           * the lease, it will still be in the lease table with us as owner.
+                           */
+                          repeatAndRetry(settings.refreshAndTakeInterval) {
+                            (c.refreshLeases *> c.takeLeases)
+                              .tapCause(e => log.error("Refresh & take leases failed, will retry", e))
+                          })
+               } yield ()).forkManaged
+        _ <- (repeatAndRetry(settings.renewInterval) {
+                 c.renewLeases
+                   .tapCause(e => log.error("Renewing leases failed, will retry", e))
+               }).forkManaged
       } yield c
     }.tapCause(c => log.error("Error creating DefaultLeaseCoordinator", c).toManaged_)
       .updateService[Logger[String]](_.named(s"worker-${workerId}"))
