@@ -283,13 +283,13 @@ private class DefaultLeaseCoordinator(
       _                 <- log.info("Refreshing leases")
       result            <- table
                   .getLeases(applicationName)
-                  .mapM { lease =>
-                    (processCommand(LeaseCommand.RefreshLease(lease, _)) *>
+                  .mapMParUnordered(settings.maxParallelLeaseAcquisitions) { lease =>
+                    processCommand(LeaseCommand.RefreshLease(lease, _)) *>
                       /**
                        * For leases that we found in the lease table that have our worker ID as owner but we don't
                        * currently have in our state as acquired
                        */
-                      registerNewAcquiredLease(lease).when(lease.owner.contains(workerId))).fork
+                      registerNewAcquiredLease(lease).when(lease.owner.contains(workerId))
                   }
                   .runDrain
                   .timed
