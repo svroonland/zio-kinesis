@@ -210,8 +210,8 @@ private class DefaultLeaseCoordinator(
       for {
         completed <- Promise.make[Nothing, Unit]
         _         <- updateState((s, now) => s.updateLease(lease, now).holdLease(lease, completed, now)).orDie
-        _         <- emitDiagnostic(DiagnosticEvent.LeaseAcquired(lease.key, lease.checkpoint)).fork
-        _         <- acquiredLeasesQueue.offer(lease -> completed).fork
+        _         <- emitDiagnostic(DiagnosticEvent.LeaseAcquired(lease.key, lease.checkpoint))
+        _         <- acquiredLeasesQueue.offer(lease -> completed)
       } yield ()
 
     // Emits WorkerJoined and WorkerLeft after each lease operation
@@ -237,6 +237,7 @@ private class DefaultLeaseCoordinator(
             case RenewLease(shard, done)                            =>
               doRenewLease(shard).foldM(done.fail, done.succeed).unit
             case RefreshLease(lease, done)                          =>
+              // log.debug(s"Runloop: RefreshLease ${lease}") *>
               doRefreshLease(lease).tap(done.succeed).unit.orDie // Cannot fail
             case ReleaseLease(shard, done)                          =>
               doReleaseLease(shard).foldM(done.fail, done.succeed).unit
@@ -270,7 +271,7 @@ private class DefaultLeaseCoordinator(
                processCommand[Throwable, Unit](LeaseCommand.ReleaseLease(shardId, _))
            )
          }
-    _             <- log.debug(s"Renewing ${leasesToRenew.size} leases done")
+    // _             <- log.debug(s"Renewing ${leasesToRenew.size} leases done")
   } yield ()
 
   /**
@@ -284,17 +285,18 @@ private class DefaultLeaseCoordinator(
       result            <- table
                   .getLeases(applicationName)
                   .mapMParUnordered(settings.maxParallelLeaseAcquisitions) { lease =>
-                    processCommand(LeaseCommand.RefreshLease(lease, _)) *>
+                    (log.info(s"RefreshLeases: ${lease}") *>
+                      processCommand(LeaseCommand.RefreshLease(lease, _)) *>
                       /**
                        * For leases that we found in the lease table that have our worker ID as owner but we don't
                        * currently have in our state as acquired
                        */
-                      registerNewAcquiredLease(lease).when(lease.owner.contains(workerId))
+                      registerNewAcquiredLease(lease).when(lease.owner.contains(workerId)))
                   }
                   .runDrain
                   .timed
       (duration, leases) = result
-      _                 <- log.debug(s"Refreshing leases took ${duration.toMillis}")
+      _                 <- log.info(s"Refreshing leases took ${duration.toMillis}")
     } yield ()
   }
 
@@ -504,59 +506,59 @@ object DefaultLeaseCoordinator {
       .bounded[LeaseCommand](128)
       .toManaged(_.shutdown)
       .flatMap { commandQueue =>
-    ZManaged.make {
-      for {
-        table          <- ZIO.service[LeaseRepository.Service]
-        state          <- Ref.make(State.empty)
-        acquiredLeases <- Queue.bounded[(Lease, Promise[Nothing, Unit])](128)
+        ZManaged.make {
+          for {
+            table          <- ZIO.service[LeaseRepository.Service]
+            state          <- Ref.make(State.empty)
+            acquiredLeases <- Queue.bounded[(Lease, Promise[Nothing, Unit])](128)
 
-        coordinator = new DefaultLeaseCoordinator(
-                        table,
-                        applicationName,
-                        workerId,
-                        state,
-                        acquiredLeases,
-                        emitDiagnostic,
-                        commandQueue,
-                        settings,
-                        strategy
-                      )
-      } yield coordinator
+            coordinator = new DefaultLeaseCoordinator(
+                            table,
+                            applicationName,
+                            workerId,
+                            state,
+                            acquiredLeases,
+                            emitDiagnostic,
+                            commandQueue,
+                            settings,
+                            strategy
+                          )
+          } yield coordinator
         }(_.releaseLeases)
       }
       .flatMap { c =>
-      // Optimized to do initalization in parallel as much as possible
-      for {
-        // TODO we could also find out by refreshing all leases
+        // Optimized to do initalization in parallel as much as possible
+        for {
+          // TODO we could also find out by refreshing all leases
           _ <- c.runloop.runDrain.forkManaged.ensuringFirst(log.debug("Shutting down runloop"))
 
-                 leaseTableExists    <-
+          leaseTableExists    <-
             ZIO.service[LeaseRepository.Service].flatMap(_.createLeaseTableIfNotExists(applicationName)).toManaged_
-                 // Wait for shards if the lease table does not exist yet, otherwise we assume there's leases
-                 // for all shards already, so just fork it. If there's new shards, the next `takeLeases` will
-                 // claim leases for them.
-                 awaitAndUpdateShards = shards.flatMap(c.updateShards)
-                 // TODO do we have to await all this stuff..? Just fork it
-                 _                   <- (c.refreshLeases.when(leaseTableExists) *>
+          // Wait for shards if the lease table does not exist yet, otherwise we assume there's leases
+          // for all shards already, so just fork it. If there's new shards, the next `takeLeases` will
+          // claim leases for them.
+          awaitAndUpdateShards = shards.flatMap(c.updateShards)
+          // TODO do we have to await all this stuff..? Just fork it
+          _                   <- (c.refreshLeases.when(leaseTableExists) *>
                    (if (leaseTableExists) awaitAndUpdateShards.fork else awaitAndUpdateShards)).toManaged_
 
-                 // Initialization. If it fails, we will try in the loop
-                 _                   <- (c.takeLeases.ignore *>
-                          // Periodic refresh
-                          /**
-                           * resumeUnreleasedLeases is here because after a temporary connection failure,
-                           * we may have 'internally' released the lease but if no other worker has claimed
-                           * the lease, it will still be in the lease table with us as owner.
-                           */
-                          repeatAndRetry(settings.refreshAndTakeInterval) {
-                            (c.refreshLeases *> c.takeLeases)
-                              .tapCause(e => log.error("Refresh & take leases failed, will retry", e))
+          // Initialization. If it fails, we will try in the loop
+          _ <- (c.takeLeases.ignore *>
+                   // Periodic refresh
+                   /**
+                    * resumeUnreleasedLeases is here because after a temporary connection failure,
+                    * we may have 'internally' released the lease but if no other worker has claimed
+                    * the lease, it will still be in the lease table with us as owner.
+                    */
+                   repeatAndRetry(settings.refreshAndTakeInterval) {
+                     (c.refreshLeases *> c.takeLeases)
+                       .tapCause(e => log.error("Refresh & take leases failed, will retry", e))
                    }).forkManaged.ensuringFirst(log.debug("Shutting down refresh & take lease loop"))
-        _ <- (repeatAndRetry(settings.renewInterval) {
-                 c.renewLeases
-                   .tapCause(e => log.error("Renewing leases failed, will retry", e))
+          _ <- (repeatAndRetry(settings.renewInterval) {
+                   c.renewLeases
+                     .tapCause(e => log.error("Renewing leases failed, will retry", e))
                  }).forkManaged.ensuringFirst(log.debug("Shutting down renew lease loop"))
-      } yield c
+        } yield c
       }
       .tapCause(c => log.error("Error creating DefaultLeaseCoordinator", c).toManaged_)
       .updateService[Logger[String]](_.named(s"worker-${workerId}"))
