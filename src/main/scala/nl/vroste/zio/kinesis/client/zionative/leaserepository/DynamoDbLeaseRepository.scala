@@ -69,24 +69,18 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient, timeout: Dura
   }
 
   override def getLeases(tableName: String): ZStream[Clock, Throwable, Lease] =
-    // paginatedRequest { (lastItem: Option[DynamoDbItem]) =>
-    ZStream.fromEffect {
-      val lastItem: Option[DynamoDbItem] = None
-      val builder                        = ScanRequest.builder().tableName(tableName)
-      val scanRequest                    = lastItem.map(_.asJava).fold(builder)(builder.exclusiveStartKey).build()
+    paginatedRequest { (lastItem: Option[DynamoDbItem]) =>
+      val builder     = ScanRequest.builder().tableName(tableName)
+      val scanRequest = lastItem.map(_.asJava).fold(builder)(builder.exclusiveStartKey).build()
 
       asZIO(client.scan(scanRequest)).map { response =>
         val items: Chunk[DynamoDbItem] = Chunk.fromIterable(response.items().asScala).map(_.asScala)
 
         (items, Option(response.lastEvaluatedKey()).map(_.asScala).filter(_.nonEmpty))
-      }.timed.map {
-        case (timing, result) =>
-          println(s"GetLeases took ${timing.toMillis}")
-          result
-      }.map(_._1)
+      }
 
-      // }(Schedule.forever)
-    }.flattenChunks.mapM(l => ZIO.fromTry(toLease(l)))
+    }(Schedule.forever).flattenChunks
+      .mapM(item => ZIO.fromTry(toLease(item)))
 
   /**
    * Removes the leaseOwner property
