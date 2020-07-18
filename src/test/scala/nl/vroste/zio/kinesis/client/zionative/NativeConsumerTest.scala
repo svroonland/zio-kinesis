@@ -449,7 +449,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                          shard
                                      }
 
-            } yield assert(acquiredAfterRelease)(hasSameElements(worker1Released.map(_._2)))
+            } yield assert(acquiredAfterRelease)(hasSubset(worker1Released.map(_._2)))
         }
       },
       testM("workers must take over from a zombie consumer") {
