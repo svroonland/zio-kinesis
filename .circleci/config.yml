@@ -56,7 +56,7 @@ jobs:
       - checkout
       - restore_cache:
           key: sbt-cache
-      - run: sbt ++2.13.1! testOnly nl.vroste.zio.kinesis.client.zionative.NativeConsumerTest
+      - run: sbt ++2.13.1! "testOnly nl.vroste.zio.kinesis.client.zionative.NativeConsumerTest"
       - store_test_results:
           path: target/test-reports
       - save_cache:
