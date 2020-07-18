@@ -272,13 +272,14 @@ object NativeConsumerTest extends DefaultRunnableSpec {
         }
       },
       testM("workers should be able to start concurrently and both get some shards") {
-        val nrRecords = 2000
-        val nrShards  = 5
+        val nrRecords =
+          20000 // This should probably be large enough to guarantee that both workers can get enough records to complete
+        val nrShards = 5
 
         withRandomStreamAndApplicationName(nrShards) {
           (streamName, applicationName) =>
             for {
-              producer                   <- produceSampleRecords(streamName, nrRecords, chunkSize = 50).fork
+              producer                   <- produceSampleRecords(streamName, nrRecords, chunkSize = 50, throttle = Some(1.second)).fork
               shardsProcessedByConsumer2 <- Ref.make[Set[String]](Set.empty)
 
               // Spin up two workers, let them fight a bit over leases
@@ -302,7 +303,6 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                       ZStream.empty
                                     case Left(e)  => ZStream.fail(e)
                                   }
-                                  .mapConcat(identity(_))
                             }
                             .take(10)
               consumer2 = Consumer
@@ -326,7 +326,6 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                         ZStream.empty
                                       case Left(e)  => ZStream.fail(e)
                                     }
-                                    .mapConcat(identity(_))
                                     .ensuring(UIO(println(s"Shard stream worker 2 ${shard} completed")))
                             }
                             .take(10)
@@ -398,11 +397,15 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                             )
                           )
                           .runDrain
+                          .tapError(e => log.error(s"Stream has failed ${e}"))
                           .tapError(consumer1Done.fail(_))
                           .fork
-              _             <- consumer1Done.await *> ZIO.sleep(10.seconds)
-              _             <- putStrLn("Interrupting producer and stream")
+              _             <- consumer1Done.await
+              _             <- log.debug("Consumer1 is done")
+              _             <- ZIO.sleep(10.seconds)
+              _             <- log.debug("Interrupting producer")
               _             <- producer.interrupt
+              _             <- log.debug("Interrupting streams")
               _             <- stream.interrupt
               allEvents     <- events.get.map(
                              _.filterNot(_._3.isInstanceOf[PollComplete])
