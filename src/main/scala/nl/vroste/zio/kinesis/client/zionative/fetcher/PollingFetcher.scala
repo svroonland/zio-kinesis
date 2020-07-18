@@ -67,14 +67,17 @@ object PollingFetcher {
                           )
                    } yield response
 
-          shardStream = repeatEffectWith(doPoll, config.pollSchedule).catchAll {
-                          case None    =>
-                            ZStream.empty
-                          case Some(e) =>
-                            ZStream.fromEffect(
-                              log.warn(s"Error in PollingFetcher for shard ${shardId}: ${e}")
-                            ) *> ZStream.fail(e)
-                        }.takeUntil(_.nextShardIterator == null)
+          shardStream = ZStream
+                          .repeatEffectWith(doPoll, config.pollSchedule)
+                          .catchAll {
+                            case None    =>
+                              ZStream.empty
+                            case Some(e) =>
+                              ZStream.fromEffect(
+                                log.warn(s"Error in PollingFetcher for shard ${shardId}: ${e}")
+                              ) *> ZStream.fail(e)
+                          }
+                          .takeUntil(_.nextShardIterator == null)
                           .buffer(config.bufferNrBatches)
                           .mapConcatChunk(response => Chunk.fromIterable(response.records.asScala))
                           .retry(config.throttlingBackoff)
@@ -82,19 +85,6 @@ object PollingFetcher {
       }.ensuring(log.info(s"PollingFetcher for shard ${shardId} closed"))
         .provide(env)
 
-    }
-
-  // Like ZStream.repeatEffectWith but does not delay the outputs
-  // TODO Wait for https://github.com/zio/zio/pull/3959 for this to be merged
-  def repeatEffectWith[R, E, A](effect: ZIO[R, E, A], schedule: Schedule[R, A, _]): ZStream[R, E, A] =
-    ZStream.fromEffect(schedule.initial zip effect).flatMap {
-      case (initialScheduleState, value) =>
-        ZStream.succeed(value) ++ ZStream.unfoldM((initialScheduleState, value)) {
-          case (state, lastValue) =>
-            schedule
-              .update(lastValue, state)
-              .foldM(_ => ZIO.succeed(Option.empty), newState => effect.map(value => Some((value, (newState, value)))))
-        }
     }
 
   private val getShardIteratorRateLimit = 5
