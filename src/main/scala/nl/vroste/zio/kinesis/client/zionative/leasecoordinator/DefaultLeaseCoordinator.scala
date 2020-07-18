@@ -468,7 +468,7 @@ object DefaultLeaseCoordinator {
   }
 
   object LeaseCommand {
-    case class RefreshLease(lease: Lease, done: Promise[Nothing, Unit]) extends LeaseCommand {
+    final case class RefreshLease(lease: Lease, done: Promise[Nothing, Unit]) extends LeaseCommand {
       val shard = lease.key
     }
 
@@ -500,11 +500,14 @@ object DefaultLeaseCoordinator {
     Throwable,
     LeaseCoordinator
   ] =
+    Queue
+      .bounded[LeaseCommand](128)
+      .toManaged(_.shutdown)
+      .flatMap { commandQueue =>
     ZManaged.make {
       for {
         table          <- ZIO.service[LeaseRepository.Service]
         state          <- Ref.make(State.empty)
-        commandQueue   <- Queue.bounded[LeaseCommand](128)
         acquiredLeases <- Queue.bounded[(Lease, Promise[Nothing, Unit])](128)
 
         coordinator = new DefaultLeaseCoordinator(
@@ -519,21 +522,23 @@ object DefaultLeaseCoordinator {
                         strategy
                       )
       } yield coordinator
-    }(_.releaseLeases).flatMap { c =>
+        }(_.releaseLeases)
+      }
+      .flatMap { c =>
       // Optimized to do initalization in parallel as much as possible
       for {
         // TODO we could also find out by refreshing all leases
-        _ <- c.runloop.runDrain.forkManaged
-        _ <- (for {
+          _ <- c.runloop.runDrain.forkManaged.ensuringFirst(log.debug("Shutting down runloop"))
+
                  leaseTableExists    <-
-                   ZIO.service[LeaseRepository.Service].flatMap(_.createLeaseTableIfNotExists(applicationName))
+            ZIO.service[LeaseRepository.Service].flatMap(_.createLeaseTableIfNotExists(applicationName)).toManaged_
                  // Wait for shards if the lease table does not exist yet, otherwise we assume there's leases
                  // for all shards already, so just fork it. If there's new shards, the next `takeLeases` will
                  // claim leases for them.
                  awaitAndUpdateShards = shards.flatMap(c.updateShards)
                  // TODO do we have to await all this stuff..? Just fork it
                  _                   <- (c.refreshLeases.when(leaseTableExists) *>
-                          (if (leaseTableExists) awaitAndUpdateShards.fork else awaitAndUpdateShards))
+                   (if (leaseTableExists) awaitAndUpdateShards.fork else awaitAndUpdateShards)).toManaged_
 
                  // Initialization. If it fails, we will try in the loop
                  _                   <- (c.takeLeases.ignore *>
@@ -546,14 +551,14 @@ object DefaultLeaseCoordinator {
                           repeatAndRetry(settings.refreshAndTakeInterval) {
                             (c.refreshLeases *> c.takeLeases)
                               .tapCause(e => log.error("Refresh & take leases failed, will retry", e))
-                          })
-               } yield ()).forkManaged
+                   }).forkManaged.ensuringFirst(log.debug("Shutting down refresh & take lease loop"))
         _ <- (repeatAndRetry(settings.renewInterval) {
                  c.renewLeases
                    .tapCause(e => log.error("Renewing leases failed, will retry", e))
-               }).forkManaged
+                 }).forkManaged.ensuringFirst(log.debug("Shutting down renew lease loop"))
       } yield c
-    }.tapCause(c => log.error("Error creating DefaultLeaseCoordinator", c).toManaged_)
+      }
+      .tapCause(c => log.error("Error creating DefaultLeaseCoordinator", c).toManaged_)
       .updateService[Logger[String]](_.named(s"worker-${workerId}"))
 
   private def repeatAndRetry[R, E, A](interval: Duration)(effect: ZIO[R, E, A]) =
