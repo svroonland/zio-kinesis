@@ -534,7 +534,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
         }
       },
       testM("a worker must pick up an ended shard stream") {
-        val nrRecords = 2000
+        val nrRecords = 20000
         val nrShards  = 3
 
         withRandomStreamAndApplicationName(nrShards) {
@@ -547,7 +547,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                   Serde.asciiString,
                   workerIdentifier = workerId,
                   leaseCoordinationSettings =
-                    LeaseCoordinationSettings(10.seconds, 3.seconds, maxParallelLeaseAcquisitions = 1),
+                    LeaseCoordinationSettings(renewInterval= 3.seconds, refreshAndTakeInterval = 5.seconds, maxParallelLeaseAcquisitions = 1),
                   emitDiagnostic = emitDiagnostic
                 )
                 .flatMapPar(Int.MaxValue) {
@@ -569,7 +569,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
             // TODO extract DiagnosticEventList { def eventsByWorker(workerId), eventsAfter(instant), etc }
             for {
-              producer      <- produceSampleRecords(streamName, nrRecords, chunkSize = 50).fork
+              producer      <- produceSampleRecords(streamName, nrRecords, chunkSize = 50, throttle = Some(1.second)).fork
               done          <- Promise.make[Nothing, Unit]
               events        <- Ref.make[List[DiagnosticEvent]](List.empty)
               emitDiagnostic = (workerId: String) =>
