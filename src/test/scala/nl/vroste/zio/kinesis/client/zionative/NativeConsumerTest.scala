@@ -546,8 +546,11 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                   applicationName,
                   Serde.asciiString,
                   workerIdentifier = workerId,
-                  leaseCoordinationSettings =
-                    LeaseCoordinationSettings(renewInterval= 3.seconds, refreshAndTakeInterval = 5.seconds, maxParallelLeaseAcquisitions = 1),
+                  leaseCoordinationSettings = LeaseCoordinationSettings(
+                    renewInterval = 3.seconds,
+                    refreshAndTakeInterval = 5.seconds,
+                    maxParallelLeaseAcquisitions = 1
+                  ),
                   emitDiagnostic = emitDiagnostic
                 )
                 .flatMapPar(Int.MaxValue) {
