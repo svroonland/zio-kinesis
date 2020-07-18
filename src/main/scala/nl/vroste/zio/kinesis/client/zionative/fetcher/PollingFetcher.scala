@@ -31,15 +31,15 @@ object PollingFetcher {
     emitDiagnostic: DiagnosticEvent => UIO[Unit]
   ): ZManaged[Clock with Client with Logging, Throwable, Fetcher] =
     for {
-      getShardIterator <- throttledFunctionN(getShardIteratorRateLimit, 1.second)(Client.getShardIterator _)
       env              <- ZIO.environment[Client with Clock with Logging].toManaged_
+      getShardIterator <- throttledFunctionN(getShardIteratorRateLimit, 1.second)(Client.getShardIterator _)
     } yield Fetcher { (shardId, startingPosition) =>
       ZStream.unwrapManaged {
         for {
-          getRecordsThrottled  <- throttledFunctionN(getRecordsRateLimit, 1.second)(Client.getRecords _)
           initialShardIterator <- getShardIterator(streamName, shardId, startingPosition)
                                     .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
                                     .toManaged_
+          getRecordsThrottled  <- throttledFunctionN(getRecordsRateLimit, 1.second)(Client.getRecords _)
           shardIterator        <- Ref.make[Option[String]](Some(initialShardIterator)).toManaged_
 
           // Failure with None indicates that there's no next shard iterator and the shard has ended

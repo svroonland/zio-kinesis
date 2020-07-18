@@ -231,7 +231,7 @@ object Consumer {
           leaseCoordinator.acquiredLeases.collect {
             case AcquiredLease(shardId, leaseLost) =>
               (shardId, leaseLost)
-          }.mapM {
+          }.mapMParUnordered(leaseCoordinationSettings.maxParallelLeaseAcquisitions) {
             case (shardId, leaseLost) =>
               for {
                 checkpointer        <- leaseCoordinator.makeCheckpointer(shardId)

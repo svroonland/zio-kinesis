@@ -31,9 +31,8 @@ object PollingFetcherTest extends DefaultRunnableSpec {
    * - [X] immediately emit all records that were fetched in the first call in one Chunk
    * - [X] immediately poll again when there are more records available
    * - [X] delay polling when there are no more records available
-   * - [ ] make no more than 5 calls per second to GetShardIterator
    * - [X] make no more than 5 calls per second per shard to GetRecords
-   * - [ ] retry after some time on being throttled
+   * - [X] retry after some time on being throttled
    * - [X] make the next call with the previous response's nextShardIterator
    * - [X] end the shard stream when the shard has ended
    * - [X] emit a diagnostic event for every completed poll

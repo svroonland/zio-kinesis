@@ -6,7 +6,7 @@ import zio.logging.Logging
 import zio.stream.ZStream
 
 object LeaseRepository {
-  case class Lease(
+  final case class Lease(
     key: String,
     owner: Option[String],
     counter: Long,

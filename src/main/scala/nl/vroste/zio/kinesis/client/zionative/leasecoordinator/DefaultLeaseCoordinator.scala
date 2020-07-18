@@ -472,17 +472,17 @@ object DefaultLeaseCoordinator {
       val shard = lease.key
     }
 
-    case class RenewLease(shard: String, done: Promise[Throwable, Unit]) extends LeaseCommand
-    case class UpdateCheckpoint(
+    final case class RenewLease(shard: String, done: Promise[Throwable, Unit]) extends LeaseCommand
+    final case class UpdateCheckpoint(
       shard: String,
       checkpoint: ExtendedSequenceNumber,
       done: Promise[Either[Throwable, ShardLeaseLost.type], Unit],
       release: Boolean
     ) extends LeaseCommand
 
-    case class ReleaseLease(shard: String, done: Promise[Throwable, Unit]) extends LeaseCommand
+    final case class ReleaseLease(shard: String, done: Promise[Throwable, Unit]) extends LeaseCommand
 
-    case class RegisterNewAcquiredLease(lease: Lease, done: Promise[Nothing, Unit]) extends LeaseCommand {
+    final case class RegisterNewAcquiredLease(lease: Lease, done: Promise[Nothing, Unit]) extends LeaseCommand {
       val shard = lease.key
     }
 
@@ -504,8 +504,8 @@ object DefaultLeaseCoordinator {
       for {
         table          <- ZIO.service[LeaseRepository.Service]
         state          <- Ref.make(State.empty)
-        commandQueue   <- Queue.unbounded[LeaseCommand]
-        acquiredLeases <- Queue.unbounded[(Lease, Promise[Nothing, Unit])]
+        commandQueue   <- Queue.bounded[LeaseCommand](128)
+        acquiredLeases <- Queue.bounded[(Lease, Promise[Nothing, Unit])](128)
 
         coordinator = new DefaultLeaseCoordinator(
                         table,
@@ -559,7 +559,7 @@ object DefaultLeaseCoordinator {
   private def repeatAndRetry[R, E, A](interval: Duration)(effect: ZIO[R, E, A]) =
     effect.repeat(Schedule.fixed(interval)).delay(interval).retry(Schedule.forever)
 
-  case class LeaseState(lease: Lease, completed: Option[Promise[Nothing, Unit]], lastUpdated: Instant) {
+  final case class LeaseState(lease: Lease, completed: Option[Promise[Nothing, Unit]], lastUpdated: Instant) {
     def update(updatedLease: Lease, now: Instant) =
       copy(lease = updatedLease, lastUpdated = if (updatedLease.counter > lease.counter) now else lastUpdated)
 
@@ -575,7 +575,7 @@ object DefaultLeaseCoordinator {
    * @param currentLeases Latest known state of all leases
    * @param shards List of all of the stream's shards
    */
-  case class State(
+  final case class State(
     currentLeases: Map[String, LeaseState],
     shards: Map[String, Shard]
   ) {
