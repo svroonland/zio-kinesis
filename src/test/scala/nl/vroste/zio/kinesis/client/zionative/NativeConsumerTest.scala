@@ -22,7 +22,7 @@ import zio.logging.slf4j.Slf4jLogger
 import zio.stream.{ ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test._
-import zio.logging.Logging
+import zio.logging._
 import nl.vroste.zio.kinesis.client.ProducerSettings
 import nl.vroste.zio.kinesis.client.TestUtil
 
@@ -298,13 +298,15 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                   .tap(checkpointer.stage)
                                   .aggregateAsyncWithin(ZTransducer.collectAllN(200), Schedule.fixed(1.second))
                                   .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-                                  .tap(_ => checkpointer.checkpoint())
+                                  // .tap(_ => checkpointer.checkpoint())
                                   .catchAll {
                                     case Right(_) =>
                                       ZStream.empty
                                     case Left(e)  => ZStream.fail(e)
                                   }
+                                  .ensuring(UIO(println(s"Shard stream worker 1 ${shard} completed")))
                             }
+                            .tap(_ => log.info("WORKER1 GOT A BATCH"))
                             .take(10)
               consumer2 = Consumer
                             .shardedStream(
@@ -322,7 +324,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                     .tap(checkpointer.stage)
                                     .aggregateAsyncWithin(ZTransducer.collectAllN(200), Schedule.fixed(1.second))
                                     .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-                                    .tap(_ => checkpointer.checkpoint())
+                                    // .tap(_ => checkpointer.checkpoint())
                                     .catchAll {
                                       case Right(_) =>
                                         ZStream.empty
@@ -330,6 +332,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                     }
                                     .ensuring(UIO(println(s"Shard stream worker 2 ${shard} completed")))
                             }
+                            .tap(_ => log.info("WORKER2 GOT A BATCH"))
                             .take(10)
 
               _        <- consumer1.merge(consumer2).runCollect
@@ -352,7 +355,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                   workerIdentifier = workerId,
                   leaseCoordinationSettings = LeaseCoordinationSettings(
                     3.seconds,
-                    refreshAndTakeInterval = 3.seconds,
+                    refreshAndTakeInterval = 10.seconds,
                     maxParallelLeaseAcquisitions = 1
                   ),
                   emitDiagnostic = emitDiagnostic
@@ -371,6 +374,10 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                         case Left(e)  => ZStream.fail(e)
                       }
                 }
+                .catchAll {
+                  case e => ZStream.unwrap(log.error(e.toString).as(ZStream.fail(e)))
+                }
+                .updateService[Logger[String]](_.named(s"worker-${workerId}"))
 
             for {
               consumer1Done <- Promise.make[Throwable, Unit]
@@ -387,29 +394,42 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                        .flatMap(time => events.update(_ :+ ((workerId, time, event))))
                                        .provideLayer(Clock.live)
 
-              stream        <- ZStream
-                          .mergeAll(3)(
-                            consumer("worker1", emitDiagnostic("worker1"))
-                              .take(10) // Such that it has had time to claim some leases
-                              .ensuringFirst(log.warn("worker1 done") *> consumer1Done.succeed(())),
-                            consumer("worker2", emitDiagnostic("worker2")).ensuringFirst(
-                              log.warn("worker2 DONE")
-                            ),
-                            consumer("worker3", emitDiagnostic("worker3")).ensuringFirst(
-                              log.warn("Worker3 DONE")
-                            )
-                          )
-                          .runDrain
-                          .tapError(e => log.error(s"Stream has failed ${e}"))
-                          .tapError(consumer1Done.fail(_))
-                          .fork
+              worker1       <- (consumer("worker1", emitDiagnostic("worker1"))
+                             .take(10) // Such that it has had time to claim some leases
+                             .runDrain
+                             .tapError(e => log.error(s"Worker1 failed with error: ${e}"))
+                             .tapError(consumer1Done.fail(_))
+                             *> log.warn("worker1 done") *> consumer1Done.succeed(())).fork
+
+              worker2       <- consumer("worker2", emitDiagnostic("worker2"))
+                           .ensuringFirst(
+                             log.warn("worker2 DONE")
+                           )
+                           .runDrain
+                           .fork
+              worker3       <- consumer("worker3", emitDiagnostic("worker3"))
+                           .ensuringFirst(
+                             log.warn("worker3 DONE")
+                           )
+                           .runDrain
+                           .fork
+
               _             <- consumer1Done.await
               _             <- log.debug("Consumer1 is done")
               _             <- ZIO.sleep(10.seconds)
               _             <- log.debug("Interrupting producer")
               _             <- producer.interrupt
               _             <- log.debug("Interrupting streams")
-              _             <- stream.interrupt
+              _             <- worker2.interrupt
+                     .tap(_ => log.info("Done interrupting worker 2"))
+                     .tapCause(e => log.error("Error interrupting worker 2:", e))
+                     .ignore zipPar worker3.interrupt
+                     .tap(_ => log.info("Done interrupting worker 3"))
+                     .tapCause(e => log.error("Error interrupting worker 3:", e))
+                     .ignore zipPar worker1.join
+                     .tap(_ => log.info("Done interrupting worker 1"))
+                     .tapCause(e => log.error("Error joining worker 1:", e))
+                     .ignore
               allEvents     <- events.get.map(
                              _.filterNot(_._3.isInstanceOf[PollComplete])
                                .filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
