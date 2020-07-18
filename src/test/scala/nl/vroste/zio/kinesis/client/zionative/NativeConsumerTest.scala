@@ -251,11 +251,21 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                     .mapConcat(identity(_))
                             }
 
-              fib                        <- consumer1.merge(ZStream.unwrap(consumer1Started.await.as(consumer2))).runCollect.fork
+              fib                        <- consumer1
+                       .merge(
+                         ZStream.unwrap(
+                           consumer1Started.await
+                             .tap(_ => log.info("Consumer 1 has started, starting consumer 2"))
+                             .as(consumer2)
+                         )
+                       )
+                       .runCollect
+                       .fork
               completedShard             <- shardCompletedByConsumer1.await
+              _                          <- log.info(s"Consumer 1 has completed shard ${completedShard}")
               _                          <- shardStartedByConsumer2.await
-              shardsConsumer2            <- shardsProcessedByConsumer2.get
               _                          <- fib.interrupt
+              shardsConsumer2            <- shardsProcessedByConsumer2.get
               _                          <- producer.interrupt
 
             } yield assert(shardsConsumer2)(contains(completedShard))
@@ -578,7 +588,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
       TestAspect.timeoutWarning(60.seconds) @@
       TestAspect.timeout(300.seconds)
 
-  val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some("NativeConsumerTest"))
+  val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
   val env = ((LocalStackServices.env.orDie >+>
     (AdminClient.live ++ Client.live ++ DynamoDbLeaseRepository.live)).orDie ++
