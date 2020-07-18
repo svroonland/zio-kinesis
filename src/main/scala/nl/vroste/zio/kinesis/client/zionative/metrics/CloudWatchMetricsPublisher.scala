@@ -148,7 +148,7 @@ private class CloudWatchMetricsPublisher(
       .tap { case (e, _) => collectPeriodicMetrics(e) }
       .mapConcat(Function.tupled(toMetrics)) merge ZStream.fromQueue(periodicMetricsQueue))
       .aggregateAsyncWithin(
-        ZTransducer.collectAllN(config.maxBatchSize.toLong),
+        ZTransducer.collectAllN(config.maxBatchSize),
         Schedule.fixed(config.maxFlushInterval)
       )
       .mapMParUnordered(config.maxParallelUploads) { metrics =>
