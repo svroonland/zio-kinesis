@@ -133,14 +133,14 @@ object Client {
 
   type ClientTask[+A] = ZIO[Client, Throwable, A]
 
-  case class ProducerRecord[T](partitionKey: String, data: T)
+  final case class ProducerRecord[T](partitionKey: String, data: T)
 
   sealed trait ShardIteratorType
   object ShardIteratorType {
-    case object Latest                                     extends ShardIteratorType
-    case object TrimHorizon                                extends ShardIteratorType
-    case class AtSequenceNumber(sequenceNumber: String)    extends ShardIteratorType
-    case class AfterSequenceNumber(sequenceNumber: String) extends ShardIteratorType
-    case class AtTimestamp(timestamp: Instant)             extends ShardIteratorType
+    case object Latest                                           extends ShardIteratorType
+    case object TrimHorizon                                      extends ShardIteratorType
+    final case class AtSequenceNumber(sequenceNumber: String)    extends ShardIteratorType
+    final case class AfterSequenceNumber(sequenceNumber: String) extends ShardIteratorType
+    final case class AtTimestamp(timestamp: Instant)             extends ShardIteratorType
   }
 }

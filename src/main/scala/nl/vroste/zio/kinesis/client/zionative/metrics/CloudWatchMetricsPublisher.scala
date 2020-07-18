@@ -25,7 +25,7 @@ import scala.jdk.CollectionConverters._
  * @param retrySchedule Transient upload failures are retried according to this schedule
  * @param maxParallelUploads The maximum number of in-flight requests with batches of metric data to CloudWatch
  */
-case class CloudWatchMetricsPublisherConfig(
+final case class CloudWatchMetricsPublisherConfig(
   maxFlushInterval: Duration = 20.seconds,
   maxBatchSize: Int = 20,
   periodicMetricInterval: Duration = 30.seconds,

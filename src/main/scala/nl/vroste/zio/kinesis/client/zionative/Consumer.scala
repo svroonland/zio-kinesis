@@ -25,7 +25,7 @@ import zio.logging.{ log, Logging }
 import zio.random.Random
 import zio.stream.ZStream
 
-case class ExtendedSequenceNumber(sequenceNumber: String, subSequenceNumber: Long)
+final case class ExtendedSequenceNumber(sequenceNumber: String, subSequenceNumber: Long)
 
 sealed trait FetchMode
 object FetchMode {
@@ -47,7 +47,7 @@ object FetchMode {
    *                        records while a new poll call is being made concurrently. A batch will contain
    *                        up to `batchSize` records. Prefer powers of 2 for this value for performance reasons.
    */
-  case class Polling(
+  final case class Polling(
     batchSize: Int = 1000,
     pollSchedule: Schedule[Clock, GetRecordsResponse, Any] = Polling.dynamicSchedule(1.second),
     throttlingBackoff: Schedule[Clock, Any, (Duration, Int)] = Util.exponentialBackoff(5.seconds, 30.seconds),
@@ -72,7 +72,7 @@ object FetchMode {
    *
    * @param retrySchedule Schedule for retrying in case of connection issues
    */
-  case class EnhancedFanOut(
+  final case class EnhancedFanOut(
     deregisterConsumerAtShutdown: Boolean = false, // TODO
     maxSubscriptionsPerSecond: Int = 10,
     retrySchedule: Schedule[Clock, Any, (Duration, Int)] = Util.exponentialBackoff(5.second, 1.minute)

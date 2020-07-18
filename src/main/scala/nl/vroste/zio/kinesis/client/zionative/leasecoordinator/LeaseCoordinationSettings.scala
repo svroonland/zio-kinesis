@@ -21,7 +21,7 @@ import zio.clock.Clock
  * @param renewRetrySchedule Schedule that controls retries when exceptions occur when renewing a
  *                           lease. The lease is released (internally only) when the schedule fails.
  */
-case class LeaseCoordinationSettings(
+final case class LeaseCoordinationSettings(
   renewInterval: Duration = 3.seconds,
   refreshAndTakeInterval: Duration = 20.seconds,
   maxParallelLeaseAcquisitions: Int = 10,

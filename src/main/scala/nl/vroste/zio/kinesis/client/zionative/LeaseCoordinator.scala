@@ -14,5 +14,5 @@ private[zionative] trait LeaseCoordinator {
 }
 
 private[zionative] object LeaseCoordinator {
-  case class AcquiredLease(shardId: String, leaseLost: Promise[Nothing, Unit])
+  final case class AcquiredLease(shardId: String, leaseLost: Promise[Nothing, Unit])
 }

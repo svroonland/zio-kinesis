@@ -18,7 +18,7 @@ object DiagnosticEvent {
    * @param duration Time the call to GetRecords took, including time needed to wait for taking into
    *   account AWS limits
    */
-  case class PollComplete(shardId: String, nrRecords: Int, behindLatest: Duration, duration: Duration)
+  final case class PollComplete(shardId: String, nrRecords: Int, behindLatest: Duration, duration: Duration)
       extends DiagnosticEvent
 
   /**
@@ -28,7 +28,8 @@ object DiagnosticEvent {
    * @param nrRecords
    * @param behindLatest
    */
-  case class SubscribeToShardEvent(shardId: String, nrRecords: Int, behindLatest: Duration) extends DiagnosticEvent
+  final case class SubscribeToShardEvent(shardId: String, nrRecords: Int, behindLatest: Duration)
+      extends DiagnosticEvent
 
   sealed trait LeaseEvent extends DiagnosticEvent
 
@@ -38,7 +39,7 @@ object DiagnosticEvent {
     * @param shardId Shard ID
    * @param checkpoint The last checkpoint made for this shard
    */
-  case class LeaseAcquired(shardId: String, checkpoint: Option[ExtendedSequenceNumber]) extends LeaseEvent
+  final case class LeaseAcquired(shardId: String, checkpoint: Option[ExtendedSequenceNumber]) extends LeaseEvent
 
   /**
    * The worker discovered that it had lost the lease for the given shard
@@ -47,7 +48,7 @@ object DiagnosticEvent {
    *
     * @param shardId Shard ID
    */
-  case class ShardLeaseLost(shardId: String) extends LeaseEvent
+  final case class ShardLeaseLost(shardId: String) extends LeaseEvent
 
   /**
    * The worker successfully renewed the lease for the given shard
@@ -55,14 +56,14 @@ object DiagnosticEvent {
     * @param shardId Shard ID
    * @param duration Time it took to renew the lease
    */
-  case class LeaseRenewed(shardId: String, duration: Duration) extends LeaseEvent
+  final case class LeaseRenewed(shardId: String, duration: Duration) extends LeaseEvent
 
   /**
    * The lease for the given shard was gracefully released
    *
     * @param shardId Shard ID
    */
-  case class LeaseReleased(shardId: String) extends LeaseEvent
+  final case class LeaseReleased(shardId: String) extends LeaseEvent
 
   /**
    * A checkpoint was made for the given shard
@@ -70,17 +71,17 @@ object DiagnosticEvent {
     * @param shardId Shard ID
    * @param checkpoint Checkpoint
    */
-  case class Checkpoint(shardId: String, checkpoint: ExtendedSequenceNumber) extends LeaseEvent
+  final case class Checkpoint(shardId: String, checkpoint: ExtendedSequenceNumber) extends LeaseEvent
 
   sealed trait WorkerEvent extends DiagnosticEvent
 
   /**
    * A new worker joined after start of this worker and claimed one or more leases
    */
-  case class WorkerJoined(workerId: String) extends WorkerEvent
+  final case class WorkerJoined(workerId: String) extends WorkerEvent
 
   /**
    * A worker has left (gracefully or zombie) and has no more claimed leases
    */
-  case class WorkerLeft(workerId: String) extends WorkerEvent
+  final case class WorkerLeft(workerId: String) extends WorkerEvent
 }

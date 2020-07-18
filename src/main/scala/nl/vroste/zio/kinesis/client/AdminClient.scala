@@ -106,9 +106,9 @@ object AdminClient {
   ): ZIO[AdminClient, Throwable, StreamDescription] =
     ZIO.service[Service].flatMap(_.describeStream(streamName, shardLimit, exclusiveStartShardId))
 
-  case class DescribeLimitsResponse(shardLimit: Int, openShardCount: Int)
+  final case class DescribeLimitsResponse(shardLimit: Int, openShardCount: Int)
 
-  case class StreamDescription(
+  final case class StreamDescription(
     streamName: String,
     streamARN: String,
     streamStatus: StreamStatus,
@@ -121,7 +121,7 @@ object AdminClient {
     keyId: String
   )
 
-  case class StreamDescriptionSummary(
+  final case class StreamDescriptionSummary(
     streamName: String,
     streamARN: String,
     streamStatus: StreamStatus,
@@ -134,7 +134,7 @@ object AdminClient {
     consumerCount: Int
   )
 
-  case class ConsumerDescription(
+  final case class ConsumerDescription(
     consumerName: String,
     consumerARN: String,
     consumerStatus: ConsumerStatus,
@@ -142,13 +142,13 @@ object AdminClient {
     streamARN: String
   )
 
-  case class EnhancedMonitoringStatus(
+  final case class EnhancedMonitoringStatus(
     streamName: String,
     currentShardLevelMetrics: List[MetricsName],
     desiredShardLevelMetrics: List[MetricsName]
   )
 
-  case class UpdateShardCountResponse(streamName: String, currentShardCount: Int, targetShardCount: Int)
+  final case class UpdateShardCountResponse(streamName: String, currentShardCount: Int, targetShardCount: Int)
 
   private[client] val retryOnLimitExceeded = Schedule.doWhile[Throwable] {
     case _: LimitExceededException => true; case _ => false
