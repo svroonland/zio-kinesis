@@ -289,7 +289,8 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                               applicationName,
                               Serde.asciiString,
                               workerIdentifier = "worker1",
-                              emitDiagnostic = onDiagnostic("worker1")
+                              emitDiagnostic = onDiagnostic("worker1"),
+                              leaseCoordinationSettings = LeaseCoordinationSettings(refreshAndTakeInterval = 5.seconds)
                             )
                             .flatMapPar(Int.MaxValue) {
                               case (shard @ _, shardStream, checkpointer) =>
@@ -311,7 +312,8 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                               applicationName,
                               Serde.asciiString,
                               workerIdentifier = "worker2",
-                              emitDiagnostic = onDiagnostic("worker2")
+                              emitDiagnostic = onDiagnostic("worker2"),
+                              leaseCoordinationSettings = LeaseCoordinationSettings(refreshAndTakeInterval = 5.seconds)
                             )
                             .flatMapPar(Int.MaxValue) {
                               case (shard, shardStream, checkpointer) =>
@@ -336,7 +338,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
         }
       },
       testM("workers must take over from a stopped consumer") {
-        val nrRecords = 2000
+        val nrRecords = 200000
         val nrShards  = 7
 
         withRandomStreamAndApplicationName(nrShards) {
@@ -361,7 +363,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                       .tap(checkpointer.stage)
                       .aggregateAsyncWithin(ZTransducer.collectAllN(200), Schedule.fixed(1.second))
                       .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-                      .map(_.last)
+                      .map(_.lastOption)
                       .tap(_ => checkpointer.checkpoint())
                       .catchAll {
                         case Right(_) =>
@@ -372,8 +374,9 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
             for {
               consumer1Done <- Promise.make[Throwable, Unit]
-              producer      <-
-                produceSampleRecords(streamName, nrRecords, chunkSize = 50).tapError(consumer1Done.fail(_)).fork
+              producer      <- produceSampleRecords(streamName, nrRecords, chunkSize = 50, throttle = Some(1.second))
+                            .tapError(consumer1Done.fail(_))
+                            .fork
               events        <- Ref.make[List[(String, Instant, DiagnosticEvent)]](List.empty)
               emitDiagnostic = (workerId: String) =>
                                  (event: DiagnosticEvent) =>
@@ -414,6 +417,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
               // _                           = println(allEvents.mkString("\n"))
 
               // Workers 2 and 3 should have later-timestamped LeaseAcquired for all shards that were released by Worker 1
+              // TODO not necessarily because maybe they claimed it and worker1 lost them
               worker1Released      = allEvents.collect {
                                   case ("worker1", time, DiagnosticEvent.LeaseReleased(shard)) =>
                                     time -> shard
