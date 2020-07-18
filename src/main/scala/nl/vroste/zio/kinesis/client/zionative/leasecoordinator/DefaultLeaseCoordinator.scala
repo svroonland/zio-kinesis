@@ -530,7 +530,7 @@ object DefaultLeaseCoordinator {
         // Optimized to do initalization in parallel as much as possible
         for {
           // TODO we could also find out by refreshing all leases
-          _ <- c.runloop.runDrain.fork.toManaged(_.interrupt).ensuringFirst(log.debug("Shutting down runloop"))
+          _ <- c.runloop.runDrain.forkManaged.ensuringFirst(log.debug("Shutting down runloop"))
 
           leaseTableExists    <-
             ZIO.service[LeaseRepository.Service].flatMap(_.createLeaseTableIfNotExists(applicationName)).toManaged_
@@ -553,11 +553,11 @@ object DefaultLeaseCoordinator {
                    repeatAndRetry(settings.refreshAndTakeInterval) {
                      (c.refreshLeases *> c.takeLeases)
                        .tapCause(e => log.error("Refresh & take leases failed, will retry", e))
-                   }).fork.toManaged(_.interrupt).ensuringFirst(log.debug("Shutting down refresh & take lease loop"))
+                   }).forkManaged.ensuringFirst(log.debug("Shutting down refresh & take lease loop"))
           _ <- (repeatAndRetry(settings.renewInterval) {
                    c.renewLeases
                      .tapCause(e => log.error("Renewing leases failed, will retry", e))
-                 }).fork.toManaged(_.interrupt).ensuringFirst(log.debug("Shutting down renew lease loop"))
+                 }).forkManaged.ensuringFirst(log.debug("Shutting down renew lease loop"))
         } yield c
       }
       .tapCause(c => log.error("Error creating DefaultLeaseCoordinator", c).toManaged_)
