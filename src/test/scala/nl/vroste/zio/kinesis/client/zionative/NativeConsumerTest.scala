@@ -191,12 +191,9 @@ object NativeConsumerTest extends DefaultRunnableSpec {
         withRandomStreamAndApplicationName(nrShards) {
           (streamName, applicationName) =>
             for {
-              producer                   <- produceSampleRecords(streamName, nrRecords, chunkSize = 10, throttle = Some(1.second)).fork
-              shardsProcessedByConsumer2 <- Ref.make[Set[String]](Set.empty)
-              consumer1Started           <- Promise.make[Nothing, Unit]
-              shardCompletedByConsumer1  <- Promise.make[Nothing, String]
-              shardStartedByConsumer2    <- Promise.make[Nothing, Unit]
-              consumer1                   = Consumer
+              producer         <- produceSampleRecords(streamName, nrRecords, chunkSize = 10, throttle = Some(1.second)).fork
+              consumer1Started <- Promise.make[Nothing, Unit]
+              consumer1         = Consumer
                             .shardedStream(
                               streamName,
                               applicationName,
@@ -205,12 +202,12 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                               emitDiagnostic = onDiagnostic("worker1")
                             )
                             .flatMapPar(Int.MaxValue) {
-                              case (shard, shardStream, checkpointer) =>
+                              case (shard @ _, shardStream, checkpointer) =>
                                 shardStream
                                 // .tap(r => UIO(println(s"Worker 1 got record on shard ${r.shardId}")))
                                   .tap(checkpointer.stage)
                                   .tap(_ => consumer1Started.succeed(()))
-                                  .aggregateAsyncWithin(ZTransducer.collectAllN(20), Schedule.fixed(1.second))
+                                  .aggregateAsyncWithin(ZTransducer.collectAllN(2000), Schedule.fixed(5.second))
                                   .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
                                   .tap(_ => checkpointer.checkpoint())
                                   .catchAll {
@@ -222,9 +219,9 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                       ZStream.fail(e)
                                   }
                                   .mapConcat(identity(_))
-                                  .ensuring(shardCompletedByConsumer1.succeed(shard))
                             }
-              consumer2                   = Consumer
+                            .updateService[Logger[String]](_.named("worker1"))
+              consumer2         = Consumer
                             .shardedStream(
                               streamName,
                               applicationName,
@@ -232,45 +229,20 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                               workerIdentifier = "worker2",
                               emitDiagnostic = onDiagnostic("worker2")
                             )
-                            .flatMapPar(Int.MaxValue) {
-                              case (shard, shardStream, checkpointer) =>
-                                ZStream.fromEffect(
-                                  shardStartedByConsumer2.succeed(()) *> shardsProcessedByConsumer2.update(_ + shard)
-                                ) *>
-                                  shardStream
-                                  // .tap(r => UIO(println(s"Worker 2 got record on shard ${r.shardId}")))
-                                    .tap(checkpointer.stage)
-                                    .aggregateAsyncWithin(ZTransducer.collectAllN(20), Schedule.fixed(1.second))
-                                    .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-                                    .tap(_ => checkpointer.checkpoint())
-                                    .catchAll {
-                                      case Right(_) =>
-                                        ZStream.empty
-                                      case Left(e)  => ZStream.fail(e)
-                                    }
-                                    .mapConcat(identity(_))
-                            }
+                            .tap(tp => log.info(s"Got tuple ${tp}"))
+                            .take(2) // 5 shards, so we expect 2
+                            .updateService[Logger[String]](_.named("worker2"))
+              worker1          <- consumer1.runDrain.tapError(e => log.error(s"Worker1 failed: ${e}")).fork
+              _                <- consumer1Started.await
+              _                <- log.info("Consumer 1 has started, starting consumer 2")
+              _                <- consumer2.runDrain
+              _                <- log.info("Shutting down worker 1")
+              _                <- worker1.interrupt
+              _                <- log.info("Shutting down producer")
+              _                <- producer.interrupt
 
-              fib                        <- consumer1
-                       .merge(
-                         ZStream.unwrap(
-                           consumer1Started.await
-                             .tap(_ => log.info("Consumer 1 has started, starting consumer 2"))
-                             .as(consumer2)
-                         )
-                       )
-                       .runCollect
-                       .fork
-              completedShard             <- shardCompletedByConsumer1.await
-              _                          <- log.info(s"Consumer 1 has completed shard ${completedShard}")
-              _                          <- shardStartedByConsumer2.await
-              _                          <- fib.interrupt
-              shardsConsumer2            <- shardsProcessedByConsumer2.get
-              _                          <- producer.interrupt
-
-            } yield assert(shardsConsumer2)(contains(completedShard))
+            } yield assertCompletes
         }
-      },
       testM("workers should be able to start concurrently and both get some shards") {
         val nrRecords =
           20000 // This should probably be large enough to guarantee that both workers can get enough records to complete
