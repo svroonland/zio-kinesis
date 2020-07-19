@@ -327,8 +327,8 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                   Serde.asciiString,
                   workerIdentifier = workerId,
                   leaseCoordinationSettings = LeaseCoordinationSettings(
-                    3.seconds,
-                    refreshAndTakeInterval = 10.seconds,
+                    2.seconds,
+                    refreshAndTakeInterval = 5.seconds,
                     maxParallelLeaseAcquisitions = 1
                   ),
                   emitDiagnostic = emitDiagnostic
@@ -407,7 +407,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                              _.filterNot(_._3.isInstanceOf[PollComplete])
                                .filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
                            )
-              // _                           = println(allEvents.mkString("\n"))
+              _              = println(allEvents.mkString("\n"))
 
               // Workers 2 and 3 should have later-timestamped LeaseAcquired for all shards that were released by Worker 1
               // TODO not necessarily because maybe they claimed it and worker1 lost them
@@ -422,7 +422,9 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                          shard
                                      }
 
-            } yield assert(acquiredAfterRelease)(hasSubset(worker1Released.map(_._2)))
+            } yield assert(worker1Released.map(_._2))(
+              hasIntersection(acquiredAfterRelease)(hasSameElements(worker1Released.map(_._2)))
+            )
         }
       },
       testM("workers must take over from a zombie consumer") {
