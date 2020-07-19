@@ -29,6 +29,7 @@ import zio.random.Random
 import zio.stream.ZStream
 import DefaultLeaseCoordinator.State
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.ZioExtensions.foreachParNUninterrupted_
+import zio.ZManaged.ReleaseMap
 
 /**
  * Coordinates leases for shards between different workers
@@ -296,7 +297,7 @@ private class DefaultLeaseCoordinator(
                   .runDrain
                   .timed
       (duration, leases) = result
-      _                 <- log.info(s"Refreshing leases took ${duration.toMillis}")
+      _                 <- log.debug(s"Refreshing leases took ${duration.toMillis}")
     } yield ()
   }
 
@@ -451,12 +452,13 @@ private class DefaultLeaseCoordinator(
     }
 
   def releaseLeases: ZIO[Logging with Clock, Nothing, Unit] =
-    state.get
-      .map(_.heldLeases.values)
-      .flatMap(ZIO.foreachPar_(_) {
-        case (lease, _) =>
-          processCommand(LeaseCommand.ReleaseLease(lease.key, _)).ignore // We do our best to release the lease
-      })
+    log.debug("Starting releaseLeases") *>
+      state.get
+        .map(_.heldLeases.values)
+        .flatMap(ZIO.foreachPar_(_) {
+          case (lease, _) =>
+            processCommand(LeaseCommand.ReleaseLease(lease.key, _)).ignore // We do our best to release the lease
+        }) *> log.debug("releaseLeases done")
 }
 
 object DefaultLeaseCoordinator {
@@ -503,8 +505,10 @@ object DefaultLeaseCoordinator {
     LeaseCoordinator
   ] =
     (for {
-      commandQueue        <-
-        Queue.bounded[LeaseCommand](128).toManaged(_.shutdown).ensuring(log.debug("Command queue shutdown"))
+      commandQueue        <- Queue
+                        .bounded[LeaseCommand](128)
+                        .toManaged(_.shutdown)
+                        .ensuring(log.debug("Command queue shutdown"))
       acquiredLeases      <- Queue
                           .bounded[(Lease, Promise[Nothing, Unit])](128)
                           .toManaged(_.shutdown)
@@ -527,8 +531,10 @@ object DefaultLeaseCoordinator {
            ).toManaged_
       // Optimized to do initalization in parallel as much as possible
       // TODO we could also find out by refreshing all leases
-      _                   <- c.runloop.runDrain.forkManaged.ensuringFirst(log.debug("Shutting down runloop"))
-      _                   <- ZManaged.finalizer(c.releaseLeases) // We need the runloop to be alive for this operation
+      _                   <- forkAManaged(c.runloop.runDrain.toManaged_).ensuringFirst(log.debug("Shutting down runloop"))
+      _                   <- ZManaged.finalizer(
+             c.releaseLeases.tap(_ => log.debug("releaseLeases done"))
+           ) // We need the runloop to be alive for this operation
       leaseTableExists    <-
         ZIO.service[LeaseRepository.Service].flatMap(_.createLeaseTableIfNotExists(applicationName)).toManaged_
       // Wait for shards if the lease table does not exist yet, otherwise we assume there's leases
@@ -540,7 +546,8 @@ object DefaultLeaseCoordinator {
                (if (leaseTableExists) awaitAndUpdateShards.fork else awaitAndUpdateShards)).toManaged_
 
       // Initialization. If it fails, we will try in the loop
-      _                   <- (c.takeLeases.ignore *>
+      _                   <- forkAManaged(
+             (c.takeLeases.ignore *>
                // Periodic refresh
                /**
                 * resumeUnreleasedLeases is here because after a temporary connection failure,
@@ -550,14 +557,14 @@ object DefaultLeaseCoordinator {
                repeatAndRetry(settings.refreshAndTakeInterval) {
                  (c.refreshLeases *> c.takeLeases)
                    .tapCause(e => log.error("Refresh & take leases failed, will retry", e))
-               }).forkManaged.ensuringFirst(log.debug("Shutting down refresh & take lease loop"))
-      _                   <- (repeatAndRetry(settings.renewInterval) {
-               c.renewLeases
-                 .tapCause(e => log.error("Renewing leases failed, will retry", e))
-             }).forkManaged.ensuringFirst(log.debug("Shutting down renew lease loop"))
+               }).toManaged_
+           ).ensuringFirst(log.debug("Shutting down refresh & take lease loop"))
+      _                   <- forkAManaged((repeatAndRetry(settings.renewInterval) {
+             c.renewLeases
+               .tapCause(e => log.error("Renewing leases failed, will retry", e))
+           }).toManaged_).ensuringFirst(log.debug("Shutting down renew lease loop"))
     } yield c)
       .tapCause(c => log.error("Error creating DefaultLeaseCoordinator", c).toManaged_)
-      .updateService[Logger[String]](_.named(s"worker-${workerId}"))
 
   private def repeatAndRetry[R, E, A](interval: Duration)(effect: ZIO[R, E, A]) =
     effect.repeat(Schedule.fixed(interval)).delay(interval).retry(Schedule.forever)
@@ -638,5 +645,26 @@ object DefaultLeaseCoordinator {
         State(leases.map(l => l.key -> LeaseState(l, None, now)).toMap, shards)
       }
   }
+
+  /**
+   * Creates a `ZManaged` value that acquires the original resource in a fiber,
+   * and provides that fiber. The finalizer for this value will interrupt the fiber
+   * and run the original finalizer.
+   */
+  def forkAManaged[R, E, A](
+    m: ZManaged[R, E, A]
+  ): ZManaged[R, Nothing, Fiber.Runtime[E, A]] =
+    ZManaged {
+      ZIO.uninterruptibleMask { restore =>
+        for {
+          tp                  <- ZIO.environment[(R, ReleaseMap)]
+          (r, outerReleaseMap) = tp
+          innerReleaseMap     <- ReleaseMap.make
+          fiber               <- restore(m.zio.map(_._2).forkDaemon.provide(r -> innerReleaseMap))
+          releaseMapEntry     <-
+            outerReleaseMap.add(e => fiber.interrupt *> innerReleaseMap.releaseAll(e, ExecutionStrategy.Sequential))
+        } yield (releaseMapEntry, fiber)
+      }
+    }
 
 }
