@@ -530,11 +530,11 @@ object DefaultLeaseCoordinator {
                )
            ).toManaged_
       // Optimized to do initalization in parallel as much as possible
-      // TODO we could also find out by refreshing all leases
-      _                   <- forkAManaged(c.runloop.runDrain.toManaged_).ensuringFirst(log.debug("Shutting down runloop"))
+      _                   <- c.runloop.runDrain.forkManaged.ensuringFirst(log.debug("Shutting down runloop"))
       _                   <- ZManaged.finalizer(
              c.releaseLeases.tap(_ => log.debug("releaseLeases done"))
            ) // We need the runloop to be alive for this operation
+      // TODO we could also find out by refreshing all leases and handling the ResourceNotFound exception
       leaseTableExists    <-
         ZIO.service[LeaseRepository.Service].flatMap(_.createLeaseTableIfNotExists(applicationName)).toManaged_
       // Wait for shards if the lease table does not exist yet, otherwise we assume there's leases
@@ -546,23 +546,23 @@ object DefaultLeaseCoordinator {
                (if (leaseTableExists) awaitAndUpdateShards.fork else awaitAndUpdateShards)).toManaged_
 
       // Initialization. If it fails, we will try in the loop
-      _                   <- forkAManaged(
-             (c.takeLeases.ignore *>
-               // Periodic refresh
-               /**
-                * resumeUnreleasedLeases is here because after a temporary connection failure,
-                * we may have 'internally' released the lease but if no other worker has claimed
-                * the lease, it will still be in the lease table with us as owner.
-                */
-               repeatAndRetry(settings.refreshAndTakeInterval) {
-                 (c.refreshLeases *> c.takeLeases)
-                   .tapCause(e => log.error("Refresh & take leases failed, will retry", e))
-               }).toManaged_
+      _                   <- (
+               (c.takeLeases.ignore *>
+                 // Periodic refresh
+                 /**
+                  * resumeUnreleasedLeases is here because after a temporary connection failure,
+                  * we may have 'internally' released the lease but if no other worker has claimed
+                  * the lease, it will still be in the lease table with us as owner.
+                  */
+                 repeatAndRetry(settings.refreshAndTakeInterval) {
+                   (c.refreshLeases *> c.takeLeases)
+                     .tapCause(e => log.error("Refresh & take leases failed, will retry", e))
+                 }).forkManaged
            ).ensuringFirst(log.debug("Shutting down refresh & take lease loop"))
-      _                   <- forkAManaged((repeatAndRetry(settings.renewInterval) {
-             c.renewLeases
-               .tapCause(e => log.error("Renewing leases failed, will retry", e))
-           }).toManaged_).ensuringFirst(log.debug("Shutting down renew lease loop"))
+      _                   <- (repeatAndRetry(settings.renewInterval) {
+               c.renewLeases
+                 .tapCause(e => log.error("Renewing leases failed, will retry", e))
+             }).forkManaged.ensuringFirst(log.debug("Shutting down renew lease loop"))
     } yield c)
       .tapCause(c => log.error("Error creating DefaultLeaseCoordinator", c).toManaged_)
 
@@ -645,26 +645,4 @@ object DefaultLeaseCoordinator {
         State(leases.map(l => l.key -> LeaseState(l, None, now)).toMap, shards)
       }
   }
-
-  /**
-   * Creates a `ZManaged` value that acquires the original resource in a fiber,
-   * and provides that fiber. The finalizer for this value will interrupt the fiber
-   * and run the original finalizer.
-   */
-  def forkAManaged[R, E, A](
-    m: ZManaged[R, E, A]
-  ): ZManaged[R, Nothing, Fiber.Runtime[E, A]] =
-    ZManaged {
-      ZIO.uninterruptibleMask { restore =>
-        for {
-          tp                  <- ZIO.environment[(R, ReleaseMap)]
-          (r, outerReleaseMap) = tp
-          innerReleaseMap     <- ReleaseMap.make
-          fiber               <- restore(m.zio.map(_._2).forkDaemon.provide(r -> innerReleaseMap))
-          releaseMapEntry     <-
-            outerReleaseMap.add(e => fiber.interrupt *> innerReleaseMap.releaseAll(e, ExecutionStrategy.Sequential))
-        } yield (releaseMapEntry, fiber)
-      }
-    }
-
 }
