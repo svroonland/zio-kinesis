@@ -29,7 +29,6 @@ import zio.random.Random
 import zio.stream.ZStream
 import DefaultLeaseCoordinator.State
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.ZioExtensions.foreachParNUninterrupted_
-import zio.ZManaged.ReleaseMap
 
 /**
  * Coordinates leases for shards between different workers

@@ -82,7 +82,7 @@ object PollingFetcher {
                           .mapConcatChunk(response => Chunk.fromIterable(response.records.asScala))
                           .retry(config.throttlingBackoff)
         } yield shardStream
-      }.ensuring(log.info(s"PollingFetcher for shard ${shardId} closed"))
+      }.ensuring(log.debug(s"PollingFetcher for shard ${shardId} closed"))
         .provide(env)
 
     }
