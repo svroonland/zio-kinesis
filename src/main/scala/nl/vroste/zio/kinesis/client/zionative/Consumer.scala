@@ -190,12 +190,14 @@ object Consumer {
 
     def createDependencies =
       ZManaged
-        .mapParN(
-          ZManaged.unwrap(
-            AdminClient
-              .describeStream(streamName)
-              .map(makeFetcher)
-          ),
+        .mapN( // TODO can't use mapParN until issue https://github.com/zio/zio/issues/3986 is fixed
+          ZManaged
+            .unwrap(
+              AdminClient
+                .describeStream(streamName)
+                .map(makeFetcher)
+            )
+            .ensuring(log.debug("Fetcher shut down")),
           // Fetch shards and initialize the lease coordinator at the same time
           // When we have the shards, we inform the lease coordinator. When the lease table
           // still has to be created, we have the shards in time for lease claiming begins.
