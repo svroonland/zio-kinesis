@@ -153,7 +153,8 @@ private class DefaultLeaseCoordinator(
               ZIO.fail(e)
           }
         case None                          =>
-          ZIO.die(new Exception(s"Unknown lease for shard ${shard}! This indicates a programming error"))
+          // Possible race condition between releasing the lease and the renewLeases cycle
+          ZIO.fail(new Exception(s"Unknown lease for shard ${shard}! Perhaps the lease was released simultaneously"))
       }
 
     def doRefreshLease(lease: Lease): ZIO[Clock, Throwable, Unit] =
