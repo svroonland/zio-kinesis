@@ -171,6 +171,9 @@ private class DefaultLeaseCoordinator(
                  else
                    // We have ourselves updated this lease by eg checkpointing or renewing
                    ZIO.unit
+               // Lease that is still owned by us but is not actively held
+               case (_, None) if lease.owner.contains(workerId)                              =>
+                 updateState(_.updateLease(lease, _)) *> doRegisterNewAcquiredLease(lease)
                // Update of a lease that we do not hold or have not yet seen
                case _                                                                        =>
                  updateState(_.updateLease(lease, _))
@@ -286,12 +289,7 @@ private class DefaultLeaseCoordinator(
                   .getLeases(applicationName)
                   .mapMParUnordered(settings.maxParallelLeaseAcquisitions) { lease =>
                     (log.info(s"RefreshLeases: ${lease}") *>
-                      processCommand(LeaseCommand.RefreshLease(lease, _)) *>
-                      /**
-                       * For leases that we found in the lease table that have our worker ID as owner but we don't
-                       * currently have in our state as acquired
-                       */
-                      registerNewAcquiredLease(lease).when(lease.owner.contains(workerId)))
+                      processCommand(LeaseCommand.RefreshLease(lease, _)))
                   }
                   .runDrain
                   .timed
@@ -378,7 +376,7 @@ private class DefaultLeaseCoordinator(
     } yield ()
 
   // Puts it in the state and the queue
-  private def registerNewAcquiredLease(lease: Lease): ZIO[Clock with Logging, Nothing, Unit] =
+  private def registerNewAcquiredLease(lease: Lease): ZIO[Clock, Nothing, Unit] =
     processCommand(LeaseCommand.RegisterNewAcquiredLease(lease, _))
 
   override def acquiredLeases: ZStream[zio.clock.Clock, Throwable, AcquiredLease]          =
