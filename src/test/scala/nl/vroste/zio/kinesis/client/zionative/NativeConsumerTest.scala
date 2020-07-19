@@ -243,6 +243,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
             } yield assertCompletes
         }
+      },
       testM("workers should be able to start concurrently and both get some shards") {
         val nrRecords =
           20000 // This should probably be large enough to guarantee that both workers can get enough records to complete
