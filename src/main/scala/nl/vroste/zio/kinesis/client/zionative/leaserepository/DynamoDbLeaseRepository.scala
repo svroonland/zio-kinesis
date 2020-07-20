@@ -42,26 +42,44 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient, timeout: Dura
       .attributeDefinitions(attributeDefinitions.asJavaCollection)
       .build()
 
-    val createTable = log.info(s"Creating lease table ${tableName}") *> asZIO(client.createTable(request)).unit
+    val createTable =
+      log.info(s"Creating lease table ${tableName}") *> asZIO(client.createTable(request)).unit
+
+    def describeTable =
+      asZIO(client.describeTable(DescribeTableRequest.builder().tableName(tableName).build()))
+        .map(_.table().tableStatus())
 
     def leaseTableExists: ZIO[Logging, Throwable, Boolean] =
-      log.debug("Checking if table exists") *>
-        asZIO(client.describeTable(DescribeTableRequest.builder().tableName(tableName).build()))
-          .map(_.table().tableStatus() == TableStatus.ACTIVE)
+      log.debug(s"Checking if lease table '${tableName}' exists and is active") *>
+        describeTable
+          .map(s => s == TableStatus.ACTIVE || s == TableStatus.UPDATING)
           .catchSome { case _: ResourceNotFoundException => ZIO.succeed(false) }
           .tap(exists => log.info(s"Lease table ${tableName} exists? ${exists}"))
 
     // recursion, yeah!
-    def awaitTableCreated: ZIO[Clock with Logging, Throwable, Unit] =
+    def awaitTableActive: ZIO[Clock with Logging, Throwable, Unit] =
       leaseTableExists
-        .flatMap(awaitTableCreated.delay(1.seconds).unless(_))
+        .flatMap(awaitTableActive.delay(1.seconds).unless(_))
 
-    // Just try to create the table, if we get ResourceInUse it already existed or another worker is creating it
-    (createTable *> awaitTableCreated.as(false)).catchSome {
-      // Another worker may have created the table between this worker checking if it exists and attempting to create it
-      case _: ResourceInUseException    =>
-        ZIO.succeed(true)
-    }.timeoutFail(new Exception("Timeout creating lease table"))(10.minute) // I dunno
+    // Optimistically assume the table already exists
+    log.debug(s"Checking if lease table '${tableName}' exists") *>
+      describeTable.flatMap {
+        case TableStatus.ACTIVE | TableStatus.UPDATING =>
+          log.debug(s"Lease table '${tableName}' exists and is active") *>
+            ZIO.succeed(true)
+        case TableStatus.CREATING                      =>
+          log.debug(s"Lease table '${tableName}' has CREATING status") *>
+            awaitTableActive.delay(1.seconds).as(true)
+        case s @ _                                     =>
+          ZIO.fail(new Exception(s"Could not create lease table '${tableName}'. Invalid table status: ${s}"))
+      }.catchSome {
+        case _: ResourceNotFoundException =>
+          createTable.catchSome {
+            // Race condition: another worker is creating the table at the same time as we are, we lose
+            case _: ResourceInUseException =>
+              ZIO.unit
+          } *> awaitTableActive.delay(1.second).as(false)
+      }.timeoutFail(new Exception("Timeout creating lease table"))(1.minute)
   }
 
   override def getLeases(tableName: String): ZStream[Clock, Throwable, Lease] =
