@@ -65,12 +65,11 @@ Features:
 * Checkpointing of records according to user-defined Schedules
 * Automatic checkpointing at shard stream shutdown due to error or interruption
 * Handling of Kinesis resource limits (throttling and backoff)
-* Optimized parallel initialization for fast startup
 * KCL compatible metrics publishing to CloudWatch
 * Compatibility for running alongside KCL consumers
 * Emission of diagnostic events for custom logging / metrics / testing
+* Manual or otherwise user-defined shard assignment strategy
 * Pluggable lease/checkpoint storage backend
-* Pluggable shard assignment strategy (future support)
 
 ### Basic usage
 
