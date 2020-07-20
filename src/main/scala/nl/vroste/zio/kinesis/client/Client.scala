@@ -3,7 +3,6 @@ package nl.vroste.zio.kinesis.client
 import java.time.Instant
 
 import nl.vroste.zio.kinesis.client.serde.Serializer
-import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.awssdk.services.kinesis.model._
 import zio._
@@ -134,23 +133,14 @@ object Client {
 
   type ClientTask[+A] = ZIO[Client, Throwable, A]
 
-  case class ConsumerRecord(
-    sequenceNumber: String,
-    approximateArrivalTimestamp: Instant,
-    data: SdkBytes,
-    partitionKey: String,
-    encryptionType: EncryptionType,
-    shardID: String
-  )
-
-  case class ProducerRecord[T](partitionKey: String, data: T)
+  final case class ProducerRecord[T](partitionKey: String, data: T)
 
   sealed trait ShardIteratorType
   object ShardIteratorType {
-    case object Latest                                     extends ShardIteratorType
-    case object TrimHorizon                                extends ShardIteratorType
-    case class AtSequenceNumber(sequenceNumber: String)    extends ShardIteratorType
-    case class AfterSequenceNumber(sequenceNumber: String) extends ShardIteratorType
-    case class AtTimestamp(timestamp: Instant)             extends ShardIteratorType
+    case object Latest                                           extends ShardIteratorType
+    case object TrimHorizon                                      extends ShardIteratorType
+    final case class AtSequenceNumber(sequenceNumber: String)    extends ShardIteratorType
+    final case class AfterSequenceNumber(sequenceNumber: String) extends ShardIteratorType
+    final case class AtTimestamp(timestamp: Instant)             extends ShardIteratorType
   }
 }

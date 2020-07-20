@@ -1,18 +1,20 @@
 package nl.vroste.zio.kinesis.client
 
-import java.time.Instant
 import java.util.UUID
 
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
-import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import software.amazon.kinesis.common.{ InitialPositionInStream, InitialPositionInStreamExtended }
 import software.amazon.kinesis.processor.RecordProcessorCheckpointer
+import zio._
 import zio.blocking.Blocking
 import zio.stream.ZStream
-import zio._
+import zio.duration.Duration
+import zio.clock.Clock
+import software.amazon.kinesis.exceptions.ShutdownException
+import zio.stream.ZTransducer
 
 /**
  * Offers a ZStream based interface to the Amazon Kinesis Client Library (KCL)
@@ -20,6 +22,8 @@ import zio._
  * Ensures proper resource shutdown and failure handling
  */
 object DynamicConsumer {
+  // For (some) backwards compatibility
+  type Record[T] = nl.vroste.zio.kinesis.client.Record[T]
 
   val live: ZLayer[Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[
     DynamoDbAsyncClient
@@ -106,18 +110,6 @@ object DynamicConsumer {
         )
     )
 
-  case class Record[T](
-    shardId: String,
-    sequenceNumber: String,
-    approximateArrivalTimestamp: Instant,
-    data: T,
-    partitionKey: String,
-    encryptionType: EncryptionType,
-    subSequenceNumber: Long,
-    explicitHashKey: String,
-    aggregated: Boolean
-  )
-
   /**
    * Staging area for checkpoints
    *
@@ -167,6 +159,31 @@ object DynamicConsumer {
      */
     def checkpointNow(r: Record[_]): ZIO[Blocking, Throwable, Unit] =
       stage(r) *> checkpoint
+
+    /**
+     * Helper method to add batch checkpointing to a shard stream
+     *
+     * Usage:
+     *    shardStream.via(checkpointer.checkpointBatched(1000, 1.second))
+     *
+     * @param nr Maximum number of records before checkpointing
+     * @param interval Maximum interval before checkpointing
+     * @return Function that results in a ZStream that produces Unit values for successful checkpoints,
+     *         fails with an exception when checkpointing fails or becomes an empty stream
+     *         when the lease for this shard is lost, thereby ending the stream.
+     */
+    def checkpointBatched[R](
+      nr: Long,
+      interval: Duration
+    ): ZStream[R, Throwable, Any] => ZStream[R with Clock with Blocking, Throwable, Unit] =
+      _.aggregateAsyncWithin(ZTransducer.foldUntil((), nr)((_, _) => ()), Schedule.fixed(interval))
+        .tap(_ => checkpoint)
+        .catchAll {
+          case _: ShutdownException =>
+            ZStream.empty
+          case e                    =>
+            ZStream.fail(e)
+        }
   }
 
   object Checkpointer {
@@ -190,5 +207,10 @@ object DynamicConsumer {
           }
       }
   }
+
+  val defaultEnvironment: ZLayer[Any, Throwable, DynamicConsumer] =
+    HttpClient.make() >>>
+      sdkClients >>>
+      DynamicConsumer.live
 
 }

@@ -8,16 +8,27 @@ import software.amazon.awssdk.services.kinesis.model.KinesisException
 import zio.clock.Clock
 import zio.console._
 import zio.duration._
+import zio.logging.slf4j.Slf4jLogger
+import zio.logging.{ LogContext, LogWriter, Logging }
 import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test._
-import zio.{ Chunk, ZIO }
+import zio.{ Chunk, URIO, ZIO }
 
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
 
-  val env =
-    ((LocalStackServices.env.orDie >>> (AdminClient.live ++ Client.live)).orDie ++ zio.test.environment.testEnvironment ++ Clock.live)
+  val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+
+  val myOwnLogger = Logging.make(new LogWriter[Any] {
+    override def writeLog(
+      context: LogContext,
+      line: => String
+    ): URIO[Any, Unit] = ???
+  })
+
+  val env = (LocalStackServices.env.orDie >>> (AdminClient.live ++ Client.live)).orDie >+>
+    (loggingEnv ++ Clock.live)
 
   def spec =
     suite("Producer")(

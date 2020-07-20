@@ -1,6 +1,6 @@
 package nl.vroste.zio.kinesis.client
 
-import nl.vroste.zio.kinesis.client.DynamicConsumer.{ Checkpointer, Record }
+import nl.vroste.zio.kinesis.client.DynamicConsumer.Checkpointer
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
@@ -13,9 +13,9 @@ import software.amazon.kinesis.processor.{ RecordProcessorCheckpointer, ShardRec
 import software.amazon.kinesis.retrieval.KinesisClientRecord
 import software.amazon.kinesis.retrieval.fanout.FanOutConfig
 import software.amazon.kinesis.retrieval.polling.PollingConfig
+import zio._
 import zio.blocking.Blocking
 import zio.stream.ZStream
-import zio._
 
 import scala.jdk.CollectionConverters._
 
@@ -37,7 +37,7 @@ private[client] class DynamicConsumerLive(
   ): ZStream[
     Blocking with R,
     Throwable,
-    (String, ZStream[Blocking, Throwable, DynamicConsumer.Record[T]], DynamicConsumer.Checkpointer)
+    (String, ZStream[Blocking, Throwable, Record[T]], DynamicConsumer.Checkpointer)
   ] = {
     /*
      * A queue for a single Shard and interface between the KCL threadpool and the ZIO runtime

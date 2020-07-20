@@ -111,3 +111,4 @@ project/plugins/project/
 .metals/
 
 # End of https://www.gitignore.io/api/sbt,scala,intellij+all
+project/metals.sbt
