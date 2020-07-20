@@ -61,10 +61,6 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient, timeout: Dura
       // Another worker may have created the table between this worker checking if it exists and attempting to create it
       case _: ResourceInUseException    =>
         ZIO.succeed(true)
-      case _: ResourceNotFoundException =>
-        // This is for LocalStack compatibility, which returns a ResourceNotFoundException when the table already exists
-        // See https://github.com/localstack/localstack/issues/2629
-        ZIO.succeed(true)
     }.timeoutFail(new Exception("Timeout creating lease table"))(10.minute) // I dunno
   }
 
