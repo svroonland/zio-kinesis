@@ -1,13 +1,13 @@
 package nl.vroste.zio.kinesis.client.zionative
 
-import scala.collection.compat._
-import zio.ZIO
-import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.Lease
-import zio.random._
-import zio.clock.Clock
-import zio.logging._
-import zio.duration._
 import java.time.Instant
+
+import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.Lease
+import zio.ZIO
+import zio.clock.Clock
+import zio.duration._
+import zio.logging._
+import zio.random._
 
 /**
  * Decides which shards this worker would like to have
