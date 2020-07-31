@@ -129,42 +129,46 @@ object DynamicConsumer {
     checkpointDuration: Duration = 5.second
   )(
     recordProcessor: Record[T] => ZIO[R, Nothing, Unit]
-  ): ZIO[DynamicConsumer, Nothing, ZStream[Clock with Logging with Blocking with R, Throwable, Record[T]]] =
-    ZIO
-      .service[DynamicConsumer.Service]
-      .map(
-        _.shardedStream(
-          streamName,
-          applicationName,
-          deserializer,
-          requestShutdown,
-          initialPosition,
-          isEnhancedFanOut,
-          leaseTableName,
-          workerIdentifier,
-          maxShardBufferSize
-        ).flatMapPar(Int.MaxValue) {
-          case (shardID, shardStream, checkpointer) =>
-            shardStream
-              .tap(r =>
-                checkpointer
-                  .stageOnSuccess(log.info(s"${workerIdentifier} Processing record $r") *> recordProcessor(r))(r)
-              )
-              .aggregateAsyncWithin(ZTransducer.collectAllN(batchSize), Schedule.fixed(checkpointDuration))
-              .mapConcat(_.toList)
-              .tap(_ => log.info(s"${workerIdentifier} Checkpointing shard ${shardID}") *> checkpointer.checkpoint)
-              .catchAll {
-                case _: ShutdownException => // This will be thrown when the shard lease has been stolen
-                  // Abort the stream when we no longer have the lease
+  ): ZIO[Clock with R with Logging with Blocking with Has[Service], Throwable, Unit] =
+    for {
+      consumer <- ZIO.service[DynamicConsumer.Service]
+      _        <- consumer
+             .shardedStream(
+               streamName,
+               applicationName,
+               deserializer,
+               requestShutdown,
+               initialPosition,
+               isEnhancedFanOut,
+               leaseTableName,
+               workerIdentifier,
+               maxShardBufferSize
+             )
+             .flatMapPar(Int.MaxValue) {
+               case (shardID, shardStream, checkpointer) =>
+                 shardStream
+                   .tap(r =>
+                     checkpointer
+                       .stageOnSuccess(log.info(s"${workerIdentifier} Processing record $r") *> recordProcessor(r))(r)
+                   )
+                   .aggregateAsyncWithin(ZTransducer.collectAllN(batchSize), Schedule.fixed(checkpointDuration))
+                   .mapConcat(_.toList)
+                   .tap(_ => log.info(s"${workerIdentifier} Checkpointing shard ${shardID}") *> checkpointer.checkpoint)
+                   .catchAll {
+                     case _: ShutdownException => // This will be thrown when the shard lease has been stolen
+                       // Abort the stream when we no longer have the lease
 
-                  ZStream.fromEffect(log.error(s"${workerIdentifier} shard ${shardID} lost")) *> ZStream.empty
-                case e                    =>
-                  ZStream.fromEffect(
-                    log.error(s"${workerIdentifier} shard ${shardID} stream failed with" + e + ": " + e.getStackTrace)
-                  ) *> ZStream.fail(e)
-              }
-        }
-      )
+                       ZStream.fromEffect(log.error(s"${workerIdentifier} shard ${shardID} lost")) *> ZStream.empty
+                     case e                    =>
+                       ZStream.fromEffect(
+                         log.error(
+                           s"${workerIdentifier} shard ${shardID} stream failed with" + e + ": " + e.getStackTrace
+                         )
+                       ) *> ZStream.fail(e)
+                   }
+             }
+             .runDrain
+    } yield ()
 
   /**
    * Staging area for checkpoints
