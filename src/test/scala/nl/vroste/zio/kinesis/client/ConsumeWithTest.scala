@@ -35,36 +35,39 @@ object ConsumeWithTest extends DefaultRunnableSpec {
       val applicationName = "zio-test-" + UUID.randomUUID().toString
       val nrRecords       = 4
 
-      createStream(streamName, 2)
-      //        .provideSomeLayer[Console](env)
-      .use { _ =>
-        (for {
-          _                 <- putStrLn("Putting records")
-          _                 <- ZIO
-                 .accessM[Client](
-                   _.get
-                     .putRecords(
-                       streamName,
-                       Serde.asciiString,
-                       Seq(ProducerRecord("key1", "msg1"), ProducerRecord("key2", "msg2"))
-                     )
-                 )
-                 .tapError(e => putStrLn(s"error1: $e").provideLayer(Console.live))
-                 .retry(retryOnResourceNotFound)
-          refProcessed      <- Ref.make(Seq.empty[String])
-          finishedConsuming <- Promise.make[Nothing, Unit]
-          _                  = println(s"fakeRecordProcessor $refProcessed $finishedConsuming")
-          _                 <- putStrLn("Starting dynamic consumer")
-          _                 <- consumeWith(
-                 streamName,
-                 applicationName = applicationName,
-                 deserializer = Serde.asciiString,
-                 isEnhancedFanOut = false
-               )(r => putStrLn(s"XXXXXXXXXXXX $r").provideLayer(Console.live))
+      for {
+        assert <- createStream(streamName, 2)
+                  //        .provideSomeLayer[Console](env)
+                  .use { _ =>
+                    (for {
+                      _                 <- putStrLn("Putting records")
+                      _                 <- ZIO
+                             .accessM[Client](
+                               _.get
+                                 .putRecords(
+                                   streamName,
+                                   Serde.asciiString,
+                                   Seq(ProducerRecord("key1", "msg1"), ProducerRecord("key2", "msg2"))
+                                 )
+                             )
+                             .tapError(e => putStrLn(s"error1: $e").provideLayer(Console.live))
+                             .retry(retryOnResourceNotFound)
+                      refProcessed      <- Ref.make(Seq.empty[String])
+                      finishedConsuming <- Promise.make[Nothing, Unit]
+                      _                  = println(s"fakeRecordProcessor $refProcessed $finishedConsuming")
+                      _                 <- putStrLn("Starting dynamic consumer")
+                      _                 <- consumeWith(
+                             streamName,
+                             applicationName = applicationName,
+                             deserializer = Serde.asciiString,
+                             isEnhancedFanOut = false
+                           )(r => putStrLn(s"XXXXXXXXXXXX $r").provideLayer(Console.live))
 
-        } yield assertCompletes)
-      // TODO this assertion doesn't do what the test says
-      }
+                    } yield assertCompletes)
+                  // TODO this assertion doesn't do what the test says
+                  }
+      } yield assert
+
     }
 
   override def spec =
