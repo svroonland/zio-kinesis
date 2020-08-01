@@ -13,6 +13,7 @@ import zio.duration._
 import zio.logging.Logging
 import zio.test.TestAspect._
 import zio.test._
+import zio.test.Assertion._
 
 object ConsumeWithTest extends DefaultRunnableSpec {
   import TestUtil._
@@ -40,8 +41,8 @@ object ConsumeWithTest extends DefaultRunnableSpec {
                     val records =
                       (1 to nrRecords).map(i => ProducerRecord(s"key$i", s"msg$i"))
                     (for {
-                      _             <- putStrLn("Putting records")
-                      _             <- ZIO
+                      _                <- putStrLn("Putting records")
+                      _                <- ZIO
                              .accessM[Client](
                                _.get
                                  .putRecords(
@@ -52,27 +53,25 @@ object ConsumeWithTest extends DefaultRunnableSpec {
                              )
                              .tapError(e => putStrLn(s"error1: $e").provideLayer(Console.live))
                              .retry(retryOnResourceNotFound)
-                      _              = println(s"fakeRecordProcessor $refProcessed $finishedConsuming")
-                      _             <- putStrLn("Starting dynamic consumer")
-                      consumerFiber <- consumeWith[Any, String](
+                      _                <- putStrLn("Starting dynamic consumer")
+                      consumerFiber    <- consumeWith[Any, String](
                                          streamName,
                                          applicationName = applicationName,
                                          deserializer = Serde.asciiString,
                                          isEnhancedFanOut = false,
                                          batchSize = 2
                                        ) {
-                                         val x: Record[String] => ZIO[Any, Throwable, Unit] = FakeRecordProcessor
+                                         FakeRecordProcessor
                                            .process(
                                              refProcessed,
                                              finishedConsuming,
                                              expectedCountOrFailFunction = Right(nrRecords)
                                            )
-                                         x
                                        }.fork
-                      _             <- finishedConsuming.await
-                      _             <- consumerFiber.interrupt
-                    } yield assertCompletes)
-                  // TODO this assertion doesn't do what the test says
+                      _                <- finishedConsuming.await
+                      _                <- consumerFiber.interrupt
+                      processedRecords <- refProcessed.get
+                    } yield assert(processedRecords.distinct.size)(equalTo(nrRecords)))
                   }
       } yield assert
 
