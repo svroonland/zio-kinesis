@@ -32,8 +32,7 @@ object FakeRecordProcessor {
           } yield sizeAfter
 
         for {
-          refPre <- refProcessed.get
-          _      <- failFunctionOrExpectedCount.fold(
+          _ <- failFunctionOrExpectedCount.fold(
                  failFunction =>
                    if (failFunction(data))
                      info(s"record $data, about to return error") *> Task.fail(error(data))
