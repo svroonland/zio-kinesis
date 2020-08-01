@@ -112,8 +112,7 @@ object DynamicConsumer {
         )
     )
 
-  // initial draft - start with a simple interface - maybe we can extract some responsibilities out later
-  // TODO: add integration tests for happy path and failure scenarios
+  // initial draft - start with a simple interface - maybe we can extract out some responsibilities as layers later
   def consumeWith[R, T](
     streamName: String,
     applicationName: String,
