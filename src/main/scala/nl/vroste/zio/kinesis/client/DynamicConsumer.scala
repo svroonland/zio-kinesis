@@ -128,7 +128,7 @@ object DynamicConsumer {
     batchSize: Int = 200,
     checkpointDuration: Duration = 5.second
   )(
-    recordProcessor: Record[T] => ZIO[R, Nothing, Unit]
+    recordProcessor: Record[T] => ZIO[Any, Throwable, Unit]
   ): ZIO[Clock with R with Logging with Blocking with Has[Service], Throwable, Unit] =
     for {
       consumer <- ZIO.service[DynamicConsumer.Service]
@@ -149,20 +149,26 @@ object DynamicConsumer {
                  shardStream
                    .tap(r =>
                      checkpointer
-                       .stageOnSuccess(log.info(s"${workerIdentifier} Processing record $r") *> recordProcessor(r))(r)
+                       .stageOnSuccess(
+                         log.info(s"${workerIdentifier} ZZZZZ Processing record $r") *> recordProcessor(r)
+                       )(r)
                    )
                    .aggregateAsyncWithin(ZTransducer.collectAllN(batchSize), Schedule.fixed(checkpointDuration))
                    .mapConcat(_.toList)
-                   .tap(_ => log.info(s"${workerIdentifier} Checkpointing shard ${shardID}") *> checkpointer.checkpoint)
+                   .tap(_ =>
+                     log.info(s"${workerIdentifier} ZZZZZ Checkpointing shard ${shardID}") *> checkpointer.checkpoint
+                   )
                    .catchAll {
                      case _: ShutdownException => // This will be thrown when the shard lease has been stolen
                        // Abort the stream when we no longer have the lease
 
-                       ZStream.fromEffect(log.error(s"${workerIdentifier} shard ${shardID} lost")) *> ZStream.empty
+                       ZStream.fromEffect(
+                         log.error(s"ZZZZZ ${workerIdentifier} shard ${shardID} lost")
+                       ) *> ZStream.empty
                      case e                    =>
                        ZStream.fromEffect(
                          log.error(
-                           s"${workerIdentifier} shard ${shardID} stream failed with" + e + ": " + e.getStackTrace
+                           s"ZZZZZ ${workerIdentifier} shard ${shardID} stream failed with" + e + ": " + e.getStackTrace
                          )
                        ) *> ZStream.fail(e)
                    }
