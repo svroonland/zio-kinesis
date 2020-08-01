@@ -150,25 +150,23 @@ object DynamicConsumer {
                    .tap(r =>
                      checkpointer
                        .stageOnSuccess(
-                         log.info(s"${workerIdentifier} ZZZZZ Processing record $r") *> recordProcessor(r)
+                         log.info(s"${workerIdentifier} Processing record $r") *> recordProcessor(r)
                        )(r)
                    )
                    .aggregateAsyncWithin(ZTransducer.collectAllN(batchSize), Schedule.fixed(checkpointDuration))
                    .mapConcat(_.toList)
-                   .tap(_ =>
-                     log.info(s"${workerIdentifier} ZZZZZ Checkpointing shard ${shardID}") *> checkpointer.checkpoint
-                   )
+                   .tap(_ => log.info(s"${workerIdentifier} Checkpointing shard ${shardID}") *> checkpointer.checkpoint)
                    .catchAll {
                      case _: ShutdownException => // This will be thrown when the shard lease has been stolen
                        // Abort the stream when we no longer have the lease
 
                        ZStream.fromEffect(
-                         log.error(s"ZZZZZ ${workerIdentifier} shard ${shardID} lost")
+                         log.error(s"${workerIdentifier} shard ${shardID} lost")
                        ) *> ZStream.empty
                      case e                    =>
                        ZStream.fromEffect(
                          log.error(
-                           s"ZZZZZ ${workerIdentifier} shard ${shardID} stream failed with" + e + ": " + e.getStackTrace
+                           s"${workerIdentifier} shard ${shardID} stream failed with" + e + ": " + e.getStackTrace
                          )
                        ) *> ZStream.fail(e)
                    }
