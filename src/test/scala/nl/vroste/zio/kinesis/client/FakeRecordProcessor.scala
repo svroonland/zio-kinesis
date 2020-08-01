@@ -28,7 +28,7 @@ object FakeRecordProcessor {
           for {
             processed <- refProcessed.updateAndGet(xs => xs :+ data)
             sizeAfter  = processed.distinct.size
-            _         <- info(s"process records count ${processed.size} rec = $data")
+            _         <- info(s"process records count ${processed.size}, rec = $data")
           } yield sizeAfter
 
         for {

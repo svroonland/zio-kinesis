@@ -18,8 +18,6 @@ import zio.test.Assertion._
 object ConsumeWithTest extends DefaultRunnableSpec {
   import TestUtil._
 
-  private val nrRecords = 4
-
   private val loggingLayer: ZLayer[Any, Nothing, Logging] =
     Console.live ++ Clock.live >>> Logging.console(
       format = (_, logEntry) => logEntry,
@@ -33,6 +31,7 @@ object ConsumeWithTest extends DefaultRunnableSpec {
     testM("consumeWith should consume records produced on all shards produced on the stream") {
       val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
       val applicationName = "zio-test-" + UUID.randomUUID().toString
+      val nrRecords       = 4
 
       for {
         refProcessed      <- Ref.make(Seq.empty[String])
@@ -83,6 +82,8 @@ object ConsumeWithTest extends DefaultRunnableSpec {
     ) {
       val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
       val applicationName = "zio-test-" + UUID.randomUUID().toString
+      val nrRecords       = 50
+      val batchSize       = 10
 
       for {
         refProcessed      <- Ref.make(Seq.empty[String])
@@ -109,13 +110,13 @@ object ConsumeWithTest extends DefaultRunnableSpec {
                              applicationName = applicationName,
                              deserializer = Serde.asciiString,
                              isEnhancedFanOut = false,
-                             batchSize = 2
+                             batchSize = batchSize
                            ) {
                              FakeRecordProcessor
                                .process(
                                  refProcessed,
                                  finishedConsuming,
-                                 failFunctionOrExpectedCount = Left(_ == "msg3")
+                                 failFunctionOrExpectedCount = Left(_ == "msg31")
                                )
                            }.ignore
                       _                <- putStrLn("Starting dynamic consumer - about to succeed")
@@ -124,7 +125,7 @@ object ConsumeWithTest extends DefaultRunnableSpec {
                                          applicationName = applicationName,
                                          deserializer = Serde.asciiString,
                                          isEnhancedFanOut = false,
-                                         batchSize = 2
+                                         batchSize = batchSize
                                        ) {
                                          FakeRecordProcessor
                                            .process(
@@ -144,7 +145,7 @@ object ConsumeWithTest extends DefaultRunnableSpec {
 
   override def spec =
     suite("ConsumeWithTest")(
-      testConsume1,
+      testConsume1 @@ ignore,
       testConsume2
     ).provideCustomLayer(env.orDie) @@ timeout(2.minutes) @@ sequential
 
