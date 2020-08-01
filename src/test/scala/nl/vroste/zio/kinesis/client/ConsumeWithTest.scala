@@ -65,7 +65,7 @@ object ConsumeWithTest extends DefaultRunnableSpec {
                                            .process(
                                              refProcessed,
                                              finishedConsuming,
-                                             expectedCountOrFailFunction = Right(nrRecords)
+                                             failFunctionOrExpectedCount = Right(nrRecords)
                                            )
                                        }.fork
                       _                <- finishedConsuming.await

@@ -17,7 +17,7 @@ object FakeRecordProcessor {
   def process[T](
     refProcessed: Ref[Seq[T]],
     promise: Promise[Nothing, Unit],
-    expectedCountOrFailFunction: Either[T => Boolean, Int]
+    failFunctionOrExpectedCount: Either[T => Boolean, Int]
   ): Record[T] => ZIO[Any, Throwable, Unit] =
     rec =>
       {
@@ -36,7 +36,7 @@ object FakeRecordProcessor {
         for {
           refPre <- refProcessed.get
           _      <- info(s"process records count before ${refPre.size} before. rec = $data")
-          _      <- expectedCountOrFailFunction.fold(
+          _      <- failFunctionOrExpectedCount.fold(
                  failFunction =>
                    if (failFunction(data))
                      info(s"record $data, about to return error") *> Task.fail(error(data))
