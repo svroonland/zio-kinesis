@@ -21,21 +21,18 @@ object FakeRecordProcessor {
   ): Record[T] => ZIO[Any, Throwable, Unit] =
     rec =>
       {
-        val data = rec.data
-
+        val data          = rec.data
         def error(rec: T) = new IllegalStateException(s"Failed processing record " + rec)
 
         val updateRefProcessed =
           for {
-            _       <- refProcessed.update(xs => xs :+ data)
-            refPost <- refProcessed.get
-            sizePost = refPost.distinct.size
-            _       <- info(s"process records count after ${refPost.size} rec = $data")
-          } yield sizePost
+            processed <- refProcessed.updateAndGet(xs => xs :+ data)
+            sizeAfter  = processed.distinct.size
+            _         <- info(s"process records count ${processed.size} rec = $data")
+          } yield sizeAfter
 
         for {
           refPre <- refProcessed.get
-          _      <- info(s"process records count before ${refPre.size} before. rec = $data")
           _      <- failFunctionOrExpectedCount.fold(
                  failFunction =>
                    if (failFunction(data))
@@ -44,10 +41,10 @@ object FakeRecordProcessor {
                      updateRefProcessed,
                  expectedCount =>
                    for {
-                     sizePost <- updateRefProcessed
-                     _        <- info(s"processed $sizePost, expected $expectedCount")
-                     _        <- ZIO.when(sizePost == expectedCount)(
-                            info(s"about to call promise.succeed on processed count $sizePost") *> promise.succeed(())
+                     sizeAfter <- updateRefProcessed
+                     _         <- info(s"processed $sizeAfter, expected $expectedCount")
+                     _         <- ZIO.when(sizeAfter == expectedCount)(
+                            info(s"about to call promise.succeed on processed count $sizeAfter") *> promise.succeed(())
                           )
                    } yield ()
                )
