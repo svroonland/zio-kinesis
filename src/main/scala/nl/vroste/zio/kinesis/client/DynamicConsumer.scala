@@ -7,16 +7,14 @@ import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.kinesis.common.{ InitialPositionInStream, InitialPositionInStreamExtended }
+import software.amazon.kinesis.exceptions.ShutdownException
 import software.amazon.kinesis.processor.RecordProcessorCheckpointer
 import zio._
 import zio.blocking.Blocking
-import zio.stream.ZStream
-import zio.duration.Duration
 import zio.clock.Clock
-import software.amazon.kinesis.exceptions.ShutdownException
+import zio.duration.{ Duration, _ }
 import zio.logging.{ log, Logging }
-import zio.stream.ZTransducer
-import zio.duration._
+import zio.stream.{ ZStream, ZTransducer }
 
 /**
  * Offers a ZStream based interface to the Amazon Kinesis Client Library (KCL)
@@ -149,12 +147,21 @@ object DynamicConsumer {
                    .tap(r =>
                      checkpointer
                        .stageOnSuccess(
-                         log.info(s"${workerIdentifier} Processing record $r") *> recordProcessor(r)
+                         log.info(
+                           s"${workerIdentifier} shard=${shardID} Attempting to process record $r"
+                         ) *> recordProcessor(r)
                        )(r)
                    )
                    .aggregateAsyncWithin(ZTransducer.collectAllN(batchSize), Schedule.fixed(checkpointDuration))
                    .mapConcat(_.toList)
-                   .tap(_ => log.info(s"${workerIdentifier} Checkpointing shard ${shardID}") *> checkpointer.checkpoint)
+                   .tap(_ =>
+                     for {
+                       cpState <- checkpointer.debug
+                       _       <- log.info(
+                              s"${workerIdentifier} shard=${shardID} Checkpointing cp state=${cpState}"
+                            ) *> checkpointer.checkpoint
+                     } yield ()
+                   )
                    .catchAll {
                      case _: ShutdownException => // This will be thrown when the shard lease has been stolen
                        // Abort the stream when we no longer have the lease
@@ -173,12 +180,61 @@ object DynamicConsumer {
              .runDrain
     } yield ()
 
+  // initial draft - start with a simple interface - maybe we can extract out some responsibilities as layers later
+  def consumeWith2[R, T](
+    streamName: String,
+    applicationName: String,
+    deserializer: Deserializer[R, T], // TODO make Deserializer a ZLayer too
+    requestShutdown: UIO[Unit] = UIO.never,
+    initialPosition: InitialPositionInStreamExtended =
+      InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON),
+    isEnhancedFanOut: Boolean = true,
+    leaseTableName: Option[String] = None,
+    workerIdentifier: String = UUID.randomUUID().toString,
+    maxShardBufferSize: Int = 1024,   // Prefer powers of 2
+    batchSize: Long = 200,
+    checkpointDuration: Duration = 5.second
+  )(
+    recordProcessor: Record[T] => ZIO[Any, Throwable, Unit]
+  ): ZIO[Blocking with Logging with Clock with R with Has[Service], Throwable, Unit] =
+    for {
+      consumer <- ZIO.service[DynamicConsumer.Service]
+      _        <- consumer
+             .shardedStream(
+               streamName,
+               applicationName,
+               deserializer,
+               requestShutdown,
+               initialPosition,
+               isEnhancedFanOut,
+               leaseTableName,
+               workerIdentifier,
+               maxShardBufferSize
+             )
+             .flatMapPar(Int.MaxValue) {
+               case (shardId, shardStream, checkpointer) =>
+                 shardStream
+                   .tap(record =>
+                     log.info(s"Processing record ${record} on shard ${shardId}") *> recordProcessor(record)
+                   )
+                   .tap(checkpointer.stage(_))
+                   .via(
+                     checkpointer
+                       .checkpointBatched[Blocking with Logging](nr = batchSize, interval = checkpointDuration)
+                   )
+             }
+             .runDrain
+    } yield ()
+
   /**
    * Staging area for checkpoints
    *
    * Guarantees that the last staged record is checkpointed upon stream shutdown / interruption
    */
   trait Checkpointer {
+
+    // TODO: remove
+    def debug: UIO[Option[Record[_]]]
 
     /**
      * Stages a record for checkpointing
@@ -268,6 +324,8 @@ object DynamicConsumer {
               }
             case None         => UIO.unit
           }
+
+        override def debug: UIO[Option[Record[_]]] = latestStaged.get
       }
   }
 
