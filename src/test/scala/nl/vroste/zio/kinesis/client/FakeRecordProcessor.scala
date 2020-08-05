@@ -28,14 +28,14 @@ object FakeRecordProcessor {
           for {
             processed <- refProcessed.updateAndGet(xs => xs :+ data)
             sizeAfter  = processed.distinct.size
-            _         <- info(s"process records count ${processed.size}, rec = $data")
+            _         <- info(s"process records count ${processed.size}, rec = $rec")
           } yield sizeAfter
 
         for {
           _ <- failFunctionOrExpectedCount.fold(
                  failFunction =>
                    if (failFunction(data))
-                     warn(s"record $data, about to return error") *> Task.fail(error(data))
+                     warn(s"record $rec, about to return error") *> Task.fail(error(data))
                    else
                      updateRefProcessed,
                  expectedCount =>

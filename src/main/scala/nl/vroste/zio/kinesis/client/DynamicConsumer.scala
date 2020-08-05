@@ -130,7 +130,7 @@ object DynamicConsumer {
 
     // this is required due to a bug in aggregateAsyncWithin whereby after an error the next element is still processed before failing
     // see ZIO issue/bug https://github.com/zio/zio/issues/4039
-    def processWithSkipOnError(refSkip: Ref[Boolean])(effect: ZIO[Logging, Throwable, Unit]) =
+    def processWithSkipOnError(refSkip: Ref[Boolean])(effect: Task[Unit]) =
       for {
         skip <- refSkip.get
         _    <- ZIO
@@ -159,11 +159,7 @@ object DynamicConsumer {
                      refSkip <- Ref.make(false)
                      _       <- shardStream
                             .tap(record =>
-                              processWithSkipOnError(refSkip) {
-                                log.info(s"Processing record ${record} on shard ${shardId}") *> recordProcessor(
-                                  record
-                                ) *> checkpointer.stage(record)
-                              }
+                              processWithSkipOnError(refSkip)(recordProcessor(record) *> checkpointer.stage(record))
                             )
                             .via(
                               checkpointer
