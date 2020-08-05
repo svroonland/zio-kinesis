@@ -122,81 +122,22 @@ object DynamicConsumer {
     leaseTableName: Option[String] = None,
     workerIdentifier: String = UUID.randomUUID().toString,
     maxShardBufferSize: Int = 1024,   // Prefer powers of 2
-    batchSize: Int = 200,
-    checkpointDuration: Duration = 5.second
-  )(
-    recordProcessor: Record[T] => ZIO[Any, Throwable, Unit]
-  ): ZIO[Clock with R with Logging with Blocking with Has[Service], Throwable, Unit] =
-    for {
-      consumer <- ZIO.service[DynamicConsumer.Service]
-      _        <- consumer
-             .shardedStream(
-               streamName,
-               applicationName,
-               deserializer,
-               requestShutdown,
-               initialPosition,
-               isEnhancedFanOut,
-               leaseTableName,
-               workerIdentifier,
-               maxShardBufferSize
-             )
-             .flatMapPar(Int.MaxValue) {
-               case (shardID, shardStream, checkpointer) =>
-                 shardStream
-                   .tap(r =>
-                     checkpointer
-                       .stageOnSuccess(
-                         log.info(
-                           s"${workerIdentifier} shard=${shardID} Attempting to process record $r"
-                         ) *> recordProcessor(r)
-                       )(r)
-                   )
-                   .aggregateAsyncWithin(ZTransducer.collectAllN(batchSize), Schedule.fixed(checkpointDuration))
-                   .mapConcat(_.toList)
-                   .tap(_ =>
-                     for {
-                       cpState <- checkpointer.debug
-                       _       <- log.info(
-                              s"${workerIdentifier} shard=${shardID} Checkpointing cp state=${cpState}"
-                            ) *> checkpointer.checkpoint
-                     } yield ()
-                   )
-                   .catchAll {
-                     case _: ShutdownException => // This will be thrown when the shard lease has been stolen
-                       // Abort the stream when we no longer have the lease
-
-                       ZStream.fromEffect(
-                         log.error(s"${workerIdentifier} shard ${shardID} lost")
-                       ) *> ZStream.empty
-                     case e                    =>
-                       ZStream.fromEffect(
-                         log.error(
-                           s"${workerIdentifier} shard ${shardID} stream failed with" + e + ": " + e.getStackTrace
-                         )
-                       ) *> ZStream.fail(e)
-                   }
-             }
-             .runDrain
-    } yield ()
-
-  // initial draft - start with a simple interface - maybe we can extract out some responsibilities as layers later
-  def consumeWith2[R, T](
-    streamName: String,
-    applicationName: String,
-    deserializer: Deserializer[R, T], // TODO make Deserializer a ZLayer too
-    requestShutdown: UIO[Unit] = UIO.never,
-    initialPosition: InitialPositionInStreamExtended =
-      InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON),
-    isEnhancedFanOut: Boolean = true,
-    leaseTableName: Option[String] = None,
-    workerIdentifier: String = UUID.randomUUID().toString,
-    maxShardBufferSize: Int = 1024,   // Prefer powers of 2
     batchSize: Long = 200,
     checkpointDuration: Duration = 5.second
   )(
     recordProcessor: Record[T] => ZIO[Any, Throwable, Unit]
-  ): ZIO[Blocking with Logging with Clock with R with Has[Service], Throwable, Unit] =
+  ): ZIO[R with Blocking with Logging with Clock with DynamicConsumer, Throwable, Unit] = {
+
+    // this is required due to a bug in aggregateAsyncWithin whereby after an error the next element is still processed before failing
+    // see ZIO issue/bug https://github.com/zio/zio/issues/4039
+    def processWithSkipOnError(refSkip: Ref[Boolean])(effect: ZIO[Logging, Throwable, Unit]) =
+      for {
+        skip <- refSkip.get
+        _    <- ZIO
+               .when(!skip)(effect)
+               .onError(_ => refSkip.update(_ => true))
+      } yield ()
+
     for {
       consumer <- ZIO.service[DynamicConsumer.Service]
       _        <- consumer
@@ -213,18 +154,28 @@ object DynamicConsumer {
              )
              .flatMapPar(Int.MaxValue) {
                case (shardId, shardStream, checkpointer) =>
-                 shardStream
-                   .tap(record =>
-                     log.info(s"Processing record ${record} on shard ${shardId}") *> recordProcessor(record)
-                   )
-                   .tap(checkpointer.stage(_))
-                   .via(
-                     checkpointer
-                       .checkpointBatched[Blocking with Logging](nr = batchSize, interval = checkpointDuration)
-                   )
+                 ZStream.fromEffect {
+                   for {
+                     refSkip <- Ref.make(false)
+                     _       <- shardStream
+                            .tap(record =>
+                              processWithSkipOnError(refSkip) {
+                                log.info(s"Processing record ${record} on shard ${shardId}") *> recordProcessor(
+                                  record
+                                ) *> checkpointer.stage(record)
+                              }
+                            )
+                            .via(
+                              checkpointer
+                                .checkpointBatched[Blocking with Logging](nr = batchSize, interval = checkpointDuration)
+                            )
+                            .runDrain
+                   } yield ()
+                 }
              }
              .runDrain
     } yield ()
+  }
 
   /**
    * Staging area for checkpoints
@@ -233,8 +184,10 @@ object DynamicConsumer {
    */
   trait Checkpointer {
 
-    // TODO: remove
-    def debug: UIO[Option[Record[_]]]
+    /*
+     * Helper method that returns current state - useful for debugging
+     */
+    private[client] def peek: UIO[Option[Record[_]]]
 
     /**
      * Stages a record for checkpointing
@@ -325,7 +278,7 @@ object DynamicConsumer {
             case None         => UIO.unit
           }
 
-        override def debug: UIO[Option[Record[_]]] = latestStaged.get
+        override private[client] def peek: UIO[Option[Record[_]]] = latestStaged.get
       }
   }
 

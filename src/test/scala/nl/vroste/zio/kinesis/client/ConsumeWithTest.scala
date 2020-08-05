@@ -11,9 +11,9 @@ import zio.clock.Clock
 import zio.console._
 import zio.duration._
 import zio.logging.Logging
+import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test._
-import zio.test.Assertion._
 
 object ConsumeWithTest extends DefaultRunnableSpec {
   import TestUtil._
@@ -145,7 +145,7 @@ object ConsumeWithTest extends DefaultRunnableSpec {
 
   override def spec =
     suite("ConsumeWithTest")(
-      testConsume1 @@ ignore,
+      testConsume1,
       testConsume2
     ).provideCustomLayer(env.orDie) @@ timeout(2.minutes) @@ sequential
 

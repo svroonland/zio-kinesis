@@ -35,7 +35,7 @@ object FakeRecordProcessor {
           _ <- failFunctionOrExpectedCount.fold(
                  failFunction =>
                    if (failFunction(data))
-                     info(s"record $data, about to return error") *> Task.fail(error(data))
+                     warn(s"record $data, about to return error") *> Task.fail(error(data))
                    else
                      updateRefProcessed,
                  expectedCount =>

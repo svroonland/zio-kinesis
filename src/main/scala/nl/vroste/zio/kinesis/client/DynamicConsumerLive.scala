@@ -227,9 +227,9 @@ private[client] class DynamicConsumerLive(
               .ensuringFirst(
                 UIO.succeed(
                   println(
-                    s"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX shardId=$shardId checkpointing on shutdown"
+                    s"shardId=$shardId checkpointing on shutdown"
                   )
-                ) *> checkpointer.debug.flatMap(r => UIO.succeed(println(s"cp state=${r}")))
+                ) *> checkpointer.peek.flatMap(cpState => UIO.succeed(println(s"checkpointer state=${cpState}")))
                   *> checkpointer.checkpoint.catchSome { case _: ShutdownException => UIO.unit }.orDie
               )
 
