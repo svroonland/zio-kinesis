@@ -64,6 +64,6 @@ class StubClient extends Client.Service {
   ): ZIO[R, Throwable, PutRecordsResponse] = ???
   override def putRecords(
     streamName: String,
-    entries: List[PutRecordsRequestEntry]
+    entries: Iterable[PutRecordsRequestEntry]
   ): Task[PutRecordsResponse]              = ???
 }

@@ -200,7 +200,7 @@ object ShardAssignmentStrategy {
 
     // From each worker that we want to take some leases, randomize the leases to reduce contention
     for {
-      leasesToStealByWorker <- ZIO.foreach(nrLeasesToStealByWorker) {
+      leasesToStealByWorker <- ZIO.foreach(nrLeasesToStealByWorker.toList) {
                                  case (worker, nrLeasesToTake) =>
                                    shuffle(leasesByWorker.getOrElse(worker, List.empty))
                                      .map(_.take(nrLeasesToTake))

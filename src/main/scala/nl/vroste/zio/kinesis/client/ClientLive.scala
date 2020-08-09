@@ -213,7 +213,7 @@ private[client] class ClientLive(kinesisClient: KinesisAsyncClient) extends Clie
     records: Iterable[ProducerRecord[T]]
   ): ZIO[R, Throwable, PutRecordsResponse] =
     for {
-      recordsAndBytes <- ZIO.foreach(records)(r => serializer.serialize(r.data).map((_, r.partitionKey)))
+      recordsAndBytes <- ZIO.foreach(records.view)(r => serializer.serialize(r.data).map((_, r.partitionKey)))
       entries          = recordsAndBytes.map {
                   case (data, partitionKey) =>
                     PutRecordsRequestEntry
@@ -222,10 +222,10 @@ private[client] class ClientLive(kinesisClient: KinesisAsyncClient) extends Clie
                       .partitionKey(partitionKey)
                       .build()
                 }
-      response        <- putRecords(streamName, entries)
+      response        <- putRecords(streamName, entries.view)
     } yield response
 
-  def putRecords(streamName: String, entries: List[PutRecordsRequestEntry]): Task[PutRecordsResponse] =
-    putRecords(PutRecordsRequest.builder().streamName(streamName).records(entries: _*).build())
+  def putRecords(streamName: String, entries: Iterable[PutRecordsRequestEntry]): Task[PutRecordsResponse] =
+    putRecords(PutRecordsRequest.builder().streamName(streamName).records(entries.toArray: _*).build())
 
 }

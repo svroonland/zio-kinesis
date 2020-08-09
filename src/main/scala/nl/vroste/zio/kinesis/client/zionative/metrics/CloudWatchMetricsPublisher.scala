@@ -29,7 +29,7 @@ final case class CloudWatchMetricsPublisherConfig(
   maxFlushInterval: Duration = 20.seconds,
   maxBatchSize: Int = 20,
   periodicMetricInterval: Duration = 30.seconds,
-  retrySchedule: Schedule[Clock, Any, (Duration, Int)] = Util.exponentialBackoff(1.second, 1.minute),
+  retrySchedule: Schedule[Clock, Any, (Duration, Long)] = Util.exponentialBackoff(1.second, 1.minute),
   maxParallelUploads: Int = 3
 ) {
   require(maxBatchSize <= 20, "maxBatchSize must be <= 20 (AWS SDK limit)")

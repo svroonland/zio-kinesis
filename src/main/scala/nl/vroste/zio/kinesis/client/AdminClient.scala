@@ -150,7 +150,7 @@ object AdminClient {
 
   final case class UpdateShardCountResponse(streamName: String, currentShardCount: Int, targetShardCount: Int)
 
-  private[client] val retryOnLimitExceeded = Schedule.doWhile[Throwable] {
+  private[client] val retryOnLimitExceeded = Schedule.recurWhile[Throwable] {
     case _: LimitExceededException => true; case _ => false
   }
 

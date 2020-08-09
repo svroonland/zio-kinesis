@@ -112,7 +112,7 @@ object Client {
       records: Iterable[ProducerRecord[T]]
     ): ZIO[R, Throwable, PutRecordsResponse]
 
-    def putRecords(streamName: String, entries: List[PutRecordsRequestEntry]): Task[PutRecordsResponse]
+    def putRecords(streamName: String, entries: Iterable[PutRecordsRequestEntry]): Task[PutRecordsResponse]
   }
 
   // Accessor methods
