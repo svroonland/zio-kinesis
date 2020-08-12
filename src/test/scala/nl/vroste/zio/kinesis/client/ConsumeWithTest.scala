@@ -53,7 +53,7 @@ object ConsumeWithTest extends DefaultRunnableSpec {
                              .tapError(e => putStrLn(s"error1: $e").provideLayer(Console.live))
                              .retry(retryOnResourceNotFound)
                       _                <- putStrLn("Starting dynamic consumer")
-                      consumerFiber    <- consumeWith(
+                      consumerFiber    <- consumeWith[Logging, String](
                                          streamName,
                                          applicationName = applicationName,
                                          deserializer = Serde.asciiString,
@@ -105,7 +105,7 @@ object ConsumeWithTest extends DefaultRunnableSpec {
                              .tapError(e => putStrLn(s"error1: $e").provideLayer(Console.live))
                              .retry(retryOnResourceNotFound)
                       _                <- putStrLn("Starting dynamic consumer - about to fail")
-                      _                <- consumeWith(
+                      _                <- consumeWith[Logging, String](
                              streamName,
                              applicationName = applicationName,
                              deserializer = Serde.asciiString,
@@ -120,7 +120,7 @@ object ConsumeWithTest extends DefaultRunnableSpec {
                                )
                            }.ignore
                       _                <- putStrLn("Starting dynamic consumer - about to succeed")
-                      consumerFiber    <- consumeWith(
+                      consumerFiber    <- consumeWith[Logging, String](
                                          streamName,
                                          applicationName = applicationName,
                                          deserializer = Serde.asciiString,

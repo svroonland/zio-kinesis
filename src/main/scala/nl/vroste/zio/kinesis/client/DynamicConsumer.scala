@@ -112,6 +112,10 @@ object DynamicConsumer {
         )
     )
 
+  final case class RecordProcessor[R, T](value: Record[T] => RIO[R, Unit]) extends (Record[T] => RIO[R, Unit]) {
+    def apply(r: Record[T]): RIO[R, Unit] = value(r)
+  }
+
   /**
    * Similar to `shardedStream` accessor but provides the `recordProcessor` callback function for processing records
    * and takes care of checkpointing. The other difference is that it returns a ZIO of unit rather than a ZStream.
@@ -151,7 +155,7 @@ object DynamicConsumer {
     checkpointBatchSize: Long = 200,
     checkpointDuration: Duration = 5.second
   )(
-    recordProcessor: Record[T] => RIO[R, Unit]
+    recordProcessor: RecordProcessor[R, T]
   ): ZIO[R with Blocking with Logging with Clock with DynamicConsumer, Throwable, Unit] =
     for {
       consumer <- ZIO.service[DynamicConsumer.Service]
