@@ -28,7 +28,7 @@ object ConsumeWithTest extends DefaultRunnableSpec {
     (LocalStackServices.localHttpClient >>> LocalStackServices.kinesisAsyncClientLayer >>> (Client.live ++ AdminClient.live ++ LocalStackServices.dynamicConsumerLayer)) ++ Clock.live ++ Blocking.live ++ loggingLayer
 
   def testConsume1 =
-    testM("consumeWith should consume records produced on all shards produced on the stream") {
+    testM("consumeWith should consume records produced on all shards") {
       val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
       val applicationName = "zio-test-" + UUID.randomUUID().toString
       val nrRecords       = 4
@@ -58,13 +58,13 @@ object ConsumeWithTest extends DefaultRunnableSpec {
                                          applicationName = applicationName,
                                          deserializer = Serde.asciiString,
                                          isEnhancedFanOut = false,
-                                         batchSize = 2
+                                         checkpointBatchSize = 2
                                        ) {
                                          FakeRecordProcessor
-                                           .process(
+                                           .make(
                                              refProcessed,
                                              finishedConsuming,
-                                             failFunctionOrExpectedCount = Right(nrRecords)
+                                             expectedCount = nrRecords
                                            )
                                        }.fork
                       _                <- finishedConsuming.await
@@ -78,7 +78,7 @@ object ConsumeWithTest extends DefaultRunnableSpec {
 
   def testConsume2 =
     testM(
-      "consumeWith should, after a restart due to a record processing error, consume records produced on all shards produced on the stream"
+      "consumeWith should, after a restart due to a record processing error, consume records produced on all shards"
     ) {
       val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
       val applicationName = "zio-test-" + UUID.randomUUID().toString
@@ -110,13 +110,13 @@ object ConsumeWithTest extends DefaultRunnableSpec {
                              applicationName = applicationName,
                              deserializer = Serde.asciiString,
                              isEnhancedFanOut = false,
-                             batchSize = batchSize
+                             checkpointBatchSize = batchSize
                            ) {
                              FakeRecordProcessor
-                               .process(
+                               .makeFailing(
                                  refProcessed,
                                  finishedConsuming,
-                                 failFunctionOrExpectedCount = Left(_ == "msg31")
+                                 failFunction = _ == "msg31"
                                )
                            }.ignore
                       _                <- putStrLn("Starting dynamic consumer - about to succeed")
@@ -125,13 +125,13 @@ object ConsumeWithTest extends DefaultRunnableSpec {
                                          applicationName = applicationName,
                                          deserializer = Serde.asciiString,
                                          isEnhancedFanOut = false,
-                                         batchSize = batchSize
+                                         checkpointBatchSize = batchSize
                                        ) {
                                          FakeRecordProcessor
-                                           .process(
+                                           .make(
                                              refProcessed,
                                              finishedConsuming,
-                                             failFunctionOrExpectedCount = Right(nrRecords)
+                                             expectedCount = nrRecords
                                            )
                                        }.fork
                       _                <- finishedConsuming.await

@@ -224,14 +224,7 @@ private[client] class DynamicConsumerLive(
               .collectWhileSuccess
               .mapChunksM(_.mapM(toRecord(shardId, _)))
               .provide(env)
-              .ensuringFirst(
-                UIO.succeed(
-                  println(
-                    s"shardId=$shardId checkpointing on shutdown"
-                  )
-                ) *> checkpointer.peek.flatMap(cpState => UIO.succeed(println(s"checkpointer state=${cpState}")))
-                  *> checkpointer.checkpoint.catchSome { case _: ShutdownException => UIO.unit }.orDie
-              )
+              .ensuringFirst(checkpointer.checkpoint.catchSome { case _: ShutdownException => UIO.unit }.orDie)
 
             (shardId, stream, checkpointer)
         }
