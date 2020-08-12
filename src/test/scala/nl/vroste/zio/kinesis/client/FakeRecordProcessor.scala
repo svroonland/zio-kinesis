@@ -18,19 +18,19 @@ object FakeRecordProcessor {
     refProcessed: Ref[Seq[T]],
     promise: Promise[Nothing, Unit],
     expectedCount: Int
-  ): Record[T] => ZIO[Any, Throwable, Unit] = process(refProcessed, promise, Right(expectedCount))
+  ): Record[T] => Task[Unit] = process(refProcessed, promise, Right(expectedCount))
 
   def makeFailing[T](
     refProcessed: Ref[Seq[T]],
     promise: Promise[Nothing, Unit],
     failFunction: T => Boolean
-  ): Record[T] => ZIO[Any, Throwable, Unit] = process(refProcessed, promise, Left(failFunction))
+  ): Record[T] => Task[Unit] = process(refProcessed, promise, Left(failFunction))
 
   private def process[T](
     refProcessed: Ref[Seq[T]],
     promise: Promise[Nothing, Unit],
     failFunctionOrExpectedCount: Either[T => Boolean, Int]
-  ): Record[T] => ZIO[Any, Throwable, Unit] =
+  ): Record[T] => Task[Unit] =
     rec =>
       {
         val data          = rec.data
