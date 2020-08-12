@@ -13,7 +13,7 @@ import zio._
 import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.duration.{ Duration, _ }
-import zio.logging.{ log, Logging }
+import zio.logging.Logging
 import zio.stream.{ ZStream, ZTransducer }
 
 /**
@@ -125,7 +125,7 @@ object DynamicConsumer {
     batchSize: Long = 200,
     checkpointDuration: Duration = 5.second
   )(
-    recordProcessor: Record[T] => ZIO[Any, Throwable, Unit]
+    recordProcessor: Record[T] => ZIO[R, Throwable, Unit]
   ): ZIO[R with Blocking with Logging with Clock with DynamicConsumer, Throwable, Unit] = {
 
     // this is required due to a bug in aggregateAsyncWithin whereby after an error the next element is still processed before failing
@@ -155,18 +155,24 @@ object DynamicConsumer {
              .flatMapPar(Int.MaxValue) {
                case (shardId, shardStream, checkpointer) =>
                  ZStream.fromEffect {
-                   for {
-                     refSkip <- Ref.make(false)
-                     _       <- shardStream
-                            .tap(record =>
-                              processWithSkipOnError(refSkip)(recordProcessor(record) *> checkpointer.stage(record))
-                            )
-                            .via(
-                              checkpointer
-                                .checkpointBatched[Blocking with Logging](nr = batchSize, interval = checkpointDuration)
-                            )
-                            .runDrain
-                   } yield ()
+                   val _ = shardId // TODO
+                   ZIO.environment[R].flatMap { env =>
+                     for {
+                       refSkip <- Ref.make(false)
+                       _       <-
+                         shardStream
+                           .tap(record =>
+                             processWithSkipOnError(refSkip)(
+                               recordProcessor(record).provide(env) *> checkpointer.stage(record)
+                             )
+                           )
+                           .via(
+                             checkpointer
+                               .checkpointBatched[Blocking with Logging](nr = batchSize, interval = checkpointDuration)
+                           )
+                           .runDrain
+                     } yield ()
+                   }
                  }
              }
              .runDrain
