@@ -112,10 +112,6 @@ object DynamicConsumer {
         )
     )
 
-  final case class RecordProcessor[R, T](value: Record[T] => RIO[R, Unit]) extends (Record[T] => RIO[R, Unit]) {
-    def apply(r: Record[T]): RIO[R, Unit] = value(r)
-  }
-
   /**
    * Similar to `shardedStream` accessor but provides the `recordProcessor` callback function for processing records
    * and takes care of checkpointing. The other difference is that it returns a ZIO of unit rather than a ZStream.
@@ -141,7 +137,7 @@ object DynamicConsumer {
    * @tparam T Type of record values
    * @return A ZIO that completes with Unit when record processing is stopped via requestShutdown or fails when the consumer stream fails
    */
-  def consumeWith[R, T](
+  def consumeWith[R, RC, T](
     streamName: String,
     applicationName: String,
     deserializer: Deserializer[R, T],
@@ -155,8 +151,8 @@ object DynamicConsumer {
     checkpointBatchSize: Long = 200,
     checkpointDuration: Duration = 5.second
   )(
-    recordProcessor: RecordProcessor[R, T]
-  ): ZIO[R with Blocking with Logging with Clock with DynamicConsumer, Throwable, Unit] =
+    recordProcessor: Record[T] => RIO[RC, Unit]
+  ): ZIO[R with RC with Blocking with Logging with Clock with DynamicConsumer, Throwable, Unit] =
     for {
       consumer <- ZIO.service[DynamicConsumer.Service]
       _        <- consumer
@@ -173,7 +169,7 @@ object DynamicConsumer {
              )
              .flatMapPar(Int.MaxValue) {
                case (_, shardStream, checkpointer) =>
-                 ZStream.fromEffect(Ref.make(false) zip ZIO.environment[R]).flatMap {
+                 ZStream.fromEffect(Ref.make(false) zip ZIO.environment[RC]).flatMap {
                    case (refSkip, env) =>
                      shardStream
                        .tap(record =>

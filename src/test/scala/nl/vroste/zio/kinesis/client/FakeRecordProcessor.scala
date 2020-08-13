@@ -1,6 +1,5 @@
 package nl.vroste.zio.kinesis.client
 
-import nl.vroste.zio.kinesis.client.DynamicConsumer.RecordProcessor
 import zio._
 
 object FakeRecordProcessor {
@@ -11,13 +10,13 @@ object FakeRecordProcessor {
     refProcessed: Ref[Seq[T]],
     promise: Promise[Nothing, Unit],
     expectedCount: Int
-  ): RecordProcessor[Logging, T] = RecordProcessor(process(refProcessed, promise, Right(expectedCount)))
+  ): Record[T] => RIO[Logging, Unit] = process(refProcessed, promise, Right(expectedCount))
 
-  def makeFailing[T](
+  def makeFailing[RC, T](
     refProcessed: Ref[Seq[T]],
     promise: Promise[Nothing, Unit],
     failFunction: T => Boolean
-  ): RecordProcessor[Logging, T] = RecordProcessor(process(refProcessed, promise, Left(failFunction)))
+  ): Record[T] => RIO[Logging, Unit] = process(refProcessed, promise, Left(failFunction))
 
   private def process[T](
     refProcessed: Ref[Seq[T]],
