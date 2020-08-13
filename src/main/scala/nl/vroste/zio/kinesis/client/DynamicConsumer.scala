@@ -139,7 +139,7 @@ object DynamicConsumer {
    * @param recordProcessor A function for processing a `Record[T]`
    * @tparam R ZIO environment type required by the `deserializer` and the `recordProcessor`
    * @tparam T Type of record values
-   * @return ZIO of unit
+   * @return A ZIO that completes with Unit when record processing is stopped via requestShutdown or fails when the consumer stream fails
    */
   def consumeWith[R, T](
     streamName: String,
@@ -173,26 +173,21 @@ object DynamicConsumer {
              )
              .flatMapPar(Int.MaxValue) {
                case (_, shardStream, checkpointer) =>
-                 ZStream.fromEffect {
-                   ZIO.environment[R].flatMap { env =>
-                     for {
-                       refSkip <- Ref.make(false)
-                       _       <- shardStream
-                              .tap(record =>
-                                processWithSkipOnError(refSkip)(
-                                  recordProcessor(record).provide(env) *> checkpointer.stage(record)
-                                )
-                              )
-                              .via(
-                                checkpointer
-                                  .checkpointBatched[Blocking with Logging](
-                                    nr = checkpointBatchSize,
-                                    interval = checkpointDuration
-                                  )
-                              )
-                              .runDrain
-                     } yield ()
-                   }
+                 ZStream.fromEffect(Ref.make(false).zip(ZIO.environment[R])).flatMap {
+                   case (refSkip, env) =>
+                     shardStream
+                       .tap(record =>
+                         processWithSkipOnError(refSkip)(
+                           recordProcessor(record).provide(env) *> checkpointer.stage(record)
+                         )
+                       )
+                       .via(
+                         checkpointer
+                           .checkpointBatched[Blocking with Logging](
+                             nr = checkpointBatchSize,
+                             interval = checkpointDuration
+                           )
+                       )
                  }
              }
              .runDrain
