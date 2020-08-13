@@ -173,7 +173,7 @@ object DynamicConsumer {
              )
              .flatMapPar(Int.MaxValue) {
                case (_, shardStream, checkpointer) =>
-                 ZStream.fromEffect(Ref.make(false).zip(ZIO.environment[R])).flatMap {
+                 ZStream.fromEffect(Ref.make(false) zip ZIO.environment[R]).flatMap {
                    case (refSkip, env) =>
                      shardStream
                        .tap(record =>
