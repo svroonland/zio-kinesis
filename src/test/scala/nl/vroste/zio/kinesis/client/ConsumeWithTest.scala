@@ -83,7 +83,7 @@ object ConsumeWithTest extends DefaultRunnableSpec {
       val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
       val applicationName = "zio-test-" + UUID.randomUUID().toString
       val nrRecords       = 50
-      val batchSize       = 10
+      val batchSize       = 10L
 
       for {
         refProcessed      <- Ref.make(Seq.empty[String])

@@ -20,7 +20,7 @@ object DynamicConsumerConsumeWithExample extends zio.App {
         applicationName = "my-application",
         deserializer = Serde.asciiString,
         workerIdentifier = "worker1",
-        checkpointBatchSize = 1000,
+        checkpointBatchSize = 1000L,
         checkpointDuration = 5.minutes
       )(record => putStrLn(s"Processing record $record"))
       .provideCustomLayer(DynamicConsumer.defaultEnvironment ++ loggingEnv)
