@@ -2,6 +2,7 @@ package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
 
 import java.time.Instant
 
+import scala.collection.compat._
 import nl.vroste.zio.kinesis.client.Record
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative._
