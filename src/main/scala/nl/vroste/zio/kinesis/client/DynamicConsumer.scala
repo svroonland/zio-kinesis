@@ -2,19 +2,20 @@ package nl.vroste.zio.kinesis.client
 
 import java.util.UUID
 
+import nl.vroste.zio.kinesis.client.Util.processWithSkipOnError
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.kinesis.common.{ InitialPositionInStream, InitialPositionInStreamExtended }
+import software.amazon.kinesis.exceptions.ShutdownException
 import software.amazon.kinesis.processor.RecordProcessorCheckpointer
 import zio._
 import zio.blocking.Blocking
-import zio.stream.ZStream
-import zio.duration.Duration
 import zio.clock.Clock
-import software.amazon.kinesis.exceptions.ShutdownException
-import zio.stream.ZTransducer
+import zio.duration.{ Duration, _ }
+import zio.logging.Logging
+import zio.stream.{ ZStream, ZTransducer }
 
 /**
  * Offers a ZStream based interface to the Amazon Kinesis Client Library (KCL)
@@ -56,18 +57,19 @@ object DynamicConsumer {
      *   method will have internal chunk buffers as well.
      * @tparam R ZIO environment type required by the `deserializer`
      * @tparam T Type of record values
+     * @return A nested ZStream - the outer ZStream represents the collection of shards, and the inner ZStream represents the individual shard
      */
     def shardedStream[R, T](
       streamName: String,
       applicationName: String,
-      deserializer: Deserializer[R, T], // TODO make Deserializer a ZLayer too
+      deserializer: Deserializer[R, T],
       requestShutdown: UIO[Unit] = UIO.never,
       initialPosition: InitialPositionInStreamExtended =
         InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON),
       isEnhancedFanOut: Boolean = true,
       leaseTableName: Option[String] = None,
       workerIdentifier: String = UUID.randomUUID().toString,
-      maxShardBufferSize: Int = 1024    // Prefer powers of 2
+      maxShardBufferSize: Int = 1024 // Prefer powers of 2
     ): ZStream[
       Blocking with R,
       Throwable,
@@ -79,14 +81,14 @@ object DynamicConsumer {
   def shardedStream[R, T](
     streamName: String,
     applicationName: String,
-    deserializer: Deserializer[R, T], // TODO make Deserializer a ZLayer too
+    deserializer: Deserializer[R, T],
     requestShutdown: UIO[Unit] = UIO.never,
     initialPosition: InitialPositionInStreamExtended =
       InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON),
     isEnhancedFanOut: Boolean = true,
     leaseTableName: Option[String] = None,
     workerIdentifier: String = UUID.randomUUID().toString,
-    maxShardBufferSize: Int = 1024    // Prefer powers of 2
+    maxShardBufferSize: Int = 1024 // Prefer powers of 2
   ): ZStream[
     DynamicConsumer with Blocking with R,
     Throwable,
@@ -111,11 +113,93 @@ object DynamicConsumer {
     )
 
   /**
+   * Similar to `shardedStream` accessor but provides the `recordProcessor` callback function for processing records
+   * and takes care of checkpointing. The other difference is that it returns a ZIO of unit rather than a ZStream.
+   *
+   * @param streamName Name of the Kinesis stream
+   * @param applicationName Application name for coordinating shard leases
+   * @param deserializer Deserializer for record values
+   * @param requestShutdown Effect that when completed will trigger a graceful shutdown of the KCL
+   *   and the streams.
+   * @param initialPosition Position in stream to start at when there is no previous checkpoint
+   *   for this application
+   * @param isEnhancedFanOut Flag for setting retrieval config - defaults to `true`. If `false` polling config is set.
+   * @param leaseTableName Optionally set the lease table name - defaults to None. If not specified the `applicationName` will be used.
+   * @param workerIdentifier Identifier used for the worker in this application group. Used in logging
+   *   and written to the lease table.
+   * @param maxShardBufferSize The maximum number of records per shard to store in a queue before blocking
+   *   the KCL record processor until records have been dequeued. Note that the stream returned from this
+   *   method will have internal chunk buffers as well.
+   * @param checkpointBatchSize Maximum number of records before checkpointing
+   * @param checkpointDuration Maximum interval before checkpointing
+   * @param recordProcessor A function for processing a `Record[T]`
+   * @tparam R ZIO environment type required by the `deserializer` and the `recordProcessor`
+   * @tparam T Type of record values
+   * @return A ZIO that completes with Unit when record processing is stopped via requestShutdown or fails when the consumer stream fails
+   */
+  def consumeWith[R, RC, T](
+    streamName: String,
+    applicationName: String,
+    deserializer: Deserializer[R, T],
+    requestShutdown: UIO[Unit] = UIO.never,
+    initialPosition: InitialPositionInStreamExtended =
+      InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON),
+    isEnhancedFanOut: Boolean = true,
+    leaseTableName: Option[String] = None,
+    workerIdentifier: String = UUID.randomUUID().toString,
+    maxShardBufferSize: Int = 1024, // Prefer powers of 2
+    checkpointBatchSize: Long = 200,
+    checkpointDuration: Duration = 5.second
+  )(
+    recordProcessor: Record[T] => RIO[RC, Unit]
+  ): ZIO[R with RC with Blocking with Logging with Clock with DynamicConsumer, Throwable, Unit] =
+    for {
+      consumer <- ZIO.service[DynamicConsumer.Service]
+      _        <- consumer
+             .shardedStream(
+               streamName,
+               applicationName,
+               deserializer,
+               requestShutdown,
+               initialPosition,
+               isEnhancedFanOut,
+               leaseTableName,
+               workerIdentifier,
+               maxShardBufferSize
+             )
+             .flatMapPar(Int.MaxValue) {
+               case (_, shardStream, checkpointer) =>
+                 ZStream.fromEffect(Ref.make(false) zip ZIO.environment[RC]).flatMap {
+                   case (refSkip, env) =>
+                     shardStream
+                       .tap(record =>
+                         processWithSkipOnError(refSkip)(
+                           recordProcessor(record).provide(env) *> checkpointer.stage(record)
+                         )
+                       )
+                       .via(
+                         checkpointer
+                           .checkpointBatched[Blocking with Logging](
+                             nr = checkpointBatchSize,
+                             interval = checkpointDuration
+                           )
+                       )
+                 }
+             }
+             .runDrain
+    } yield ()
+
+  /**
    * Staging area for checkpoints
    *
    * Guarantees that the last staged record is checkpointed upon stream shutdown / interruption
    */
   trait Checkpointer {
+
+    /*
+     * Helper method that returns current state - useful for debugging
+     */
+    private[client] def peek: UIO[Option[Record[_]]]
 
     /**
      * Stages a record for checkpointing
@@ -205,6 +289,8 @@ object DynamicConsumer {
               }
             case None         => UIO.unit
           }
+
+        override private[client] def peek: UIO[Option[Record[_]]] = latestStaged.get
       }
   }
 

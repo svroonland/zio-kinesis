@@ -102,7 +102,6 @@ object Util {
    * @param duration Duration for nr of tokens
    * @return The original function with rate limiting applied, as a managed resource
    */
-
   def throttledFunction[R, I, E, A](units: Int, duration: Duration)(
     f: I => ZIO[R, E, A]
   ): ZManaged[Clock, Nothing, I => ZIO[R, E, A]] =
@@ -138,4 +137,20 @@ object Util {
         case (i0, i1, i2) => f(i0, i1, i2)
       }.map(Function.untupled(_))
   }
+
+  /**
+   * this is a workaround to a bug in `aggregateAsyncWithin` whereby after an error the next element is still processed before failing
+   * (see ZIO issue/bug https://github.com/zio/zio/issues/4039) and should be used to wrap the effect used upstream of `aggregateAsyncWithin`
+   * If `refSkip` contains Boolean true due to a previous error the effect is skipped.
+   * @param refSkip a Ref of Boolean - it must be initialised to false
+   * @param effect
+   * @return the result of the effect or the result of the NOP skip - both are Task[Unit]
+   */
+  def processWithSkipOnError(refSkip: Ref[Boolean])(effect: Task[Unit]): ZIO[Any, Throwable, Unit] =
+    for {
+      skip <- refSkip.get
+      _    <- ZIO
+             .when(!skip)(effect)
+             .onError(_ => refSkip.update(_ => true))
+    } yield ()
 }
