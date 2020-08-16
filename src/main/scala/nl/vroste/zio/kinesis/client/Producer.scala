@@ -204,7 +204,7 @@ object Producer {
   }
 
   private final def scheduleCatchRecoverable: Schedule[Any, Throwable, Throwable] =
-    Schedule.doWhile {
+    Schedule.recurWhile {
       case e: KinesisException if e.statusCode() / 100 != 4 => true
       case _: ReadTimeoutException                          => true
       case _: IOException                                   => true

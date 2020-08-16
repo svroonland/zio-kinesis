@@ -34,8 +34,8 @@ object TestUtil {
              .retry(Schedule.exponential(1.second) && Schedule.recurs(10))
     } yield ()
 
-  val retryOnResourceNotFound: Schedule[Clock, Throwable, ((Throwable, Int), Duration)] =
-    Schedule.doWhile[Throwable] {
+  val retryOnResourceNotFound: Schedule[Clock, Throwable, ((Throwable, Long), Duration)] =
+    Schedule.recurWhile[Throwable] {
       case _: ResourceNotFoundException => true
       case _                            => false
     } &&

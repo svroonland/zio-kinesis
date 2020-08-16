@@ -25,11 +25,11 @@ object ExampleApp extends zio.App {
   val produceRate                     = 400                  // Nr records to produce per second
   val nrShards                        = 2
   val enhancedFanout                  = false
-  val nrNativeWorkers                 = 2
+  val nrNativeWorkers                 = 1
   val nrKclWorkers                    = 0
   val applicationName                 = "testApp-1"          // + java.util.UUID.randomUUID().toString(),
   val runtime                         = 3.minute
-  val maxRandomWorkerStartDelayMillis = 1 + 1 * 60 * 1000
+  val maxRandomWorkerStartDelayMillis = 1 + 0 * 60 * 1000
   val recordProcessingTime: Duration  = 1.millisecond
 
   override def run(

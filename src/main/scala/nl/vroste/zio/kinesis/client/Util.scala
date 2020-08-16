@@ -4,7 +4,7 @@ import java.util.concurrent.{ CompletableFuture, CompletionException }
 
 import software.amazon.awssdk.core.exception.SdkException
 import zio.clock.Clock
-import zio.duration.Duration
+import zio.duration._
 import zio.stream.ZStream
 import zio._
 
@@ -22,34 +22,30 @@ object Util {
      * @return Stream outputting elements of all attempts of the stream
      */
     // To be included in ZIO with https://github.com/zio/zio/pull/3902
-    def retry[R1 <: R](schedule: Schedule[R1, E, _]): ZStream[R1, E, O] =
+    def retry[R1 <: R](schedule: Schedule[R1, E, _]): ZStream[R1 with Clock, E, O] =
       ZStream {
         for {
-          s0           <- schedule.initial.toManaged_
-          state        <- Ref.make[schedule.State](s0).toManaged_
+          driver       <- schedule.driver.toManaged_
           currStream   <- Ref.make[ZIO[R, Option[E], Chunk[O]]](IO.fail(None)).toManaged_ // IO.fail(None) = Pull.end
           switchStream <- ZManaged.switchable[R, Nothing, ZIO[R, Option[E], Chunk[O]]]
           _            <- switchStream(stream.process).flatMap(currStream.set).toManaged_
           pull          = {
-            def go: ZIO[R1, Option[E], Chunk[O]] =
+            def loop: ZIO[R1 with Clock, Option[E], Chunk[O]] =
               currStream.get.flatten.catchSome {
                 case Some(e) =>
-                  (for {
-                    s        <- state.get
-                    newState <- schedule.update(e, s)
-                    _        <- state.set(newState)
-                  } yield ())
+                  driver
+                    .next(e)
                     .foldM(
                       // Failure of the schedule indicates it doesn't accept the input
                       _ => IO.fail(Some(e)), // TODO = Pull.fail
                       _ =>
                         switchStream(stream.process).flatMap(currStream.set) *>
-                          // Reset the schedule to its initial state when a chunk is successfully pulled
-                          go.tap(_ => state.set(s0))
+                          // Reset the schedule when a chunk is successfully pulled
+                          loop.tap(_ => driver.reset)
                     )
               }
 
-            go
+            loop
           }
         } yield pull
       }
@@ -66,15 +62,16 @@ object Util {
           ZIO.fail(Option(e.getCause()).getOrElse(e))
       }
 
+  // TODO there might be some optimization here
   def paginatedRequest[R, E, A, Token](fetch: Option[Token] => ZIO[R, E, (A, Option[Token])])(
-    throttling: Schedule[Clock, Any, Int] = Schedule.forever
+    throttling: Schedule[Clock, Any, Long] = Schedule.forever
   ): ZStream[Clock with R, E, A] =
     ZStream.fromEffect(fetch(None)).flatMap {
       case (results, nextTokenOpt) =>
         ZStream.succeed(results) ++ (nextTokenOpt match {
           case None            => ZStream.empty
           case Some(nextToken) =>
-            ZStream.paginateM[R, E, A, Token](nextToken)(token => fetch(Some(token))).scheduleElements(throttling)
+            ZStream.paginateM[R, E, A, Token](nextToken)(token => fetch(Some(token))).repeatElements(throttling)
         })
     }
 
@@ -92,7 +89,7 @@ object Util {
     max: Duration,
     factor: Double = 2.0,
     maxRecurs: Option[Int] = None
-  ): Schedule[Clock, A, (Duration, Int)] =
+  ): Schedule[Clock, A, (Duration, Long)] =
     (Schedule.exponential(min, factor).whileOutput(_ <= max) andThen Schedule.fixed(max).as(max)) &&
       maxRecurs.map(Schedule.recurs).getOrElse(Schedule.forever)
 

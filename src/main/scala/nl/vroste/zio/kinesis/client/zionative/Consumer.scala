@@ -50,8 +50,8 @@ object FetchMode {
   final case class Polling(
     batchSize: Int = 1000,
     pollSchedule: Schedule[Clock, GetRecordsResponse, Any] = Polling.dynamicSchedule(1.second),
-    throttlingBackoff: Schedule[Clock, Any, (Duration, Int)] = Util.exponentialBackoff(5.seconds, 30.seconds),
-    retrySchedule: Schedule[Clock, Any, (Duration, Int)] = Util.exponentialBackoff(1.second, 1.minute),
+    throttlingBackoff: Schedule[Clock, Any, (Duration, Long)] = Util.exponentialBackoff(5.seconds, 30.seconds),
+    retrySchedule: Schedule[Clock, Any, (Duration, Long)] = Util.exponentialBackoff(1.second, 1.minute),
     bufferNrBatches: Int = 2
   ) extends FetchMode
 
@@ -64,7 +64,9 @@ object FetchMode {
      * @param interval Fixed interval for polling when no more records are currently available
      */
     def dynamicSchedule(interval: Duration): Schedule[Clock, GetRecordsResponse, Any] =
-      Schedule.doWhile((_: GetRecordsResponse).millisBehindLatest() != 0) || Schedule.fixed(interval)
+      // TODO change `andThen` back to `||` when https://github.com/zio/zio/issues/4101 is fixed
+      (Schedule.recurWhile[Boolean](_ == true) andThen Schedule.fixed(interval))
+        .contramap((_: GetRecordsResponse).millisBehindLatest() != 0)
   }
 
   /**
@@ -75,7 +77,7 @@ object FetchMode {
   final case class EnhancedFanOut(
     deregisterConsumerAtShutdown: Boolean = false, // TODO
     maxSubscriptionsPerSecond: Int = 10,
-    retrySchedule: Schedule[Clock, Any, (Duration, Int)] = Util.exponentialBackoff(5.second, 1.minute)
+    retrySchedule: Schedule[Clock, Any, (Duration, Long)] = Util.exponentialBackoff(5.second, 1.minute)
   ) extends FetchMode
 }
 
@@ -190,7 +192,7 @@ object Consumer {
 
     def createDependencies =
       ZManaged
-        .mapN( // TODO can't use mapParN until issue https://github.com/zio/zio/issues/3986 is fixed
+        .mapParN(
           ZManaged
             .unwrap(
               AdminClient
@@ -275,7 +277,7 @@ object Consumer {
   private[zionative] def retryOnThrottledWithSchedule[R, A](
     schedule: Schedule[R, Throwable, A]
   ): Schedule[R, Throwable, (Throwable, A)] =
-    Schedule.doWhile[Throwable](e => isThrottlingException.lift(e).isDefined) && schedule
+    Schedule.recurWhile[Throwable](e => isThrottlingException.lift(e).isDefined) && schedule
 
   val defaultEnvironment
     : ZLayer[Any, Throwable, AdminClient with Client with LeaseRepository with Has[CloudWatchAsyncClient]] =

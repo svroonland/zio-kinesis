@@ -225,7 +225,7 @@ private[client] class ClientLive(kinesisClient: KinesisAsyncClient) extends Clie
       response        <- putRecords(streamName, entries)
     } yield response
 
-  def putRecords(streamName: String, entries: List[PutRecordsRequestEntry]): Task[PutRecordsResponse] =
-    putRecords(PutRecordsRequest.builder().streamName(streamName).records(entries: _*).build())
+  def putRecords(streamName: String, entries: Iterable[PutRecordsRequestEntry]): Task[PutRecordsResponse] =
+    putRecords(PutRecordsRequest.builder().streamName(streamName).records(entries.toArray: _*).build())
 
 }

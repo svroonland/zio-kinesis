@@ -235,8 +235,11 @@ object PollingFetcherTest extends DefaultRunnableSpec {
           chunksReceivedImmediately <- chunksReceived.get
           _                          = println(chunksReceivedImmediately)
           _                         <- TestClock.adjust(5.second)
-          chunksReceivedLater       <- chunksReceived.get
-          _                         <- chunksFib.join
+          _                         <- TestClock.adjust(
+                 3.seconds
+               ) // TODO remove: because of broken dynamicSchedule and https://github.com/zio/zio/issues/4101
+          chunksReceivedLater <- chunksReceived.get
+          _                   <- chunksFib.join
         } yield assert(chunksReceivedImmediately)(equalTo(1L)) && assert(chunksReceivedLater)(
           equalTo(nrBatches + 1)
         ))

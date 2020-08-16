@@ -44,6 +44,7 @@ object PollingFetcher {
 
           // Failure with None indicates that there's no next shard iterator and the shard has ended
           doPoll      = for {
+                     _                    <- log.info("Polling")
                      currentIterator      <- shardIterator.get
                      currentIterator      <- ZIO.fromOption(currentIterator)
                      responseWithDuration <-
