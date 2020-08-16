@@ -20,7 +20,6 @@ import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.{
   LeaseObsolete,
   UnableToClaimLease
 }
-import software.amazon.awssdk.services.kinesis.model.Shard
 import zio._
 import zio.clock.Clock
 import zio.duration._
@@ -28,6 +27,7 @@ import zio.logging._
 import zio.random.Random
 import zio.stream.ZStream
 import DefaultLeaseCoordinator.State
+import io.github.vigoo.zioaws.kinesis.model.Shard
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.ZioExtensions.foreachParNUninterrupted_
 
 /**

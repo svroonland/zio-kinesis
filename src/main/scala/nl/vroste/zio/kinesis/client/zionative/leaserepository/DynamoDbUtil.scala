@@ -1,56 +1,46 @@
 package nl.vroste.zio.kinesis.client.zionative.leaserepository
 
-import software.amazon.awssdk.services.dynamodb.model._
+import io.github.vigoo.zioaws.dynamodb.model._
 
-import scala.jdk.CollectionConverters._
 import scala.reflect.ClassTag
 
 object DynamoDbUtil {
-  type DynamoDbItem = scala.collection.mutable.Map[String, AttributeValue]
+  type DynamoDbItem = Map[String, AttributeValue]
 
   object DynamoDbItem {
-    def apply(items: (String, AttributeValue)*): DynamoDbItem = scala.collection.mutable.Map(items: _*)
+    def apply(items: (String, AttributeValue)*): DynamoDbItem = Map(items: _*)
     val empty                                                 = apply()
   }
 
-  def expectedAttributeValue[T: ClassTag](v: T) = ExpectedAttributeValue.builder().value(attributeValue(v)).build()
+  def expectedAttributeValue[T: ClassTag](v: T): ExpectedAttributeValue =
+    ExpectedAttributeValue(value = Some(attributeValue(v)))
 
   def putAttributeValueUpdate[T: ClassTag](value: T): AttributeValueUpdate =
-    AttributeValueUpdate
-      .builder()
-      .action(AttributeAction.PUT)
-      .value(attributeValue(value))
-      .build()
+    AttributeValueUpdate(action = Some(AttributeAction.PUT), value = Some(attributeValue(value)))
 
   def deleteAttributeValueUpdate: AttributeValueUpdate =
-    AttributeValueUpdate
-      .builder()
-      .action(AttributeAction.DELETE)
-      .value(null.asInstanceOf[AttributeValue])
-      .build()
+    AttributeValueUpdate(action = Some(AttributeAction.DELETE), value = None) // TODO does none work?
 
   object ImplicitConversions {
     implicit def toAttributeValue[T: ClassTag](value: T): AttributeValue =
       attributeValue[T](value)
   }
 
-  def attributeValue[T: ClassTag](value: T): AttributeValue = {
-    val builder = AttributeValue.builder()
+  def attributeValue[T: ClassTag](value: T): AttributeValue =
     value match {
-      case null       => builder.nul(true)
-      case v: String  => builder.s(v)
-      case v: Long    => builder.n(v.toString)
-      case v: List[_] => builder.ss(v.map(_.toString).asJavaCollection)
-      case v: Seq[_]  => builder.ss(v.map(_.toString).asJavaCollection)
+      case null       => AttributeValue(nul = Some(true))
+      case v: String  => AttributeValue(s = Some(v))
+      case v: Long    => AttributeValue(n = Some(v.toString))
+      case v: List[_] => AttributeValue(ss = Some(v.map(_.toString)))
+      case v: Seq[_]  => AttributeValue(ss = Some(v.map(_.toString).toList))
       case v          =>
         throw new Exception(s"Could not convert value ${v} to attribute!")
     }
-    builder.build()
-  }
 
-  def keySchemaElement(name: String, keyType: KeyType)                 =
-    KeySchemaElement.builder().attributeName(name).keyType(keyType).build()
+  def keySchemaElement(name: String, keyType: KeyType) =
+    KeySchemaElement(name, keyType)
+
   def attributeDefinition(name: String, attrType: ScalarAttributeType) =
-    AttributeDefinition.builder().attributeName(name).attributeType(attrType).build()
+    AttributeDefinition(name, attrType)
 
 }

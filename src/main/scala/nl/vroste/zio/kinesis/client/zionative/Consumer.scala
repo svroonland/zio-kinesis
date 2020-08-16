@@ -1,7 +1,17 @@
 package nl.vroste.zio.kinesis.client.zionative
 
-import nl.vroste.zio.kinesis.client.AdminClient.StreamDescription
-import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
+import java.nio.ByteBuffer
+
+import io.github.vigoo.zioaws.kinesis
+import io.github.vigoo.zioaws.kinesis.{ model, Kinesis }
+import io.github.vigoo.zioaws.kinesis.model.{
+  DescribeStreamRequest,
+  GetRecordsResponse,
+  ListShardsRequest,
+  ShardIteratorType,
+  StartingPosition,
+  StreamDescription
+}
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.{ EnhancedFanOut, Polling }
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
@@ -11,11 +21,9 @@ import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepos
 import nl.vroste.zio.kinesis.client.{ sdkClients, AdminClient, Client, HttpClient, Record, Util }
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.kinesis.model.{
-  GetRecordsResponse,
   KmsThrottlingException,
   LimitExceededException,
-  ProvisionedThroughputExceededException,
-  Record => KinesisRecord
+  ProvisionedThroughputExceededException
 }
 import zio._
 import zio.blocking.Blocking
@@ -66,7 +74,7 @@ object FetchMode {
     def dynamicSchedule(interval: Duration): Schedule[Clock, GetRecordsResponse, Any] =
       // TODO change `andThen` back to `||` when https://github.com/zio/zio/issues/4101 is fixed
       (Schedule.recurWhile[Boolean](_ == true) andThen Schedule.fixed(interval))
-        .contramap((_: GetRecordsResponse).millisBehindLatest() != 0)
+        .contramap((_: GetRecordsResponse).millisBehindLatest.get != 0)
   }
 
   /**
@@ -151,11 +159,11 @@ object Consumer {
     workerIdentifier: String = "worker1",
     fetchMode: FetchMode = FetchMode.Polling(),
     leaseCoordinationSettings: LeaseCoordinationSettings = LeaseCoordinationSettings(),
-    initialPosition: ShardIteratorType = ShardIteratorType.TrimHorizon,
+    initialPosition: ShardIteratorType = ShardIteratorType.TRIM_HORIZON,
     emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit,
     shardAssignmentStrategy: ShardAssignmentStrategy = ShardAssignmentStrategy.balanced()
   ): ZStream[
-    Blocking with Clock with Random with Client with AdminClient with LeaseRepository with Logging with R,
+    Blocking with Clock with Random with Kinesis with LeaseRepository with Logging with R,
     Throwable,
     (
       String,
@@ -167,24 +175,24 @@ object Consumer {
       Checkpointer
     )
   ] = {
-    def toRecord(shardId: String, r: KinesisRecord): ZIO[R, Throwable, Record[T]] =
-      deserializer.deserialize(r.data.asByteBuffer()).map { data =>
+    def toRecord(shardId: String, r: io.github.vigoo.zioaws.kinesis.model.Record): ZIO[R, Throwable, Record[T]] =
+      deserializer.deserialize(ByteBuffer.wrap(r.data.toArray)).map { data =>
         Record(
           shardId,
           r.sequenceNumber,
-          r.approximateArrivalTimestamp,
+          r.approximateArrivalTimestamp.get, // TODO make optional
           data,
           r.partitionKey,
-          r.encryptionType,
-          0,    // r.subSequenceNumber,
-          "",   // r.explicitHashKey,
-          false //r.aggregated,
+          r.encryptionType,                  // TODO make optional
+          0,                                 // r.subSequenceNumber,
+          "",                                // r.explicitHashKey,
+          false                              //r.aggregated,
         )
       }
 
     def makeFetcher(
       streamDescription: StreamDescription
-    ): ZManaged[Clock with Client with Logging, Throwable, Fetcher] =
+    ): ZManaged[Clock with Kinesis with Logging, Throwable, Fetcher] =
       fetchMode match {
         case c: Polling        => PollingFetcher.make(streamDescription.streamName, c, emitDiagnostic)
         case c: EnhancedFanOut => EnhancedFanOutFetcher.make(streamDescription, workerIdentifier, c, emitDiagnostic)
@@ -195,8 +203,10 @@ object Consumer {
         .mapParN(
           ZManaged
             .unwrap(
-              AdminClient
-                .describeStream(streamName)
+              kinesis
+                .describeStream(DescribeStreamRequest(streamName))
+                .mapError(_.toThrowable)
+                .map(r => r.streamDescriptionValue.editable)
                 .map(makeFetcher)
             )
             .ensuring(log.debug("Fetcher shut down")),
@@ -208,13 +218,14 @@ object Consumer {
           // additional information to the lease coordinator, and the list of leases is used
           // as the list of shards.
           for {
-            fetchShards      <- Client
-                             .listShards(streamName)
-                             .runCollect
-                             .map(_.map(l => (l.shardId(), l)).toMap)
+            fetchShards      <- kinesis
+                             .listShards(ListShardsRequest(Some(streamName)))
+                             .mapError(_.toThrowable)
+                             .map(_.shardsValue.toList.flatten)
+                             .map(_.map(l => l.shardIdValue -> l).toMap)
                              .flatMap { shards =>
                                if (shards.isEmpty) ZIO.fail(new Exception("No shards in stream!"))
-                               else ZIO.succeed(shards)
+                               else ZIO.succeed(shards.view.mapValues(_.editable).toMap)
                              }
                              .forkManaged
             leaseCoordinator <- DefaultLeaseCoordinator
@@ -242,8 +253,13 @@ object Consumer {
                 env                 <- ZIO.environment[Blocking with Logging with Clock with R]
                 startingPositionOpt <- leaseCoordinator.getCheckpointForShard(shardId)
                 startingPosition     = startingPositionOpt
-                                     .map(s => ShardIteratorType.AfterSequenceNumber(s.sequenceNumber))
-                                     .getOrElse(initialPosition)
+                                     .map(s =>
+                                       StartingPosition(
+                                         `type` = ShardIteratorType.AFTER_SEQUENCE_NUMBER,
+                                         sequenceNumber = Some(s.sequenceNumber)
+                                       )
+                                     )
+                                     .getOrElse(StartingPosition(`type` = initialPosition))
                 stop                 = ZStream.fromEffect(leaseLost.await).as(Exit.fail(None))
                 shardStream          = (stop mergeTerminateEither fetcher
                                   .shardRecordStream(shardId, startingPosition)
@@ -279,10 +295,9 @@ object Consumer {
   ): Schedule[R, Throwable, (Throwable, A)] =
     Schedule.recurWhile[Throwable](e => isThrottlingException.lift(e).isDefined) && schedule
 
-  val defaultEnvironment
-    : ZLayer[Any, Throwable, AdminClient with Client with LeaseRepository with Has[CloudWatchAsyncClient]] =
+  val defaultEnvironment: ZLayer[Any, Throwable, Kinesis with LeaseRepository with Has[CloudWatchAsyncClient]] =
     HttpClient.make() >>>
       sdkClients >+>
-      (AdminClient.live ++ Client.live ++ DynamoDbLeaseRepository.live)
+      (kinesis.live ++ DynamoDbLeaseRepository.live)
 
 }

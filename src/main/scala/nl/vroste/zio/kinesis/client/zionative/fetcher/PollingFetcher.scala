@@ -1,13 +1,14 @@
 package nl.vroste.zio.kinesis.client.zionative.fetcher
+import io.github.vigoo.zioaws.kinesis
+import io.github.vigoo.zioaws.kinesis.Kinesis
+import io.github.vigoo.zioaws.kinesis.model._
 import nl.vroste.zio.kinesis.client.zionative.{ Consumer, DiagnosticEvent, FetchMode, Fetcher }
-import nl.vroste.zio.kinesis.client.{ Client, Util }
+import nl.vroste.zio.kinesis.client.Util
 import zio._
 import zio.clock.Clock
 import zio.duration._
 import zio.logging.{ log, Logging }
 import zio.stream.ZStream
-
-import scala.jdk.CollectionConverters._
 
 /**
  * Fetcher that uses GetRecords
@@ -29,46 +30,76 @@ object PollingFetcher {
     streamName: String,
     config: FetchMode.Polling,
     emitDiagnostic: DiagnosticEvent => UIO[Unit]
-  ): ZManaged[Clock with Client with Logging, Throwable, Fetcher] =
+  ): ZManaged[Clock with Kinesis with Logging, Throwable, Fetcher] =
     for {
-      env              <- ZIO.environment[Client with Clock with Logging].toManaged_
-      getShardIterator <- throttledFunctionN(getShardIteratorRateLimit, 1.second)(Client.getShardIterator _)
-    } yield Fetcher { (shardId, startingPosition) =>
+      env              <- ZIO.environment[Kinesis with Clock with Logging].toManaged_
+      getShardIterator <- throttledFunction(getShardIteratorRateLimit, 1.second)(kinesis.getShardIterator _)
+    } yield Fetcher { (shardId, startingPosition: ShardIteratorType) =>
       ZStream.unwrapManaged {
         for {
-          initialShardIterator <- getShardIterator(streamName, shardId, startingPosition)
+          initialShardIterator <- getShardIterator(GetShardIteratorRequest(streamName, shardId, startingPosition))
+                                    .map(_.shardIteratorValue.get)
+                                    .mapError(_.toThrowable)
                                     .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
                                     .toManaged_
-          getRecordsThrottled  <- throttledFunctionN(getRecordsRateLimit, 1.second)(Client.getRecords _)
+          getRecordsThrottled  <- throttledFunction(getRecordsRateLimit, 1.second)(kinesis.getRecords _)
           shardIterator        <- Ref.make[Option[String]](Some(initialShardIterator)).toManaged_
 
           // Failure with None indicates that there's no next shard iterator and the shard has ended
-          doPoll      = for {
-                     _                    <- log.info("Polling")
-                     currentIterator      <- shardIterator.get
-                     currentIterator      <- ZIO.fromOption(currentIterator)
-                     responseWithDuration <-
-                       getRecordsThrottled(currentIterator, config.batchSize)
-                         .tapError(e => log.warn(s"Error GetRecords for shard ${shardId}: ${e}"))
-                         .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
-                         .retry(
-                           Schedule.fixed(100.millis) && Schedule.recurs(3)
-                         ) // There is a race condition in kinesalite, see https://github.com/mhart/kinesalite/issues/25
-                         .asSomeError
-                         .timed
-                     (duration, response)  = responseWithDuration
-                     _                    <- shardIterator.set(Option(response.nextShardIterator))
-                     _                    <- emitDiagnostic(
-                            DiagnosticEvent.PollComplete(
-                              shardId,
-                              response.records.size,
-                              response.millisBehindLatest().toLong.millis,
-                              duration
-                            )
-                          )
-                   } yield response
+          doPoll: ZIO[Logging, Option[Throwable], GetRecordsResponse.ReadOnly] = for {
+                                                                                   _                    <- log.info("Polling")
+                                                                                   currentIterator      <- shardIterator.get
+                                                                                   currentIterator      <-
+                                                                                     ZIO.fromOption(currentIterator)
+                                                                                   responseWithDuration <-
+                                                                                     getRecordsThrottled(
+                                                                                       GetRecordsRequest(
+                                                                                         currentIterator,
+                                                                                         Some(config.batchSize)
+                                                                                       )
+                                                                                     ).mapError(_.toThrowable)
+                                                                                       .tapError(e =>
+                                                                                         log.warn(
+                                                                                           s"Error GetRecords for shard ${shardId}: ${e}"
+                                                                                         )
+                                                                                       )
+                                                                                       .retry(
+                                                                                         retryOnThrottledWithSchedule(
+                                                                                           config.throttlingBackoff
+                                                                                         )
+                                                                                       )
+                                                                                       .retry(
+                                                                                         Schedule.fixed(
+                                                                                           100.millis
+                                                                                         ) && Schedule
+                                                                                           .recurs(3)
+                                                                                       ) // There is a race condition in kinesalite, see https://github.com/mhart/kinesalite/issues/25
+                                                                                       .asSomeError
+                                                                                       .timed
+                                                                                   (duration, response)  =
+                                                                                     responseWithDuration
+                                                                                   _                    <-
+                                                                                     shardIterator.set(
+                                                                                       Option(
+                                                                                         response.nextShardIteratorValue.get
+                                                                                       )
+                                                                                     )
+                                                                                   millisBehindLatest   <-
+                                                                                     response.millisBehindLatest
+                                                                                       .mapError(
+                                                                                         _.toThrowable
+                                                                                       )
+                                                                                   _                    <- emitDiagnostic(
+                                                                                          DiagnosticEvent.PollComplete(
+                                                                                            shardId,
+                                                                                            response.recordsValue.size,
+                                                                                            millisBehindLatest.millis,
+                                                                                            duration
+                                                                                          )
+                                                                                        )
+                                                                                 } yield response
 
-          shardStream = ZStream
+          shardStream                                                          = ZStream
                           .repeatEffectWith(doPoll, config.pollSchedule)
                           .catchAll {
                             case None    =>
@@ -80,7 +111,7 @@ object PollingFetcher {
                           }
                           .takeUntil(_.nextShardIterator == null)
                           .buffer(config.bufferNrBatches)
-                          .mapConcatChunk(response => Chunk.fromIterable(response.records.asScala))
+                          .mapConcatChunk(response => Chunk.fromIterable(response.recordsValue.map(_.editable)))
                           .retry(config.throttlingBackoff)
         } yield shardStream
       }.ensuring(log.debug(s"PollingFetcher for shard ${shardId} closed"))

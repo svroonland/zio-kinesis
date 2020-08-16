@@ -1,7 +1,7 @@
 package nl.vroste.zio.kinesis.client
 import java.time.Instant
 
-import software.amazon.awssdk.services.kinesis.model.EncryptionType
+import io.github.vigoo.zioaws.kinesis.model.EncryptionType
 
 final case class Record[T](
   shardId: String,
@@ -9,7 +9,7 @@ final case class Record[T](
   approximateArrivalTimestamp: Instant,
   data: T,
   partitionKey: String,
-  encryptionType: EncryptionType,
+  encryptionType: Option[EncryptionType],
   subSequenceNumber: Long,
   explicitHashKey: String,
   aggregated: Boolean

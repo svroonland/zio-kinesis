@@ -55,7 +55,9 @@ libraryDependencies ++= Seq(
   "software.amazon.awssdk"  % "kinesis"                     % "2.13.76",
   "ch.qos.logback"          % "logback-classic"             % "1.2.3",
   "software.amazon.kinesis" % "amazon-kinesis-client"       % "2.2.11",
-  "org.scala-lang.modules" %% "scala-collection-compat"     % "2.1.6"
+  "org.scala-lang.modules" %% "scala-collection-compat"     % "2.1.6",
+  "io.github.vigoo"        %% "zio-aws-kinesis"             % "1.13.69.1",
+  "io.github.vigoo"        %% "zio-aws-dynamodb"            % "1.13.69.1"
 ) ++ {
   if (scalaBinaryVersion.value == "2.13") silencer else Seq.empty
 }
