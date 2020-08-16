@@ -20,9 +20,12 @@ More beta users and feedback are of course welcome.
 - [Configuration](#configuration)
 - [Producer](#producer)
 - [DynamicConsumer](#dynamicconsumer)
+  * [Basic usage using `consumeWith`](#basic-usage-using--consumewith-)
+  * [Advanced usage](#advanced-usage-example-)
 - [Client and AdminClient](#client-and-adminclient)
-- [Running tests and usage examples](#running-tests-and-usage-examples)
+- [Running tests and more usage examples](#running-tests-and-usage-examples)
 - [Credits](#credits)
+
 
 ## Features
 
@@ -52,42 +55,6 @@ libraryDependencies += "nl.vroste" %% "zio-kinesis" % "<version>"
 ```
 
 The latest version is built against ZIO 1.0.0-RC21-2.
-
-### `DynamicConsumer.consumeWith` utility method
-For a lot of use cases where you just want to do something with all messages on a Kinesis stream, `zio-kinesis` provides the 
-convenience method `DynamicConsumer.consumeWith`. This method lets you execute a ZIO effect for each message. It takes
-care of checkpointing which you can configure through `checkpointBatchSize` and `checkpointDuration` parameters.   
-
-```scala
-package nl.vroste.zio.kinesis.client.examples
-
-import nl.vroste.zio.kinesis.client.DynamicConsumer
-import nl.vroste.zio.kinesis.client.serde.Serde
-import zio._
-import zio.console.putStrLn
-import zio.duration._
-import zio.logging.slf4j.Slf4jLogger
-
-/**
- * Basic usage example for `DynamicConsumer.consumeWith` convenience method
- */
-object DynamicConsumerConsumeWithExample extends zio.App {
-  private val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
-
-  override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
-    DynamicConsumer
-      .consumeWith(
-        streamName = "my-stream",
-        applicationName = "my-application",
-        deserializer = Serde.asciiString,
-        workerIdentifier = "worker1",
-        checkpointBatchSize = 1000L,
-        checkpointDuration = 5.minutes
-      )(record => putStrLn(s"Processing record $record"))
-      .provideCustomLayer(DynamicConsumer.defaultEnvironment ++ loggingEnv)
-      .exitCode
-}
-``` 
 
 ## Consumer
 
@@ -288,8 +255,51 @@ The interface is largely the same as `Consumer`, except for:
  * The ZIO environment
  * Checkpointing is an effect that can fail with a `Throwable` instead of `Either[Throwable, ShardLeaseLost.type]`. A `ShutdownException` indicates that the shard should no longer be processed. See the documentation on `Checkpointer.checkpoint` for more details.
  * Retrying is not done automatically by DynamicConsumer's Checkpointer.
+
+Unlike `Consumer`, `DynamicConsumer` also supports:
+* Resharding
+* KPL record aggregation via Protobuf + subsequence number checkpointing
+* Full CloudWatch metrics publishing
+
+### Basic usage using `consumeWith`
+For a lot of use cases where you just want to do something with all messages on a Kinesis stream, `zio-kinesis` provides the 
+convenience method `DynamicConsumer.consumeWith`. This method lets you execute a ZIO effect for each message. It takes
+care of checkpointing which you can configure through `checkpointBatchSize` and `checkpointDuration` parameters.   
+
+```scala
+package nl.vroste.zio.kinesis.client.examples
+
+import nl.vroste.zio.kinesis.client.DynamicConsumer
+import nl.vroste.zio.kinesis.client.serde.Serde
+import zio._
+import zio.console.putStrLn
+import zio.duration._
+import zio.logging.slf4j.Slf4jLogger
+
+object DynamicConsumerConsumeWithExample extends zio.App {
+  private val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+
+  override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
+    DynamicConsumer
+      .consumeWith(
+        streamName = "my-stream",
+        applicationName = "my-application",
+        deserializer = Serde.asciiString,
+        workerIdentifier = "worker1",
+        checkpointBatchSize = 1000L,
+        checkpointDuration = 5.seconds
+      ){ record => 
+        // Effectfully process your record here
+        putStrLn(s"Processing record $record")
+      }
+      .provideCustomLayer(DynamicConsumer.defaultEnvironment ++ loggingEnv)
+      .exitCode
+}
+``` 
   
-Usage example:
+### Advanced usage
+If you want more control over your stream, `DynamicConsumer.shardedStream` can be used:
+
 
 ```scala
 import nl.vroste.zio.kinesis.client.DynamicConsumer
@@ -333,7 +343,7 @@ More low-level operations for consuming, producing and administering streams are
 Refer to the [AWS Kinesis Streams API Reference](https://docs.aws.amazon.com/kinesis/latest/APIReference/Welcome.html) 
 for more information.
 
-## Running tests and usage examples 
+## Running tests and more usage examples 
 
 See [src/test/nl/vroste/zio/kinesis/client/examples](src/test/nl/vroste/zio/kinesis/client/examples) for some examples. The [integration tests](src/test/scala/nl/vroste/zio/kinesis/client) are also good usage examples.
 
