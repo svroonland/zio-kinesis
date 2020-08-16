@@ -14,6 +14,7 @@ import zio.interop.reactivestreams._
 import zio.stream.ZStream
 
 import scala.jdk.CollectionConverters._
+import scala.collection.compat._
 import java.util.concurrent.CompletionException
 
 private[client] class ClientLive(kinesisClient: KinesisAsyncClient) extends Client.Service {
