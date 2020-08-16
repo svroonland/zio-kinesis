@@ -14,7 +14,6 @@ import zio.interop.reactivestreams._
 import zio.stream.ZStream
 
 import scala.jdk.CollectionConverters._
-import scala.collection.compat._
 import java.util.concurrent.CompletionException
 
 private[client] class ClientLive(kinesisClient: KinesisAsyncClient) extends Client.Service {
@@ -214,7 +213,7 @@ private[client] class ClientLive(kinesisClient: KinesisAsyncClient) extends Clie
     records: Iterable[ProducerRecord[T]]
   ): ZIO[R, Throwable, PutRecordsResponse] =
     for {
-      recordsAndBytes <- ZIO.foreach(records.view)(r => serializer.serialize(r.data).map((_, r.partitionKey)))
+      recordsAndBytes <- ZIO.foreach(records)(r => serializer.serialize(r.data).map((_, r.partitionKey)))
       entries          = recordsAndBytes.map {
                   case (data, partitionKey) =>
                     PutRecordsRequestEntry
@@ -223,7 +222,7 @@ private[client] class ClientLive(kinesisClient: KinesisAsyncClient) extends Clie
                       .partitionKey(partitionKey)
                       .build()
                 }
-      response        <- putRecords(streamName, entries.view)
+      response        <- putRecords(streamName, entries)
     } yield response
 
   def putRecords(streamName: String, entries: Iterable[PutRecordsRequestEntry]): Task[PutRecordsResponse] =
