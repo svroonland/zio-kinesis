@@ -64,7 +64,9 @@ object FetchMode {
      * @param interval Fixed interval for polling when no more records are currently available
      */
     def dynamicSchedule(interval: Duration): Schedule[Clock, GetRecordsResponse, Any] =
-      Schedule.recurWhile[GetRecordsResponse](_.millisBehindLatest() != 0) || Schedule.fixed(interval)
+      // TODO change `andThen` back to `||` when https://github.com/zio/zio/issues/4101 is fixed
+      (Schedule.recurWhile[Boolean](_ == true) andThen Schedule.fixed(interval))
+        .contramap((_: GetRecordsResponse).millisBehindLatest() != 0)
   }
 
   /**
@@ -190,7 +192,7 @@ object Consumer {
 
     def createDependencies =
       ZManaged
-        .mapN( // TODO can't use mapParN until issue https://github.com/zio/zio/issues/3986 is fixed
+        .mapParN(
           ZManaged
             .unwrap(
               AdminClient
