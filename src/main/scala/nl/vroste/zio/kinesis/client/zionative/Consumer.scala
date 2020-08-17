@@ -2,7 +2,10 @@ package nl.vroste.zio.kinesis.client.zionative
 
 import java.nio.ByteBuffer
 
-import io.github.vigoo.zioaws.kinesis
+import io.github.vigoo.zioaws.cloudwatch.CloudWatch
+import io.github.vigoo.zioaws.core.config
+import io.github.vigoo.zioaws.core.config.AwsConfig
+import io.github.vigoo.zioaws.{ cloudwatch, dynamodb, kinesis, netty }
 import io.github.vigoo.zioaws.kinesis.{ model, Kinesis }
 import io.github.vigoo.zioaws.kinesis.model.{
   DescribeStreamRequest,
@@ -18,7 +21,7 @@ import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative.fetcher.{ EnhancedFanOutFetcher, PollingFetcher }
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.{ DefaultLeaseCoordinator, LeaseCoordinationSettings }
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
-import nl.vroste.zio.kinesis.client.{ sdkClients, AdminClient, Client, HttpClient, Record, Util }
+import nl.vroste.zio.kinesis.client.{ sdkClients, AdminClient, Client, Record, Util }
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.kinesis.model.{
   KmsThrottlingException,
@@ -57,7 +60,7 @@ object FetchMode {
    */
   final case class Polling(
     batchSize: Int = 1000,
-    pollSchedule: Schedule[Clock, GetRecordsResponse, Any] = Polling.dynamicSchedule(1.second),
+    pollSchedule: Schedule[Clock, GetRecordsResponse.ReadOnly, Any] = Polling.dynamicSchedule(1.second),
     throttlingBackoff: Schedule[Clock, Any, (Duration, Long)] = Util.exponentialBackoff(5.seconds, 30.seconds),
     retrySchedule: Schedule[Clock, Any, (Duration, Long)] = Util.exponentialBackoff(1.second, 1.minute),
     bufferNrBatches: Int = 2
@@ -71,10 +74,10 @@ object FetchMode {
      *
      * @param interval Fixed interval for polling when no more records are currently available
      */
-    def dynamicSchedule(interval: Duration): Schedule[Clock, GetRecordsResponse, Any] =
+    def dynamicSchedule(interval: Duration): Schedule[Clock, GetRecordsResponse.ReadOnly, Any] =
       // TODO change `andThen` back to `||` when https://github.com/zio/zio/issues/4101 is fixed
       (Schedule.recurWhile[Boolean](_ == true) andThen Schedule.fixed(interval))
-        .contramap((_: GetRecordsResponse).millisBehindLatest.get != 0)
+        .contramap((_: GetRecordsResponse.ReadOnly).millisBehindLatestValue.get != 0)
   }
 
   /**
@@ -295,9 +298,9 @@ object Consumer {
   ): Schedule[R, Throwable, (Throwable, A)] =
     Schedule.recurWhile[Throwable](e => isThrottlingException.lift(e).isDefined) && schedule
 
-  val defaultEnvironment: ZLayer[Any, Throwable, Kinesis with LeaseRepository with Has[CloudWatchAsyncClient]] =
-    HttpClient.make() >>>
-      sdkClients >+>
-      (kinesis.live ++ DynamoDbLeaseRepository.live)
+  val defaultEnvironment: ZLayer[AwsConfig, Throwable, Kinesis with LeaseRepository with CloudWatch] =
+    netty.client() >>>
+      config.default >>>
+      (kinesis.live ++ (dynamodb.live >>> DynamoDbLeaseRepository.live) ++ cloudwatch.live)
 
 }

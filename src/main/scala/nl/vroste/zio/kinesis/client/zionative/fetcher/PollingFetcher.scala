@@ -34,14 +34,16 @@ object PollingFetcher {
     for {
       env              <- ZIO.environment[Kinesis with Clock with Logging].toManaged_
       getShardIterator <- throttledFunction(getShardIteratorRateLimit, 1.second)(kinesis.getShardIterator _)
-    } yield Fetcher { (shardId, startingPosition: ShardIteratorType) =>
+    } yield Fetcher { (shardId, startingPosition: StartingPosition) =>
       ZStream.unwrapManaged {
         for {
-          initialShardIterator <- getShardIterator(GetShardIteratorRequest(streamName, shardId, startingPosition))
-                                    .map(_.shardIteratorValue.get)
-                                    .mapError(_.toThrowable)
-                                    .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
-                                    .toManaged_
+          initialShardIterator <-
+            getShardIterator(
+              GetShardIteratorRequest(streamName, shardId, startingPosition.`type`, startingPosition.sequenceNumber)
+            ).map(_.shardIteratorValue.get)
+              .mapError(_.toThrowable)
+              .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
+              .toManaged_
           getRecordsThrottled  <- throttledFunction(getRecordsRateLimit, 1.second)(kinesis.getRecords _)
           shardIterator        <- Ref.make[Option[String]](Some(initialShardIterator)).toManaged_
 
@@ -61,29 +63,15 @@ object PollingFetcher {
                              s"Error GetRecords for shard ${shardId}: ${e}"
                            )
                          )
+                         .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
                          .retry(
-                           retryOnThrottledWithSchedule(
-                             config.throttlingBackoff
-                           )
-                         )
-                         .retry(
-                           Schedule.fixed(
-                             100.millis
-                           ) && Schedule
-                             .recurs(3)
+                           Schedule.fixed(100.millis) && Schedule.recurs(3)
                          ) // There is a race condition in kinesalite, see https://github.com/mhart/kinesalite/issues/25
                          .asSomeError
                          .timed
                      (duration, response)  = responseWithDuration
-                     _                    <- shardIterator.set(
-                            Option(
-                              response.nextShardIteratorValue.get
-                            )
-                          )
-                     millisBehindLatest   <- response.millisBehindLatest
-                                             .mapError(
-                                               _.toThrowable
-                                             )
+                     _                    <- shardIterator.set(Option(response.nextShardIteratorValue.get))
+                     millisBehindLatest   <- response.millisBehindLatest.mapError(e => Some(e.toThrowable))
                      _                    <- emitDiagnostic(
                             DiagnosticEvent.PollComplete(
                               shardId,

@@ -2,19 +2,16 @@ package nl.vroste.zio.kinesis.client.zionative.metrics
 
 import java.time.Instant
 
+import io.github.vigoo.zioaws.cloudwatch.CloudWatch
+import io.github.vigoo.zioaws.cloudwatch.model.{ Dimension, MetricDatum, PutMetricDataRequest, StandardUnit }
 import nl.vroste.zio.kinesis.client.Util
-import nl.vroste.zio.kinesis.client.Util.asZIO
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent._
-import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
-import software.amazon.awssdk.services.cloudwatch.model.{ Dimension, MetricDatum, PutMetricDataRequest, StandardUnit }
 import zio._
 import zio.clock.Clock
 import zio.duration._
 import zio.logging.{ log, Logging }
 import zio.stream.{ ZStream, ZTransducer }
-
-import scala.jdk.CollectionConverters._
 
 /**
  * Configuration for CloudWatch metrics publishing
@@ -39,7 +36,7 @@ final case class CloudWatchMetricsPublisherConfig(
  * Publishes KCL compatible metrics to CloudWatch
  */
 private class CloudWatchMetricsPublisher(
-  client: CloudWatchAsyncClient,
+  client: CloudWatch.Service,
   eventQueue: Queue[DiagnosticEvent],
   periodicMetricsQueue: Queue[MetricDatum],
   namespace: String,
@@ -66,7 +63,7 @@ private class CloudWatchMetricsPublisher(
             1,
             timestamp,
             Seq("WorkerIdentifier" -> workerId, "Operation" -> "RenewAllLeases"),
-            StandardUnit.COUNT
+            StandardUnit.Count
           )
         )
       case LeaseRenewed(shardId @ _, duration)                      =>
@@ -76,14 +73,14 @@ private class CloudWatchMetricsPublisher(
             duration.toMillis.toDouble,
             timestamp,
             Seq("WorkerIdentifier" -> workerId, "Operation" -> "RenewAllLeases"),
-            StandardUnit.MILLISECONDS
+            StandardUnit.Milliseconds
           ),
           metric(
             "RenewLease.Success",
             1,
             timestamp,
             Seq("WorkerIdentifier" -> workerId, "Operation" -> "RenewAllLeases"),
-            StandardUnit.COUNT
+            StandardUnit.Count
           )
         )
       case LeaseReleased(shardId @ _)                               => List.empty // Processed in periodic metrics
@@ -107,21 +104,21 @@ private class CloudWatchMetricsPublisher(
         nrRecords.toDouble,
         timestamp,
         Seq("ShardId" -> shardId, "Operation" -> "ProcessTask"),
-        StandardUnit.COUNT
+        StandardUnit.Count
       ), // TODO fetched != quite processed
       metric(
         "Time",
         duration.toMillis.toDouble,
         timestamp,
         Seq("ShardId" -> shardId, "Operation" -> "ProcessTask"),
-        StandardUnit.MILLISECONDS
+        StandardUnit.Milliseconds
       ),
       metric(
         "MillisBehindLatest",
         behindLatest.toMillis.toDouble,
         timestamp,
         Seq("ShardId" -> shardId, "Operation" -> "ProcessTask"),
-        StandardUnit.MILLISECONDS
+        StandardUnit.Milliseconds
       )
     )
 
@@ -171,33 +168,32 @@ private class CloudWatchMetricsPublisher(
                           nrWorkers.toDouble,
                           now,
                           Seq("Operation" -> "TakeLeases", "WorkerIdentifier" -> workerId),
-                          StandardUnit.COUNT
+                          StandardUnit.Count
                         )
       nrLeasesMetric  = metric(
                          "TotalLeases",
                          nrLeases.toDouble,
                          now,
                          Seq("Operation" -> "TakeLeases", "WorkerIdentifier" -> workerId),
-                         StandardUnit.COUNT
+                         StandardUnit.Count
                        )
       nrLeasesMetric2 = metric(
                           "CurrentLeases",
                           nrLeases.toDouble,
                           now,
                           Seq("Operation" -> "RenewAllLeases", "WorkerIdentifier" -> workerId),
-                          StandardUnit.COUNT
+                          StandardUnit.Count
                         )
       _              <- periodicMetricsQueue.offerAll(List(nrWorkersMetric, nrLeasesMetric, nrLeasesMetric2))
     } yield ()).repeat(Schedule.fixed(config.periodicMetricInterval))
 
   private def putMetricData(metricData: Seq[MetricDatum]): ZIO[Logging, Throwable, Unit] = {
-    val request = PutMetricDataRequest
-      .builder()
-      .metricData(metricData.asJava)
-      .namespace(namespace)
-      .build()
+    val request = PutMetricDataRequest(namespace, metricData.toList)
 
-    asZIO(client.putMetricData(request)).unit
+    client
+      .putMetricData(request)
+      .unit
+      .mapError(_.toThrowable)
   }
 }
 
@@ -206,11 +202,12 @@ object CloudWatchMetricsPublisher {
     def processEvent(e: DiagnosticEvent): UIO[Unit]
   }
 
-  def make(applicationName: String, workerId: String): ZManaged[Clock with Logging with Has[
-    CloudWatchAsyncClient
-  ] with Has[CloudWatchMetricsPublisherConfig], Nothing, Service] =
+  def make(
+    applicationName: String,
+    workerId: String
+  ): ZManaged[Clock with Logging with CloudWatch with Has[CloudWatchMetricsPublisherConfig], Nothing, Service] =
     for {
-      client  <- ZManaged.service[CloudWatchAsyncClient]
+      client  <- ZManaged.service[CloudWatch.Service]
       config  <- ZManaged.service[CloudWatchMetricsPublisherConfig]
       q       <- Queue.bounded[DiagnosticEvent](1000).toManaged_
       q2      <- Queue.bounded[MetricDatum](1000).toManaged_
@@ -231,14 +228,13 @@ object CloudWatchMetricsPublisher {
     dimensions: Seq[(String, String)],
     unit: StandardUnit
   ) =
-    MetricDatum
-      .builder()
-      .metricName(name)
-      .dimensions(dimensions.map(Function.tupled(dimension)).asJava)
-      .value(value)
-      .timestamp(timestamp)
-      .unit(unit)
-      .build()
+    MetricDatum(
+      name,
+      Some(dimensions.map(Function.tupled(dimension)).toList),
+      Some(timestamp),
+      Some(value),
+      unit = Some(unit)
+    )
 
-  private def dimension(name: String, value: String) = Dimension.builder().name(name).value(value).build()
+  private def dimension(name: String, value: String) = Dimension(name, value)
 }

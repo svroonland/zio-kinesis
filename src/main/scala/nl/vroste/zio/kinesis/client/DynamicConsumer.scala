@@ -1,5 +1,6 @@
 package nl.vroste.zio.kinesis.client
 
+import java.time.Instant
 import java.util.UUID
 
 import nl.vroste.zio.kinesis.client.Util.processWithSkipOnError
@@ -7,6 +8,7 @@ import nl.vroste.zio.kinesis.client.serde.Deserializer
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
+import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import software.amazon.kinesis.common.{ InitialPositionInStream, InitialPositionInStreamExtended }
 import software.amazon.kinesis.exceptions.ShutdownException
 import software.amazon.kinesis.processor.RecordProcessorCheckpointer
@@ -23,8 +25,17 @@ import zio.stream.{ ZStream, ZTransducer }
  * Ensures proper resource shutdown and failure handling
  */
 object DynamicConsumer {
-  // For (some) backwards compatibility
-  type Record[T] = nl.vroste.zio.kinesis.client.Record[T]
+  final case class Record[T](
+    shardId: String,
+    sequenceNumber: String,
+    approximateArrivalTimestamp: Instant,
+    data: T,
+    partitionKey: String,
+    encryptionType: EncryptionType,
+    subSequenceNumber: Long,
+    explicitHashKey: String,
+    aggregated: Boolean
+  )
 
   val live: ZLayer[Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[
     DynamoDbAsyncClient

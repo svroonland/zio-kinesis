@@ -2,19 +2,20 @@ package nl.vroste.zio.kinesis.client
 import java.io.IOException
 import java.time.Instant
 
+import io.github.vigoo.zioaws.kinesis
+import io.github.vigoo.zioaws.kinesis.Kinesis
+import io.github.vigoo.zioaws.kinesis.model.{ PutRecordsRequest, PutRecordsRequestEntry }
 import io.netty.handler.timeout.ReadTimeoutException
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.serde.Serializer
-import software.amazon.awssdk.core.SdkBytes
-import software.amazon.awssdk.services.kinesis.model.{ KinesisException, PutRecordsRequestEntry }
+import software.amazon.awssdk.services.kinesis.model.KinesisException
 import zio._
 import zio.clock.Clock
 import zio.duration.{ Duration, _ }
 import zio.logging._
 import zio.stream.{ ZSink, ZStream, ZTransducer }
 
-import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
 /**
@@ -85,11 +86,10 @@ object Producer {
     streamName: String,
     serializer: Serializer[R, T],
     settings: ProducerSettings = ProducerSettings()
-  ): ZManaged[R with Clock with Client with Logging, Throwable, Producer[T]] =
+  ): ZManaged[R with Clock with Kinesis with Logging, Throwable, Producer[T]] =
     for {
-      client <- ZManaged.service[Client.Service]
-      env    <- ZIO.environment[R with Clock].toManaged_
-      queue  <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
+      env   <- ZIO.environment[R with Clock].toManaged_
+      queue <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
 
       failedQueue <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
 
@@ -103,21 +103,18 @@ object Producer {
              // Several putRecords requests in parallel
              .mapMPar(settings.maxParallelRequests) { batch: PutRecordsBatch =>
                (for {
-                 response              <- client
-                               .putRecords(streamName, batch.entries.map(_.r).reverse)
+                 response              <- kinesis
+                               .putRecords(PutRecordsRequest(batch.entries.map(_.r).reverse, streamName))
+                               .mapError(_.toThrowable)
                                .tapError(e => log.warn(s"Error producing records, will retry if recoverable: $e"))
                                .retry(scheduleCatchRecoverable && settings.backoffRequests)
 
-                 maybeSucceeded         = response
-                                    .records()
-                                    .asScala
+                 maybeSucceeded         = response.recordsValue
                                     .zip(batch.entries.reverse)
-                 (newFailed, succeeded) = if (response.failedRecordCount() > 0)
+                 (newFailed, succeeded) = if (response.failedRecordCountValue.getOrElse(0) > 0)
                                             maybeSucceeded.partition {
                                               case (result, _) =>
-                                                result.errorCode() != null && recoverableErrorCodes.contains(
-                                                  result.errorCode()
-                                                )
+                                                result.errorCodeValue.exists(recoverableErrorCodes.contains)
                                             }
                                           else
                                             (Seq.empty, maybeSucceeded)
@@ -130,7 +127,9 @@ object Producer {
                         .fork // TODO should be per shard
                  _                     <- ZIO.foreachPar_(succeeded) {
                         case (response, request) =>
-                          request.done.succeed(ProduceResponse(response.shardId(), response.sequenceNumber()))
+                          request.done.succeed(
+                            ProduceResponse(response.shardIdValue.get, response.sequenceNumberValue.get)
+                          )
                       }
                } yield ()).catchAll { case NonFatal(e) => ZIO.foreach_(batch.entries.map(_.done))(_.fail(e)) }
              }
@@ -143,11 +142,7 @@ object Producer {
           now      <- zio.clock.currentDateTime.provide(env)
           done     <- Promise.make[Throwable, ProduceResponse]
           data     <- serializer.serialize(r.data).provide(env)
-          entry     = PutRecordsRequestEntry
-                    .builder()
-                    .partitionKey(r.partitionKey)
-                    .data(SdkBytes.fromByteBuffer(data))
-                    .build()
+          entry     = PutRecordsRequestEntry(Chunk.fromByteBuffer(data), partitionKey = r.partitionKey)
           request   = ProduceRequest(entry, done, now.toInstant)
           _        <- queue.offer(request)
           response <- done.await
@@ -162,11 +157,7 @@ object Producer {
                 for {
                   done <- Promise.make[Throwable, ProduceResponse]
                   data <- serializer.serialize(r.data).provide(env)
-                  entry = PutRecordsRequestEntry
-                            .builder()
-                            .partitionKey(r.partitionKey)
-                            .data(SdkBytes.fromByteBuffer(data))
-                            .build()
+                  entry = PutRecordsRequestEntry(Chunk.fromByteBuffer(data), partitionKey = r.partitionKey)
                 } yield ProduceRequest(entry, done, now.toInstant)
               }
           }
@@ -191,7 +182,7 @@ object Producer {
       copy(
         entries = entry +: entries,
         nrRecords = nrRecords + 1,
-        payloadSize = payloadSize + entry.r.partitionKey().length + entry.r.data().asByteArray().length
+        payloadSize = payloadSize + entry.r.partitionKey.length + entry.r.data.length
       )
 
     def isWithinLimits =
