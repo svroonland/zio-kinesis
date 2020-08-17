@@ -4,7 +4,7 @@ import java.net.URI
 
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.core.config
-import io.github.vigoo.zioaws.core.config.AwsConfig
+import io.github.vigoo.zioaws.core.config.{ AwsConfig, ClientCustomization }
 import io.github.vigoo.zioaws.core.httpclient.HttpClient
 import io.github.vigoo.zioaws.dynamodb.DynamoDb
 import io.github.vigoo.zioaws.kinesis.Kinesis
@@ -49,6 +49,17 @@ object LocalStackServices {
         )
     )
 
+  val awsConfig: ZLayer[HttpClient, Throwable, AwsConfig] =
+    config.customized(new ClientCustomization {
+      override def customize[
+        Client,
+        Builder <: software.amazon.awssdk.awscore.client.builder.AwsClientBuilder[Builder, Client]
+      ](builder: Builder): Builder =
+        builder
+          .credentialsProvider(credsProvider)
+          .region(region)
+    })
+
   val kinesisAsyncClientLayer: ZLayer[AwsConfig, Throwable, Kinesis] =
     kinesis.customized { builder =>
       System.setProperty(SdkSystemSetting.CBOR_ENABLED.property, "false")
@@ -60,21 +71,13 @@ object LocalStackServices {
     }
 
   val dynamoDbClientLayer: ZLayer[AwsConfig, Throwable, DynamoDb] =
-    dynamodb.customized(
-      _.credentialsProvider(credsProvider)
-        .region(region)
-        .endpointOverride(dynamoDbUri)
-    )
+    dynamodb.customized(_.endpointOverride(dynamoDbUri))
 
   val cloudWatchClientLayer: ZLayer[AwsConfig, Throwable, CloudWatch] =
-    cloudwatch.customized(
-      _.credentialsProvider(credsProvider)
-        .region(region)
-        .endpointOverride(cloudwatchUri)
-    )
+    cloudwatch.customized(_.endpointOverride(cloudwatchUri))
 
   val env: ZLayer[Any, Throwable, CloudWatch with Kinesis with DynamoDb] =
-    localHttpClient >>> config.default >>> (cloudWatchClientLayer ++ kinesisAsyncClientLayer ++ dynamoDbClientLayer)
+    localHttpClient >>> awsConfig >>> (cloudWatchClientLayer ++ kinesisAsyncClientLayer ++ dynamoDbClientLayer)
 
   val dynamicConsumerLayer: ZLayer[Any, Throwable, Has[DynamicConsumer.Service]] =
     env >>> DynamicConsumer.live
