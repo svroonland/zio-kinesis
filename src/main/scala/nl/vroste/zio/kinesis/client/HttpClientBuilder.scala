@@ -5,15 +5,9 @@ import software.amazon.awssdk.http.nio.netty.{ Http2Configuration, NettyNioAsync
 import zio.duration._
 import zio.{ ZIO, ZLayer, ZManaged }
 
-object HttpClient {
+import io.github.vigoo.zioaws.core.httpclient.HttpClient
 
-  /**
-   * Wrapper around SdkAsyncHttpClient to support configuring the HTTP Protocol
-   * Not all AWS services support HTTP 2 (only Kinesis does) and Localstack does not either
-   */
-  trait Service {
-    def createSdkHttpClient(http2Supported: Boolean = true): ZManaged[Any, Throwable, SdkAsyncHttpClient]
-  }
+object HttpClientBuilder {
 
   /**
    * Builder for SdkAsyncHttpClient
@@ -38,26 +32,32 @@ object HttpClient {
     readTimeout: Duration = 30.seconds,
     allowHttp2: Boolean = true,
     build: NettyNioAsyncHttpClient.Builder => SdkAsyncHttpClient = _.build()
-  ): ZLayer[Any, Nothing, HttpClient] =
-    ZLayer.succeed { http2Supported =>
-      val protocol = if (allowHttp2 && http2Supported) Protocol.HTTP2 else Protocol.HTTP1_1
+  ): ZLayer[Any, Throwable, HttpClient] = {
+    val protocol = if (allowHttp2) Protocol.HTTP2 else Protocol.HTTP1_1
 
-      val builder = NettyNioAsyncHttpClient
-        .builder()
-        .maxConcurrency(maxConcurrency)
-        .connectionAcquisitionTimeout(connectionAcquisitionTimeout.asJava)
-        .maxPendingConnectionAcquires(maxPendingConnectionAcquires)
-        .readTimeout(readTimeout.asJava)
-        .http2Configuration(
-          Http2Configuration
-            .builder()
-            .initialWindowSize(initialWindowSize)
-            .maxStreams(maxConcurrency.toLong)
-            .healthCheckPingPeriod(healthCheckPingPeriod.asJava)
-            .build()
-        )
-        .protocol(protocol)
+    val builder = NettyNioAsyncHttpClient
+      .builder()
+      .maxConcurrency(maxConcurrency)
+      .connectionAcquisitionTimeout(connectionAcquisitionTimeout.asJava)
+      .maxPendingConnectionAcquires(maxPendingConnectionAcquires)
+      .readTimeout(readTimeout.asJava)
+      .http2Configuration(
+        Http2Configuration
+          .builder()
+          .initialWindowSize(initialWindowSize)
+          .maxStreams(maxConcurrency.toLong)
+          .healthCheckPingPeriod(healthCheckPingPeriod.asJava)
+          .build()
+      )
+      .protocol(protocol)
 
-      ZManaged.fromAutoCloseable(ZIO(build(builder)))
-    }
+    ZManaged
+      .fromAutoCloseable(ZIO(build(builder)))
+      .map { nettyClient =>
+        new HttpClient.Service {
+          override val client: SdkAsyncHttpClient = nettyClient
+        }
+      }
+      .toLayer
+  }
 }

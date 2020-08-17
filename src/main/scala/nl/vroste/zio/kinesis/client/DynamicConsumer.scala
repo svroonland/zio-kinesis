@@ -3,11 +3,13 @@ package nl.vroste.zio.kinesis.client
 import java.time.Instant
 import java.util.UUID
 
+import io.github.vigoo.zioaws.cloudwatch.CloudWatch
+import io.github.vigoo.zioaws.core.config
+import io.github.vigoo.zioaws.dynamodb.DynamoDb
+import io.github.vigoo.zioaws.kinesis.Kinesis
+import io.github.vigoo.zioaws.netty
 import nl.vroste.zio.kinesis.client.Util.processWithSkipOnError
 import nl.vroste.zio.kinesis.client.serde.Deserializer
-import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
-import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
-import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import software.amazon.kinesis.common.{ InitialPositionInStream, InitialPositionInStreamExtended }
 import software.amazon.kinesis.exceptions.ShutdownException
@@ -37,11 +39,9 @@ object DynamicConsumer {
     aggregated: Boolean
   )
 
-  val live: ZLayer[Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[
-    DynamoDbAsyncClient
-  ], Nothing, DynamicConsumer] =
-    ZLayer.fromServices[KinesisAsyncClient, CloudWatchAsyncClient, DynamoDbAsyncClient, DynamicConsumer.Service] {
-      new DynamicConsumerLive(_, _, _)
+  val live: ZLayer[Kinesis with CloudWatch with DynamoDb, Nothing, DynamicConsumer] =
+    ZLayer.fromServices[Kinesis.Service, CloudWatch.Service, DynamoDb.Service, DynamicConsumer.Service] {
+      case (kinesis, cloudwatch, dynamodb) => new DynamicConsumerLive(kinesis.api, cloudwatch.api, dynamodb.api)
     }
 
   trait Service {
@@ -306,8 +306,6 @@ object DynamicConsumer {
   }
 
   val defaultEnvironment: ZLayer[Any, Throwable, DynamicConsumer] =
-    HttpClient.make() >>>
-      sdkClients >>>
-      DynamicConsumer.live
+    netty.client() >>> config.default >>> sdkClients >>> DynamicConsumer.live
 
 }

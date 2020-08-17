@@ -2,6 +2,13 @@ package nl.vroste.zio.kinesis.client
 
 import java.net.URI
 
+import io.github.vigoo.zioaws.cloudwatch.CloudWatch
+import io.github.vigoo.zioaws.core.config
+import io.github.vigoo.zioaws.core.config.AwsConfig
+import io.github.vigoo.zioaws.core.httpclient.HttpClient
+import io.github.vigoo.zioaws.dynamodb.DynamoDb
+import io.github.vigoo.zioaws.kinesis.Kinesis
+import io.github.vigoo.zioaws.{ cloudwatch, dynamodb, kinesis }
 import software.amazon.awssdk.auth.credentials.{
   AwsBasicCredentials,
   AwsCredentialsProvider,
@@ -10,12 +17,9 @@ import software.amazon.awssdk.auth.credentials.{
 import software.amazon.awssdk.core.SdkSystemSetting
 import software.amazon.awssdk.http.SdkHttpConfigurationOption
 import software.amazon.awssdk.regions.Region
-import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
-import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
-import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.awssdk.utils.AttributeMap
 import zio.duration._
-import zio.{ Has, ZIO, ZLayer, ZManaged }
+import zio.{ Has, ZLayer }
 
 /**
  * Layers for connecting to a LocalStack (https://localstack.cloud/) environment on a local docker host
@@ -32,8 +36,8 @@ object LocalStackServices {
   val credsProvider: AwsCredentialsProvider =
     StaticCredentialsProvider.create(AwsBasicCredentials.create(accessKey, secretAccessKey))
 
-  val localHttpClient: ZLayer[Any, Nothing, HttpClient] =
-    HttpClient.make(
+  val localHttpClient: ZLayer[Any, Throwable, HttpClient] =
+    HttpClientBuilder.make(
       maxConcurrency = 25, // localstack 11.2 has hardcoded limit of 128 and we need to share with a few clients below
       maxPendingConnectionAcquires = 20,
       readTimeout = 10.seconds,
@@ -45,42 +49,32 @@ object LocalStackServices {
         )
     )
 
-  val kinesisAsyncClientLayer: ZLayer[HttpClient, Throwable, Has[KinesisAsyncClient]] =
-    ZLayer.fromServiceManaged { httpClient =>
-      httpClient.createSdkHttpClient().flatMap { sdkHttpClient =>
-        ZManaged.fromAutoCloseable {
-          ZIO.effect {
-            System.setProperty(SdkSystemSetting.CBOR_ENABLED.property, "false")
+  val kinesisAsyncClientLayer: ZLayer[AwsConfig, Throwable, Kinesis] =
+    kinesis.customized { builder =>
+      System.setProperty(SdkSystemSetting.CBOR_ENABLED.property, "false")
 
-            KinesisAsyncClient
-              .builder()
-              .credentialsProvider(credsProvider)
-              .region(region)
-              .endpointOverride(kinesisUri)
-              .httpClient(sdkHttpClient)
-              .build
-          }
-        }
-      }
+      builder
+        .credentialsProvider(credsProvider)
+        .region(region)
+        .endpointOverride(kinesisUri)
     }
 
-  val dynamoDbClientLayer: ZLayer[HttpClient, Throwable, Has[DynamoDbAsyncClient]] =
-    nl.vroste.zio.kinesis.client.dynamoDbAsyncClientLayer(
+  val dynamoDbClientLayer: ZLayer[AwsConfig, Throwable, DynamoDb] =
+    dynamodb.customized(
       _.credentialsProvider(credsProvider)
         .region(region)
         .endpointOverride(dynamoDbUri)
-        .build()
     )
 
-  val cloudWatchClientLayer: ZLayer[HttpClient, Throwable, Has[CloudWatchAsyncClient]] =
-    nl.vroste.zio.kinesis.client.cloudWatchAsyncClientLayer(
+  val cloudWatchClientLayer: ZLayer[AwsConfig, Throwable, CloudWatch] =
+    cloudwatch.customized(
       _.credentialsProvider(credsProvider)
         .region(region)
         .endpointOverride(cloudwatchUri)
-        .build
     )
 
-  val env = localHttpClient >>> (cloudWatchClientLayer ++ kinesisAsyncClientLayer ++ dynamoDbClientLayer)
+  val env: ZLayer[Any, Throwable, CloudWatch with Kinesis with DynamoDb] =
+    localHttpClient >>> config.default >>> (cloudWatchClientLayer ++ kinesisAsyncClientLayer ++ dynamoDbClientLayer)
 
   val dynamicConsumerLayer: ZLayer[Any, Throwable, Has[DynamicConsumer.Service]] =
     env >>> DynamicConsumer.live

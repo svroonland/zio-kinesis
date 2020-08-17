@@ -27,8 +27,7 @@ object ProducerTest extends DefaultRunnableSpec {
     ): URIO[Any, Unit] = ???
   })
 
-  val env = (LocalStackServices.env.orDie >>> (AdminClient.live ++ Client.live)).orDie >+>
-    (loggingEnv ++ Clock.live)
+  val env = (LocalStackServices.env.orDie) ++ loggingEnv ++ Clock.live
 
   def spec =
     suite("Producer")(

@@ -1,56 +1,40 @@
 package nl.vroste.zio.kinesis
 
-import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
-import software.amazon.awssdk.core.retry.RetryPolicy
-import software.amazon.awssdk.services.cloudwatch.{ CloudWatchAsyncClient, CloudWatchAsyncClientBuilder }
-import software.amazon.awssdk.services.dynamodb.{ DynamoDbAsyncClient, DynamoDbAsyncClientBuilder }
-import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyncClientBuilder }
-import zio.{ Has, ZIO, ZLayer, ZManaged }
+import io.github.vigoo.zioaws.cloudwatch.CloudWatch
+import io.github.vigoo.zioaws.core.config.AwsConfig
+import io.github.vigoo.zioaws.dynamodb.DynamoDb
+import io.github.vigoo.zioaws.kinesis.Kinesis
+import io.github.vigoo.zioaws.{ cloudwatch, dynamodb, kinesis }
+import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClientBuilder
+import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClientBuilder
+import software.amazon.awssdk.services.kinesis.KinesisAsyncClientBuilder
+import zio.{ Has, ZLayer }
 
 package object client {
-
   type DynamicConsumer = Has[DynamicConsumer.Service]
-  type HttpClient      = Has[HttpClient.Service]
 
+  // TODO on http client
+//  // We do our own retries for the purposes of logging and metrics
+//  .overrideConfiguration(ClientOverrideConfiguration.builder().retryPolicy(RetryPolicy.none()).build())
+
+  @deprecated("Use io.github.vigoo.zioaws.kinesis.live or io.github.vigoo.zioaws.kinesis.customized(builder)")
   def kinesisAsyncClientLayer(
-    build: KinesisAsyncClientBuilder => KinesisAsyncClient = _.build()
-  ): ZLayer[HttpClient, Throwable, Has[KinesisAsyncClient]] =
-    ZLayer.fromServiceManaged { httpClient =>
-      httpClient.createSdkHttpClient(http2Supported = true).flatMap { client =>
-        ZManaged.fromAutoCloseable(
-          ZIO.effect(
-            build(
-              KinesisAsyncClient
-                .builder()
-                // We do our own retries for the purposes of logging and metrics
-                .overrideConfiguration(ClientOverrideConfiguration.builder().retryPolicy(RetryPolicy.none()).build())
-                .httpClient(client)
-            )
-          )
-        )
-      }
-    }
+    build: KinesisAsyncClientBuilder => KinesisAsyncClientBuilder = identity
+  ): ZLayer[AwsConfig, Throwable, Kinesis] =
+    kinesis.customized(build)
 
+  @deprecated("Use io.github.vigoo.zioaws.cloudwatch.live or io.github.vigoo.zioaws.cloudwatch.customized(builder)")
   def cloudWatchAsyncClientLayer(
-    build: CloudWatchAsyncClientBuilder => CloudWatchAsyncClient = _.build()
-  ): ZLayer[HttpClient, Throwable, Has[CloudWatchAsyncClient]] =
-    ZLayer.fromServiceManaged { httpClient =>
-      httpClient.createSdkHttpClient(http2Supported = false).flatMap { client =>
-        ZManaged.fromAutoCloseable(ZIO.effect(build(CloudWatchAsyncClient.builder().httpClient(client))))
-      }
-    }
+    build: CloudWatchAsyncClientBuilder => CloudWatchAsyncClientBuilder = identity
+  ): ZLayer[AwsConfig, Throwable, CloudWatch] =
+    cloudwatch.customized(build)
 
+  @deprecated("Use io.github.vigoo.zioaws.dynamodb.live or io.github.vigoo.zioaws.dynamodb.customized(builder)")
   def dynamoDbAsyncClientLayer(
-    build: DynamoDbAsyncClientBuilder => DynamoDbAsyncClient = _.build()
-  ): ZLayer[HttpClient, Throwable, Has[DynamoDbAsyncClient]] =
-    ZLayer.fromServiceManaged { httpClient =>
-      // DynamoDB does not support HTTP 2
-      httpClient.createSdkHttpClient(http2Supported = false).flatMap { client =>
-        ZManaged.fromAutoCloseable(ZIO.effect(build(DynamoDbAsyncClient.builder().httpClient(client))))
-      }
-    }
+    build: DynamoDbAsyncClientBuilder => DynamoDbAsyncClientBuilder = identity
+  ): ZLayer[AwsConfig, Throwable, DynamoDb] =
+    dynamodb.customized(build)
 
-  val sdkClients: ZLayer[HttpClient, Throwable, Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[
-    DynamoDbAsyncClient
-  ]] = kinesisAsyncClientLayer() ++ cloudWatchAsyncClientLayer() ++ dynamoDbAsyncClientLayer()
+  val sdkClients: ZLayer[AwsConfig, Throwable, Kinesis with CloudWatch with DynamoDb] =
+    kinesis.live ++ cloudwatch.live ++ dynamodb.live
 }

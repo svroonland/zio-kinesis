@@ -1,12 +1,15 @@
 package nl.vroste.zio.kinesis.client
+import io.github.vigoo.zioaws.cloudwatch.CloudWatch
+import io.github.vigoo.zioaws.core.config
+import io.github.vigoo.zioaws.dynamodb.DynamoDb
+import io.github.vigoo.zioaws.{ cloudwatch, dynamodb, kinesis, netty }
+import io.github.vigoo.zioaws.kinesis.Kinesis
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.TestUtil.retryOnResourceNotFound
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
 import nl.vroste.zio.kinesis.client.zionative.metrics.{ CloudWatchMetricsPublisher, CloudWatchMetricsPublisherConfig }
 import nl.vroste.zio.kinesis.client.zionative._
-import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
-import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio._
 import zio.clock.Clock
@@ -154,29 +157,31 @@ object ExampleApp extends zio.App {
 
   val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
-  val localStackEnv =
-    LocalStackServices.env >+>
-      (AdminClient.live ++ Client.live ++ DynamoDbLeaseRepository.live).orDie ++
-        loggingEnv
+  val localStackEnv: ZLayer[
+    Clock,
+    Nothing,
+    Kinesis with DynamoDb with CloudWatch with DynamicConsumer with Logging with LeaseRepository with Has[
+      CloudWatchMetricsPublisherConfig
+    ]
+  ] =
+    LocalStackServices.env.orDie >+>
+      (DynamicConsumer.live ++
+        loggingEnv ++
+        DynamoDbLeaseRepository.live ++
+        ZLayer.succeed(CloudWatchMetricsPublisherConfig()))
 
-  val awsEnv: ZLayer[Clock, Nothing, AdminClient with Client with DynamicConsumer with Logging with Has[
-    DynamoDbAsyncClient
-  ] with LeaseRepository with Has[CloudWatchAsyncClient] with Has[CloudWatchMetricsPublisherConfig]] = {
-    val httpClient    = HttpClient.make(
-      maxConcurrency = 100,
-      allowHttp2 = false
-//      build = _.proxyConfiguration(ProxyConfiguration.builder().host("localhost").port(9090).build())
-//        .buildWithDefaults(
-//          AttributeMap.builder.put(SdkHttpConfigurationOption.TRUST_ALL_CERTIFICATES, java.lang.Boolean.TRUE).build()
-//        )
-    )
-    val kinesisClient = kinesisAsyncClientLayer()
-    val cloudWatch    = cloudWatchAsyncClientLayer()
-    val dynamo        = dynamoDbAsyncClientLayer()
-    val awsClients    = (httpClient >>> (kinesisClient ++ cloudWatch ++ dynamo)).orDie
-
-    val client      = Client.live.orDie
-    val adminClient = AdminClient.live.orDie
+  val awsEnv: ZLayer[
+    Clock,
+    Nothing,
+    Kinesis with DynamoDb with CloudWatch with DynamicConsumer with Logging with LeaseRepository with Has[
+      CloudWatchMetricsPublisherConfig
+    ]
+  ] = {
+    val awsHttpClient = netty.client(maxConcurrency = Some(100)) // Allow http2 = false?
+    val kinesisClient = kinesis.live
+    val cloudWatch    = cloudwatch.live
+    val dynamo        = dynamodb.live
+    val awsClients    = (awsHttpClient >>> config.default >>> (kinesisClient ++ cloudWatch ++ dynamo)).orDie
 
     val leaseRepo       = DynamoDbLeaseRepository.live
     val dynamicConsumer = DynamicConsumer.live
@@ -186,7 +191,7 @@ object ExampleApp extends zio.App {
 
     ZLayer.requires[Clock] >+>
       awsClients >+>
-      (client ++ adminClient ++ dynamicConsumer ++ leaseRepo ++ logging ++ metricsPublisherConfig)
+      (dynamicConsumer ++ leaseRepo ++ logging ++ metricsPublisherConfig)
   }
 
   def produceRecords(streamName: String, nrRecords: Int) =

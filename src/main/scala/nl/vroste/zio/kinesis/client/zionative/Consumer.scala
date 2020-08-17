@@ -5,24 +5,16 @@ import java.nio.ByteBuffer
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.core.config
 import io.github.vigoo.zioaws.core.config.AwsConfig
+import io.github.vigoo.zioaws.kinesis.Kinesis
+import io.github.vigoo.zioaws.kinesis.model._
 import io.github.vigoo.zioaws.{ cloudwatch, dynamodb, kinesis, netty }
-import io.github.vigoo.zioaws.kinesis.{ model, Kinesis }
-import io.github.vigoo.zioaws.kinesis.model.{
-  DescribeStreamRequest,
-  GetRecordsResponse,
-  ListShardsRequest,
-  ShardIteratorType,
-  StartingPosition,
-  StreamDescription
-}
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.{ EnhancedFanOut, Polling }
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative.fetcher.{ EnhancedFanOutFetcher, PollingFetcher }
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.{ DefaultLeaseCoordinator, LeaseCoordinationSettings }
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
-import nl.vroste.zio.kinesis.client.{ sdkClients, AdminClient, Client, Record, Util }
-import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
+import nl.vroste.zio.kinesis.client.{ Record, Util }
 import software.amazon.awssdk.services.kinesis.model.{
   KmsThrottlingException,
   LimitExceededException,

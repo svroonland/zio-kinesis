@@ -3,16 +3,19 @@ package nl.vroste.zio.kinesis.client.zionative
 import java.time.Instant
 import java.{ util => ju }
 
+import io.github.vigoo.zioaws.kinesis
+import io.github.vigoo.zioaws.kinesis.Kinesis
+import io.github.vigoo.zioaws.kinesis.model.{ DescribeStreamRequest, ListShardsRequest, Shard }
+
 import scala.collection.compat._
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
-import nl.vroste.zio.kinesis.client.{ AdminClient, Client, LocalStackServices, Producer }
+import nl.vroste.zio.kinesis.client.{ LocalStackServices, Producer }
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.TestUtil.retryOnResourceNotFound
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.LeaseCoordinationSettings
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
-import software.amazon.awssdk.services.kinesis.model.Shard
 import zio._
 import zio.clock.Clock
 import zio.console._
@@ -73,7 +76,10 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                            }
                            .take(nrRecords.toLong)
                            .runCollect
-              shardIds <- AdminClient.describeStream(streamName).map(_.shards.map(_.shardId()))
+              shardIds <- kinesis
+                            .describeStream(DescribeStreamRequest(streamName))
+                            .mapError(_.toThrowable)
+                            .map(_.streamDescriptionValue.shardsValue.map(_.shardIdValue))
               _        <- producer.interrupt
 
             } yield assert(records.map(_.shardId).toSet)(equalTo(shardIds.toSet))
@@ -595,22 +601,23 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
   val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
-  val env = ((LocalStackServices.env.orDie >+>
-    (AdminClient.live ++ Client.live ++ DynamoDbLeaseRepository.live)).orDie ++
+  val env = ((LocalStackServices.env.orDie >+> DynamoDbLeaseRepository.live) ++
     zio.test.environment.testEnvironment ++
     Clock.live) >>>
     (ZLayer.identity ++ loggingEnv)
 
   def withStream[R, A](name: String, shards: Int)(
     f: ZIO[R, Throwable, A]
-  ): ZIO[AdminClient with Client with Clock with Console with R, Throwable, A] =
+  ): ZIO[Kinesis with Clock with Console with R, Throwable, A] =
     TestUtil
       .createStream(name, shards)
       .tapM { _ =>
-        def getShards: ZIO[Client with Clock, Throwable, Chunk[Shard]] =
-          ZIO
-            .service[Client.Service]
-            .flatMap(_.listShards(name).runCollect)
+        def getShards: ZIO[Kinesis with Clock, Throwable, Chunk[Shard.ReadOnly]] =
+          kinesis
+            .listShards(ListShardsRequest(Some(name)))
+            .flatMap(_.shards)
+            .map(Chunk.fromIterable(_))
+            .mapError(_.toThrowable)
             .filterOrElse(_.nonEmpty)(_ => getShards.delay(1.second))
         getShards
       }
@@ -622,7 +629,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     chunkSize: Int = 100,
     throttle: Option[Duration] = None,
     indexStart: Int = 1
-  ): ZIO[Client with Clock with Logging, Throwable, Chunk[ProduceResponse]] =
+  ): ZIO[Kinesis with Clock with Logging, Throwable, Chunk[ProduceResponse]] =
     Producer.make(streamName, Serde.asciiString, ProducerSettings(maxParallelRequests = 1)).use { producer =>
       val records =
         (indexStart until (nrRecords + indexStart)).map(i => ProducerRecord(s"key$i", s"msg$i"))
@@ -646,7 +653,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     nrRecords: Int,
     chunkSize: Int = 100,
     indexStart: Int = 1
-  ): ZIO[Client with Clock with Logging, Throwable, Chunk[ProduceResponse]] =
+  ): ZIO[Kinesis with Clock with Logging, Throwable, Chunk[ProduceResponse]] =
     Producer.make(streamName, Serde.asciiString).use { producer =>
       val records =
         (indexStart until (nrRecords + indexStart)).map(i => ProducerRecord(s"key$i", s"msg$i"))
@@ -693,7 +700,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     nrShards: Int
   )(
     f: (String, String) => ZIO[R, Throwable, A]
-  ): ZIO[Client with AdminClient with Clock with Console with R, Throwable, A] =
+  ): ZIO[Kinesis with Clock with Console with R, Throwable, A] =
     ZIO.effectTotal((streamPrefix + "testStream", streamPrefix + "testApplication")).flatMap {
       case (streamName, applicationName) =>
         withStream(streamName, shards = nrShards) {
