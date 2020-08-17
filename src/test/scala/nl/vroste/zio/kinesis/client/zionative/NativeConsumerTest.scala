@@ -8,8 +8,7 @@ import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model.{ DescribeStreamRequest, ListShardsRequest, Shard }
 
 import scala.collection.compat._
-import nl.vroste.zio.kinesis.client.Client.ProducerRecord
-import nl.vroste.zio.kinesis.client.{ LocalStackServices, Producer }
+import nl.vroste.zio.kinesis.client.{ LocalStackServices, Producer, ProducerRecord, ProducerSettings, TestUtil }
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.TestUtil.retryOnResourceNotFound
 import nl.vroste.zio.kinesis.client.serde.Serde
@@ -26,8 +25,6 @@ import zio.stream.{ ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test._
 import zio.logging._
-import nl.vroste.zio.kinesis.client.ProducerSettings
-import nl.vroste.zio.kinesis.client.TestUtil
 
 object NativeConsumerTest extends DefaultRunnableSpec {
   /*

@@ -22,7 +22,6 @@ More beta users and feedback are of course welcome.
 - [DynamicConsumer](#dynamicconsumer)
   * [Basic usage using `consumeWith`](#basic-usage-using--consumewith-)
   * [Advanced usage](#advanced-usage-example-)
-- [Client and AdminClient](#client-and-adminclient)
 - [Running tests and more usage examples](#running-tests-and-usage-examples)
 - [Credits](#credits)
 
@@ -32,13 +31,10 @@ More beta users and feedback are of course welcome.
 The library consists of:
 
 * `Consumer`  
-  A ZStream interface to Kinesis streams, including checkpointing , lease coordination and metrics. This is a ZIO-native client built on top of the AWS SDK, designed for compatibility with KCL clients. Both polling and enhanced fanout (HTTP2 streaming) are supported.
+  A ZStream interface to Kinesis streams, including checkpointing , lease coordination and metrics. This is a ZIO-native client built on top of the AWS SDK (via `zio-aws`), designed for compatibility with KCL clients. Both polling and enhanced fanout (HTTP2 streaming) are supported.
   
 * `Producer`  
   Put records efficiently and reliably on Kinesis while respecting Kinesis throughput limits. Features batching and failure handling.
-
-* `Client` and `AdminClient`  
-  ZIO wrappers around the low level AWS SDK methods for Kinesis. Methods offer a ZIO-native interface with ZStream where applicable, taking care of paginated request and AWS rate limits. 
   
 * `DynamicConsumer`  
   A ZStream-based wrapper around the Kinesis Client Library; an auto-rebalancing and checkpointing consumer.  
@@ -336,12 +332,6 @@ object DynamicConsumerBasicUsageExample extends zio.App {
 
 DynamicConsumer is built on `ZManaged` and therefore resource-safe: after stream completion all resources acquired will be shutdown.
 
-
-## Client and AdminClient
-More low-level operations for consuming, producing and administering streams are available in `Client` and `AdminClient`.
-
-Refer to the [AWS Kinesis Streams API Reference](https://docs.aws.amazon.com/kinesis/latest/APIReference/Welcome.html) 
-for more information.
 
 ## Running tests and more usage examples 
 

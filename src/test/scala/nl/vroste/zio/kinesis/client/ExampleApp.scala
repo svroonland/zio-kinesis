@@ -4,7 +4,6 @@ import io.github.vigoo.zioaws.core.config
 import io.github.vigoo.zioaws.dynamodb.DynamoDb
 import io.github.vigoo.zioaws.{ cloudwatch, dynamodb, kinesis, netty }
 import io.github.vigoo.zioaws.kinesis.Kinesis
-import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.TestUtil.retryOnResourceNotFound
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository

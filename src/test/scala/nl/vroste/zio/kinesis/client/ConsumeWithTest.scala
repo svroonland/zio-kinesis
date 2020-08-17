@@ -4,12 +4,9 @@ import java.util.UUID
 
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.dynamodb.DynamoDb
-import io.github.vigoo.zioaws.kinesis
 import io.github.vigoo.zioaws.kinesis.Kinesis
-import io.github.vigoo.zioaws.kinesis.model.{ PutRecordsRequest, PutRecordsRequestEntry, PutRecordsResponse }
-import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.DynamicConsumer.consumeWith
-import nl.vroste.zio.kinesis.client.serde.{ Serde, Serializer }
+import nl.vroste.zio.kinesis.client.serde.Serde
 import zio._
 import zio.blocking.Blocking
 import zio.clock.Clock

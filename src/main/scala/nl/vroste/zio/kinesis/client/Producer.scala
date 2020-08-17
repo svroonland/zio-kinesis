@@ -6,7 +6,6 @@ import io.github.vigoo.zioaws.kinesis
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model.{ PutRecordsRequest, PutRecordsRequestEntry }
 import io.netty.handler.timeout.ReadTimeoutException
-import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.serde.Serializer
 import software.amazon.awssdk.services.kinesis.model.KinesisException

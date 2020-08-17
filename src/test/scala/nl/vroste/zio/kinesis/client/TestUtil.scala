@@ -9,7 +9,6 @@ import io.github.vigoo.zioaws.kinesis.model.{
   PutRecordsRequestEntry,
   PutRecordsResponse
 }
-import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.serde.Serializer
 import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException }
 import zio.clock.Clock
