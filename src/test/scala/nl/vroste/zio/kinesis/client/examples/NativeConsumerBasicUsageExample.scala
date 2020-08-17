@@ -2,6 +2,7 @@ package nl.vroste.zio.kinesis.client.examples
 
 import io.github.vigoo.zioaws.core.config
 import io.github.vigoo.zioaws.netty
+import nl.vroste.zio.kinesis.client.HttpClientBuilder
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.Consumer
 import zio._
@@ -26,7 +27,7 @@ object NativeConsumerBasicUsageExample extends zio.App {
             .via(checkpointer.checkpointBatched[Console](nr = 1000, interval = 5.second))
       }
       .runDrain
-      .provideCustomLayer((netty.client() >>> config.default >>> Consumer.defaultEnvironment) ++ loggingEnv)
+      .provideCustomLayer((HttpClientBuilder.make() >>> config.default >>> Consumer.defaultEnvironment) ++ loggingEnv)
       .exitCode
 
   val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))

@@ -306,6 +306,6 @@ object DynamicConsumer {
   }
 
   val defaultEnvironment: ZLayer[Any, Throwable, DynamicConsumer] =
-    netty.client() >>> config.default >>> sdkClients >>> DynamicConsumer.live
+    HttpClientBuilder.make() >>> config.default >>> sdkClients >>> DynamicConsumer.live
 
 }

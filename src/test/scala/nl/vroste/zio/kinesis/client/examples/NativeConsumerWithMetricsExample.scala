@@ -2,6 +2,7 @@ package nl.vroste.zio.kinesis.client.examples
 
 import io.github.vigoo.zioaws.core.config
 import io.github.vigoo.zioaws.netty
+import nl.vroste.zio.kinesis.client.HttpClientBuilder
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.Consumer
 import nl.vroste.zio.kinesis.client.zionative.metrics.{ CloudWatchMetricsPublisher, CloudWatchMetricsPublisherConfig }
@@ -39,7 +40,7 @@ object NativeConsumerWithMetricsExample extends zio.App {
           .runDrain
       }
       .provideCustomLayer(
-        (netty.client() >>> config.default >>> Consumer.defaultEnvironment) ++ loggingEnv ++ ZLayer
+        (HttpClientBuilder.make() >>> config.default >>> Consumer.defaultEnvironment) ++ loggingEnv ++ ZLayer
           .succeed(metricsConfig)
       )
       .exitCode

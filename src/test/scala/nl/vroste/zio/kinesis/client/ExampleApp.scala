@@ -176,7 +176,7 @@ object ExampleApp extends zio.App {
       CloudWatchMetricsPublisherConfig
     ]
   ] = {
-    val awsHttpClient = netty.client(maxConcurrency = Some(100)) // Allow http2 = false?
+    val awsHttpClient = HttpClientBuilder.make(maxConcurrency = 100, allowHttp2 = false)
     val kinesisClient = kinesis.live
     val cloudWatch    = cloudwatch.live
     val dynamo        = dynamodb.live

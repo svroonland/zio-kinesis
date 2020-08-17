@@ -14,7 +14,7 @@ import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative.fetcher.{ EnhancedFanOutFetcher, PollingFetcher }
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.{ DefaultLeaseCoordinator, LeaseCoordinationSettings }
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
-import nl.vroste.zio.kinesis.client.{ Record, Util }
+import nl.vroste.zio.kinesis.client.{ HttpClientBuilder, Record, Util }
 import software.amazon.awssdk.services.kinesis.model.{
   KmsThrottlingException,
   LimitExceededException,
@@ -291,7 +291,7 @@ object Consumer {
     Schedule.recurWhile[Throwable](e => isThrottlingException.lift(e).isDefined) && schedule
 
   val defaultEnvironment: ZLayer[AwsConfig, Throwable, Kinesis with LeaseRepository with CloudWatch] =
-    netty.client() >>>
+    HttpClientBuilder.make() >>>
       config.default >>>
       (kinesis.live ++ (dynamodb.live >>> DynamoDbLeaseRepository.live) ++ cloudwatch.live)
 
