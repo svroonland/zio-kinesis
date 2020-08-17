@@ -70,7 +70,7 @@ object PollingFetcher {
                          .asSomeError
                          .timed
                      (duration, response)  = responseWithDuration
-                     _                    <- shardIterator.set(Option(response.nextShardIteratorValue.get))
+                     _                    <- shardIterator.set(response.nextShardIteratorValue)
                      millisBehindLatest   <- response.millisBehindLatest.mapError(e => Some(e.toThrowable))
                      _                    <- emitDiagnostic(
                             DiagnosticEvent.PollComplete(
