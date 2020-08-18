@@ -9,7 +9,7 @@ object FakeRecordProcessor {
   def make[T](
     refProcessed: Ref[Seq[T]],
     promise: Promise[Nothing, Unit],
-    expectedCount: Int
+    expectedCount: Long
   ): Record[T] => RIO[Logging, Unit] = process(refProcessed, promise, Right(expectedCount))
 
   def makeFailing[RC, T](
@@ -21,7 +21,7 @@ object FakeRecordProcessor {
   private def process[T](
     refProcessed: Ref[Seq[T]],
     promise: Promise[Nothing, Unit],
-    failFunctionOrExpectedCount: Either[T => Boolean, Int]
+    failFunctionOrExpectedCount: Either[T => Boolean, Long]
   ): Record[T] => RIO[Logging, Unit] =
     rec => {
       val data          = rec.data
