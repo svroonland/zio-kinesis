@@ -37,7 +37,7 @@ object ConsumeWithReshardTest extends DefaultRunnableSpec {
       val applicationName = "mercury-invoice-test-reshard-dev"
 
       val nrRecordsPerBatch = 100
-      val nrBatches         = 4
+      val nrBatches         = 30
 
       val nrShards             = 10
       val nrReshardShards: Int = nrShards / 2
@@ -73,7 +73,8 @@ object ConsumeWithReshardTest extends DefaultRunnableSpec {
                                          applicationName = applicationName,
                                          deserializer = Serde.asciiString,
                                          isEnhancedFanOut = false,
-                                         checkpointBatchSize = nrRecordsPerBatch.toLong
+                                         checkpointBatchSize = nrRecordsPerBatch.toLong,
+                                         checkpointDuration = 10.second
                                        ) {
                                          FakeRecordProcessor
                                            .make(
@@ -86,7 +87,7 @@ object ConsumeWithReshardTest extends DefaultRunnableSpec {
                              .accessM[AdminClient](
                                _.get.updateShardCount(streamName, nrReshardShards)
                              )
-                             .delay(1.seconds)
+                             .delay(16.seconds)
                              .fork
                       _                <- finishedConsuming.await
                       _                <- consumerFiber.interrupt
@@ -100,6 +101,6 @@ object ConsumeWithReshardTest extends DefaultRunnableSpec {
   override def spec =
     suite("ConsumeWithReshardTest")(
       testConsume2
-    ).provideCustomLayer(env.orDie) @@ timeout(30.seconds) @@ sequential
+    ).provideCustomLayer(env.orDie) @@ timeout(2.minutes) @@ sequential
 
 }

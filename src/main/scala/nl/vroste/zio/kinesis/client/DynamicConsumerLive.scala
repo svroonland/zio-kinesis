@@ -112,11 +112,12 @@ private[client] class DynamicConsumerLive(
         shardQueue.foreach(_.stop("shard ended"))
       }
 
-      override def shutdownRequested(shutdownRequestedInput: ShutdownRequestedInput): Unit =
+      override def shutdownRequested(shutdownRequestedInput: ShutdownRequestedInput): Unit = {
         println(
           s"XXXXXXXXXXXXXXXXXXXXXXXXXX shutdownRequested XXXXXXXXXXXXXXXXXXXXXXXXXX shutdownRequestedInput=$shutdownRequestedInput"
         )
-      shardQueue.foreach(_.stop("shutdown requested"))
+        shardQueue.foreach(_.stop("shutdown requested"))
+      }
     }
 
     class Queues(
