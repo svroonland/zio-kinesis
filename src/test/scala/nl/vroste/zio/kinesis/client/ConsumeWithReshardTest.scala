@@ -68,7 +68,7 @@ object ConsumeWithReshardTest extends DefaultRunnableSpec {
                                          applicationName = applicationName,
                                          deserializer = Serde.asciiString,
                                          isEnhancedFanOut = false,
-                                         checkpointBatchSize = nrRecordsPerBatch
+                                         checkpointBatchSize = nrRecordsPerBatch.toLong
                                        ) {
                                          FakeRecordProcessor
                                            .make(
@@ -93,7 +93,7 @@ object ConsumeWithReshardTest extends DefaultRunnableSpec {
     }
 
   override def spec =
-    suite("ConsumeWithTest2")(
+    suite("ConsumeWithReshardTest")(
       testConsume2
     ).provideCustomLayer(env.orDie) @@ timeout(2.minutes) @@ sequential
 
