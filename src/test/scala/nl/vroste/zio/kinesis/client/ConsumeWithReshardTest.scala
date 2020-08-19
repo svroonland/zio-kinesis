@@ -35,7 +35,7 @@ object ConsumeWithReshardTest extends DefaultRunnableSpec {
       val streamName        = "zio-test-stream-" + UUID.randomUUID().toString
       val applicationName   = "zio-test-" + UUID.randomUUID().toString
       val nrRecordsPerBatch = 100
-      val nrBatches         = 100
+      val nrBatches         = 10
 
       for {
         refProcessed      <- Ref.make(Seq.empty[String])
@@ -77,12 +77,12 @@ object ConsumeWithReshardTest extends DefaultRunnableSpec {
                                              expectedCount = nrRecordsPerBatch * nrBatches
                                            )
                                        }.fork
-                      _                <- ZIO
-                             .accessM[AdminClient](
-                               _.get.mergeShards(streamName, "shardId-000000000000", "shardId-000000000001")
-                             )
-                             .delay(1.seconds)
-                             .fork
+//                      _                <- ZIO
+//                             .accessM[AdminClient](
+//                               _.get.mergeShards(streamName, "shardId-000000000000", "shardId-000000000001")
+//                             )
+//                             .delay(1.seconds)
+//                             .fork
                       _                <- finishedConsuming.await
                       _                <- consumerFiber.interrupt
                       processedRecords <- refProcessed.get
