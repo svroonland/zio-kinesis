@@ -26,26 +26,31 @@ object ConsumeWithReshardTest extends DefaultRunnableSpec {
     )
 
   private val env =
-    (LocalStackServices.localHttpClient >>> LocalStackServices.kinesisAsyncClientLayer >>> (Client.live ++ AdminClient.live ++ LocalStackServices.dynamicConsumerLayer)) ++ Clock.live ++ Blocking.live ++ loggingLayer
+    (HttpClient
+      .make() >>> sdkClients >>> (Client.live ++ AdminClient.live ++ DynamicConsumer.live)) ++ Clock.live ++ Blocking.live ++ loggingLayer
 
   def testConsume2 =
     testM(
       "consumeWith should, after a re-shard consume records produced on all shards"
     ) {
-      val streamName        = "zio-test-stream-" + UUID.randomUUID().toString
-      val applicationName   = "zio-test-" + UUID.randomUUID().toString
+      val streamName      = "mercury-invoice-test-reshard-dev"
+      val applicationName = "mercury-invoice-test-reshard-dev"
+
       val nrRecordsPerBatch = 100
-      val nrBatches         = 10
+      val nrBatches         = 4
+
+      val nrShards             = 10
+      val nrReshardShards: Int = nrShards / 2
 
       for {
         refProcessed      <- Ref.make(Seq.empty[String])
         finishedConsuming <- Promise.make[Nothing, Unit]
-        assert            <- createStream(streamName, 2).use { _ =>
+        assert            <- createStream(streamName, nrShards).use { _ =>
                     (for {
                       _                <- putStrLn("Putting records")
                       _                <- ZStream
                              .fromIterable(1 to nrBatches)
-                             .schedule(Schedule.spaced(250.millis))
+                             .schedule(Schedule.spaced(500.millis))
                              .mapM { batchIndex =>
                                ZIO
                                  .accessM[Client](
@@ -59,7 +64,7 @@ object ConsumeWithReshardTest extends DefaultRunnableSpec {
                                  )
                              }
                              .runDrain
-                             .tapError(e => putStrLn(s"error1: $e").provideLayer(Console.live))
+                             .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
                              .retry(retryOnResourceNotFound)
                              .fork
                       _                <- putStrLn("Starting dynamic consumer")
@@ -77,12 +82,12 @@ object ConsumeWithReshardTest extends DefaultRunnableSpec {
                                              expectedCount = nrRecordsPerBatch * nrBatches
                                            )
                                        }.fork
-//                      _                <- ZIO
-//                             .accessM[AdminClient](
-//                               _.get.mergeShards(streamName, "shardId-000000000000", "shardId-000000000001")
-//                             )
-//                             .delay(1.seconds)
-//                             .fork
+                      _                <- ZIO
+                             .accessM[AdminClient](
+                               _.get.updateShardCount(streamName, nrReshardShards)
+                             )
+                             .delay(1.seconds)
+                             .fork
                       _                <- finishedConsuming.await
                       _                <- consumerFiber.interrupt
                       processedRecords <- refProcessed.get
@@ -95,6 +100,6 @@ object ConsumeWithReshardTest extends DefaultRunnableSpec {
   override def spec =
     suite("ConsumeWithReshardTest")(
       testConsume2
-    ).provideCustomLayer(env.orDie) @@ timeout(2.minutes) @@ sequential
+    ).provideCustomLayer(env.orDie) @@ timeout(30.seconds) @@ sequential
 
 }
