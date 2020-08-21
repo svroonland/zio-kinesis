@@ -224,7 +224,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
                   .shardRecordStream("shard1", ShardIteratorType.TrimHorizon)
                   .mapChunks(Chunk.single)
                   .tap(_ => chunksReceived.update(_ + 1))
-                  .take(nrBatches + 1)
+                  .take(nrBatches)
                   .runDrain
               }
               .provideSomeLayer[ZEnv with Logging with TestClock](
@@ -233,12 +233,11 @@ object PollingFetcherTest extends DefaultRunnableSpec {
               .fork
           _                         <- TestClock.adjust(0.seconds)
           chunksReceivedImmediately <- chunksReceived.get
-          _                          = println(chunksReceivedImmediately)
           _                         <- TestClock.adjust(5.second)
           chunksReceivedLater       <- chunksReceived.get
           _                         <- chunksFib.join
         } yield assert(chunksReceivedImmediately)(equalTo(1L)) && assert(chunksReceivedLater)(
-          equalTo(nrBatches + 1)
+          equalTo(nrBatches)
         ))
       }
     ).provideCustomLayer(loggingEnv ++ TestClock.default)
