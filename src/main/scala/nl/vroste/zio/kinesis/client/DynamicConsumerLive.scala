@@ -148,7 +148,6 @@ private[client] class DynamicConsumerLive(
         new FanOutConfig(kinesisClient)
           .streamName(streamName)
           .applicationName(applicationName)
-          .consumerName(workerIdentifier)
       else
         new PollingConfig(streamName, kinesisClient)
 
