@@ -64,8 +64,7 @@ object FetchMode {
      * @param interval Fixed interval for polling when no more records are currently available
      */
     def dynamicSchedule(interval: Duration): Schedule[Clock, GetRecordsResponse, Any] =
-      // TODO change `andThen` back to `||` when https://github.com/zio/zio/issues/4101 is fixed
-      (Schedule.recurWhile[Boolean](_ == true) andThen Schedule.fixed(interval))
+      (Schedule.recurWhile[Boolean](_ == true) || Schedule.fixed(interval))
         .contramap((_: GetRecordsResponse).millisBehindLatest() != 0)
   }
 
