@@ -10,6 +10,7 @@ import software.amazon.kinesis.coordinator.Scheduler
 import software.amazon.kinesis.exceptions.ShutdownException
 import software.amazon.kinesis.lifecycle.events._
 import software.amazon.kinesis.processor.{ RecordProcessorCheckpointer, ShardRecordProcessor }
+import software.amazon.kinesis.processor.ShardRecordProcessorFactory
 import software.amazon.kinesis.retrieval.KinesisClientRecord
 import software.amazon.kinesis.retrieval.fanout.FanOutConfig
 import software.amazon.kinesis.retrieval.polling.PollingConfig
@@ -82,9 +83,7 @@ private[client] class DynamicConsumerLive(
               q.takeAll.unit *>                  // Clear the queue so it doesn't have to be drained fully
                 q.offer(Exit.fail(None)).unit <* // Pass an exit signal in the queue to stop the stream
                 q.awaitShutdown
-            ).race(
-              q.awaitShutdown
-            ) <*
+            ).race(q.awaitShutdown) <*
             UIO(println(s"ShardQueue: stop() for ${shardId} because of ${reason} - COMPLETE")).when(false)
           // TODO maybe we want to only do this when the main stream's completion has bubbled up..?
         }
@@ -182,7 +181,9 @@ private[client] class DynamicConsumerLive(
             dynamoDbAsyncClient,
             cloudWatchAsyncClient,
             workerIdentifier,
-            () => new ZioShardProcessor(queues)
+            new ShardRecordProcessorFactory {
+              override def shardRecordProcessor(): ShardRecordProcessor = new ZioShardProcessor(queues)
+            }
           )
           leaseTableName.fold(configsBuilder)(configsBuilder.tableName)
         }

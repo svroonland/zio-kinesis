@@ -54,7 +54,7 @@ libraryDependencies ++= Seq(
   "dev.zio"                %% "zio-logging-slf4j"           % "0.3.2",
   "software.amazon.awssdk"  % "kinesis"                     % "2.14.3",
   "ch.qos.logback"          % "logback-classic"             % "1.2.3",
-  "software.amazon.kinesis" % "amazon-kinesis-client"       % "2.2.11",
+  "software.amazon.kinesis" % "amazon-kinesis-client"       % "2.3.0",
   "org.scala-lang.modules" %% "scala-collection-compat"     % "2.1.6"
 ) ++ {
   if (scalaBinaryVersion.value == "2.13") silencer else Seq.empty
