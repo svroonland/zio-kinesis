@@ -413,7 +413,7 @@ private class DefaultLeaseCoordinator(
         doCheckpoint(release = true)
 
       private def doCheckpoint(release: Boolean): ZIO[Any, Either[Throwable, ShardLeaseLost.type], Unit] =
-        /**
+        /*
          * This uses a semaphore to ensure that two concurrent calls to `checkpoint` do not attempt
          * to process the last staged record
          *
@@ -547,7 +547,7 @@ object DefaultLeaseCoordinator {
       _                   <- (
                (c.takeLeases.ignore *>
                  // Periodic refresh
-                 /**
+                 /*
                   * resumeUnreleasedLeases is here because after a temporary connection failure,
                   * we may have 'internally' released the lease but if no other worker has claimed
                   * the lease, it will still be in the lease table with us as owner.
