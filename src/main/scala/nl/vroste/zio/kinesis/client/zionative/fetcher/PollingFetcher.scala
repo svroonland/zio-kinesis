@@ -1,6 +1,7 @@
 package nl.vroste.zio.kinesis.client.zionative.fetcher
 import nl.vroste.zio.kinesis.client.zionative.{ Consumer, DiagnosticEvent, FetchMode, Fetcher }
 import nl.vroste.zio.kinesis.client.{ Client, Util }
+import software.amazon.awssdk.services.kinesis.model.ChildShard
 import zio._
 import zio.clock.Clock
 import zio.duration._
@@ -38,6 +39,7 @@ object PollingFetcher {
         for {
           initialShardIterator <- getShardIterator(streamName, shardId, startingPosition)
                                     .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
+                                    .mapError(Left(_): Either[Throwable, Seq[ChildShard]])
                                     .toManaged_
           getRecordsThrottled  <- throttledFunctionN(getRecordsRateLimit, 1.second)(Client.getRecords _)
           shardIterator        <- Ref.make[Option[String]](Some(initialShardIterator)).toManaged_
@@ -71,17 +73,23 @@ object PollingFetcher {
           shardStream = ZStream
                           .repeatEffectWith(doPoll, config.pollSchedule)
                           .catchAll {
-                            case None    =>
+                            case None    => // TODO do we still need the None in combination with nextShardIterator?
                               ZStream.empty
                             case Some(e) =>
                               ZStream.fromEffect(
                                 log.warn(s"Error in PollingFetcher for shard ${shardId}: ${e}")
                               ) *> ZStream.fail(e)
                           }
-                          .takeUntil(_.nextShardIterator == null)
-                          .buffer(config.bufferNrBatches)
-                          .mapConcatChunk(response => Chunk.fromIterable(response.records.asScala))
                           .retry(config.throttlingBackoff)
+                          .buffer(config.bufferNrBatches)
+                          .mapError(Left(_): Either[Throwable, Seq[ChildShard]])
+                          .flatMap { response =>
+                            if (response.hasChildShards)
+                              ZStream.succeed(response) ++ ZStream.fail(Right(response.childShards().asScala.toSeq))
+                            else
+                              ZStream.succeed(response)
+                          }
+                          .mapConcat(_.records.asScala)
         } yield shardStream
       }.ensuring(log.debug(s"PollingFetcher for shard ${shardId} closed"))
         .provide(env)

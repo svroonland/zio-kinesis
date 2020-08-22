@@ -246,6 +246,13 @@ object Consumer {
                 stop                 = ZStream.fromEffect(leaseLost.await).as(Exit.fail(None))
                 shardStream          = (stop mergeTerminateEither fetcher
                                   .shardRecordStream(shardId, startingPosition)
+                                  .catchAll {
+                                    case Left(e)                =>
+                                      ZStream.fail(e)
+                                    case Right(childShards @ _) =>
+                                      // Notify the lease coordinator about this?
+                                      ZStream.empty
+                                  }
                                   .mapChunksM { chunk => // mapM is slow
                                     chunk.mapM(record => toRecord(shardId, record))
                                   }
