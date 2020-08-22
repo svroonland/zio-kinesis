@@ -107,8 +107,10 @@ private[client] class DynamicConsumerLive(
       override def leaseLost(leaseLostInput: LeaseLostInput): Unit =
         shardQueue.foreach(_.stop("lease lost"))
 
-      override def shardEnded(shardEndedInput: ShardEndedInput): Unit =
+      override def shardEnded(shardEndedInput: ShardEndedInput): Unit = {
         shardQueue.foreach(_.stop("shard ended"))
+        shardEndedInput.checkpointer().checkpoint()
+      }
 
       override def shutdownRequested(shutdownRequestedInput: ShutdownRequestedInput): Unit =
         shardQueue.foreach(_.stop("shutdown requested"))
@@ -148,7 +150,6 @@ private[client] class DynamicConsumerLive(
         new FanOutConfig(kinesisClient)
           .streamName(streamName)
           .applicationName(applicationName)
-          .consumerName(workerIdentifier)
       else
         new PollingConfig(streamName, kinesisClient)
 

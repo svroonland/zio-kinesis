@@ -7,7 +7,7 @@ import io.github.vigoo.zioaws.core.config
 import io.github.vigoo.zioaws.core.config.AwsConfig
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model._
-import io.github.vigoo.zioaws.{ cloudwatch, dynamodb, kinesis, netty }
+import io.github.vigoo.zioaws.{ clouwatch, dynamodb, kinesis, netty }
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.{ EnhancedFanOut, Polling }
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
@@ -67,9 +67,8 @@ object FetchMode {
      * @param interval Fixed interval for polling when no more records are currently available
      */
     def dynamicSchedule(interval: Duration): Schedule[Clock, GetRecordsResponse.ReadOnly, Any] =
-      // TODO change `andThen` back to `||` when https://github.com/zio/zio/issues/4101 is fixed
-      (Schedule.recurWhile[Boolean](_ == true) andThen Schedule.fixed(interval))
-        .contramap((_: GetRecordsResponse.ReadOnly).millisBehindLatestValue.get != 0)
+      (Schedule.recurWhile[Boolean](_ == true) || Schedule.fixed(interval))
+        .contramap((_: GetRecordsResponse.ReadOnly).millisBehindLatest() != 0)
   }
 
   /**
