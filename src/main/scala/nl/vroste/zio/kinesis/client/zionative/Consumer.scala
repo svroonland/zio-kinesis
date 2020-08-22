@@ -7,7 +7,7 @@ import io.github.vigoo.zioaws.core.config
 import io.github.vigoo.zioaws.core.config.AwsConfig
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model._
-import io.github.vigoo.zioaws.{ clouwatch, dynamodb, kinesis, netty }
+import io.github.vigoo.zioaws.{ cloudwatch, dynamodb, kinesis }
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.{ EnhancedFanOut, Polling }
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
@@ -68,7 +68,7 @@ object FetchMode {
      */
     def dynamicSchedule(interval: Duration): Schedule[Clock, GetRecordsResponse.ReadOnly, Any] =
       (Schedule.recurWhile[Boolean](_ == true) || Schedule.fixed(interval))
-        .contramap((_: GetRecordsResponse.ReadOnly).millisBehindLatest() != 0)
+        .contramap((_: GetRecordsResponse.ReadOnly).millisBehindLatestValue.get != 0)
   }
 
   /**

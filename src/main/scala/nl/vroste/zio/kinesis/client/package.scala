@@ -15,7 +15,7 @@ import zio.{ Has, ZLayer }
 package object client {
   type DynamicConsumer = Has[DynamicConsumer.Service]
 
-  @deprecated("Use io.github.vigoo.zioaws.kinesis.live or io.github.vigoo.zioaws.kinesis.customized(builder)")
+  @deprecated("Use io.github.vigoo.zioaws.kinesis.live or io.github.vigoo.zioaws.kinesis.customized(builder)", "0.12")
   def kinesisAsyncClientLayer(
     build: KinesisAsyncClientBuilder => KinesisAsyncClientBuilder = identity
   ): ZLayer[AwsConfig, Throwable, Kinesis] =
@@ -23,7 +23,10 @@ package object client {
       build(_).overrideConfiguration(ClientOverrideConfiguration.builder().retryPolicy(RetryPolicy.none()).build())
     )
 
-  @deprecated("Use io.github.vigoo.zioaws.cloudwatch.live or io.github.vigoo.zioaws.cloudwatch.customized(builder)")
+  @deprecated(
+    "Use io.github.vigoo.zioaws.cloudwatch.live or io.github.vigoo.zioaws.cloudwatch.customized(builder)",
+    "0.12"
+  )
   def cloudWatchAsyncClientLayer(
     build: CloudWatchAsyncClientBuilder => CloudWatchAsyncClientBuilder = identity
   ): ZLayer[AwsConfig, Throwable, CloudWatch] =
@@ -31,7 +34,7 @@ package object client {
       build(_).overrideConfiguration(ClientOverrideConfiguration.builder().retryPolicy(RetryPolicy.none()).build())
     )
 
-  @deprecated("Use io.github.vigoo.zioaws.dynamodb.live or io.github.vigoo.zioaws.dynamodb.customized(builder)")
+  @deprecated("Use io.github.vigoo.zioaws.dynamodb.live or io.github.vigoo.zioaws.dynamodb.customized(builder)", "0.12")
   def dynamoDbAsyncClientLayer(
     build: DynamoDbAsyncClientBuilder => DynamoDbAsyncClientBuilder = identity
   ): ZLayer[AwsConfig, Throwable, DynamoDb] =

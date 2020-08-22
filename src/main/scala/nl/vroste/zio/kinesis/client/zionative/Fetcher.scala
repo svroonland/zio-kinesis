@@ -1,5 +1,5 @@
 package nl.vroste.zio.kinesis.client.zionative
-import io.github.vigoo.zioaws.kinesis.model.{ Record, ShardIteratorType, StartingPosition }
+import io.github.vigoo.zioaws.kinesis.model.{ Record, StartingPosition }
 import zio.clock.Clock
 import zio.stream.ZStream
 
