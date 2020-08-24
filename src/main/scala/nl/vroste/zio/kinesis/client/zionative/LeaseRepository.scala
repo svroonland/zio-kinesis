@@ -5,12 +5,26 @@ import zio.clock.Clock
 import zio.logging.Logging
 import zio.stream.ZStream
 
+sealed trait SpecialCheckpoint {
+  val stringValue: String
+}
+
+object SpecialCheckpoint {
+  case object ShardEnd extends SpecialCheckpoint {
+    val stringValue = "SHARD_END"
+  }
+
+  case object TrimHorizon extends SpecialCheckpoint {
+    val stringValue = "TRIM_HORIZON"
+  }
+}
+
 object LeaseRepository {
   final case class Lease(
     key: String,
     owner: Option[String],
     counter: Long,
-    checkpoint: Option[ExtendedSequenceNumber],
+    checkpoint: Option[Either[SpecialCheckpoint, ExtendedSequenceNumber]],
     parentShardIds: Seq[String]
   ) {
     def increaseCounter: Lease = copy(counter = counter + 1)

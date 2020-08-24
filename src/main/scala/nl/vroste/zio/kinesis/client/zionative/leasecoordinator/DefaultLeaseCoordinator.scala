@@ -100,7 +100,7 @@ private class DefaultLeaseCoordinator(
 
     def doUpdateCheckpoint(
       shard: String,
-      checkpoint: ExtendedSequenceNumber,
+      checkpoint: Either[SpecialCheckpoint, ExtendedSequenceNumber],
       release: Boolean
     ): ZIO[Logging with Clock, Either[Throwable, ShardLeaseLost.type], Unit] =
       for {
@@ -380,12 +380,12 @@ private class DefaultLeaseCoordinator(
   private def registerNewAcquiredLease(lease: Lease): ZIO[Clock, Nothing, Unit] =
     processCommand(LeaseCommand.RegisterNewAcquiredLease(lease, _))
 
-  override def acquiredLeases: ZStream[zio.clock.Clock, Throwable, AcquiredLease]          =
+  override def acquiredLeases: ZStream[zio.clock.Clock, Throwable, AcquiredLease]                                     =
     ZStream
       .fromQueue(acquiredLeasesQueue)
       .map { case (lease, complete) => AcquiredLease(lease.key, complete) }
 
-  override def getCheckpointForShard(shardId: String): UIO[Option[ExtendedSequenceNumber]] =
+  override def getCheckpointForShard(shardId: String): UIO[Option[Either[SpecialCheckpoint, ExtendedSequenceNumber]]] =
     for {
       leaseOpt <- state.get.map(_.currentLeases.get(shardId))
     } yield leaseOpt.flatMap(_.lease.checkpoint)
@@ -400,9 +400,10 @@ private class DefaultLeaseCoordinator(
 
   override def makeCheckpointer(shardId: String) =
     for {
-      staged <- Ref.make[Option[ExtendedSequenceNumber]](None)
-      permit <- Semaphore.make(1)
-    } yield new Checkpointer {
+      staged     <- Ref.make[Option[ExtendedSequenceNumber]](None)
+      endOfShard <- Ref.make[Option[ExtendedSequenceNumber]](None)
+      permit     <- Semaphore.make(1)
+    } yield new Checkpointer with CheckpointerInternal {
       def checkpoint[R](
         retrySchedule: Schedule[Clock with R, Throwable, Any]
       ): ZIO[Clock with R, Either[Throwable, ShardLeaseLost.type], Unit] =
@@ -430,9 +431,16 @@ private class DefaultLeaseCoordinator(
          */
         permit.withPermit {
           for {
-            lastStaged <- staged.get
-            _          <- lastStaged match {
-                   case Some(checkpoint) =>
+            lastStaged           <- staged.get
+            endOfShardSequenceNr <- endOfShard.get
+            _                    <- lastStaged match {
+                   case Some(sequenceNr) =>
+                     val checkpoint: Either[SpecialCheckpoint, ExtendedSequenceNumber] =
+                       endOfShardSequenceNr
+                         .filter(_ == sequenceNr)
+                         .map(_ => Left(SpecialCheckpoint.ShardEnd))
+                         .getOrElse(Right(sequenceNr))
+
                      processCommand(LeaseCommand.UpdateCheckpoint(shardId, checkpoint, _, release = release))
                      // onSuccess to ensure updating in the face of interruption
                      // only update when the staged record has not changed while checkpointing
@@ -447,6 +455,9 @@ private class DefaultLeaseCoordinator(
 
       override def stage(r: Record[_]): zio.UIO[Unit] =
         staged.set(Some(ExtendedSequenceNumber(r.sequenceNumber, r.subSequenceNumber)))
+
+      override def markEndOfShard(lastSequenceNumber: ExtendedSequenceNumber): UIO[Unit] =
+        endOfShard.set(Some(lastSequenceNumber))
     }
 
   def releaseLeases: ZIO[Logging with Clock, Nothing, Unit] =
@@ -477,7 +488,7 @@ object DefaultLeaseCoordinator {
     final case class RenewLease(shard: String, done: Promise[Throwable, Unit]) extends LeaseCommand
     final case class UpdateCheckpoint(
       shard: String,
-      checkpoint: ExtendedSequenceNumber,
+      checkpoint: Either[SpecialCheckpoint, ExtendedSequenceNumber],
       done: Promise[Either[Throwable, ShardLeaseLost.type], Unit],
       release: Boolean
     ) extends LeaseCommand
@@ -587,7 +598,6 @@ object DefaultLeaseCoordinator {
     currentLeases: Map[String, LeaseState],
     shards: Map[String, Shard]
   ) {
-
     val heldLeases = currentLeases.collect {
       case (shard, LeaseState(lease, Some(completed), _)) => shard -> (lease -> completed)
     }

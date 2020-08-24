@@ -1,5 +1,6 @@
 package nl.vroste.zio.kinesis.client.zionative
 import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
+import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
 import software.amazon.awssdk.services.kinesis.model.{ ChildShard, Record => KinesisRecord }
 import zio.clock.Clock
 import zio.stream.ZStream
@@ -11,16 +12,23 @@ private[zionative] trait Fetcher {
    * Stream of records on the shard with the given ID, starting from the startingPosition
    *
    * May complete when the shard ends
+   *
+   * Can fail with a Throwable or an end-of-shard indicator
    */
   def shardRecordStream(
     shardId: String,
     startingPosition: ShardIteratorType
-  ): ZStream[Clock, Either[Throwable, Seq[ChildShard]], KinesisRecord]
+  ): ZStream[Clock, Either[Throwable, EndOfShard], KinesisRecord]
 }
 
 private[zionative] object Fetcher {
+  case class EndOfShard(lastSequenceNumber: ExtendedSequenceNumber, childShards: Seq[ChildShard])
+
   def apply(
-    f: (String, ShardIteratorType) => ZStream[Clock, Either[Throwable, Seq[ChildShard]], KinesisRecord]
+    f: (
+      String,
+      ShardIteratorType
+    ) => ZStream[Clock, Either[Throwable, EndOfShard], KinesisRecord]
   ): Fetcher =
     (shard, startingPosition) => f(shard, startingPosition)
 }

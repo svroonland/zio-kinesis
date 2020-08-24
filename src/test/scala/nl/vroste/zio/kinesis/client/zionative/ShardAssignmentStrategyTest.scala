@@ -26,7 +26,7 @@ object ShardAssignmentStrategyTest extends DefaultRunnableSpec {
                     counter    <- Gen.long(1, 1000)
                     sequenceNr <-
                       Gen.option(Gen.int(0, Int.MaxValue / 2).map(_.toString).map(ExtendedSequenceNumber(_, 0L)))
-                  } yield Lease(s"shard-${shard}", worker, counter, sequenceNr, Seq.empty)
+                  } yield Lease(s"shard-${shard}", worker, counter, sequenceNr.map(Right(_)), Seq.empty)
                 }
     } yield leases
 

@@ -39,7 +39,8 @@ object DiagnosticEvent {
     * @param shardId Shard ID
    * @param checkpoint The last checkpoint made for this shard
    */
-  final case class LeaseAcquired(shardId: String, checkpoint: Option[ExtendedSequenceNumber]) extends LeaseEvent
+  final case class LeaseAcquired(shardId: String, checkpoint: Option[Either[SpecialCheckpoint, ExtendedSequenceNumber]])
+      extends LeaseEvent
 
   /**
    * The worker discovered that it had lost the lease for the given shard
@@ -71,7 +72,8 @@ object DiagnosticEvent {
     * @param shardId Shard ID
    * @param checkpoint Checkpoint
    */
-  final case class Checkpoint(shardId: String, checkpoint: ExtendedSequenceNumber) extends LeaseEvent
+  final case class Checkpoint(shardId: String, checkpoint: Either[SpecialCheckpoint, ExtendedSequenceNumber])
+      extends LeaseEvent
 
   sealed trait WorkerEvent extends DiagnosticEvent
 

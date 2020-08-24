@@ -685,7 +685,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
       table      <- ZIO.service[LeaseRepository.Service]
       leases     <- table.getLeases(applicationName).runCollect
       checkpoints = leases.collect {
-                      case l if l.checkpoint.isDefined => l.key -> l.checkpoint.get.sequenceNumber
+                      case l if l.checkpoint.isDefined => l.key -> l.checkpoint.get.toOption.get.sequenceNumber
                     }.toMap
     } yield checkpoints
 

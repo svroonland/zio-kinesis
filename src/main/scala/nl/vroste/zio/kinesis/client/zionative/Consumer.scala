@@ -4,6 +4,7 @@ import nl.vroste.zio.kinesis.client.AdminClient.StreamDescription
 import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.{ EnhancedFanOut, Polling }
+import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative.fetcher.{ EnhancedFanOutFetcher, PollingFetcher }
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.{ DefaultLeaseCoordinator, LeaseCoordinationSettings }
@@ -24,6 +25,8 @@ import zio.duration._
 import zio.logging.{ log, Logging }
 import zio.random.Random
 import zio.stream.ZStream
+
+import scala.jdk.CollectionConverters._
 
 final case class ExtendedSequenceNumber(sequenceNumber: String, subSequenceNumber: Long)
 
@@ -240,18 +243,25 @@ object Consumer {
                 checkpointer        <- leaseCoordinator.makeCheckpointer(shardId)
                 env                 <- ZIO.environment[Blocking with Logging with Clock with R]
                 startingPositionOpt <- leaseCoordinator.getCheckpointForShard(shardId)
-                startingPosition     = startingPositionOpt
-                                     .map(s => ShardIteratorType.AfterSequenceNumber(s.sequenceNumber))
-                                     .getOrElse(initialPosition)
+                startingPosition     = startingPositionOpt.map {
+                                     case Left(SpecialCheckpoint.TrimHorizon) => ShardIteratorType.TrimHorizon
+                                     case Left(SpecialCheckpoint.ShardEnd)    =>
+                                       throw new IllegalArgumentException(
+                                         s"SHARD_END is not a valid starting checkpoint for shard ${shardId}"
+                                       )
+                                     case Right(s)                            =>
+                                       ShardIteratorType.AfterSequenceNumber(s.sequenceNumber)
+                                   }.getOrElse(initialPosition)
                 stop                 = ZStream.fromEffect(leaseLost.await).as(Exit.fail(None))
                 shardStream          = (stop mergeTerminateEither fetcher
                                   .shardRecordStream(shardId, startingPosition)
                                   .catchAll {
-                                    case Left(e)                =>
+                                    case Left(e)                                                =>
                                       ZStream.fail(e)
-                                    case Right(childShards @ _) =>
-                                      // Notify the lease coordinator about this?
-                                      ZStream.empty
+                                    case Right(EndOfShard(lastSequenceNumber, childShards @ _)) =>
+                                      ZStream.unwrap(
+                                        checkpointer.markEndOfShard(lastSequenceNumber) as ZStream.empty
+                                      )
                                   }
                                   .mapChunksM { chunk => // mapM is slow
                                     chunk.mapM(record => toRecord(shardId, record))

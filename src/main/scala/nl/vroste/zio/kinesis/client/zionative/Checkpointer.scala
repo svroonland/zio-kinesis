@@ -12,6 +12,10 @@ import zio.stream.{ ZStream, ZTransducer }
  */
 case object ShardLeaseLost
 
+private[zionative] trait CheckpointerInternal {
+  def markEndOfShard(lastSequenceNumber: ExtendedSequenceNumber): UIO[Unit]
+}
+
 /**
  * Staging area for checkpoints
  *

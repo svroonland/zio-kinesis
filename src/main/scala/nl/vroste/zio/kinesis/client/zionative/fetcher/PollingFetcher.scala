@@ -1,5 +1,6 @@
 package nl.vroste.zio.kinesis.client.zionative.fetcher
-import nl.vroste.zio.kinesis.client.zionative.{ Consumer, DiagnosticEvent, FetchMode, Fetcher }
+import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
+import nl.vroste.zio.kinesis.client.zionative.{ Consumer, DiagnosticEvent, ExtendedSequenceNumber, FetchMode, Fetcher }
 import nl.vroste.zio.kinesis.client.{ Client, Util }
 import software.amazon.awssdk.services.kinesis.model.ChildShard
 import zio._
@@ -39,7 +40,7 @@ object PollingFetcher {
         for {
           initialShardIterator <- getShardIterator(streamName, shardId, startingPosition)
                                     .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
-                                    .mapError(Left(_): Either[Throwable, Seq[ChildShard]])
+                                    .mapError(Left(_): Either[Throwable, EndOfShard])
                                     .toManaged_
           getRecordsThrottled  <- throttledFunctionN(getRecordsRateLimit, 1.second)(Client.getRecords _)
           shardIterator        <- Ref.make[Option[String]](Some(initialShardIterator)).toManaged_
@@ -82,11 +83,15 @@ object PollingFetcher {
                           }
                           .retry(config.throttlingBackoff)
                           .buffer(config.bufferNrBatches)
-                          .mapError(Left(_): Either[Throwable, Seq[ChildShard]])
+                          .mapError(Left(_): Either[Throwable, EndOfShard])
                           .flatMap { response =>
-                            if (response.hasChildShards)
-                              ZStream.succeed(response) ++ ZStream.fail(Right(response.childShards().asScala.toSeq))
-                            else
+                            if (response.hasChildShards) {
+                              val lastRecord     = response.records().asScala.last
+                              val lastSequenceNr = ExtendedSequenceNumber(lastRecord.sequenceNumber(), 0L)
+                              ZStream.succeed(response) ++ ZStream.fail(
+                                Right(EndOfShard(lastSequenceNr, response.childShards().asScala.toSeq))
+                              )
+                            } else
                               ZStream.succeed(response)
                           }
                           .mapConcat(_.records.asScala)

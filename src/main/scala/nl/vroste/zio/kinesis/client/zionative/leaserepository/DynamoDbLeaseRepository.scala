@@ -10,7 +10,7 @@ import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.{
   UnableToClaimLease
 }
 import DynamoDbUtil._
-import nl.vroste.zio.kinesis.client.zionative.{ ExtendedSequenceNumber, LeaseRepository }
+import nl.vroste.zio.kinesis.client.zionative.{ ExtendedSequenceNumber, LeaseRepository, SpecialCheckpoint }
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
 import software.amazon.awssdk.services.dynamodb.model._
 import zio._
@@ -194,10 +194,11 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient, timeout: Dura
           "leaseOwner"                   -> lease.owner.map(putAttributeValueUpdate(_)).getOrElse(deleteAttributeValueUpdate),
           "leaseCounter"                 -> putAttributeValueUpdate(lease.counter),
           "checkpoint"                   -> lease.checkpoint
-            .map(_.sequenceNumber)
+            .map(_.fold(_.stringValue, _.sequenceNumber))
             .map(putAttributeValueUpdate)
             .getOrElse(putAttributeValueUpdate(null)),
           "checkpointSubSequenceNumber"  -> lease.checkpoint
+            .flatMap(_.toOption)
             .map(_.subSequenceNumber)
             .map(putAttributeValueUpdate)
             .getOrElse(putAttributeValueUpdate(0L)),
@@ -280,10 +281,7 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient, timeout: Dura
           .filterNot(_.nul())
           .map(_.s())
           .map(
-            ExtendedSequenceNumber(
-              _,
-              subSequenceNumber = item("checkpointSubSequenceNumber").n().toLong
-            )
+            toSequenceNumberOrSpecialCheckpoint(_, item("checkpointSubSequenceNumber").n().toLong)
           ),
         parentShardIds = item.get("parentShardIds").map(_.ss().asScala.toList).getOrElse(List.empty)
       )
@@ -293,13 +291,23 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient, timeout: Dura
         Failure(e)
     }
 
+  private def toSequenceNumberOrSpecialCheckpoint(
+    sequenceNumber: String,
+    subsequenceNumber: Long
+  ): Either[SpecialCheckpoint, ExtendedSequenceNumber] =
+    sequenceNumber match {
+      case s if s == SpecialCheckpoint.ShardEnd.stringValue    => Left(SpecialCheckpoint.ShardEnd)
+      case s if s == SpecialCheckpoint.TrimHorizon.stringValue => Left(SpecialCheckpoint.TrimHorizon)
+      case s                                                   => Right(ExtendedSequenceNumber(s, subsequenceNumber))
+    }
+
   private def toDynamoItem(lease: Lease): DynamoDbItem = {
     import DynamoDbUtil.ImplicitConversions.toAttributeValue
     DynamoDbItem(
       "leaseKey"                    -> lease.key,
       "leaseCounter"                -> lease.counter,
-      "checkpoint"                  -> lease.checkpoint.map(_.sequenceNumber).getOrElse(null),
-      "checkpointSubSequenceNumber" -> lease.checkpoint.map(_.subSequenceNumber).getOrElse(null)
+      "checkpoint"                  -> lease.checkpoint.map(_.fold(_.stringValue, _.sequenceNumber)).getOrElse(null),
+      "checkpointSubSequenceNumber" -> lease.checkpoint.map(_.fold(_ => 0L, _.subSequenceNumber)).getOrElse(null)
     ) ++ (if (lease.parentShardIds.nonEmpty) DynamoDbItem("parentShardIds" -> lease.parentShardIds)
           else DynamoDbItem.empty) ++
       lease.owner.fold(DynamoDbItem.empty)(owner => DynamoDbItem("leaseOwner" -> owner))
