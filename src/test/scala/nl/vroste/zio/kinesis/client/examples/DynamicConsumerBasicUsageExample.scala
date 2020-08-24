@@ -27,6 +27,6 @@ object DynamicConsumerBasicUsageExample extends zio.App {
             .via(checkpointer.checkpointBatched[Blocking with Console](nr = 1000, interval = 5.second))
       }
       .runDrain
-      .provideCustomLayer(DynamicConsumer.defaultEnvironment)
+      .provideCustomLayer(DynamicConsumer.defaultAwsEnvironment >>> DynamicConsumer.live)
       .exitCode
 }

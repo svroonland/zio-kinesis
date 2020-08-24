@@ -294,9 +294,8 @@ object DynamicConsumer {
       }
   }
 
-  val defaultEnvironment: ZLayer[Any, Throwable, DynamicConsumer] =
+  val defaultAwsEnvironment
+    : ZLayer[Any, Throwable, Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[DynamoDbAsyncClient]] =
     HttpClient.make() >>>
-      sdkClients >>>
-      DynamicConsumer.live
-
+      sdkClients
 }
