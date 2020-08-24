@@ -14,7 +14,7 @@ import zio._
 import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.duration.{ Duration, _ }
-import zio.logging.Logging
+import zio.logging.{ Logger, Logging }
 import zio.stream.{ ZStream, ZTransducer }
 
 /**
@@ -26,11 +26,13 @@ object DynamicConsumer {
   // For (some) backwards compatibility
   type Record[T] = nl.vroste.zio.kinesis.client.Record[T]
 
-  val live: ZLayer[Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[
+  val live: ZLayer[Has[Logger[String]] with Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[
     DynamoDbAsyncClient
-  ], Nothing, DynamicConsumer] =
-    ZLayer.fromServices[KinesisAsyncClient, CloudWatchAsyncClient, DynamoDbAsyncClient, DynamicConsumer.Service] {
-      new DynamicConsumerLive(_, _, _)
+  ], Nothing, Has[Service]] =
+    ZLayer.fromServices[Logger[
+      String
+    ], KinesisAsyncClient, CloudWatchAsyncClient, DynamoDbAsyncClient, DynamicConsumer.Service] {
+      new DynamicConsumerLive(_, _, _, _)
     }
 
   trait Service {

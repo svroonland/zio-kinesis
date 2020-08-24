@@ -7,6 +7,7 @@ import nl.vroste.zio.kinesis.client.zionative.metrics.{ CloudWatchMetricsPublish
 import nl.vroste.zio.kinesis.client.zionative._
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
+import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio._
 import zio.clock.Clock
@@ -159,9 +160,11 @@ object ExampleApp extends zio.App {
       (AdminClient.live ++ Client.live ++ DynamoDbLeaseRepository.live).orDie ++
         loggingEnv
 
-  val awsEnv: ZLayer[Clock, Nothing, AdminClient with Client with DynamicConsumer with Logging with Has[
+  val awsEnv: ZLayer[Clock, Nothing, Clock with Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[
     DynamoDbAsyncClient
-  ] with LeaseRepository with Has[CloudWatchAsyncClient] with Has[CloudWatchMetricsPublisherConfig]] = {
+  ] with Logging with Client with AdminClient with Has[DynamicConsumer.Service] with LeaseRepository with Has[
+    CloudWatchMetricsPublisherConfig
+  ]] = {
     val httpClient    = HttpClient.make(
       maxConcurrency = 100,
       allowHttp2 = false
@@ -185,7 +188,7 @@ object ExampleApp extends zio.App {
     val metricsPublisherConfig = ZLayer.succeed(CloudWatchMetricsPublisherConfig())
 
     ZLayer.requires[Clock] >+>
-      awsClients >+>
+      awsClients ++ loggingEnv >+>
       (client ++ adminClient ++ dynamicConsumer ++ leaseRepo ++ logging ++ metricsPublisherConfig)
   }
 

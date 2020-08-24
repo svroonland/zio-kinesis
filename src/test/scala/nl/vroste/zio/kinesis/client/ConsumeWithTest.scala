@@ -26,7 +26,7 @@ object ConsumeWithTest extends DefaultRunnableSpec {
     )
 
   private val env =
-    (LocalStackServices.localHttpClient >>> LocalStackServices.kinesisAsyncClientLayer >>> (Client.live ++ AdminClient.live ++ (localStackAwsLayer >>> DynamicConsumer.live))) ++ Clock.live ++ Blocking.live ++ loggingLayer
+    (LocalStackServices.localHttpClient >>> LocalStackServices.kinesisAsyncClientLayer >>> (Client.live ++ AdminClient.live ++ (loggingLayer ++ localStackAwsLayer >>> DynamicConsumer.live))) ++ Clock.live ++ Blocking.live ++ loggingLayer
 
   def testConsume1 =
     testM("consumeWith should consume records produced on all shards") {

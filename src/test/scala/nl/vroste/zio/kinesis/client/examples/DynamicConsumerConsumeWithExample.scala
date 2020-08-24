@@ -23,6 +23,6 @@ object DynamicConsumerConsumeWithExample extends zio.App {
         checkpointBatchSize = 1000L,
         checkpointDuration = 5.minutes
       )(record => putStrLn(s"Processing record $record"))
-      .provideCustomLayer(DynamicConsumer.defaultAwsEnvironment >>> DynamicConsumer.live ++ loggingEnv)
+      .provideCustomLayer(loggingEnv ++ DynamicConsumer.defaultAwsEnvironment >>> DynamicConsumer.live ++ loggingEnv)
       .exitCode
 }

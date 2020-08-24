@@ -15,11 +15,13 @@ import software.amazon.kinesis.retrieval.fanout.FanOutConfig
 import software.amazon.kinesis.retrieval.polling.PollingConfig
 import zio._
 import zio.blocking.Blocking
+import zio.logging.Logger
 import zio.stream.ZStream
 
 import scala.jdk.CollectionConverters._
 
 private[client] class DynamicConsumerLive(
+  logger: Logger[String],
   kinesisAsyncClient: KinesisAsyncClient,
   cloudWatchAsyncClient: CloudWatchAsyncClient,
   dynamoDbAsyncClient: DynamoDbAsyncClient
@@ -57,10 +59,10 @@ private[client] class DynamicConsumerLive(
         // TODO we must make sure never to throw an exception here, because KCL will delete the records
         // See https://github.com/awslabs/amazon-kinesis-client/issues/10
         runtime.unsafeRun {
-          // UIO(println(s"ShardQueue: offerRecords for ${shardId} got ${r.size()} records")) *>
-          q.offerAll(r.asScala.map(Exit.succeed(_))).unit.catchSomeCause {
-            case c if c.interrupted => ZIO.unit
-          } // TODO what behavior do we want if the queue + substream are already shutdown for some reason..?
+          logger.info(s"ShardQueue: offerRecords for ${shardId} got ${r.size()} records") *>
+            q.offerAll(r.asScala.map(Exit.succeed(_))).unit.catchSomeCause {
+              case c if c.interrupted => ZIO.unit
+            } // TODO what behavior do we want if the queue + substream are already shutdown for some reason..?
           // UIO(println(s"ShardQueue: offerRecords for ${shardId} COMPLETE"))
         }
 
