@@ -4,6 +4,7 @@ import java.util.UUID
 
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.DynamicConsumer.consumeWith
+import nl.vroste.zio.kinesis.client.LocalStackServices.localStackAwsLayer
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio._
 import zio.blocking.Blocking
@@ -25,7 +26,7 @@ object ConsumeWithTest extends DefaultRunnableSpec {
     )
 
   private val env =
-    (LocalStackServices.localHttpClient >>> LocalStackServices.kinesisAsyncClientLayer >>> (Client.live ++ AdminClient.live ++ LocalStackServices.dynamicConsumerLayer)) ++ Clock.live ++ Blocking.live ++ loggingLayer
+    (LocalStackServices.localHttpClient >>> LocalStackServices.kinesisAsyncClientLayer >>> (Client.live ++ AdminClient.live ++ (localStackAwsLayer >>> DynamicConsumer.live))) ++ Clock.live ++ Blocking.live ++ loggingLayer
 
   def testConsume1 =
     testM("consumeWith should consume records produced on all shards") {

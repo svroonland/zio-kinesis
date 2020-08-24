@@ -155,7 +155,7 @@ object ExampleApp extends zio.App {
   val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
   val localStackEnv =
-    LocalStackServices.env >+>
+    LocalStackServices.localStackAwsLayer >+>
       (AdminClient.live ++ Client.live ++ DynamoDbLeaseRepository.live).orDie ++
         loggingEnv
 

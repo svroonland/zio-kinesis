@@ -80,8 +80,6 @@ object LocalStackServices {
         .build
     )
 
-  val env = localHttpClient >>> (cloudWatchClientLayer ++ kinesisAsyncClientLayer ++ dynamoDbClientLayer)
+  val localStackAwsLayer = localHttpClient >>> (cloudWatchClientLayer ++ kinesisAsyncClientLayer ++ dynamoDbClientLayer)
 
-  val dynamicConsumerLayer: ZLayer[Any, Throwable, Has[DynamicConsumer.Service]] =
-    env >>> DynamicConsumer.live
 }
