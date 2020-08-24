@@ -1,7 +1,6 @@
 package nl.vroste.zio.kinesis.client.examples
 
 import nl.vroste.zio.kinesis.client.DynamicConsumer
-import nl.vroste.zio.kinesis.client.examples.DynamicConsumerConsumeWithExample.getClass
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio._
 import zio.blocking.Blocking
