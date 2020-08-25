@@ -26,7 +26,7 @@ object DynamicConsumer {
   // For (some) backwards compatibility
   type Record[T] = nl.vroste.zio.kinesis.client.Record[T]
 
-  val live: ZLayer[Has[Logger[String]] with Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[
+  val live: ZLayer[Logging with Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[
     DynamoDbAsyncClient
   ], Nothing, Has[Service]] =
     ZLayer.fromServices[Logger[
@@ -296,8 +296,4 @@ object DynamicConsumer {
       }
   }
 
-  val defaultAwsEnvironment
-    : ZLayer[Any, Throwable, Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[DynamoDbAsyncClient]] =
-    HttpClient.make() >>>
-      sdkClients
 }

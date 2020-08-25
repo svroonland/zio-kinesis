@@ -57,8 +57,8 @@ object ExampleApp extends zio.App {
                     .info(
                       id + s": PollComplete for ${ev.nrRecords} records of ${ev.shardId}, behind latest: ${ev.behindLatest.toMillis} ms (took ${ev.duration.toMillis} ms)"
                     )
-                    .provideLayer(loggingEnv)
-                case ev                               => log.info(id + ": " + ev.toString).provideLayer(loggingEnv)
+                    .provideLayer(loggingLayer)
+                case ev                               => log.info(id + ": " + ev.toString).provideLayer(loggingLayer)
               }) *> metrics.processEvent(ev)
           )
           .flatMapPar(Int.MaxValue) {
@@ -153,12 +153,12 @@ object ExampleApp extends zio.App {
       // localStackEnv
     )
 
-  val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
   val localStackEnv =
     LocalStackServices.localStackAwsLayer >+>
       (AdminClient.live ++ Client.live ++ DynamoDbLeaseRepository.live).orDie ++
-        loggingEnv
+        loggingLayer
 
   val awsEnv: ZLayer[Clock, Nothing, Clock with Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[
     DynamoDbAsyncClient
@@ -183,12 +183,12 @@ object ExampleApp extends zio.App {
 
     val leaseRepo       = DynamoDbLeaseRepository.live
     val dynamicConsumer = DynamicConsumer.live
-    val logging         = loggingEnv
+    val logging         = loggingLayer
 
     val metricsPublisherConfig = ZLayer.succeed(CloudWatchMetricsPublisherConfig())
 
     ZLayer.requires[Clock] >+>
-      awsClients ++ loggingEnv >+>
+      awsClients ++ loggingLayer >+>
       (client ++ adminClient ++ dynamicConsumer ++ leaseRepo ++ logging ++ metricsPublisherConfig)
   }
 

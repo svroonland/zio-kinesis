@@ -36,8 +36,8 @@ object NativeConsumerWithMetricsExample extends zio.App {
           }
           .runDrain
       }
-      .provideCustomLayer(Consumer.defaultEnvironment ++ loggingEnv ++ ZLayer.succeed(metricsConfig))
+      .provideCustomLayer(Consumer.defaultEnvironment ++ loggingLayer ++ ZLayer.succeed(metricsConfig))
       .exitCode
 
-  val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 }

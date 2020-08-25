@@ -18,7 +18,7 @@ import zio.{ Chunk, URIO, ZIO }
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
 
-  val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
   val myOwnLogger = Logging.make(new LogWriter[Any] {
     override def writeLog(
@@ -28,7 +28,7 @@ object ProducerTest extends DefaultRunnableSpec {
   })
 
   val env = (LocalStackServices.localStackAwsLayer.orDie >>> (AdminClient.live ++ Client.live)).orDie >+>
-    (loggingEnv ++ Clock.live)
+    (loggingLayer ++ Clock.live)
 
   def spec =
     suite("Producer")(

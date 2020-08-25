@@ -248,7 +248,7 @@ val clientLayer = HTTPClient.make() >>> kinesisAsyncClientLayer() >>> Client.liv
 `DynamicConsumer` is an alternative to `Consumer`, backed by the 
 [Kinesis Client Library (KCL)](https://docs.aws.amazon.com/streams/latest/dev/shared-throughput-kcl-consumers.html). 
 
-_NOTE: Although `DynamicConsumer` will be included in this library for some time to come for backwards compatility, it will eventually be deprecated and removed in favour of the ZIO native `Consumer`. Users are recommended to upgrade._
+_NOTE: Although `DynamicConsumer` will be included in this library for some time to come for backwards compatibility, it will eventually be deprecated and removed in favour of the ZIO native `Consumer`. Users are recommended to upgrade._
   
 The interface is largely the same as `Consumer`, except for:
  * Some parameters for configuration 
@@ -269,6 +269,7 @@ care of checkpointing which you can configure through `checkpointBatchSize` and 
 ```scala
 package nl.vroste.zio.kinesis.client.examples
 
+import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.DynamicConsumer
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio._
@@ -276,8 +277,11 @@ import zio.console.putStrLn
 import zio.duration._
 import zio.logging.slf4j.Slf4jLogger
 
+/**
+ * Basic usage example for `DynamicConsumer.consumeWith` convenience method
+ */
 object DynamicConsumerConsumeWithExample extends zio.App {
-  private val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  private val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     DynamicConsumer
@@ -287,12 +291,9 @@ object DynamicConsumerConsumeWithExample extends zio.App {
         deserializer = Serde.asciiString,
         workerIdentifier = "worker1",
         checkpointBatchSize = 1000L,
-        checkpointDuration = 5.seconds
-      ){ record => 
-        // Effectfully process your record here
-        putStrLn(s"Processing record $record")
-      }
-      .provideCustomLayer(DynamicConsumer.defaultEnvironment ++ loggingEnv)
+        checkpointDuration = 5.minutes
+      )(record => putStrLn(s"Processing record $record"))
+      .provideCustomLayer(loggingLayer ++ defaultAwsLayer >>> DynamicConsumer.live ++ loggingLayer)
       .exitCode
 }
 ``` 
@@ -302,17 +303,22 @@ If you want more control over your stream, `DynamicConsumer.shardedStream` can b
 
 
 ```scala
-import nl.vroste.zio.kinesis.client.DynamicConsumer
+package nl.vroste.zio.kinesis.client.examples
+
+import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio._
 import zio.blocking.Blocking
-import zio.console.{Console, putStrLn}
+import zio.console.{ putStrLn, Console }
 import zio.duration._
+import zio.logging.slf4j.Slf4jLogger
 
 /**
  * Basic usage example for DynamicConsumer
  */
 object DynamicConsumerBasicUsageExample extends zio.App {
+  private val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     DynamicConsumer
       .shardedStream(
@@ -329,7 +335,7 @@ object DynamicConsumerBasicUsageExample extends zio.App {
             .via(checkpointer.checkpointBatched[Blocking with Console](nr = 1000, interval = 5.second))
       }
       .runDrain
-      .provideCustomLayer(DynamicConsumer.defaultEnvironment)
+      .provideCustomLayer(loggingLayer ++ defaultAwsLayer >>> DynamicConsumer.live)
       .exitCode
 }
 ```
