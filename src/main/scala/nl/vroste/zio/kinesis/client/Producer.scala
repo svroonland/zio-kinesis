@@ -139,37 +139,30 @@ object Producer {
              .fork
     } yield new Producer[T] {
       override def produce(r: ProducerRecord[T]): Task[ProduceResponse] =
-        for {
-          done     <- Promise.make[Throwable, ProduceResponse]
-          data     <- serializer.serialize(r.data).provide(env)
-          entry     = PutRecordsRequestEntry
-                    .builder()
-                    .partitionKey(r.partitionKey)
-                    .data(SdkBytes.fromByteBuffer(data))
-                    .build()
-          request   = ProduceRequest(entry, done)
+        (for {
+          request  <- makeProduceRequest(r)
           _        <- queue.offer(request)
-          response <- done.await
-        } yield response
+          response <- request.done.await
+        } yield response).provide(env)
 
       override def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[Seq[ProduceResponse]] =
         (for {
-          requests <- ZIO
-                        .foreach(chunk) { r =>
-                          for {
-                            done <- Promise.make[Throwable, ProduceResponse]
-                            data <- serializer.serialize(r.data)
-                            entry = PutRecordsRequestEntry
-                                      .builder()
-                                      .partitionKey(r.partitionKey)
-                                      .data(SdkBytes.fromByteBuffer(data))
-                                      .build()
-                          } yield ProduceRequest(entry, done)
-                        }
+          requests <- ZIO.foreach(chunk)(makeProduceRequest)
           _        <- queue.offerAll(requests)
           results  <- ZIO.foreach(requests)(_.done.await)
         } yield results)
           .provide(env)
+
+      private def makeProduceRequest(r: ProducerRecord[T]) =
+        for {
+          done <- Promise.make[Throwable, ProduceResponse]
+          data <- serializer.serialize(r.data)
+          entry = PutRecordsRequestEntry
+                    .builder()
+                    .partitionKey(r.partitionKey)
+                    .data(SdkBytes.fromByteBuffer(data))
+                    .build()
+        } yield ProduceRequest(entry, done)
     }
 
   val maxRecordsPerRequest     = 499             // This is a Kinesis API limitation // TODO because of fold issue, reduced by 1
