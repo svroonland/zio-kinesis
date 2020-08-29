@@ -77,7 +77,6 @@ final case class ProducerSettings(
   failedDelay: Duration = 100.millis
 )
 
-// TODO add logging
 object Producer {
   def make[R, T](
     streamName: String,
@@ -123,12 +122,7 @@ object Producer {
                                           else
                                             (Seq.empty, maybeSucceeded)
 
-                 _                     <-
-                   log
-                     .info(
-                       s"Failed to produce ${newFailed.size} records: ${newFailed.map(_._1.errorMessage()).mkString(", ")}"
-                     )
-                     .when(newFailed.nonEmpty)
+                 _                     <- log.info(s"Failed to produce ${newFailed.size} records").when(newFailed.nonEmpty)
                  // TODO backoff for shard limit stuff
                  _                     <- failedQueue
                         .offerAll(newFailed.map(_._2))
@@ -139,7 +133,6 @@ object Producer {
                             ZIO.succeed(ProduceResponse(response.shardId(), response.sequenceNumber()))
                           )
                       }
-                 _                     <- log.debug("Done with batch")
                } yield ()).catchAll {
                  case NonFatal(e) =>
                    log.warn("Failed to process batch") *>
