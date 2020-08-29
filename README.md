@@ -292,9 +292,8 @@ object DynamicConsumerConsumeWithExample extends zio.App {
         workerIdentifier = "worker1",
         checkpointBatchSize = 1000L,
         checkpointDuration = 5.minutes
-      ){
-        // Effectfully process your record here
-        record => putStrLn(s"Processing record $record")
+      ){ record => // Effectfully process your record here
+        putStrLn(s"Processing record $record")
       }
       .provideCustomLayer(loggingLayer ++ defaultAwsLayer >>> DynamicConsumer.live ++ loggingLayer)
       .exitCode
