@@ -1,6 +1,5 @@
 package nl.vroste.zio.kinesis.client
 import java.io.IOException
-import java.time.Instant
 
 import io.netty.handler.timeout.ReadTimeoutException
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
