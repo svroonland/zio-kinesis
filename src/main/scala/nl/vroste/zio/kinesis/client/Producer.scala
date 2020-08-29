@@ -98,10 +98,10 @@ object Producer {
            // Buffer records up to maxBufferDuration or up to the Kinesis PutRecords request limit
              .aggregateAsyncWithin(
                ZTransducer.fold(PutRecordsBatch.empty)(_.isWithinLimits)(_.add(_)),
-               Schedule.spaced(settings.maxBufferDuration)
+               Schedule.duration(settings.maxBufferDuration)
              )
              // Several putRecords requests in parallel
-             .mapMPar(settings.maxParallelRequests) { batch: PutRecordsBatch =>
+             .mapMParUnordered(settings.maxParallelRequests) { batch: PutRecordsBatch =>
                (for {
                  response              <- client
                                .putRecords(streamName, batch.entries.map(_.r).reverse)
@@ -127,8 +127,9 @@ object Producer {
                  _                     <- failedQueue
                         .offerAll(newFailed.map(_._2))
                         .delay(settings.failedDelay)
-                        .fork // TODO should be per shard
-                 _                     <- ZIO.foreachPar_(succeeded) {
+                        .fork
+                        .when(newFailed.nonEmpty) // TODO should be per shard
+                 _                     <- ZIO.foreach_(succeeded) {
                         case (response, request) =>
                           request.done.succeed(ProduceResponse(response.shardId(), response.sequenceNumber()))
                       }
@@ -170,7 +171,7 @@ object Producer {
                 } yield ProduceRequest(entry, done, now.toInstant)
               }
           }
-          .flatMap(requests => queue.offerAll(requests) *> ZIO.foreachPar(requests)(_.done.await))
+          .flatMap(requests => queue.offerAll(requests) *> ZIO.foreach(requests)(_.done.await))
     }
 
   val maxRecordsPerRequest     = 499             // This is a Kinesis API limitation // TODO because of fold issue, reduced by 1
