@@ -27,7 +27,7 @@ import scala.util.control.NonFatal
  * - Retry individual records
  * - Rate limiting to respect shard capacity (TODO)
  *
- * Records are batched for up to `maxBufferDuration` time, or 500 records or 5MB of payload size,
+ * Records are batched for up to 500 records or 5MB of payload size,
  * whichever comes first. The latter two are Kinesis API limits.
  *
  * Individual records which cannot be produced due to Kinesis shard rate limits are retried.
@@ -93,15 +93,18 @@ object Producer {
       failedQueue <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
 
       // Failed records get precedence)
-      _ <- (ZStream.fromQueue(failedQueue) merge ZStream.fromQueue(queue))
+      _ <- (ZStream
+               .tick(100.millis)
+               .mapConcatChunkM(_ => failedQueue.takeBetween(1, Int.MaxValue).map(Chunk.fromIterable)) merge ZStream
+               .fromQueue(queue))
            // Buffer records up to maxBufferDuration or up to the Kinesis PutRecords request limit
-             .aggregateAsyncWithin(
-               ZTransducer.fold(PutRecordsBatch.empty)(_.isWithinLimits)(_.add(_)),
-               Schedule.duration(settings.maxBufferDuration)
+             .aggregateAsync(
+               ZTransducer.fold(PutRecordsBatch.empty)(_.isWithinLimits)(_.add(_))
              )
              // Several putRecords requests in parallel
              .mapMParUnordered(settings.maxParallelRequests) { batch: PutRecordsBatch =>
                (for {
+                 _                     <- log.info(s"Producing batch of size ${batch.nrRecords}")
                  response              <- client
                                .putRecords(streamName, batch.entriesInOrder.map(_.r))
                                .tapError(e => log.warn(s"Error producing records, will retry if recoverable: $e"))
@@ -121,18 +124,28 @@ object Producer {
                                           else
                                             (Seq.empty, maybeSucceeded)
 
-                 _                     <- log.info(s"Failed to produce ${newFailed.size} records").when(newFailed.nonEmpty)
+                 _                     <-
+                   log
+                     .info(
+                       s"Failed to produce ${newFailed.size} records: ${newFailed.map(_._1.errorMessage()).mkString(", ")}"
+                     )
+                     .when(newFailed.nonEmpty)
                  // TODO backoff for shard limit stuff
                  _                     <- failedQueue
                         .offerAll(newFailed.map(_._2))
-                        .delay(settings.failedDelay)
-                        .fork
                         .when(newFailed.nonEmpty) // TODO should be per shard
                  _                     <- ZIO.foreach_(succeeded) {
                         case (response, request) =>
-                          request.done.succeed(ProduceResponse(response.shardId(), response.sequenceNumber()))
+                          request.done.completeWith(
+                            ZIO.succeed(ProduceResponse(response.shardId(), response.sequenceNumber()))
+                          )
                       }
-               } yield ()).catchAll { case NonFatal(e) => ZIO.foreach_(batch.entries.map(_.done))(_.fail(e)) }
+                 _                     <- log.debug("Done with batch")
+               } yield ()).catchAll {
+                 case NonFatal(e) =>
+                   log.warn("Failed to process batch") *>
+                     ZIO.foreach_(batch.entries.map(_.done))(_.fail(e))
+               }
              }
              .runDrain
              .toManaged_
