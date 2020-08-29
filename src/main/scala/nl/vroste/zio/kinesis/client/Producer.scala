@@ -62,7 +62,7 @@ trait Producer[T] {
    *
    * @return Task that fails if any of the records fail to be produced with a non-recoverable error
    */
-  def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[List[ProduceResponse]]
+  def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[Seq[ProduceResponse]]
 
   /**
    * ZSink interface to the Producer
@@ -104,14 +104,14 @@ object Producer {
              .mapMParUnordered(settings.maxParallelRequests) { batch: PutRecordsBatch =>
                (for {
                  response              <- client
-                               .putRecords(streamName, batch.entries.map(_.r).reverse)
+                               .putRecords(streamName, batch.entriesInOrder.map(_.r))
                                .tapError(e => log.warn(s"Error producing records, will retry if recoverable: $e"))
                                .retry(scheduleCatchRecoverable && settings.backoffRequests)
 
                  maybeSucceeded         = response
                                     .records()
                                     .asScala
-                                    .zip(batch.entries.reverse)
+                                    .zip(batch.entriesInOrder)
                  (newFailed, succeeded) = if (response.failedRecordCount() > 0)
                                             maybeSucceeded.partition {
                                               case (result, _) =>
@@ -141,7 +141,6 @@ object Producer {
     } yield new Producer[T] {
       override def produce(r: ProducerRecord[T]): Task[ProduceResponse] =
         for {
-          now      <- zio.clock.currentDateTime.provide(env)
           done     <- Promise.make[Throwable, ProduceResponse]
           data     <- serializer.serialize(r.data).provide(env)
           entry     = PutRecordsRequestEntry
@@ -149,29 +148,29 @@ object Producer {
                     .partitionKey(r.partitionKey)
                     .data(SdkBytes.fromByteBuffer(data))
                     .build()
-          request   = ProduceRequest(entry, done, now.toInstant)
+          request   = ProduceRequest(entry, done)
           _        <- queue.offer(request)
           response <- done.await
         } yield response
 
-      override def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[List[ProduceResponse]] =
-        zio.clock.currentDateTime
+      override def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[Seq[ProduceResponse]] =
+        (for {
+          requests <- ZIO
+                        .foreach(chunk) { r =>
+                          for {
+                            done <- Promise.make[Throwable, ProduceResponse]
+                            data <- serializer.serialize(r.data)
+                            entry = PutRecordsRequestEntry
+                                      .builder()
+                                      .partitionKey(r.partitionKey)
+                                      .data(SdkBytes.fromByteBuffer(data))
+                                      .build()
+                          } yield ProduceRequest(entry, done)
+                        }
+          _        <- queue.offerAll(requests)
+          results  <- ZIO.foreach(requests)(_.done.await)
+        } yield results)
           .provide(env)
-          .flatMap { now =>
-            ZIO
-              .foreach(chunk.toList) { r =>
-                for {
-                  done <- Promise.make[Throwable, ProduceResponse]
-                  data <- serializer.serialize(r.data).provide(env)
-                  entry = PutRecordsRequestEntry
-                            .builder()
-                            .partitionKey(r.partitionKey)
-                            .data(SdkBytes.fromByteBuffer(data))
-                            .build()
-                } yield ProduceRequest(entry, done, now.toInstant)
-              }
-          }
-          .flatMap(requests => queue.offerAll(requests) *> ZIO.foreach(requests)(_.done.await))
     }
 
   val maxRecordsPerRequest     = 499             // This is a Kinesis API limitation // TODO because of fold issue, reduced by 1
@@ -181,11 +180,7 @@ object Producer {
 
   final case class ProduceResponse(shardId: String, sequenceNumber: String)
 
-  private final case class ProduceRequest(
-    r: PutRecordsRequestEntry,
-    done: Promise[Throwable, ProduceResponse],
-    timestamp: Instant
-  )
+  private final case class ProduceRequest(r: PutRecordsRequestEntry, done: Promise[Throwable, ProduceResponse])
 
   private final case class PutRecordsBatch(entries: List[ProduceRequest], nrRecords: Int, payloadSize: Long) {
     def add(entry: ProduceRequest): PutRecordsBatch =
@@ -194,6 +189,8 @@ object Producer {
         nrRecords = nrRecords + 1,
         payloadSize = payloadSize + entry.r.partitionKey().length + entry.r.data().asByteArray().length
       )
+
+    lazy val entriesInOrder: Seq[ProduceRequest] = entries.reverse
 
     def isWithinLimits =
       nrRecords <= maxRecordsPerRequest &&
