@@ -71,8 +71,7 @@ trait Producer[T] {
 }
 
 final case class ProducerSettings(
-  bufferSize: Int = 8192, // Prefer powers of 2
-  maxBufferDuration: Duration = 500.millis,
+  bufferSize: Int = 8192,
   maxParallelRequests: Int = 24,
   backoffRequests: Schedule[Clock, Throwable, Any] = Schedule.exponential(500.millis) && Schedule.recurs(5),
   failedDelay: Duration = 100.millis
@@ -97,7 +96,7 @@ object Producer {
                .tick(100.millis)
                .mapConcatChunkM(_ => failedQueue.takeBetween(1, Int.MaxValue).map(Chunk.fromIterable)) merge ZStream
                .fromQueue(queue))
-           // Buffer records up to maxBufferDuration or up to the Kinesis PutRecords request limit
+           // Batch records up to the Kinesis PutRecords request limits as long as downstream is busy
              .aggregateAsync(
                ZTransducer.fold(PutRecordsBatch.empty)(_.isWithinLimits)(_.add(_))
              )
