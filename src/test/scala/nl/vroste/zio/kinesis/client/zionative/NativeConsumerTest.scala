@@ -612,8 +612,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
         def getShards: ZIO[Kinesis with Clock, Throwable, Chunk[Shard.ReadOnly]] =
           kinesis
             .listShards(ListShardsRequest(Some(name)))
-            .flatMap(_.shards)
-            .map(Chunk.fromIterable(_))
+            .runCollect
             .mapError(_.toThrowable)
             .filterOrElse(_.nonEmpty)(_ => getShards.delay(1.second))
         getShards

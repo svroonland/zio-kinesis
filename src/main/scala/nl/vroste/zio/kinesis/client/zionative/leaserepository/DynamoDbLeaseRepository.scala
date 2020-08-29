@@ -88,8 +88,8 @@ private class DynamoDbLeaseRepository(client: DynamoDb.Service, timeout: Duratio
   }
 
   override def getLeases(tableName: String): ZStream[Clock, Throwable, Lease] =
-    ZStream
-      .unwrap(client.scanStream(ScanRequest(tableName)))
+    client
+      .scan(ScanRequest(tableName))
       .mapError(_.toThrowable)
       .map(item => toLease(item.view.mapValues(_.editable).toMap))
       .mapM(ZIO.fromTry(_))

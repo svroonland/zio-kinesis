@@ -45,6 +45,8 @@ inThisBuild(
 name := "zio-kinesis"
 scalafmtOnCompile := true
 
+val zioAwsVersion = "2.14.3.0"
+
 libraryDependencies ++= Seq(
   "dev.zio"                %% "zio-streams"                 % "1.0.1",
   "dev.zio"                %% "zio-test"                    % "1.0.1" % "test",
@@ -56,10 +58,10 @@ libraryDependencies ++= Seq(
   "ch.qos.logback"          % "logback-classic"             % "1.2.3",
   "software.amazon.kinesis" % "amazon-kinesis-client"       % "2.2.11",
   "org.scala-lang.modules" %% "scala-collection-compat"     % "2.1.6",
-  "io.github.vigoo"        %% "zio-aws-kinesis"             % "1.13.69.1",
-  "io.github.vigoo"        %% "zio-aws-dynamodb"            % "1.13.69.1",
-  "io.github.vigoo"        %% "zio-aws-cloudwatch"          % "1.13.69.1",
-  "io.github.vigoo"        %% "zio-aws-netty"               % "1.13.69.1"
+  "io.github.vigoo"        %% "zio-aws-kinesis"             % zioAwsVersion,
+  "io.github.vigoo"        %% "zio-aws-dynamodb"            % zioAwsVersion,
+  "io.github.vigoo"        %% "zio-aws-cloudwatch"          % zioAwsVersion,
+  "io.github.vigoo"        %% "zio-aws-netty"               % zioAwsVersion
 ) ++ {
   if (scalaBinaryVersion.value == "2.13") silencer else Seq.empty
 }

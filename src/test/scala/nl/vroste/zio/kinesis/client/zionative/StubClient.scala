@@ -17,9 +17,8 @@ class StubClient extends Kinesis.Service {
   override def describeStream(request: model.DescribeStreamRequest): IO[AwsError, DescribeStreamResponse.ReadOnly]    = ???
   override def decreaseStreamRetentionPeriod(request: model.DecreaseStreamRetentionPeriodRequest): IO[AwsError, Unit] =
     ???
-  override def listStreamConsumers(
-    request: model.ListStreamConsumersRequest
-  ): IO[AwsError, ListStreamConsumersResponse.ReadOnly]                                                               = ???
+
+  override def listStreamConsumers(request: ListStreamConsumersRequest): ZStream[Any, AwsError, Consumer.ReadOnly]    = ???
   override def addTagsToStream(request: model.AddTagsToStreamRequest): IO[AwsError, Unit]                             = ???
   override def mergeShards(request: model.MergeShardsRequest): IO[AwsError, Unit]                                     = ???
   override def describeStreamSummary(
@@ -30,7 +29,7 @@ class StubClient extends Kinesis.Service {
   override def listTagsForStream(
     request: model.ListTagsForStreamRequest
   ): IO[AwsError, ListTagsForStreamResponse.ReadOnly]                                                                 = ???
-  override def listShards(request: model.ListShardsRequest): IO[AwsError, ListShardsResponse.ReadOnly]                = ???
+  override def listShards(request: ListShardsRequest): ZStream[Any, AwsError, Shard.ReadOnly]                         = ???
   override def describeStreamConsumer(
     request: model.DescribeStreamConsumerRequest
   ): IO[AwsError, DescribeStreamConsumerResponse.ReadOnly]                                                            = ???
@@ -55,7 +54,8 @@ class StubClient extends Kinesis.Service {
   ): IO[AwsError, RegisterStreamConsumerResponse.ReadOnly]                                                            = ???
   override def describeLimits(request: model.DescribeLimitsRequest): IO[AwsError, DescribeLimitsResponse.ReadOnly]    = ???
   override def subscribeToShard(
-    request: model.SubscribeToShardRequest
-  ): IO[AwsError, ZStream[Any, AwsError, SubscribeToShardEvent.ReadOnly]]                                             = ???
-  override def getRecords(request: model.GetRecordsRequest): IO[AwsError, GetRecordsResponse.ReadOnly]                = ???
+    request: SubscribeToShardRequest
+  ): ZStream[Any, AwsError, SubscribeToShardEvent.ReadOnly]                                                           = ???
+
+  override def getRecords(request: model.GetRecordsRequest): IO[AwsError, GetRecordsResponse.ReadOnly] = ???
 }

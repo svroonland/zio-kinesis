@@ -215,7 +215,7 @@ object Consumer {
             fetchShards      <- kinesis
                              .listShards(ListShardsRequest(Some(streamName)))
                              .mapError(_.toThrowable)
-                             .map(_.shardsValue.toList.flatten)
+                             .runCollect
                              .map(_.map(l => l.shardIdValue -> l).toMap)
                              .flatMap { shards =>
                                if (shards.isEmpty) ZIO.fail(new Exception("No shards in stream!"))

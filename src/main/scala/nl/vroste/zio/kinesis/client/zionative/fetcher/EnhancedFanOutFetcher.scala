@@ -30,12 +30,13 @@ object EnhancedFanOutFetcher {
       consumerARN        <- registerConsumerIfNotExists(streamDescription.streamARN, workerId).toManaged_
       subscribeThrottled <- Util.throttledFunctionN(config.maxSubscriptionsPerSecond, 1.second) {
                               (pos: StartingPosition, shardId: String) =>
-                                client
-                                  .subscribeToShard(
-                                    SubscribeToShardRequest(consumerARN, shardId, pos)
-                                  )
-                                  .mapError(_.toThrowable)
-                                  .map(_.mapError(_.toThrowable))
+                                ZIO.succeed(
+                                  client
+                                    .subscribeToShard(
+                                      SubscribeToShardRequest(consumerARN, shardId, pos)
+                                    )
+                                    .mapError(_.toThrowable)
+                                )
                             }
     } yield Fetcher { (shardId, startingPosition) =>
       ZStream.unwrap {
