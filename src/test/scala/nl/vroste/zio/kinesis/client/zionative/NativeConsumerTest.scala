@@ -7,12 +7,11 @@ import scala.collection.compat._
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.{ AdminClient, Client, LocalStackServices, Producer }
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
-import nl.vroste.zio.kinesis.client.TestUtil.retryOnResourceNotFound
+import nl.vroste.zio.kinesis.client.TestUtil.{ retryOnResourceNotFound, withStream }
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.LeaseCoordinationSettings
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
-import software.amazon.awssdk.services.kinesis.model.Shard
 import zio._
 import zio.clock.Clock
 import zio.console._
@@ -24,7 +23,6 @@ import zio.test.Assertion._
 import zio.test._
 import zio.logging._
 import nl.vroste.zio.kinesis.client.ProducerSettings
-import nl.vroste.zio.kinesis.client.TestUtil
 
 object NativeConsumerTest extends DefaultRunnableSpec {
   /*
@@ -600,21 +598,6 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     zio.test.environment.testEnvironment ++
     Clock.live) >>>
     (ZLayer.identity ++ loggingLayer)
-
-  def withStream[R, A](name: String, shards: Int)(
-    f: ZIO[R, Throwable, A]
-  ): ZIO[AdminClient with Client with Clock with Console with R, Throwable, A] =
-    TestUtil
-      .createStream(name, shards)
-      .tapM { _ =>
-        def getShards: ZIO[Client with Clock, Throwable, Chunk[Shard]] =
-          ZIO
-            .service[Client.Service]
-            .flatMap(_.listShards(name).runCollect)
-            .filterOrElse(_.nonEmpty)(_ => getShards.delay(1.second))
-        getShards
-      }
-      .use_(f)
 
   def produceSampleRecords(
     streamName: String,

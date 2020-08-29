@@ -1,12 +1,27 @@
 package nl.vroste.zio.kinesis.client
 
-import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException }
+import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException, Shard }
 import zio.clock.Clock
 import zio.console.{ putStrLn, Console }
 import zio.duration._
-import zio.{ Schedule, ZIO, ZManaged }
+import zio.{ Chunk, Schedule, ZIO, ZManaged }
 
 object TestUtil {
+
+  def withStream[R, A](name: String, shards: Int)(
+    f: ZIO[R, Throwable, A]
+  ): ZIO[AdminClient with Client with Clock with Console with R, Throwable, A] =
+    TestUtil
+      .createStream(name, shards)
+      .tapM { _ =>
+        def getShards: ZIO[Client with Clock, Throwable, Chunk[Shard]] =
+          ZIO
+            .service[Client.Service]
+            .flatMap(_.listShards(name).runCollect)
+            .filterOrElse(_.nonEmpty)(_ => getShards.delay(1.second))
+        getShards
+      }
+      .use_(f)
 
   def createStream(streamName: String, nrShards: Int): ZManaged[Console with AdminClient with Clock, Throwable, Unit] =
     createStreamUnmanaged(streamName, nrShards).toManaged(_ =>

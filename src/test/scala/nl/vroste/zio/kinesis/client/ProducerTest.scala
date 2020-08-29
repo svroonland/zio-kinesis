@@ -29,60 +29,60 @@ object ProducerTest extends DefaultRunnableSpec {
 
         val streamName = "zio-test-stream-producer"
 
-        (for {
-          _        <- createStream(streamName, 1)
-          producer <- Producer
-                        .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 128))
-        } yield producer).use { producer =>
-          for {
-            _         <- putStrLn("Producing record!")
-            result    <- producer.produce(ProducerRecord("bla1", "bla1value")).timed
-            (time, _)  = result
-            _         <- putStrLn(time.toMillis.toString)
-            result2   <- producer.produce(ProducerRecord("bla1", "bla1value")).timed
-            (time2, _) = result2
-            _         <- putStrLn(time2.toMillis.toString)
-          } yield assertCompletes
+        withStream(streamName, 1) {
+          Producer
+            .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 128))
+            .use { producer =>
+              for {
+                _         <- putStrLn("Producing record!")
+                result    <- producer.produce(ProducerRecord("bla1", "bla1value")).timed
+                (time, _)  = result
+                _         <- putStrLn(time.toMillis.toString)
+                result2   <- producer.produce(ProducerRecord("bla1", "bla1value")).timed
+                (time2, _) = result2
+                _         <- putStrLn(time2.toMillis.toString)
+              } yield assertCompletes
+            }
         }
       },
       testM("support a ramp load") {
         val streamName = "zio-test-stream-producer-ramp"
 
-        (for {
-          _        <- createStreamUnmanaged(streamName, 10).toManaged_
-          producer <- Producer
-                        .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 128))
-        } yield producer).use {
-          producer =>
-            val increment = 1
-            for {
-              batchSize <- Ref.make(1)
-              timing    <- Ref.make[Chunk[Chunk[Duration]]](Chunk.empty)
+        withStream(streamName, 10) {
+          Producer
+            .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 128))
+            .use {
+              producer =>
+                val increment = 1
+                for {
+                  batchSize <- Ref.make(1)
+                  timing    <- Ref.make[Chunk[Chunk[Duration]]](Chunk.empty)
 
-              _       <- ZStream
-                     .tick(1.second)
-                     .take(200)
-                     .mapM(_ => batchSize.getAndUpdate(_ + 1))
-                     .map { batchSize =>
-                       Chunk.fromIterable(
-                         (1 to batchSize * increment).map(i =>
-                           ProducerRecord(s"key${i}" + UUID.randomUUID(), s"value${i}")
-                         )
-                       )
-                     }
-                     .mapM { batch =>
-                       for {
-                         _     <- putStrLn(s"Sending batch of size ${batch.size}!")
-                         times <- ZIO.foreachPar(batch)(producer.produce(_).timed.map(_._1))
-                         _     <- timing.update(_ :+ times)
-                         _     <-
-                           putStrLn(s"Batch size ${batch.size}: avg = ${times.map(_.toMillis).sum / times.length} ms")
-                       } yield ()
-                     }
-                     .runDrain
-              results <- timing.get
-              _       <- ZIO.foreach(results)(r => putStrLn(r.map(_.toMillis).mkString(" ")))
-            } yield assertCompletes
+                  _       <- ZStream
+                         .tick(1.second)
+                         .take(200)
+                         .mapM(_ => batchSize.getAndUpdate(_ + 1))
+                         .map { batchSize =>
+                           Chunk.fromIterable(
+                             (1 to batchSize * increment)
+                               .map(i => ProducerRecord(s"key${i}" + UUID.randomUUID(), s"value${i}"))
+                           )
+                         }
+                         .mapM { batch =>
+                           for {
+                             _     <- putStrLn(s"Sending batch of size ${batch.size}!")
+                             times <- ZIO.foreachPar(batch)(producer.produce(_).timed.map(_._1))
+                             _     <- timing.update(_ :+ times)
+                             _     <- putStrLn(
+                                    s"Batch size ${batch.size}: avg = ${times.map(_.toMillis).sum / times.length} ms"
+                                  )
+                           } yield ()
+                         }
+                         .runDrain
+                  results <- timing.get
+                  _       <- ZIO.foreach(results)(r => putStrLn(r.map(_.toMillis).mkString(" ")))
+                } yield assertCompletes
+            }
         }
       } @@ TestAspect.ignore,
       testM("produce records to Kinesis successfully and efficiently") {
