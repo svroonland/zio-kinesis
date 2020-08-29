@@ -1,6 +1,7 @@
 package nl.vroste.zio.kinesis.client.zionative.leaserepository
 
 import java.util.concurrent.TimeoutException
+import scala.collection.compat._
 
 import DynamoDbUtil._
 import io.github.vigoo.zioaws.dynamodb.model._
@@ -87,12 +88,11 @@ private class DynamoDbLeaseRepository(client: DynamoDb.Service, timeout: Duratio
       }.timeoutFail(new Exception("Timeout creating lease table"))(1.minute)
   }
 
-  override def getLeases(tableName: String): ZStream[Clock, Throwable, Lease] =
+  override def getLeases(tableName: String): ZStream[Any, Throwable, Lease] =
     client
       .scan(ScanRequest(tableName))
       .mapError(_.toThrowable)
-      .map(item => toLease(item.view.mapValues(_.editable).toMap))
-      .mapM(ZIO.fromTry(_))
+      .mapM(item => ZIO.fromTry(toLease(item.view.mapValues(_.editable).toMap)))
 
   /**
    * Removes the leaseOwner property

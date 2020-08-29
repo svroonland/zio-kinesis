@@ -18,8 +18,8 @@ import software.amazon.awssdk.core.SdkSystemSetting
 import software.amazon.awssdk.http.SdkHttpConfigurationOption
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.utils.AttributeMap
+import zio.ZLayer
 import zio.duration._
-import zio.{ Has, ZLayer }
 
 /**
  * Layers for connecting to a LocalStack (https://localstack.cloud/) environment on a local docker host

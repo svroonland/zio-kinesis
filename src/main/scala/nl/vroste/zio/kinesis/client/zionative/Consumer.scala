@@ -1,6 +1,7 @@
 package nl.vroste.zio.kinesis.client.zionative
 
 import java.nio.ByteBuffer
+import scala.collection.compat._
 
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.core.config

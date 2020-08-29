@@ -18,7 +18,9 @@ class StubClient extends Kinesis.Service {
   override def decreaseStreamRetentionPeriod(request: model.DecreaseStreamRetentionPeriodRequest): IO[AwsError, Unit] =
     ???
 
-  override def listStreamConsumers(request: ListStreamConsumersRequest): ZStream[Any, AwsError, Consumer.ReadOnly]    = ???
+  override def listStreamConsumers(
+    request: ListStreamConsumersRequest
+  ): ZStream[Any, AwsError, io.github.vigoo.zioaws.kinesis.model.Consumer.ReadOnly]                                   = ???
   override def addTagsToStream(request: model.AddTagsToStreamRequest): IO[AwsError, Unit]                             = ???
   override def mergeShards(request: model.MergeShardsRequest): IO[AwsError, Unit]                                     = ???
   override def describeStreamSummary(

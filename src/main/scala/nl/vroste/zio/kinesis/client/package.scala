@@ -3,7 +3,6 @@ package nl.vroste.zio.kinesis
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.core.config
 import io.github.vigoo.zioaws.core.config.AwsConfig
-import io.github.vigoo.zioaws.core.httpclient.HttpClient
 import io.github.vigoo.zioaws.dynamodb.DynamoDb
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.{ cloudwatch, dynamodb, kinesis }

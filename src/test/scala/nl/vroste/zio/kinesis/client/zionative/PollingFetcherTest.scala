@@ -2,7 +2,7 @@ package nl.vroste.zio.kinesis.client.zionative
 import java.nio.charset.Charset
 
 import io.github.vigoo.zioaws.core.AwsError
-import io.github.vigoo.zioaws.kinesis.{ getShardIterator, model, Kinesis }
+import io.github.vigoo.zioaws.kinesis.{ model, Kinesis }
 import io.github.vigoo.zioaws.kinesis.model.{
   GetRecordsResponse,
   GetShardIteratorResponse,
@@ -10,7 +10,6 @@ import io.github.vigoo.zioaws.kinesis.model.{
   ShardIteratorType,
   StartingPosition
 }
-import nl.vroste.zio.kinesis.client.Client
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.Polling
 import nl.vroste.zio.kinesis.client.zionative.fetcher.PollingFetcher

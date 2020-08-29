@@ -33,7 +33,7 @@ object LeaseRepository {
      */
     def createLeaseTableIfNotExists(tableName: String): ZIO[Clock with Logging, Throwable, Boolean]
 
-    def getLeases(tableName: String): ZStream[Clock, Throwable, Lease]
+    def getLeases(tableName: String): ZStream[Any, Throwable, Lease]
 
     /**
      * Removes the leaseOwner property
