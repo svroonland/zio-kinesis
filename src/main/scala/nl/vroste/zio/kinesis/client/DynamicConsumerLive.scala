@@ -59,15 +59,15 @@ private[client] class DynamicConsumerLive(
         // TODO we must make sure never to throw an exception here, because KCL will delete the records
         // See https://github.com/awslabs/amazon-kinesis-client/issues/10
         runtime.unsafeRun {
-          logger.debug(s"ShardQueue: offerRecords for ${shardId} got ${r.size()} records") *>
+          logger.debug(s"offerRecords for ${shardId} got ${r.size()} records") *>
             q.offerAll(r.asScala.map(Exit.succeed(_))).unit.catchSomeCause {
               case c if c.interrupted => ZIO.unit
             } *> // TODO what behavior do we want if the queue + substream are already shutdown for some reason..?
-            logger.debug((s"ShardQueue: offerRecords for ${shardId} COMPLETE"))
+            logger.trace((s"offerRecords for ${shardId} COMPLETE"))
         }
 
       def shutdownQueue: UIO[Unit] =
-        logger.debug(s"ShardQueue: shutdownQueue for ${shardId}") *>
+        logger.debug(s"shutdownQueue for ${shardId}") *>
           q.shutdown
 
       /**
@@ -79,7 +79,7 @@ private[client] class DynamicConsumerLive(
                */
       def stop(reason: String): Unit =
         runtime.unsafeRun {
-          logger.debug(s"ShardQueue: stop() for ${shardId} because of ${reason}") *>
+          logger.debug(s"stop() for ${shardId} because of ${reason}") *>
             (
               q.takeAll.unit *>                  // Clear the queue so it doesn't have to be drained fully
                 q.offer(Exit.fail(None)).unit <* // Pass an exit signal in the queue to stop the stream
@@ -87,7 +87,7 @@ private[client] class DynamicConsumerLive(
             ).race(
               q.awaitShutdown
             ) <*
-            logger.debug(s"ShardQueue: stop() for ${shardId} because of ${reason} - COMPLETE")
+            logger.trace(s"stop() for ${shardId} because of ${reason} - COMPLETE")
           // TODO maybe we want to only do this when the main stream's completion has bubbled up..?
         }
     }
