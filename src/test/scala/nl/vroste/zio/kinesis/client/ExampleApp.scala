@@ -1,14 +1,18 @@
 package nl.vroste.zio.kinesis.client
+import akka.actor.ActorSystem
+import com.github.matsluni.akkahttpspi.AkkaHttpClient
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.core.config
+import io.github.vigoo.zioaws.core.httpclient.HttpClient
 import io.github.vigoo.zioaws.dynamodb.DynamoDb
 import io.github.vigoo.zioaws.kinesis.Kinesis
-import io.github.vigoo.zioaws.{ cloudwatch, dynamodb, kinesis }
+import io.github.vigoo.zioaws.{ akkahttp, cloudwatch, dynamodb, kinesis }
 import nl.vroste.zio.kinesis.client.TestUtil.retryOnResourceNotFound
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative._
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
 import nl.vroste.zio.kinesis.client.zionative.metrics.{ CloudWatchMetricsPublisher, CloudWatchMetricsPublisherConfig }
+import software.amazon.awssdk.http.async.SdkAsyncHttpClient
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio._
 import zio.clock.Clock
@@ -22,14 +26,14 @@ import zio.stream.{ ZStream, ZTransducer }
  * Example app that shows the ZIO-native and KCL workers running in parallel
  */
 object ExampleApp extends zio.App {
-  val streamName                      = "zio-test-stream-12" // + java.util.UUID.randomUUID().toString
+  val streamName                      = "zio-test-stream-13" // + java.util.UUID.randomUUID().toString
   val nrRecords                       = 2000000
   val produceRate                     = 400                  // Nr records to produce per second
   val nrShards                        = 2
   val enhancedFanout                  = false
   val nrNativeWorkers                 = 1
   val nrKclWorkers                    = 0
-  val applicationName                 = "testApp-1"          // + java.util.UUID.randomUUID().toString(),
+  val applicationName                 = "testApp-30"         // + java.util.UUID.randomUUID().toString(),
   val runtime                         = 3.minute
   val maxRandomWorkerStartDelayMillis = 1 + 0 * 60 * 1000
   val recordProcessingTime: Duration  = 1.millisecond
@@ -112,7 +116,6 @@ object ExampleApp extends zio.App {
                   .stageOnSuccess(log.info(s"${id} Processing record $r").when(false))(r)
               )
               .aggregateAsyncWithin(ZTransducer.collectAllN(1000), Schedule.fixed(5.second))
-              .mapConcat(_.toList)
               .tap(_ => log.info(s"${id} Checkpointing shard ${shardID}") *> checkpointer.checkpoint)
               .catchAll {
                 case _: ShutdownException => // This will be thrown when the shard lease has been stolen
@@ -175,8 +178,31 @@ object ExampleApp extends zio.App {
       CloudWatchMetricsPublisherConfig
     ]
   ] = {
-    val awsHttpClient = HttpClientBuilder.make(maxConcurrency = 100, allowHttp2 = false)
-    val awsClients    = (awsHttpClient >>> config.default >>> (kinesis.live ++ cloudwatch.live ++ dynamodb.live)).orDie
+//    val awsHttpClient = HttpClientBuilder.make(maxConcurrency = 100, allowHttp2 = false)
+    val actorSystem =
+      ZLayer.fromAcquireRelease(ZIO.effect(ActorSystem("test")))(sys => ZIO.fromFuture(_ => sys.terminate()).orDie)
+
+    val awsHttpClient: ZLayer[Any with Has[ActorSystem], Throwable, Has[HttpClient.Service]] =
+      ZLayer.fromServiceM { (actorSystem: ActorSystem) =>
+        ZIO.runtime[Any].flatMap { runtime =>
+          val ec = runtime.platform.executor.asEC
+
+          ZIO(
+            AkkaHttpClient
+              .builder()
+              .withActorSystem(actorSystem)
+              .withExecutionContext(ec)
+              .build()
+          ).map { akkaClient =>
+            new HttpClient.Service {
+              override val client: SdkAsyncHttpClient = akkaClient
+            }
+          }
+        }
+      }
+
+    val awsClients =
+      (actorSystem >>> awsHttpClient >>> config.default >>> (kinesis.live ++ cloudwatch.live ++ dynamodb.live)).orDie
 
     val leaseRepo       = DynamoDbLeaseRepository.live
     val dynamicConsumer = DynamicConsumer.live
