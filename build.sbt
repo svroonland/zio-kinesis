@@ -62,7 +62,8 @@ libraryDependencies ++= Seq(
   "io.github.vigoo"        %% "zio-aws-dynamodb"            % zioAwsVersion,
   "io.github.vigoo"        %% "zio-aws-cloudwatch"          % zioAwsVersion,
   "io.github.vigoo"        %% "zio-aws-netty"               % zioAwsVersion,
-  "io.github.vigoo"        %% "zio-aws-akka-http"           % zioAwsVersion
+  "io.github.vigoo"        %% "zio-aws-akka-http"           % zioAwsVersion,
+  "io.github.vigoo"        %% "zio-aws-http4s"              % zioAwsVersion
 ) ++ {
   if (scalaBinaryVersion.value == "2.13") silencer else Seq.empty
 }

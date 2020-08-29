@@ -1,5 +1,6 @@
 package nl.vroste.zio.kinesis.client
 import akka.actor.ActorSystem
+import akka.http.scaladsl.settings.{ ClientConnectionSettings, ConnectionPoolSettings }
 import com.github.matsluni.akkahttpspi.AkkaHttpClient
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.core.config
@@ -178,11 +179,17 @@ object ExampleApp extends zio.App {
       CloudWatchMetricsPublisherConfig
     ]
   ] = {
+    // NETTY
 //    val awsHttpClient = HttpClientBuilder.make(maxConcurrency = 100, allowHttp2 = false)
+
+    // HTTP4S
+//    val awsHttpClient = io.github.vigoo.zioaws.http4s.client()
+
+    // AKKA HTTP
     val actorSystem =
       ZLayer.fromAcquireRelease(ZIO.effect(ActorSystem("test")))(sys => ZIO.fromFuture(_ => sys.terminate()).orDie)
 
-    val awsHttpClient: ZLayer[Any with Has[ActorSystem], Throwable, Has[HttpClient.Service]] =
+    val awsHttpClient: ZLayer[Any, Throwable, Has[HttpClient.Service]] = actorSystem >>>
       ZLayer.fromServiceM { (actorSystem: ActorSystem) =>
         ZIO.runtime[Any].flatMap { runtime =>
           val ec = runtime.platform.executor.asEC
@@ -190,6 +197,9 @@ object ExampleApp extends zio.App {
           ZIO(
             AkkaHttpClient
               .builder()
+              .withConnectionPoolSettings(
+                ConnectionPoolSettings(actorSystem).withMaxOpenRequests(100).withMaxConnections(1000)
+              )
               .withActorSystem(actorSystem)
               .withExecutionContext(ec)
               .build()
@@ -202,7 +212,7 @@ object ExampleApp extends zio.App {
       }
 
     val awsClients =
-      (actorSystem >>> awsHttpClient >>> config.default >>> (kinesis.live ++ cloudwatch.live ++ dynamodb.live)).orDie
+      (awsHttpClient >>> config.default >>> (kinesis.live ++ cloudwatch.live ++ dynamodb.live)).orDie
 
     val leaseRepo       = DynamoDbLeaseRepository.live
     val dynamicConsumer = DynamicConsumer.live
