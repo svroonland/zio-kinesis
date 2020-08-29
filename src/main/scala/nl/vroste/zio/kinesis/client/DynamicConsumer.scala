@@ -273,7 +273,7 @@ object DynamicConsumer {
   }
 
   object Checkpointer {
-    private[client] def make(kclCheckpointer: RecordProcessorCheckpointer): UIO[Checkpointer] =
+    private[client] def make(kclCheckpointer: RecordProcessorCheckpointer, logger: Logger[String]): UIO[Checkpointer] =
       for {
         latestStaged <- Ref.make[Option[Record[_]]](None)
       } yield new Checkpointer {
@@ -283,9 +283,10 @@ object DynamicConsumer {
         override def checkpoint: ZIO[Blocking, Throwable, Unit] =
           latestStaged.get.flatMap {
             case Some(record) =>
-              zio.blocking.blocking {
-                Task(kclCheckpointer.checkpoint(record.sequenceNumber, record.subSequenceNumber))
-              } *> latestStaged.update {
+              logger.info(s"about to checkpoint: shardId=${record.shardId} partitionKey=${record.partitionKey}") *>
+                zio.blocking.blocking {
+                  Task(kclCheckpointer.checkpoint(record.sequenceNumber, record.subSequenceNumber))
+                } *> latestStaged.update {
                 case Some(r) if r == record => None
                 case r                      => r // A newer record may have been staged by now
               }

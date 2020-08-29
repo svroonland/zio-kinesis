@@ -130,7 +130,7 @@ private[client] class DynamicConsumerLive(
                          maxShardBufferSize
                        )
                        .map(new ShardQueue(shard, runtime, _))
-            checkpointer <- Checkpointer.make(checkpointer)
+            checkpointer <- Checkpointer.make(checkpointer, logger)
             _            <- shards.offer(Exit.succeed((shard, queue, checkpointer))).unit
           } yield queue
         }
