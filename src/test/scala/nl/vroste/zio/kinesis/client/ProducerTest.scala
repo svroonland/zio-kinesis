@@ -23,9 +23,6 @@ object ProducerTest extends DefaultRunnableSpec {
   val env = (LocalStackServices.localStackAwsLayer.orDie >>> (AdminClient.live ++ Client.live)).orDie >+>
     (loggingLayer ++ Clock.live)
 
-//  val env = (client.defaultAwsLayer >>> (AdminClient.live ++ Client.live)).orDie >+>
-//    (loggingLayer ++ Clock.live)
-
   def spec =
     suite("Producer")(
       testM("produce a single record immediately") {
@@ -87,7 +84,7 @@ object ProducerTest extends DefaultRunnableSpec {
               _       <- ZIO.foreach(results)(r => putStrLn(r.map(_.toMillis).mkString(" ")))
             } yield assertCompletes
         }
-      },
+      } @@ TestAspect.ignore,
       testM("produce records to Kinesis successfully and efficiently") {
         // This test demonstrates production of about 5000-6000 records per second on my Mid 2015 Macbook Pro
 
@@ -122,7 +119,7 @@ object ProducerTest extends DefaultRunnableSpec {
               _                <- putStrLn(s"Produced ${nrChunks * nrRecordsPerChunk * 1000.0 / time.toMillis}")
             } yield assertCompletes
         }.untraced
-      } @@ timeout(5.minute),
+      } @@ timeout(5.minute) @@ TestAspect.ignore,
       testM("fail when attempting to produce to a stream that does not exist") {
         val streamName = "zio-test-stream-not-existing"
 
