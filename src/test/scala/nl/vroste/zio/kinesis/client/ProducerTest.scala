@@ -74,7 +74,7 @@ object ProducerTest extends DefaultRunnableSpec {
                        for {
                          _     <- putStrLn(s"Sending batch of size ${batch.size}!")
                          times <- ZIO.foreachPar(batch)(producer.produce(_).timed.map(_._1))
-                         _     <- timing.update(_.appended(times))
+                         _     <- timing.update(_ :+ times)
                          _     <-
                            putStrLn(s"Batch size ${batch.size}: avg = ${times.map(_.toMillis).sum / times.length} ms")
                        } yield ()
