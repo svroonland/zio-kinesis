@@ -1,7 +1,6 @@
 package nl.vroste.zio.kinesis.client.examples
 
 import io.github.vigoo.zioaws.core.config
-import io.github.vigoo.zioaws.netty
 import nl.vroste.zio.kinesis.client.HttpClientBuilder
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.Consumer
@@ -40,10 +39,10 @@ object NativeConsumerWithMetricsExample extends zio.App {
           .runDrain
       }
       .provideCustomLayer(
-        (HttpClientBuilder.make() >>> config.default >>> Consumer.defaultEnvironment) ++ loggingEnv ++ ZLayer
+        (HttpClientBuilder.make() >>> config.default >>> Consumer.defaultEnvironment) ++ loggingLayer ++ ZLayer
           .succeed(metricsConfig)
       )
       .exitCode
 
-  val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 }

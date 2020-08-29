@@ -2,13 +2,13 @@ package nl.vroste.zio.kinesis.client
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.core.config
 import io.github.vigoo.zioaws.dynamodb.DynamoDb
-import io.github.vigoo.zioaws.{ cloudwatch, dynamodb, kinesis, netty }
 import io.github.vigoo.zioaws.kinesis.Kinesis
+import io.github.vigoo.zioaws.{ cloudwatch, dynamodb, kinesis }
 import nl.vroste.zio.kinesis.client.TestUtil.retryOnResourceNotFound
 import nl.vroste.zio.kinesis.client.serde.Serde
+import nl.vroste.zio.kinesis.client.zionative._
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
 import nl.vroste.zio.kinesis.client.zionative.metrics.{ CloudWatchMetricsPublisher, CloudWatchMetricsPublisherConfig }
-import nl.vroste.zio.kinesis.client.zionative._
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio._
 import zio.clock.Clock
@@ -58,8 +58,8 @@ object ExampleApp extends zio.App {
                     .info(
                       id + s": PollComplete for ${ev.nrRecords} records of ${ev.shardId}, behind latest: ${ev.behindLatest.toMillis} ms (took ${ev.duration.toMillis} ms)"
                     )
-                    .provideLayer(loggingEnv)
-                case ev                               => log.info(id + ": " + ev.toString).provideLayer(loggingEnv)
+                    .provideLayer(loggingLayer)
+                case ev                               => log.info(id + ": " + ev.toString).provideLayer(loggingLayer)
               }) *> metrics.processEvent(ev)
           )
           .flatMapPar(Int.MaxValue) {
@@ -154,7 +154,7 @@ object ExampleApp extends zio.App {
       // localStackEnv
     )
 
-  val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
   val localStackEnv: ZLayer[
     Clock,
@@ -163,9 +163,8 @@ object ExampleApp extends zio.App {
       CloudWatchMetricsPublisherConfig
     ]
   ] =
-    LocalStackServices.env.orDie >+>
+    (LocalStackServices.env.orDie ++ loggingLayer) >+>
       (DynamicConsumer.live ++
-        loggingEnv ++
         DynamoDbLeaseRepository.live ++
         ZLayer.succeed(CloudWatchMetricsPublisherConfig()))
 
@@ -177,20 +176,18 @@ object ExampleApp extends zio.App {
     ]
   ] = {
     val awsHttpClient = HttpClientBuilder.make(maxConcurrency = 100, allowHttp2 = false)
-    val kinesisClient = kinesis.live
-    val cloudWatch    = cloudwatch.live
-    val dynamo        = dynamodb.live
-    val awsClients    = (awsHttpClient >>> config.default >>> (kinesisClient ++ cloudWatch ++ dynamo)).orDie
+    val awsClients    = (awsHttpClient >>> config.default >>> (kinesis.live ++ cloudwatch.live ++ dynamodb.live)).orDie
 
     val leaseRepo       = DynamoDbLeaseRepository.live
     val dynamicConsumer = DynamicConsumer.live
-    val logging         = loggingEnv
+    val logging         = loggingLayer
 
     val metricsPublisherConfig = ZLayer.succeed(CloudWatchMetricsPublisherConfig())
 
     ZLayer.requires[Clock] >+>
+      logging >+>
       awsClients >+>
-      (dynamicConsumer ++ leaseRepo ++ logging ++ metricsPublisherConfig)
+      (dynamicConsumer ++ leaseRepo ++ metricsPublisherConfig)
   }
 
   def produceRecords(streamName: String, nrRecords: Int) =

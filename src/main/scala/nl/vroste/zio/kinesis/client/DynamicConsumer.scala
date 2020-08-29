@@ -4,7 +4,6 @@ import java.time.Instant
 import java.util.UUID
 
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
-import io.github.vigoo.zioaws.core.config
 import io.github.vigoo.zioaws.dynamodb.DynamoDb
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import nl.vroste.zio.kinesis.client.Util.processWithSkipOnError
@@ -17,7 +16,7 @@ import zio._
 import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.duration.{ Duration, _ }
-import zio.logging.Logging
+import zio.logging.{ Logger, Logging }
 import zio.stream.{ ZStream, ZTransducer }
 
 /**
@@ -38,10 +37,12 @@ object DynamicConsumer {
     aggregated: Boolean
   )
 
-  val live: ZLayer[Kinesis with CloudWatch with DynamoDb, Nothing, DynamicConsumer] =
-    ZLayer.fromServices[Kinesis.Service, CloudWatch.Service, DynamoDb.Service, DynamicConsumer.Service] {
-      case (kinesis, cloudwatch, dynamodb) => new DynamicConsumerLive(kinesis.api, cloudwatch.api, dynamodb.api)
-    }
+  val live: ZLayer[Logging with Kinesis with CloudWatch with DynamoDb, Nothing, DynamicConsumer] =
+    ZLayer
+      .fromServices[Logger[String], Kinesis.Service, CloudWatch.Service, DynamoDb.Service, DynamicConsumer.Service] {
+        case (logger, kinesis, cloudwatch, dynamodb) =>
+          new DynamicConsumerLive(logger, kinesis.api, cloudwatch.api, dynamodb.api)
+      }
 
   trait Service {
 
@@ -281,7 +282,7 @@ object DynamicConsumer {
   }
 
   object Checkpointer {
-    private[client] def make(kclCheckpointer: RecordProcessorCheckpointer): UIO[Checkpointer] =
+    private[client] def make(kclCheckpointer: RecordProcessorCheckpointer, logger: Logger[String]): UIO[Checkpointer] =
       for {
         latestStaged <- Ref.make[Option[Record[_]]](None)
       } yield new Checkpointer {
@@ -291,9 +292,10 @@ object DynamicConsumer {
         override def checkpoint: ZIO[Blocking, Throwable, Unit] =
           latestStaged.get.flatMap {
             case Some(record) =>
-              zio.blocking.blocking {
-                Task(kclCheckpointer.checkpoint(record.sequenceNumber, record.subSequenceNumber))
-              } *> latestStaged.update {
+              logger.info(s"about to checkpoint: shardId=${record.shardId} partitionKey=${record.partitionKey}") *>
+                zio.blocking.blocking {
+                  Task(kclCheckpointer.checkpoint(record.sequenceNumber, record.subSequenceNumber))
+                } *> latestStaged.update {
                 case Some(r) if r == record => None
                 case r                      => r // A newer record may have been staged by now
               }
@@ -303,8 +305,4 @@ object DynamicConsumer {
         override private[client] def peek: UIO[Option[Record[_]]] = latestStaged.get
       }
   }
-
-  val defaultEnvironment: ZLayer[Any, Throwable, DynamicConsumer] =
-    HttpClientBuilder.make() >>> config.default >>> sdkClients >>> DynamicConsumer.live
-
 }

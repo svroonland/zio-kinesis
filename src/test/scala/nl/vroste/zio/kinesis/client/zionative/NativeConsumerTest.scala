@@ -596,12 +596,12 @@ object NativeConsumerTest extends DefaultRunnableSpec {
       TestAspect.timeoutWarning(60.seconds) @@
       TestAspect.timeout(300.seconds)
 
-  val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
   val env = ((LocalStackServices.env.orDie >+> DynamoDbLeaseRepository.live) ++
     zio.test.environment.testEnvironment ++
     Clock.live) >>>
-    (ZLayer.identity ++ loggingEnv)
+    (ZLayer.identity ++ loggingLayer)
 
   def withStream[R, A](name: String, shards: Int)(
     f: ZIO[R, Throwable, A]
@@ -674,7 +674,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     (ev: DiagnosticEvent) =>
       ev match {
         case _: PollComplete => UIO.unit
-        case _               => log.info(s"${worker}: ${ev}").provideLayer(loggingEnv)
+        case _               => log.info(s"${worker}: ${ev}").provideLayer(loggingLayer)
       }
 
   def assertAllLeasesReleased(applicationName: String) =

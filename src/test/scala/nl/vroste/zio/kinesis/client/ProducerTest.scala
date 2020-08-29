@@ -8,28 +8,42 @@ import zio.clock.Clock
 import zio.console._
 import zio.duration._
 import zio.logging.slf4j.Slf4jLogger
-import zio.logging.{ LogContext, LogWriter, Logging }
 import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test._
-import zio.{ Chunk, URIO, ZIO }
+import zio.{ Chunk, ZIO }
 
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
 
-  val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
-  val myOwnLogger = Logging.make(new LogWriter[Any] {
-    override def writeLog(
-      context: LogContext,
-      line: => String
-    ): URIO[Any, Unit] = ???
-  })
-
-  val env = (LocalStackServices.env.orDie) ++ loggingEnv ++ Clock.live
+  val env = (LocalStackServices.env.orDie) ++ loggingLayer ++ Clock.live
 
   def spec =
     suite("Producer")(
+      testM("produce a single record immediately") {
+
+        val streamName = "zio-test-stream-producer"
+
+        (for {
+          _        <- putStrLn("Creating stream").toManaged_
+          _        <- createStream(streamName, 1)
+          _        <- putStrLn("Creating producer").toManaged_
+          producer <- Producer
+                        .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 128))
+        } yield producer).use { producer =>
+          for {
+            _         <- putStrLn("Producing record!")
+            result    <- producer.produce(ProducerRecord("bla1", "bla1value")).timed
+            (time, _)  = result
+            _         <- putStrLn(time.toMillis.toString)
+            result2   <- producer.produce(ProducerRecord("bla1", "bla1value")).timed
+            (time2, _) = result2
+            _         <- putStrLn(time2.toMillis.toString)
+          } yield assertCompletes
+        }
+      },
       testM("produce records to Kinesis successfully and efficiently") {
         // This test demonstrates production of about 5000-6000 records per second on my Mid 2015 Macbook Pro
 
@@ -39,22 +53,26 @@ object ProducerTest extends DefaultRunnableSpec {
           _        <- createStream(streamName, 10)
           producer <- Producer
                         .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 32768))
-
-        } yield producer).use { producer =>
-          (
+        } yield producer).use {
+          producer =>
             for {
-              _ <- ZIO.sleep(5.second)
+              _                <- ZIO.sleep(5.second)
               // Parallelism, but not infinitely (not sure if it matters)
-              _ <- ZIO.collectAllParN(2)((1 to 20).map { i =>
-                     for {
-                       _      <- putStrLn(s"Starting chunk $i")
-                       records = (1 to 10).map(j => ProducerRecord(s"key$i", s"message$i-$j"))
-                       _      <- (producer
-                                .produceChunk(Chunk.fromIterable(records)) *> putStrLn(s"Chunk $i completed"))
-                     } yield ()
-                   })
+              nrChunks          = 50
+              nrRecordsPerChunk = 1000
+              time             <- ZIO
+                        .collectAllParN_(20)((1 to nrChunks).map { i =>
+                          for {
+                            _      <- putStrLn(s"Starting chunk $i")
+                            records = (1 to nrRecordsPerChunk).map(j => ProducerRecord(s"key$i", s"message$i-$j"))
+                            _      <- (producer
+                                     .produceChunk(Chunk.fromIterable(records)) *> putStrLn(s"Chunk $i completed"))
+                          } yield ()
+                        })
+                        .timed
+                        .map(_._1)
+              _                <- putStrLn(s"Produced ${nrChunks * nrRecordsPerChunk} in ${time.getSeconds}")
             } yield assertCompletes
-          )
         }.untraced
       } @@ timeout(5.minute),
       testM("fail when attempting to produce to a stream that does not exist") {

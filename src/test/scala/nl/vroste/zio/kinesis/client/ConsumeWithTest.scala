@@ -31,7 +31,7 @@ object ConsumeWithTest extends DefaultRunnableSpec {
     Throwable,
     CloudWatch with Kinesis with DynamoDb with DynamicConsumer with Clock with Blocking with Logging
   ] =
-    (LocalStackServices.env >+> LocalStackServices.dynamicConsumerLayer) ++ Clock.live ++ Blocking.live ++ loggingLayer
+    (loggingLayer ++ LocalStackServices.env) >+> DynamicConsumer.live ++ Clock.live ++ Blocking.live
 
   def testConsume1 =
     testM("consumeWith should consume records produced on all shards") {
