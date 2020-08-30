@@ -7,7 +7,7 @@ import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.ProducerMetrics.{ emptyAttempts, emptyLatency }
 import nl.vroste.zio.kinesis.client.serde.Serializer
-import org.HdrHistogram.{ AbstractHistogram, Histogram, IntCountsHistogram }
+import org.HdrHistogram.{ Histogram, IntCountsHistogram }
 import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.services.kinesis.model.{ KinesisException, PutRecordsRequestEntry }
 import zio._
@@ -80,44 +80,6 @@ final case class ProducerSettings(
   failedDelay: Duration = 100.millis,
   metricsInterval: Duration = 1.second
 )
-
-final case class ProducerMetrics(
-  interval: Duration,
-  attempts: IntCountsHistogram,
-  nrFailures: Long,
-  latency: AbstractHistogram
-) {
-  val nrRecordsPublished: Long = attempts.getTotalCount
-
-  override def toString: String =
-    s"{interval=${interval.getSeconds}, " +
-      s"total records published=${nrRecordsPublished}, " +
-      s"throughput=${if (interval.toMillis <= 0) "unknown"
-      else nrRecordsPublished * 1000 / interval.toMillis + "/s"}, " +
-      s"success rate=${if (nrRecordsPublished + nrFailures > 0) (nrRecordsPublished * 100.0 / (nrRecordsPublished + nrFailures))
-      else 100}%" +
-      s"failed attempts=${nrFailures}, " +
-      s"mean latency=${latency.getMean.toInt}ms, " +
-      s"95% latency=${latency.getValueAtPercentile(95).toInt}.ms, " +
-      s"min latency=${latency.getMinValue.toInt}ms, " +
-      s"2nd attempts=${attempts.getCountAtValue(2)}, " +
-      s"max attempts=${attempts.getMaxValue}}"
-
-  def +(that: ProducerMetrics): ProducerMetrics =
-    ProducerMetrics(
-      interval = interval + that.interval,
-      attempts = { val newAttempts = attempts.copy(); newAttempts.add(that.attempts); newAttempts },
-      nrFailures = nrFailures + that.nrFailures,
-      latency = { val newLatency = latency.copy(); newLatency.add(that.latency); newLatency }
-    )
-}
-
-object ProducerMetrics {
-  private[client] val emptyAttempts = new IntCountsHistogram(1, 20, 2)
-  private[client] val emptyLatency  = new Histogram(1, 120000, 3)
-
-  val empty = ProducerMetrics(interval = 0.millis, attempts = emptyAttempts, nrFailures = 0, latency = emptyLatency)
-}
 
 object Producer {
   def make[R, R1, T](

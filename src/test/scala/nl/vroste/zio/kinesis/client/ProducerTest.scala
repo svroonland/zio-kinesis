@@ -105,10 +105,10 @@ object ProducerTest extends DefaultRunnableSpec {
                           ProducerSettings(bufferSize = 16384),
                           metrics => totalMetrics.updateAndGet(_ + metrics).flatMap(m => putStrLn(m.toString))
                         )
-        } yield producer).use {
-          producer =>
+        } yield (producer, totalMetrics)).use {
+          case (producer, totalMetrics) =>
             for {
-              _                <- ZIO.sleep(5.second)
+              _                <- ZIO.sleep(5.second).when(false)
               // Parallelism, but not infinitely (not sure if it matters)
               nrChunks          = 100
               nrRecordsPerChunk = 8000
@@ -128,6 +128,7 @@ object ProducerTest extends DefaultRunnableSpec {
                         .timed
                         .map(_._1)
               _                <- putStrLn(s"Produced ${nrChunks * nrRecordsPerChunk * 1000.0 / time.toMillis}")
+              _                <- totalMetrics.get.flatMap(m => putStrLn(m.toString))
             } yield assertCompletes
         }.untraced
       } @@ timeout(5.minute),

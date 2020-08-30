@@ -19,6 +19,7 @@ More beta users and feedback are of course welcome.
   * [Unsupported features](#unsupported-features)
 - [Configuration](#configuration)
 - [Producer](#producer)
+  * [Metrics](#metrics)
 - [DynamicConsumer](#dynamicconsumer)
   * [Basic usage using `consumeWith`](#basic-usage-using--consumewith-)
   * [Advanced usage](#advanced-usage-example-)
@@ -243,6 +244,13 @@ val clientLayer = HTTPClient.make() >>> kinesisAsyncClientLayer() >>> Client.liv
     ZIO(println(s"All records in the chunk were produced"))
 }
 ```
+
+### Metrics
+`Producer` collects metrics about things like success rate and throughput. Statistics are collected in a `HdrHistogram`.
+
+`ProducerMetrics` can be combined with other `ProducerMetrics` to get statistically sound total metrics.
+
+TODO example
 
 ## DynamicConsumer
 `DynamicConsumer` is an alternative to `Consumer`, backed by the 
