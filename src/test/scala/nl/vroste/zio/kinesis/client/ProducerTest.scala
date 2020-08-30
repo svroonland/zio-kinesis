@@ -22,7 +22,7 @@ object ProducerTest extends DefaultRunnableSpec {
   val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
   val env = (client.defaultAwsLayer.orDie >>> (AdminClient.live ++ Client.live)).orDie >+>
-    (loggingLayer ++ Clock.live)
+    (loggingLayer ++ Clock.live ++ zio.console.Console.live)
 
   def spec =
     suite("Producer")(
@@ -87,22 +87,23 @@ object ProducerTest extends DefaultRunnableSpec {
                 } yield assertCompletes
             }
         }
-      } @@ TestAspect.ignore,
+      },
       testM("produce records to Kinesis successfully and efficiently") {
         // This test demonstrates production of about 5000-6000 records per second on my Mid 2015 Macbook Pro
 
-        val streamName = "zio-test-stream-producer2"
+        val streamName = "zio-test-stream-producer3"
 
         (for {
-          _        <- putStrLn("creating stream").toManaged_
-          _        <- createStreamUnmanaged(streamName, 50).toManaged_
-          _        <- putStrLn("creating producer").toManaged_
-          producer <- Producer
+          _            <- putStrLn("creating stream").toManaged_
+          _            <- createStreamUnmanaged(streamName, 5).toManaged_
+          _            <- putStrLn("creating producer").toManaged_
+          totalMetrics <- Ref.make(ProducerMetrics.empty).toManaged_
+          producer     <- Producer
                         .make(
                           streamName,
                           Serde.asciiString,
-                          ProducerSettings(bufferSize = 32768),
-                          metrics => putStrLn(metrics.toString)
+                          ProducerSettings(bufferSize = 16384),
+                          metrics => totalMetrics.updateAndGet(_ + metrics).flatMap(m => putStrLn(m.toString))
                         )
         } yield producer).use {
           producer =>
@@ -129,7 +130,7 @@ object ProducerTest extends DefaultRunnableSpec {
               _                <- putStrLn(s"Produced ${nrChunks * nrRecordsPerChunk * 1000.0 / time.toMillis}")
             } yield assertCompletes
         }.untraced
-      } @@ timeout(5.minute) @@ TestAspect.ignore,
+      } @@ timeout(5.minute),
       testM("fail when attempting to produce to a stream that does not exist") {
         val streamName = "zio-test-stream-not-existing"
 

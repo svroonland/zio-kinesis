@@ -5,8 +5,9 @@ import java.time.Instant
 import io.netty.handler.timeout.ReadTimeoutException
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
+import nl.vroste.zio.kinesis.client.ProducerMetrics.{ emptyAttempts, emptyLatency }
 import nl.vroste.zio.kinesis.client.serde.Serializer
-import org.HdrHistogram.{ AbstractHistogram, Histogram }
+import org.HdrHistogram.{ AbstractHistogram, Histogram, IntCountsHistogram }
 import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.services.kinesis.model.{ KinesisException, PutRecordsRequestEntry }
 import zio._
@@ -81,15 +82,41 @@ final case class ProducerSettings(
 )
 
 final case class ProducerMetrics(
-  timestamp: Instant,
-  nrRecordsPublished: Long,
-  nrRecordsFailed: Long,
+  interval: Duration,
+  attempts: IntCountsHistogram,
+  nrFailures: Long,
   latency: AbstractHistogram
 ) {
+  val nrRecordsPublished: Long = attempts.getTotalCount
+
   override def toString: String =
-    s"timestamp=${timestamp}, published=${nrRecordsPublished}, failed=${nrRecordsFailed}, " +
-      s"mean latency=${latency.getMean.toInt}ms, 95% latency=${latency.getValueAtPercentile(95).toInt}.ms, " +
-      s"min latency=${latency.getMinValue.toInt}ms"
+    s"{interval=${interval.getSeconds}, " +
+      s"total records published=${nrRecordsPublished}, " +
+      s"throughput=${if (interval.toMillis <= 0) "unknown"
+      else nrRecordsPublished * 1000 / interval.toMillis + "/s"}, " +
+      s"success rate=${if (nrRecordsPublished + nrFailures > 0) (nrRecordsPublished * 100.0 / (nrRecordsPublished + nrFailures))
+      else 100}%" +
+      s"failed attempts=${nrFailures}, " +
+      s"mean latency=${latency.getMean.toInt}ms, " +
+      s"95% latency=${latency.getValueAtPercentile(95).toInt}.ms, " +
+      s"min latency=${latency.getMinValue.toInt}ms, " +
+      s"2nd attempts=${attempts.getCountAtValue(2)}, " +
+      s"max attempts=${attempts.getMaxValue}}"
+
+  def +(that: ProducerMetrics): ProducerMetrics =
+    ProducerMetrics(
+      interval = interval + that.interval,
+      attempts = { val newAttempts = attempts.copy(); newAttempts.add(that.attempts); newAttempts },
+      nrFailures = nrFailures + that.nrFailures,
+      latency = { val newLatency = latency.copy(); newLatency.add(that.latency); newLatency }
+    )
+}
+
+object ProducerMetrics {
+  private[client] val emptyAttempts = new IntCountsHistogram(1, 20, 2)
+  private[client] val emptyLatency  = new Histogram(1, 120000, 3)
+
+  val empty = ProducerMetrics(interval = 0.millis, attempts = emptyAttempts, nrFailures = 0, latency = emptyLatency)
 }
 
 object Producer {
@@ -103,7 +130,8 @@ object Producer {
       client         <- ZManaged.service[Client.Service]
       env            <- ZIO.environment[R with Clock].toManaged_
       queue          <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
-      currentMetrics <- Ref.make(CurrentMetrics.empty).toManaged_
+      now            <- instant.toManaged_
+      currentMetrics <- Ref.make(CurrentMetrics.empty(now)).toManaged_
 
       failedQueue <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
 
@@ -139,11 +167,11 @@ object Producer {
                                           else
                                             (Seq.empty, maybeSucceeded)
 
-                 // Publish metrics
+                 // Collect metrics
                  now                   <- instant
                  _                     <- currentMetrics.update(
                         _.add(
-                          succeeded.size.toLong,
+                          succeeded.map(_._2.attemptNumber).toSeq,
                           newFailed.size.toLong,
                           succeeded
                             .map(_._2.timestamp)
@@ -153,7 +181,7 @@ object Producer {
                  _                     <- log.info(s"Failed to produce ${newFailed.size} records").when(newFailed.nonEmpty)
                  // TODO backoff for shard limit stuff
                  _                     <- failedQueue
-                        .offerAll(newFailed.map(_._2))
+                        .offerAll(newFailed.map(_._2.newAttempt))
                         .when(newFailed.nonEmpty) // TODO should be per shard
                  _                     <- ZIO.foreach_(succeeded) {
                         case (response, request) =>
@@ -170,12 +198,16 @@ object Producer {
              .runDrain
              .toManaged_
              .fork
+      // Repeatedly produce metrics
       _ <- (for {
-               m      <- currentMetrics.getAndUpdate(_ => CurrentMetrics.empty)
                now    <- instant
-               metrics = ProducerMetrics(now, m.nrPublished, m.nrFailed, m.latency)
+               m      <- currentMetrics.getAndUpdate(_ => CurrentMetrics.empty(now))
+               metrics = ProducerMetrics(java.time.Duration.between(m.start, now), m.published, m.nrFailed, m.latency)
                _      <- metricsCollector(metrics)
-             } yield ()).delay(settings.metricsInterval).repeat(Schedule.fixed(settings.metricsInterval)).forkManaged
+             } yield ())
+             .delay(settings.metricsInterval)
+             .repeat(Schedule.fixed(settings.metricsInterval))
+             .forkManaged
     } yield new Producer[T] {
       override def produce(r: ProducerRecord[T]): Task[ProduceResponse] =
         (for {
@@ -216,8 +248,11 @@ object Producer {
   private final case class ProduceRequest(
     r: PutRecordsRequestEntry,
     done: Promise[Throwable, ProduceResponse],
-    timestamp: Instant
-  )
+    timestamp: Instant,
+    attemptNumber: Int = 1
+  ) {
+    def newAttempt = copy(attemptNumber = attemptNumber + 1)
+  }
 
   private final case class PutRecordsBatch(entries: List[ProduceRequest], nrRecords: Int, payloadSize: Long) {
     def add(entry: ProduceRequest): PutRecordsBatch =
@@ -227,7 +262,7 @@ object Producer {
         payloadSize = payloadSize + entry.r.partitionKey().length + entry.r.data().asByteArray().length
       )
 
-    lazy val entriesInOrder: Seq[ProduceRequest] = entries.reverse
+    lazy val entriesInOrder: Seq[ProduceRequest] = entries.reverse.sortBy(e => -1 * e.attemptNumber)
 
     def isWithinLimits =
       nrRecords <= maxRecordsPerRequest &&
@@ -247,16 +282,22 @@ object Producer {
     }
 
   private final case class CurrentMetrics(
-    nrPublished: Long,
+    start: Instant,
+    published: IntCountsHistogram, // Tracks number of attempts
     nrFailed: Long,
     latency: Histogram
   ) {
-    def add(published: Long, failed: Long, latencies: Iterable[Duration]): CurrentMetrics = {
+    val nrPublished = published.getTotalCount
+
+    def add(publishedWithAttempts: Seq[Int], failed: Long, latencies: Iterable[Duration]): CurrentMetrics = {
       val newLatency = latency.copy()
-      latencies.foreach(l => newLatency.recordValue(l.toMillis))
+      latencies.map(_.toMillis).foreach(newLatency.recordValue)
+
+      val newPublished = published.copy()
+      publishedWithAttempts.map(_.toLong).foreach(newPublished.recordValue)
 
       copy(
-        nrPublished = nrPublished + published,
+        published = newPublished,
         nrFailed = nrFailed + failed,
         latency = newLatency
       )
@@ -264,7 +305,8 @@ object Producer {
   }
 
   private object CurrentMetrics {
-    val empty = CurrentMetrics(0, 0, new Histogram(1, 120000, 3))
+    def empty(now: Instant) =
+      CurrentMetrics(start = now, published = emptyAttempts, nrFailed = 0, latency = emptyLatency)
   }
 
 }
