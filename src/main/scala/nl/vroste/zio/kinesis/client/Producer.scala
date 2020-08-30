@@ -6,6 +6,7 @@ import io.netty.handler.timeout.ReadTimeoutException
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.serde.Serializer
+import org.HdrHistogram.{ AbstractHistogram, Histogram }
 import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.services.kinesis.model.{ KinesisException, PutRecordsRequestEntry }
 import zio._
@@ -83,8 +84,13 @@ final case class ProducerMetrics(
   timestamp: Instant,
   nrRecordsPublished: Long,
   nrRecordsFailed: Long,
-  meanLatency: Option[Duration]
-)
+  latency: AbstractHistogram
+) {
+  override def toString: String =
+    s"timestamp=${timestamp}, published=${nrRecordsPublished}, failed=${nrRecordsFailed}, " +
+      s"mean latency=${latency.getMean.toInt}ms, 95% latency=${latency.getValueAtPercentile(95).toInt}.ms, " +
+      s"min latency=${latency.getMinValue.toInt}ms"
+}
 
 object Producer {
   def make[R, R1, T](
@@ -97,7 +103,7 @@ object Producer {
       client         <- ZManaged.service[Client.Service]
       env            <- ZIO.environment[R with Clock].toManaged_
       queue          <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
-      currentMetrics <- Ref.make(CurrentMetrics()).toManaged_
+      currentMetrics <- Ref.make(CurrentMetrics.empty).toManaged_
 
       failedQueue <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
 
@@ -165,13 +171,10 @@ object Producer {
              .toManaged_
              .fork
       _ <- (for {
-               m          <- currentMetrics.getAndUpdate(_ => CurrentMetrics())
-               now        <- instant
-               meanLatency = if (m.latencies.nonEmpty)
-                               Some(m.latencies.map(_.toMillis).sum.millis * (1.0 / m.latencies.length))
-                             else None
-               metrics     = ProducerMetrics(now, m.nrPublished, m.nrFailed, meanLatency)
-               _          <- metricsCollector(metrics)
+               m      <- currentMetrics.getAndUpdate(_ => CurrentMetrics.empty)
+               now    <- instant
+               metrics = ProducerMetrics(now, m.nrPublished, m.nrFailed, m.latency)
+               _      <- metricsCollector(metrics)
              } yield ()).delay(settings.metricsInterval).repeat(Schedule.fixed(settings.metricsInterval)).forkManaged
     } yield new Producer[T] {
       override def produce(r: ProducerRecord[T]): Task[ProduceResponse] =
@@ -244,16 +247,24 @@ object Producer {
     }
 
   private final case class CurrentMetrics(
-    nrPublished: Long = 0,
-    nrFailed: Long = 0,
-    latencies: Chunk[Duration] = Chunk.empty
+    nrPublished: Long,
+    nrFailed: Long,
+    latency: Histogram
   ) {
-    def add(published: Long, failed: Long, latencies: Iterable[Duration]): CurrentMetrics =
+    def add(published: Long, failed: Long, latencies: Iterable[Duration]): CurrentMetrics = {
+      val newLatency = latency.copy()
+      latencies.foreach(l => newLatency.recordValue(l.toMillis))
+
       copy(
         nrPublished = nrPublished + published,
         nrFailed = nrFailed + failed,
-        latencies = this.latencies ++ latencies
+        latency = newLatency
       )
+    }
+  }
+
+  private object CurrentMetrics {
+    val empty = CurrentMetrics(0, 0, new Histogram(1, 120000, 3))
   }
 
 }
