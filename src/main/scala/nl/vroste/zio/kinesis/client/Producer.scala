@@ -1,5 +1,6 @@
 package nl.vroste.zio.kinesis.client
 import java.io.IOException
+import java.time.Instant
 
 import io.netty.handler.timeout.ReadTimeoutException
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
@@ -8,7 +9,7 @@ import nl.vroste.zio.kinesis.client.serde.Serializer
 import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.services.kinesis.model.{ KinesisException, PutRecordsRequestEntry }
 import zio._
-import zio.clock.Clock
+import zio.clock.{ instant, Clock }
 import zio.duration.{ Duration, _ }
 import zio.logging._
 import zio.stream.{ ZSink, ZStream, ZTransducer }
@@ -74,19 +75,29 @@ final case class ProducerSettings(
   bufferSize: Int = 8192,
   maxParallelRequests: Int = 24,
   backoffRequests: Schedule[Clock, Throwable, Any] = Schedule.exponential(500.millis) && Schedule.recurs(5),
-  failedDelay: Duration = 100.millis
+  failedDelay: Duration = 100.millis,
+  metricsInterval: Duration = 1.second
+)
+
+final case class ProducerMetrics(
+  timestamp: Instant,
+  nrRecordsPublished: Long,
+  nrRecordsFailed: Long,
+  meanLatency: Option[Duration]
 )
 
 object Producer {
-  def make[R, T](
+  def make[R, R1, T](
     streamName: String,
     serializer: Serializer[R, T],
-    settings: ProducerSettings = ProducerSettings()
-  ): ZManaged[R with Clock with Client with Logging, Throwable, Producer[T]] =
+    settings: ProducerSettings = ProducerSettings(),
+    metricsCollector: ProducerMetrics => ZIO[R1, Nothing, Unit] = (_: ProducerMetrics) => ZIO.unit
+  ): ZManaged[R with R1 with Clock with Client with Logging, Throwable, Producer[T]] =
     for {
-      client <- ZManaged.service[Client.Service]
-      env    <- ZIO.environment[R with Clock].toManaged_
-      queue  <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
+      client         <- ZManaged.service[Client.Service]
+      env            <- ZIO.environment[R with Clock].toManaged_
+      queue          <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
+      currentMetrics <- Ref.make(CurrentMetrics()).toManaged_
 
       failedQueue <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
 
@@ -122,6 +133,17 @@ object Producer {
                                           else
                                             (Seq.empty, maybeSucceeded)
 
+                 // Publish metrics
+                 now                   <- instant
+                 _                     <- currentMetrics.update(
+                        _.add(
+                          succeeded.size.toLong,
+                          newFailed.size.toLong,
+                          succeeded
+                            .map(_._2.timestamp)
+                            .map(timestamp => java.time.Duration.between(timestamp, now))
+                        )
+                      )
                  _                     <- log.info(s"Failed to produce ${newFailed.size} records").when(newFailed.nonEmpty)
                  // TODO backoff for shard limit stuff
                  _                     <- failedQueue
@@ -142,23 +164,34 @@ object Producer {
              .runDrain
              .toManaged_
              .fork
+      _ <- (for {
+               m          <- currentMetrics.getAndUpdate(_ => CurrentMetrics())
+               now        <- instant
+               meanLatency = if (m.latencies.nonEmpty)
+                               Some(m.latencies.map(_.toMillis).sum.millis * (1.0 / m.latencies.length))
+                             else None
+               metrics     = ProducerMetrics(now, m.nrPublished, m.nrFailed, meanLatency)
+               _          <- metricsCollector(metrics)
+             } yield ()).delay(settings.metricsInterval).repeat(Schedule.fixed(settings.metricsInterval)).forkManaged
     } yield new Producer[T] {
       override def produce(r: ProducerRecord[T]): Task[ProduceResponse] =
         (for {
-          request  <- makeProduceRequest(r)
+          now      <- instant
+          request  <- makeProduceRequest(r, now)
           _        <- queue.offer(request)
           response <- request.done.await
         } yield response).provide(env)
 
       override def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[Seq[ProduceResponse]] =
         (for {
-          requests <- ZIO.foreach(chunk)(makeProduceRequest)
+          now      <- instant
+          requests <- ZIO.foreach(chunk)(makeProduceRequest(_, now))
           _        <- queue.offerAll(requests)
           results  <- ZIO.foreach(requests)(_.done.await)
         } yield results)
           .provide(env)
 
-      private def makeProduceRequest(r: ProducerRecord[T]) =
+      private def makeProduceRequest(r: ProducerRecord[T], now: Instant) =
         for {
           done <- Promise.make[Throwable, ProduceResponse]
           data <- serializer.serialize(r.data)
@@ -167,7 +200,7 @@ object Producer {
                     .partitionKey(r.partitionKey)
                     .data(SdkBytes.fromByteBuffer(data))
                     .build()
-        } yield ProduceRequest(entry, done)
+        } yield ProduceRequest(entry, done, now)
     }
 
   val maxRecordsPerRequest     = 499             // This is a Kinesis API limitation // TODO because of fold issue, reduced by 1
@@ -177,7 +210,11 @@ object Producer {
 
   final case class ProduceResponse(shardId: String, sequenceNumber: String)
 
-  private final case class ProduceRequest(r: PutRecordsRequestEntry, done: Promise[Throwable, ProduceResponse])
+  private final case class ProduceRequest(
+    r: PutRecordsRequestEntry,
+    done: Promise[Throwable, ProduceResponse],
+    timestamp: Instant
+  )
 
   private final case class PutRecordsBatch(entries: List[ProduceRequest], nrRecords: Int, payloadSize: Long) {
     def add(entry: ProduceRequest): PutRecordsBatch =
@@ -205,4 +242,18 @@ object Producer {
       case _: IOException                                   => true
       case _                                                => false
     }
+
+  private final case class CurrentMetrics(
+    nrPublished: Long = 0,
+    nrFailed: Long = 0,
+    latencies: Chunk[Duration] = Chunk.empty
+  ) {
+    def add(published: Long, failed: Long, latencies: Iterable[Duration]): CurrentMetrics =
+      copy(
+        nrPublished = nrPublished + published,
+        nrFailed = nrFailed + failed,
+        latencies = this.latencies ++ latencies
+      )
+  }
+
 }

@@ -19,6 +19,7 @@ object TestUtil {
             .service[Client.Service]
             .flatMap(_.listShards(name).runCollect)
             .filterOrElse(_.nonEmpty)(_ => getShards.delay(1.second))
+            .catchSome { case _: ResourceInUseException => getShards.delay(1.second) }
         getShards
       }
       .use_(f)

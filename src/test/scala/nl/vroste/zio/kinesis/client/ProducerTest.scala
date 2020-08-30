@@ -2,11 +2,12 @@ package nl.vroste.zio.kinesis.client
 
 import java.util.UUID
 
+import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.awssdk.services.kinesis.model.KinesisException
 import zio.clock.Clock
-import zio.console._
+import zio.console.putStrLn
 import zio.duration._
 import zio.logging.slf4j.Slf4jLogger
 import zio.stream.ZStream
@@ -20,7 +21,7 @@ object ProducerTest extends DefaultRunnableSpec {
 
   val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
-  val env = (LocalStackServices.localStackAwsLayer.orDie >>> (AdminClient.live ++ Client.live)).orDie >+>
+  val env = (client.defaultAwsLayer.orDie >>> (AdminClient.live ++ Client.live)).orDie >+>
     (loggingLayer ++ Clock.live)
 
   def spec =
@@ -50,7 +51,12 @@ object ProducerTest extends DefaultRunnableSpec {
 
         withStream(streamName, 10) {
           Producer
-            .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 128))
+            .make(
+              streamName,
+              Serde.asciiString,
+              ProducerSettings(bufferSize = 128),
+              metrics => putStrLn(metrics.toString)
+            )
             .use {
               producer =>
                 val increment = 1
@@ -73,9 +79,6 @@ object ProducerTest extends DefaultRunnableSpec {
                              _     <- putStrLn(s"Sending batch of size ${batch.size}!")
                              times <- ZIO.foreachPar(batch)(producer.produce(_).timed.map(_._1))
                              _     <- timing.update(_ :+ times)
-                             _     <- putStrLn(
-                                    s"Batch size ${batch.size}: avg = ${times.map(_.toMillis).sum / times.length} ms"
-                                  )
                            } yield ()
                          }
                          .runDrain
@@ -95,7 +98,12 @@ object ProducerTest extends DefaultRunnableSpec {
           _        <- createStreamUnmanaged(streamName, 50).toManaged_
           _        <- putStrLn("creating producer").toManaged_
           producer <- Producer
-                        .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 32768))
+                        .make(
+                          streamName,
+                          Serde.asciiString,
+                          ProducerSettings(bufferSize = 32768),
+                          metrics => putStrLn(metrics.toString)
+                        )
         } yield producer).use {
           producer =>
             for {
@@ -105,13 +113,15 @@ object ProducerTest extends DefaultRunnableSpec {
               nrRecordsPerChunk = 8000
               time             <- ZIO
                         .collectAllParN_(3)((1 to nrChunks).map { i =>
+                          val records = (1 to nrRecordsPerChunk).map(j =>
+                            // Random UUID to get an even distribution over the shards
+                            ProducerRecord(s"key$i" + UUID.randomUUID(), s"message$i-$j")
+                          )
+
                           for {
-                            _      <- putStrLn(s"Starting chunk $i")
-                            records = (1 to nrRecordsPerChunk).map(j =>
-                                        // Random UUID to get an even distribution over the shards
-                                        ProducerRecord(s"key$i" + UUID.randomUUID(), s"message$i-$j")
-                                      )
-                            _      <- (producer.produceChunk(Chunk.fromIterable(records)) *> putStrLn(s"Chunk $i completed"))
+                            //                            _      <- putStrLn(s"Starting chunk $i")
+                            _ <- producer.produceChunk(Chunk.fromIterable(records))
+                            _ <- putStrLn(s"Chunk $i completed")
                           } yield ()
                         })
                         .timed
