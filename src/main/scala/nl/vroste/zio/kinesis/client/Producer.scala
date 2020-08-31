@@ -78,7 +78,7 @@ final case class ProducerSettings(
   maxParallelRequests: Int = 24,
   backoffRequests: Schedule[Clock, Throwable, Any] = Schedule.exponential(500.millis) && Schedule.recurs(5),
   failedDelay: Duration = 100.millis,
-  metricsInterval: Duration = 1.second
+  metricsInterval: Duration = 30.seconds
 )
 
 object Producer {

@@ -222,34 +222,82 @@ All of this of course with the robust failure handling you can expect from a ZIO
 Usage example:
 
 ```scala
+import nl.vroste.zio.kinesis.client
+import nl.vroste.zio.kinesis.client.Client.ProducerRecord
+import nl.vroste.zio.kinesis.client.serde.Serde
+import nl.vroste.zio.kinesis.client.{ Client, Producer }
 import zio._
-import nl.vroste.zio.kinesis.client._
-import serde._
-import Client.ProducerRecord
-import zio.clock.Clock
+import zio.console.putStrLn
+import zio.logging.slf4j.Slf4jLogger
 
-val streamName  = "my_stream"
-val applicationName ="my_awesome_zio_application"
-val clientLayer = HTTPClient.make() >>> kinesisAsyncClientLayer() >>> Client.live
+object ProducerExample extends zio.App {
+  val streamName      = "my_stream"
+  val applicationName = "my_awesome_zio_application"
 
-(for {
-  producer <- Producer
-    .make(streamName, Serde.asciiString)
-} yield producer)
-  .provideLayer(Clock.live ++ clientLayer)
-  .use { producer =>
-  val records = (1 to 100).map(j => ProducerRecord(s"key${j}", s"message${j}"))
-  producer
-    .produceChunk(Chunk.fromIterable(records)) *>
-    ZIO(println(s"All records in the chunk were produced"))
+  val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val env          = client.defaultAwsLayer >+> Client.live ++ loggingLayer
+
+  val program = Producer.make(streamName, Serde.asciiString).use { producer =>
+    val record = ProducerRecord("key1", "message1")
+
+    for {
+      _ <- producer.produce(record)
+      r <- putStrLn(s"All records in the chunk were produced")
+    } yield r
+  }
+
+  override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
+    program.provideCustomLayer(env).exitCode
 }
 ```
 
 ### Metrics
-`Producer` collects metrics about things like success rate and throughput. Statistics are collected in a `HdrHistogram`.
+`Producer` periodically collects metrics like success rate and throughput and makes them available as `ProducerMetrics` values. Statistical values are collected in a `HdrHistogram`.  Metrics are collected every 30 seconds by default, but the interval can be customized. 
 
-`ProducerMetrics` can be combined with other `ProducerMetrics` to get statistically sound total metrics.
+`ProducerMetrics` objects can be combined with other `ProducerMetrics` to get (statistically sound!) total metrics, allowing you to do your own filtering, aggregation or other processing if desired.
 
+```scala
+import nl.vroste.zio.kinesis.client
+import nl.vroste.zio.kinesis.client.Client.ProducerRecord
+import nl.vroste.zio.kinesis.client.serde.Serde
+import nl.vroste.zio.kinesis.client.{ Client, Producer, ProducerMetrics, ProducerSettings }
+import zio._
+import zio.console.putStrLn
+import zio.logging.slf4j.Slf4jLogger
+
+object ProducerWithMetricsExample extends zio.App {
+  val streamName      = "my_stream"
+  val applicationName = "my_awesome_zio_application"
+
+  val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val env          = client.defaultAwsLayer >+> Client.live ++ loggingLayer
+
+  val program = (for {
+    totalMetrics <- Ref.make(ProducerMetrics.empty).toManaged_
+    producer     <- Producer
+                  .make(
+                    streamName,
+                    Serde.asciiString,
+                    ProducerSettings(),
+                    metrics => totalMetrics.updateAndGet(_ + metrics).flatMap(m => putStrLn(m.toString))
+                  )
+  } yield (producer, totalMetrics)).use {
+    case (producer, totalMetrics) =>
+      val records = (1 to 100).map(j => ProducerRecord(s"key${j}", s"message${j}"))
+
+      for {
+        _ <- producer.produceChunk(Chunk.fromIterable(records))
+        r <- putStrLn(s"All records in the chunk were produced")
+        m <- totalMetrics.get
+        _ <- putStrLn(s"Metrics after producing: ${m}")
+      } yield ()
+  }
+
+  override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
+    program.provideCustomLayer(env).exitCode
+}
+
+```
 TODO example
 
 ## DynamicConsumer
