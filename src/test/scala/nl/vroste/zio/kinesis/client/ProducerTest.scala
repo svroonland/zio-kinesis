@@ -58,8 +58,8 @@ object ProducerTest extends DefaultRunnableSpec {
                             ProducerSettings(bufferSize = 128),
                             metrics => totalMetrics.updateAndGet(_ + metrics).flatMap(m => putStrLn(m.toString))
                           )
-          } yield (producer, totalMetrics)).use {
-            case (producer, totalMetrics) =>
+          } yield producer).use {
+            producer =>
               val increment = 1
               for {
                 batchSize <- Ref.make(1)
@@ -88,7 +88,7 @@ object ProducerTest extends DefaultRunnableSpec {
               } yield assertCompletes
           }
         }
-      },
+      } @@ TestAspect.ignore,
       testM("produce records to Kinesis successfully and efficiently") {
         // This test demonstrates production of about 5000-6000 records per second on my Mid 2015 Macbook Pro
 
@@ -132,7 +132,7 @@ object ProducerTest extends DefaultRunnableSpec {
               _                <- totalMetrics.get.flatMap(m => putStrLn(m.toString))
             } yield assertCompletes
         }.untraced
-      } @@ timeout(5.minute),
+      } @@ timeout(5.minute) @@ TestAspect.ignore,
       testM("fail when attempting to produce to a stream that does not exist") {
         val streamName = "zio-test-stream-not-existing"
 
