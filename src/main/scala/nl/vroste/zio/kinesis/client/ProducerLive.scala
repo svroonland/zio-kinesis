@@ -45,22 +45,18 @@ private[client] final class ProducerLive[R, R1, T](
 
   private def processBatch(batch: PutRecordsBatch) =
     (for {
-      _                     <- log.info(s"Producing batch of size ${batch.nrRecords}")
-      response              <- client
+      _             <- log.info(s"Producing batch of size ${batch.nrRecords}")
+      response      <- client
                     .putRecords(streamName, batch.entriesInOrder.map(_.r))
                     .tapError(e => log.warn(s"Error producing records, will retry if recoverable: $e"))
                     .retry(scheduleCatchRecoverable && settings.backoffRequests)
 
-      maybeSucceeded         = response
-                         .records()
-                         .asScala
-                         .zip(batch.entriesInOrder)
+      maybeSucceeded = response.records().asScala.zip(batch.entriesInOrder)
+
       (newFailed, succeeded) = if (response.failedRecordCount() > 0)
                                  maybeSucceeded.partition {
                                    case (result, _) =>
-                                     result.errorCode() != null && recoverableErrorCodes.contains(
-                                       result.errorCode()
-                                     )
+                                     result.errorCode() != null && recoverableErrorCodes.contains(result.errorCode())
                                  }
                                else
                                  (Seq.empty, maybeSucceeded)
