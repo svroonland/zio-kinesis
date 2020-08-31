@@ -132,13 +132,13 @@ private[client] final class ProducerLive[R, R1, T](
     } yield ProduceRequest(entry, done, now)
 }
 
-object ProducerLive {
+private[client] object ProducerLive {
   val maxRecordsPerRequest     = 499             // This is a Kinesis API limitation // TODO because of fold issue, reduced by 1
   val maxPayloadSizePerRequest = 5 * 1024 * 1024 // 5 MB
 
   val recoverableErrorCodes = Set("ProvisionedThroughputExceededException", "InternalFailure", "ServiceUnavailable");
 
-  private[client] final case class ProduceRequest(
+  final case class ProduceRequest(
     r: PutRecordsRequestEntry,
     done: Promise[Throwable, ProduceResponse],
     timestamp: Instant,
@@ -147,7 +147,7 @@ object ProducerLive {
     def newAttempt = copy(attemptNumber = attemptNumber + 1)
   }
 
-  private final case class PutRecordsBatch(entries: List[ProduceRequest], nrRecords: Int, payloadSize: Long) {
+  final case class PutRecordsBatch(entries: List[ProduceRequest], nrRecords: Int, payloadSize: Long) {
     def add(entry: ProduceRequest): PutRecordsBatch =
       copy(
         entries = entry +: entries,
@@ -162,11 +162,11 @@ object ProducerLive {
         payloadSize < maxPayloadSizePerRequest
   }
 
-  private object PutRecordsBatch {
+  object PutRecordsBatch {
     val empty = PutRecordsBatch(List.empty, 0, 0)
   }
 
-  private[client] final def scheduleCatchRecoverable: Schedule[Any, Throwable, Throwable] =
+  final def scheduleCatchRecoverable: Schedule[Any, Throwable, Throwable] =
     Schedule.recurWhile {
       case e: KinesisException if e.statusCode() / 100 != 4 => true
       case _: ReadTimeoutException                          => true
@@ -174,7 +174,7 @@ object ProducerLive {
       case _                                                => false
     }
 
-  private[client] final case class CurrentMetrics(
+  final case class CurrentMetrics(
     start: Instant,
     published: IntCountsHistogram, // Tracks number of attempts
     nrFailed: Long,
@@ -197,9 +197,8 @@ object ProducerLive {
     }
   }
 
-  private[client] object CurrentMetrics {
+  object CurrentMetrics {
     def empty(now: Instant) =
       CurrentMetrics(start = now, published = emptyAttempts, nrFailed = 0, latency = emptyLatency)
   }
-
 }
