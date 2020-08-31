@@ -298,7 +298,6 @@ object ProducerWithMetricsExample extends zio.App {
 }
 
 ```
-TODO example
 
 ## DynamicConsumer
 `DynamicConsumer` is an alternative to `Consumer`, backed by the 
@@ -323,8 +322,6 @@ convenience method `DynamicConsumer.consumeWith`. This method lets you execute a
 care of checkpointing which you can configure through `checkpointBatchSize` and `checkpointDuration` parameters.   
 
 ```scala
-package nl.vroste.zio.kinesis.client.examples
-
 import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.DynamicConsumer
 import nl.vroste.zio.kinesis.client.serde.Serde
@@ -361,8 +358,6 @@ If you want more control over your stream, `DynamicConsumer.shardedStream` can b
 
 
 ```scala
-package nl.vroste.zio.kinesis.client.examples
-
 import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio._
