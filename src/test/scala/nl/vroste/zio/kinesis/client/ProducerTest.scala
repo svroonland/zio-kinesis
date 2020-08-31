@@ -2,7 +2,6 @@ package nl.vroste.zio.kinesis.client
 
 import java.util.UUID
 
-import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.awssdk.services.kinesis.model.KinesisException
@@ -21,7 +20,7 @@ object ProducerTest extends DefaultRunnableSpec {
 
   val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
-  val env = (client.defaultAwsLayer.orDie >>> (AdminClient.live ++ Client.live)).orDie >+>
+  val env = (LocalStackServices.localStackAwsLayer.orDie >>> (AdminClient.live ++ Client.live)).orDie >+>
     (loggingLayer ++ Clock.live ++ zio.console.Console.live)
 
   def spec =
@@ -50,42 +49,44 @@ object ProducerTest extends DefaultRunnableSpec {
         val streamName = "zio-test-stream-producer-ramp"
 
         withStream(streamName, 10) {
-          Producer
-            .make(
-              streamName,
-              Serde.asciiString,
-              ProducerSettings(bufferSize = 128),
-              metrics => putStrLn(metrics.toString)
-            )
-            .use {
-              producer =>
-                val increment = 1
-                for {
-                  batchSize <- Ref.make(1)
-                  timing    <- Ref.make[Chunk[Chunk[Duration]]](Chunk.empty)
+          (for {
+            totalMetrics <- Ref.make(ProducerMetrics.empty).toManaged_
+            producer     <- Producer
+                          .make(
+                            streamName,
+                            Serde.asciiString,
+                            ProducerSettings(bufferSize = 128),
+                            metrics => totalMetrics.updateAndGet(_ + metrics).flatMap(m => putStrLn(m.toString))
+                          )
+          } yield (producer, totalMetrics)).use {
+            case (producer, totalMetrics) =>
+              val increment = 1
+              for {
+                batchSize <- Ref.make(1)
+                timing    <- Ref.make[Chunk[Chunk[Duration]]](Chunk.empty)
 
-                  _       <- ZStream
-                         .tick(1.second)
-                         .take(200)
-                         .mapM(_ => batchSize.getAndUpdate(_ + 1))
-                         .map { batchSize =>
-                           Chunk.fromIterable(
-                             (1 to batchSize * increment)
-                               .map(i => ProducerRecord(s"key${i}" + UUID.randomUUID(), s"value${i}"))
-                           )
-                         }
-                         .mapM { batch =>
-                           for {
-                             _     <- putStrLn(s"Sending batch of size ${batch.size}!")
-                             times <- ZIO.foreachPar(batch)(producer.produce(_).timed.map(_._1))
-                             _     <- timing.update(_ :+ times)
-                           } yield ()
-                         }
-                         .runDrain
-                  results <- timing.get
-                  _       <- ZIO.foreach(results)(r => putStrLn(r.map(_.toMillis).mkString(" ")))
-                } yield assertCompletes
-            }
+                _       <- ZStream
+                       .tick(1.second)
+                       .take(200)
+                       .mapM(_ => batchSize.getAndUpdate(_ + 1))
+                       .map { batchSize =>
+                         Chunk.fromIterable(
+                           (1 to batchSize * increment)
+                             .map(i => ProducerRecord(s"key${i}" + UUID.randomUUID(), s"value${i}"))
+                         )
+                       }
+                       .mapM { batch =>
+                         for {
+                           _     <- putStrLn(s"Sending batch of size ${batch.size}!")
+                           times <- ZIO.foreachPar(batch)(producer.produce(_).timed.map(_._1))
+                           _     <- timing.update(_ :+ times)
+                         } yield ()
+                       }
+                       .runDrain
+                results <- timing.get
+                _       <- ZIO.foreach(results)(r => putStrLn(r.map(_.toMillis).mkString(" ")))
+              } yield assertCompletes
+          }
         }
       },
       testM("produce records to Kinesis successfully and efficiently") {
