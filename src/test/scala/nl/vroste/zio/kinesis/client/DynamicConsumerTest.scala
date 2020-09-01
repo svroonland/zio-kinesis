@@ -10,6 +10,7 @@ import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.console._
 import zio.duration._
+import zio.logging.Logging
 import zio.stream.{ ZStream, ZTransducer }
 import zio.test.TestAspect._
 import zio.test._
@@ -17,8 +18,14 @@ import zio.test._
 object DynamicConsumerTest extends DefaultRunnableSpec {
   import TestUtil._
 
+  private val loggingLayer: ZLayer[Any, Nothing, Logging] =
+    Console.live ++ Clock.live >>> Logging.console(
+      format = (_, logEntry) => logEntry,
+      rootLoggerName = Some("default-logger")
+    )
+
   private val env: ZLayer[Any, Throwable, Client with AdminClient with DynamicConsumer with Clock] =
-    (LocalStackServices.localHttpClient >>> LocalStackServices.kinesisAsyncClientLayer >>> (Client.live ++ AdminClient.live ++ LocalStackServices.dynamicConsumerLayer)) ++ Clock.live
+    (LocalStackServices.localHttpClient >>> LocalStackServices.kinesisAsyncClientLayer >>> (Client.live ++ AdminClient.live ++ (loggingLayer ++ LocalStackServices.localStackAwsLayer >>> DynamicConsumer.live))) ++ Clock.live
 
   def testConsume1: ZSpec[Clock with Blocking with Console with DynamicConsumer with Client, Throwable] =
     testM("consume records produced on all shards produced on the stream") {

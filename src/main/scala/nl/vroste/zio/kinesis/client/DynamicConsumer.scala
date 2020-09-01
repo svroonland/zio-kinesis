@@ -14,7 +14,7 @@ import zio._
 import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.duration.{ Duration, _ }
-import zio.logging.Logging
+import zio.logging.{ Logger, Logging }
 import zio.stream.{ ZStream, ZTransducer }
 
 /**
@@ -26,11 +26,13 @@ object DynamicConsumer {
   // For (some) backwards compatibility
   type Record[T] = nl.vroste.zio.kinesis.client.Record[T]
 
-  val live: ZLayer[Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[
+  val live: ZLayer[Logging with Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[
     DynamoDbAsyncClient
-  ], Nothing, DynamicConsumer] =
-    ZLayer.fromServices[KinesisAsyncClient, CloudWatchAsyncClient, DynamoDbAsyncClient, DynamicConsumer.Service] {
-      new DynamicConsumerLive(_, _, _)
+  ], Nothing, Has[Service]] =
+    ZLayer.fromServices[Logger[
+      String
+    ], KinesisAsyncClient, CloudWatchAsyncClient, DynamoDbAsyncClient, DynamicConsumer.Service] {
+      new DynamicConsumerLive(_, _, _, _)
     }
 
   trait Service {
@@ -271,7 +273,7 @@ object DynamicConsumer {
   }
 
   object Checkpointer {
-    private[client] def make(kclCheckpointer: RecordProcessorCheckpointer): UIO[Checkpointer] =
+    private[client] def make(kclCheckpointer: RecordProcessorCheckpointer, logger: Logger[String]): UIO[Checkpointer] =
       for {
         latestStaged <- Ref.make[Option[Record[_]]](None)
       } yield new Checkpointer {
@@ -281,9 +283,10 @@ object DynamicConsumer {
         override def checkpoint: ZIO[Blocking, Throwable, Unit] =
           latestStaged.get.flatMap {
             case Some(record) =>
-              zio.blocking.blocking {
-                Task(kclCheckpointer.checkpoint(record.sequenceNumber, record.subSequenceNumber))
-              } *> latestStaged.update {
+              logger.info(s"about to checkpoint: shardId=${record.shardId} partitionKey=${record.partitionKey}") *>
+                zio.blocking.blocking {
+                  Task(kclCheckpointer.checkpoint(record.sequenceNumber, record.subSequenceNumber))
+                } *> latestStaged.update {
                 case Some(r) if r == record => None
                 case r                      => r // A newer record may have been staged by now
               }
@@ -293,10 +296,5 @@ object DynamicConsumer {
         override private[client] def peek: UIO[Option[Record[_]]] = latestStaged.get
       }
   }
-
-  val defaultEnvironment: ZLayer[Any, Throwable, DynamicConsumer] =
-    HttpClient.make() >>>
-      sdkClients >>>
-      DynamicConsumer.live
 
 }

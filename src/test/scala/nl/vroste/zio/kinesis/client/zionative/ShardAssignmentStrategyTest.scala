@@ -98,12 +98,12 @@ object ShardAssignmentStrategyTest extends DefaultRunnableSpec {
             } yield assert(toStealWorkers)(equalTo(busiestWorkers.take(toStealWorkers.size)))
         }
       }
-    ).provideCustomLayer(loggingEnv)
+    ).provideCustomLayer(loggingLayer)
 
   def changedElements[A](as: List[A]): List[A] =
     as.foldLeft(List.empty[A]) { case (acc, a) => if (acc.lastOption.contains(a)) acc else acc :+ a }
 
-  val loggingEnv                               = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val loggingLayer                             = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
   def genTraverse[R, A, B](elems: Iterable[A])(f: A => Gen[R, B]): Gen[R, List[B]] =
     Gen.crossAll(elems.map(f))

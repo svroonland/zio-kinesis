@@ -9,7 +9,7 @@ import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative.fetcher.{ EnhancedFanOutFetcher, PollingFetcher }
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.{ DefaultLeaseCoordinator, LeaseCoordinationSettings }
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
-import nl.vroste.zio.kinesis.client.{ sdkClients, AdminClient, Client, HttpClient, Record, Util }
+import nl.vroste.zio.kinesis.client.{ sdkClientsLayer, AdminClient, Client, HttpClient, Record, Util }
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.kinesis.model.{
   GetRecordsResponse,
@@ -298,7 +298,7 @@ object Consumer {
   val defaultEnvironment
     : ZLayer[Any, Throwable, AdminClient with Client with LeaseRepository with Has[CloudWatchAsyncClient]] =
     HttpClient.make() >>>
-      sdkClients >+>
+      sdkClientsLayer >+>
       (AdminClient.live ++ Client.live ++ DynamoDbLeaseRepository.live)
 
 }

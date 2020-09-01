@@ -7,12 +7,11 @@ import scala.collection.compat._
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.{ AdminClient, Client, LocalStackServices, Producer }
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
-import nl.vroste.zio.kinesis.client.TestUtil.retryOnResourceNotFound
+import nl.vroste.zio.kinesis.client.TestUtil.{ retryOnResourceNotFound, withStream }
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.LeaseCoordinationSettings
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
-import software.amazon.awssdk.services.kinesis.model.Shard
 import zio._
 import zio.clock.Clock
 import zio.console._
@@ -24,7 +23,6 @@ import zio.test.Assertion._
 import zio.test._
 import zio.logging._
 import nl.vroste.zio.kinesis.client.ProducerSettings
-import nl.vroste.zio.kinesis.client.TestUtil
 
 object NativeConsumerTest extends DefaultRunnableSpec {
   /*
@@ -593,28 +591,13 @@ object NativeConsumerTest extends DefaultRunnableSpec {
       TestAspect.timeoutWarning(60.seconds) @@
       TestAspect.timeout(300.seconds)
 
-  val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
-  val env = ((LocalStackServices.env.orDie >+>
+  val env = ((LocalStackServices.localStackAwsLayer.orDie >+>
     (AdminClient.live ++ Client.live ++ DynamoDbLeaseRepository.live)).orDie ++
     zio.test.environment.testEnvironment ++
     Clock.live) >>>
-    (ZLayer.identity ++ loggingEnv)
-
-  def withStream[R, A](name: String, shards: Int)(
-    f: ZIO[R, Throwable, A]
-  ): ZIO[AdminClient with Client with Clock with Console with R, Throwable, A] =
-    TestUtil
-      .createStream(name, shards)
-      .tapM { _ =>
-        def getShards: ZIO[Client with Clock, Throwable, Chunk[Shard]] =
-          ZIO
-            .service[Client.Service]
-            .flatMap(_.listShards(name).runCollect)
-            .filterOrElse(_.nonEmpty)(_ => getShards.delay(1.second))
-        getShards
-      }
-      .use_(f)
+    (ZLayer.identity ++ loggingLayer)
 
   def produceSampleRecords(
     streamName: String,
@@ -671,7 +654,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     (ev: DiagnosticEvent) =>
       ev match {
         case _: PollComplete => UIO.unit
-        case _               => log.info(s"${worker}: ${ev}").provideLayer(loggingEnv)
+        case _               => log.info(s"${worker}: ${ev}").provideLayer(loggingLayer)
       }
 
   def assertAllLeasesReleased(applicationName: String) =

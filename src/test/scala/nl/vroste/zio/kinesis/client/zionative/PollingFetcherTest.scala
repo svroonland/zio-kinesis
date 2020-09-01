@@ -24,7 +24,7 @@ import scala.jdk.CollectionConverters._
 
 object PollingFetcherTest extends DefaultRunnableSpec {
 
-  val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some("PollingFetcherTest"))
+  val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some("PollingFetcherTest"))
 
   /**
    * PollingFetcher must:
@@ -240,7 +240,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
           equalTo(nrBatches)
         ))
       }
-    ).provideCustomLayer(loggingEnv ++ TestClock.default)
+    ).provideCustomLayer(loggingLayer ++ TestClock.default)
 
   private def makeRecords(nrRecords: Long): Seq[Record] =
     (0 until nrRecords.toInt).map { i =>

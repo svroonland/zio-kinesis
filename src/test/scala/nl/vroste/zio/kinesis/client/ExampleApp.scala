@@ -7,6 +7,7 @@ import nl.vroste.zio.kinesis.client.zionative.metrics.{ CloudWatchMetricsPublish
 import nl.vroste.zio.kinesis.client.zionative._
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
+import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio._
 import zio.clock.Clock
@@ -56,8 +57,8 @@ object ExampleApp extends zio.App {
                     .info(
                       id + s": PollComplete for ${ev.nrRecords} records of ${ev.shardId}, behind latest: ${ev.behindLatest.toMillis} ms (took ${ev.duration.toMillis} ms)"
                     )
-                    .provideLayer(loggingEnv)
-                case ev                               => log.info(id + ": " + ev.toString).provideLayer(loggingEnv)
+                    .provideLayer(loggingLayer)
+                case ev                               => log.info(id + ": " + ev.toString).provideLayer(loggingLayer)
               }) *> metrics.processEvent(ev)
           )
           .flatMapPar(Int.MaxValue) {
@@ -152,16 +153,18 @@ object ExampleApp extends zio.App {
       // localStackEnv
     )
 
-  val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
   val localStackEnv =
-    LocalStackServices.env >+>
+    LocalStackServices.localStackAwsLayer >+>
       (AdminClient.live ++ Client.live ++ DynamoDbLeaseRepository.live).orDie ++
-        loggingEnv
+        loggingLayer
 
-  val awsEnv: ZLayer[Clock, Nothing, AdminClient with Client with DynamicConsumer with Logging with Has[
+  val awsEnv: ZLayer[Clock, Nothing, Clock with Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[
     DynamoDbAsyncClient
-  ] with LeaseRepository with Has[CloudWatchAsyncClient] with Has[CloudWatchMetricsPublisherConfig]] = {
+  ] with Logging with Client with AdminClient with Has[DynamicConsumer.Service] with LeaseRepository with Has[
+    CloudWatchMetricsPublisherConfig
+  ]] = {
     val httpClient    = HttpClient.make(
       maxConcurrency = 100,
       allowHttp2 = false
@@ -180,12 +183,12 @@ object ExampleApp extends zio.App {
 
     val leaseRepo       = DynamoDbLeaseRepository.live
     val dynamicConsumer = DynamicConsumer.live
-    val logging         = loggingEnv
+    val logging         = loggingLayer
 
     val metricsPublisherConfig = ZLayer.succeed(CloudWatchMetricsPublisherConfig())
 
     ZLayer.requires[Clock] >+>
-      awsClients >+>
+      awsClients ++ loggingLayer >+>
       (client ++ adminClient ++ dynamicConsumer ++ leaseRepo ++ logging ++ metricsPublisherConfig)
   }
 

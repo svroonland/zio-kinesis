@@ -24,8 +24,8 @@ object NativeConsumerBasicUsageExample extends zio.App {
             .via(checkpointer.checkpointBatched[Console](nr = 1000, interval = 5.second))
       }
       .runDrain
-      .provideCustomLayer(Consumer.defaultEnvironment ++ loggingEnv)
+      .provideCustomLayer(Consumer.defaultEnvironment ++ loggingLayer)
       .exitCode
 
-  val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 }

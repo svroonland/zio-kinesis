@@ -15,11 +15,13 @@ import software.amazon.kinesis.retrieval.fanout.FanOutConfig
 import software.amazon.kinesis.retrieval.polling.PollingConfig
 import zio._
 import zio.blocking.Blocking
+import zio.logging.Logger
 import zio.stream.ZStream
 
 import scala.jdk.CollectionConverters._
 
 private[client] class DynamicConsumerLive(
+  logger: Logger[String],
   kinesisAsyncClient: KinesisAsyncClient,
   cloudWatchAsyncClient: CloudWatchAsyncClient,
   dynamoDbAsyncClient: DynamoDbAsyncClient
@@ -57,16 +59,16 @@ private[client] class DynamicConsumerLive(
         // TODO we must make sure never to throw an exception here, because KCL will delete the records
         // See https://github.com/awslabs/amazon-kinesis-client/issues/10
         runtime.unsafeRun {
-          // UIO(println(s"ShardQueue: offerRecords for ${shardId} got ${r.size()} records")) *>
-          q.offerAll(r.asScala.map(Exit.succeed(_))).unit.catchSomeCause {
-            case c if c.interrupted => ZIO.unit
-          } // TODO what behavior do we want if the queue + substream are already shutdown for some reason..?
-          // UIO(println(s"ShardQueue: offerRecords for ${shardId} COMPLETE"))
+          logger.debug(s"offerRecords for ${shardId} got ${r.size()} records") *>
+            q.offerAll(r.asScala.map(Exit.succeed(_))).unit.catchSomeCause {
+              case c if c.interrupted => ZIO.unit
+            } *> // TODO what behavior do we want if the queue + substream are already shutdown for some reason..?
+            logger.trace((s"offerRecords for ${shardId} COMPLETE"))
         }
 
       def shutdownQueue: UIO[Unit] =
-        // UIO(println(s"ShardQueue: shutdownQueue for ${shardId}")) *>
-        q.shutdown
+        logger.debug(s"shutdownQueue for ${shardId}") *>
+          q.shutdown
 
       /**
        * Shutdown processing for this shard
@@ -77,7 +79,7 @@ private[client] class DynamicConsumerLive(
                */
       def stop(reason: String): Unit =
         runtime.unsafeRun {
-          UIO(println(s"ShardQueue: stop() for ${shardId} because of ${reason}")).when(false) *>
+          logger.debug(s"stop() for ${shardId} because of ${reason}") *>
             (
               q.takeAll.unit *>                  // Clear the queue so it doesn't have to be drained fully
                 q.offer(Exit.fail(None)).unit <* // Pass an exit signal in the queue to stop the stream
@@ -85,7 +87,7 @@ private[client] class DynamicConsumerLive(
             ).race(
               q.awaitShutdown
             ) <*
-            UIO(println(s"ShardQueue: stop() for ${shardId} because of ${reason} - COMPLETE")).when(false)
+            logger.trace(s"stop() for ${shardId} because of ${reason} - COMPLETE")
           // TODO maybe we want to only do this when the main stream's completion has bubbled up..?
         }
     }
@@ -128,7 +130,7 @@ private[client] class DynamicConsumerLive(
                          maxShardBufferSize
                        )
                        .map(new ShardQueue(shard, runtime, _))
-            checkpointer <- Checkpointer.make(checkpointer)
+            checkpointer <- Checkpointer.make(checkpointer, logger)
             _            <- shards.offer(Exit.succeed((shard, queue, checkpointer))).unit
           } yield queue
         }
@@ -204,8 +206,8 @@ private[client] class DynamicConsumerLive(
                            .retrievalSpecificConfig(retrievalConfig(kinesisAsyncClient))
                        )
                      ).toManaged_
-        doShutdown = // UIO(println("Starting graceful shutdown")) *>
-                     ZIO.fromFutureJava(scheduler.startGracefulShutdown()).unit.orDie <*
+        doShutdown = logger.debug("Starting graceful shutdown") *>
+                       ZIO.fromFutureJava(scheduler.startGracefulShutdown()).unit.orDie <*
                        queues.shutdown
         _         <- zio.blocking
                .blocking(ZIO(scheduler.run()))
