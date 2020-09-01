@@ -20,8 +20,8 @@ object ProducerExample extends zio.App {
 
     for {
       _ <- producer.produce(record)
-      r <- putStrLn(s"All records in the chunk were produced")
-    } yield r
+      _ <- putStrLn(s"All records in the chunk were produced")
+    } yield ()
   }
 
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =

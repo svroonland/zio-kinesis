@@ -30,7 +30,7 @@ object ProducerWithMetricsExample extends zio.App {
 
       for {
         _ <- producer.produceChunk(Chunk.fromIterable(records))
-        r <- putStrLn(s"All records in the chunk were produced")
+        _ <- putStrLn(s"All records in the chunk were produced")
         m <- totalMetrics.get
         _ <- putStrLn(s"Metrics after producing: ${m}")
       } yield ()
