@@ -46,7 +46,6 @@ object PollingFetcher {
 
           // Failure with None indicates that there's no next shard iterator and the shard has ended
           doPoll      = for {
-                     _                    <- log.info("Polling")
                      currentIterator      <- shardIterator.get
                      currentIterator      <- ZIO.fromOption(currentIterator)
                      responseWithDuration <-
@@ -84,13 +83,12 @@ object PollingFetcher {
                           .buffer(config.bufferNrBatches)
                           .mapError(Left(_): Either[Throwable, EndOfShard])
                           .flatMap { response =>
-                            if (response.hasChildShards) {
-                              val lastRecord     = response.records().asScala.last
-                              val lastSequenceNr = ExtendedSequenceNumber(lastRecord.sequenceNumber(), 0L)
-                              ZStream.succeed(response) ++ ZStream.fail(
-                                Right(EndOfShard(lastSequenceNr, response.childShards().asScala.toSeq))
-                              )
-                            } else
+                            if (response.hasChildShards && Option(response.nextShardIterator()).isEmpty)
+                              ZStream.succeed(response) ++ (ZStream.fromEffect(
+                                log.debug(s"PollingFetcher found end of shard for ${shardId}")
+                              ) *>
+                                ZStream.fail(Right(EndOfShard(response.childShards().asScala.toSeq))))
+                            else
                               ZStream.succeed(response)
                           }
                           .mapConcat(_.records.asScala)

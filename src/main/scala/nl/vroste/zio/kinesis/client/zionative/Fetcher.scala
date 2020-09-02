@@ -22,7 +22,7 @@ private[zionative] trait Fetcher {
 }
 
 private[zionative] object Fetcher {
-  case class EndOfShard(lastSequenceNumber: ExtendedSequenceNumber, childShards: Seq[ChildShard])
+  case class EndOfShard(childShards: Seq[ChildShard])
 
   def apply(
     f: (

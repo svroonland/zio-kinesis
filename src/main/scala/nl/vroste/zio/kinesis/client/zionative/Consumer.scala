@@ -254,15 +254,28 @@ object Consumer {
                 shardStream          = (stop mergeTerminateEither fetcher
                                   .shardRecordStream(shardId, startingPosition)
                                   .catchAll {
-                                    case Left(e)                                                =>
-                                      ZStream.fail(e)
-                                    case Right(EndOfShard(lastSequenceNumber, childShards @ _)) =>
-                                      ZStream.unwrap(
-                                        checkpointer.markEndOfShard(lastSequenceNumber) as ZStream.empty
-                                      )
+                                    case Left(e)                            =>
+                                      ZStream.fromEffect(log.error(s"Shard stream ${shardId} failed", Cause.fail(e))) *>
+                                        ZStream.fail(e)
+                                    case Right(EndOfShard(childShards @ _)) =>
+                                      ZStream.fromEffect(
+                                        log.debug(s"Found end of shard for ${shardId}!!") *>
+                                          checkpointer.markEndOfShard()
+                                      ) *> ZStream.empty
                                   }
                                   .mapChunksM { chunk => // mapM is slow
-                                    chunk.mapM(record => toRecord(shardId, record))
+                                    chunk
+                                      .mapM(record => toRecord(shardId, record))
+                                      .tap { records =>
+                                        records.lastOption.fold(ZIO.unit) { r =>
+                                          val extendedSequenceNumber =
+                                            ExtendedSequenceNumber(r.sequenceNumber, r.subSequenceNumber)
+                                          println(
+                                            s"Shard ${shardId} setting high watermark to ${extendedSequenceNumber}"
+                                          )
+                                          checkpointer.setMaxSequenceNumber(extendedSequenceNumber)
+                                        }
+                                      }
                                   }
                                   .map(Exit.succeed(_))).collectWhileSuccess
               } yield (

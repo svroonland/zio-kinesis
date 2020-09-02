@@ -13,7 +13,8 @@ import zio.stream.{ ZStream, ZTransducer }
 case object ShardLeaseLost
 
 private[zionative] trait CheckpointerInternal {
-  def markEndOfShard(lastSequenceNumber: ExtendedSequenceNumber): UIO[Unit]
+  def setMaxSequenceNumber(lastSequenceNumber: ExtendedSequenceNumber): UIO[Unit]
+  def markEndOfShard(): UIO[Unit]
 }
 
 /**

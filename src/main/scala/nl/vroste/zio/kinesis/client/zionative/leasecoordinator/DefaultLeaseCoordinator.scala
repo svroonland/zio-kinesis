@@ -400,9 +400,12 @@ private class DefaultLeaseCoordinator(
 
   override def makeCheckpointer(shardId: String) =
     for {
-      staged     <- Ref.make[Option[ExtendedSequenceNumber]](None)
-      endOfShard <- Ref.make[Option[ExtendedSequenceNumber]](None)
-      permit     <- Semaphore.make(1)
+      staged            <- Ref.make(Option.empty[ExtendedSequenceNumber])
+      lastCheckpoint    <- Ref.make(Option.empty[ExtendedSequenceNumber])
+      maxSequenceNumber <- Ref.make(Option.empty[ExtendedSequenceNumber])
+      shardEnded        <- Ref.make(false)
+      permit            <- Semaphore.make(1)
+      env               <- ZIO.environment[Logging]
     } yield new Checkpointer with CheckpointerInternal {
       def checkpoint[R](
         retrySchedule: Schedule[Clock with R, Throwable, Any]
@@ -411,7 +414,15 @@ private class DefaultLeaseCoordinator(
           .retry(retrySchedule +++ Schedule.stop) // Only retry Left[Throwable]
 
       override def checkpointAndRelease: ZIO[Any, Either[Throwable, ShardLeaseLost.type], Unit] =
-        doCheckpoint(release = true)
+        (maxSequenceNumber.get zip lastCheckpoint.get zip shardEnded.get).flatMap {
+          case ((maxSeqNr, lastCheckpoint), shardEnded) =>
+            log
+              .debug(
+                s"Checkpoint and release for shard ${shardId}, maxSeqNr=${maxSeqNr}, " +
+                  s"lastCheckpoint=${lastCheckpoint}, shardEnded=${shardEnded}"
+              )
+              .provide(env)
+        } *> doCheckpoint(release = true)
 
       private def doCheckpoint(release: Boolean): ZIO[Any, Either[Throwable, ShardLeaseLost.type], Unit] =
         /*
@@ -431,20 +442,29 @@ private class DefaultLeaseCoordinator(
          */
         permit.withPermit {
           for {
-            lastStaged           <- staged.get
-            endOfShardSequenceNr <- endOfShard.get
-            _                    <- lastStaged match {
+            lastStaged          <- staged.get
+            maxSequenceNumber   <- maxSequenceNumber.get
+            endOfShardSeen      <- shardEnded.get
+            lastCheckpointValue <- lastCheckpoint.get
+            _                   <- lastStaged match {
                    case Some(sequenceNr) =>
                      val checkpoint: Either[SpecialCheckpoint, ExtendedSequenceNumber] =
-                       endOfShardSequenceNr
-                         .filter(_ == sequenceNr)
+                       maxSequenceNumber
+                         .filter(_ == sequenceNr && endOfShardSeen)
                          .map(_ => Left(SpecialCheckpoint.ShardEnd))
                          .getOrElse(Right(sequenceNr))
 
+                     (processCommand(LeaseCommand.UpdateCheckpoint(shardId, checkpoint, _, release = release)) *>
+                       lastCheckpoint.set(checkpoint.toOption) *>
+                       // only update when the staged record has not changed while checkpointing
+                       staged.updateSome { case Some(s) if s == sequenceNr => None }).uninterruptible
+                   // Either the last checkpoint is the current max checkpoint (i.e. an empty poll at shard end)
+                   // or we only get that empty poll (when having resumed the shard after the last sequence nr)
+                   case None
+                       if release && endOfShardSeen && ((maxSequenceNumber.isEmpty && lastCheckpointValue.isEmpty) || lastCheckpointValue
+                         .exists(maxSequenceNumber.contains)) =>
+                     val checkpoint = Left(SpecialCheckpoint.ShardEnd)
                      processCommand(LeaseCommand.UpdateCheckpoint(shardId, checkpoint, _, release = release))
-                     // onSuccess to ensure updating in the face of interruption
-                     // only update when the staged record has not changed while checkpointing
-                       .onSuccess(_ => staged.updateSome { case Some(lastStaged @ _) => None })
                    case None if release  =>
                      processCommand(LeaseCommand.ReleaseLease(shardId, _)).mapError(Left(_))
                    case None             =>
@@ -456,8 +476,13 @@ private class DefaultLeaseCoordinator(
       override def stage(r: Record[_]): zio.UIO[Unit] =
         staged.set(Some(ExtendedSequenceNumber(r.sequenceNumber, r.subSequenceNumber)))
 
-      override def markEndOfShard(lastSequenceNumber: ExtendedSequenceNumber): UIO[Unit] =
-        endOfShard.set(Some(lastSequenceNumber))
+      override def setMaxSequenceNumber(lastSequenceNumber: ExtendedSequenceNumber): UIO[Unit] =
+        maxSequenceNumber.set(Some(lastSequenceNumber))
+
+      override def markEndOfShard(): UIO[Unit] = {
+        println(s"Marking end of shard for ${shardId}")
+        shardEnded.set(true)
+      }
     }
 
   def releaseLeases: ZIO[Logging with Clock, Nothing, Unit] =

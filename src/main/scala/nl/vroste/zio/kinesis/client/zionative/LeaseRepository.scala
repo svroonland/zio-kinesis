@@ -47,6 +47,8 @@ object LeaseRepository {
      */
     def createLeaseTableIfNotExists(tableName: String): ZIO[Clock with Logging, Throwable, Boolean]
 
+    def deleteTable(tableName: String): ZIO[Clock with Logging, Throwable, Unit]
+
     def getLeases(tableName: String): ZStream[Clock, Throwable, Lease]
 
     /**

@@ -270,6 +270,15 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient, timeout: Dura
       }
   }
 
+  override def deleteTable(
+    tableName: String
+  ): ZIO[Clock with Logging, Throwable, Unit] = {
+    val request = DeleteTableRequest.builder().tableName(tableName).build()
+    asZIO(client.deleteTable(request))
+      .timeoutFail(new TimeoutException(s"Timeout creating lease"))(timeout)
+      .unit
+  }
+
   private def toLease(item: DynamoDbItem): Try[Lease] =
     Try {
       Lease(

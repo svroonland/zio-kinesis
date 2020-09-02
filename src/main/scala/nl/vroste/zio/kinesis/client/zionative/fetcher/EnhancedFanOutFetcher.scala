@@ -64,13 +64,11 @@ object EnhancedFanOutFetcher {
             .retry(config.retrySchedule)
         }.mapError(Left(_): Either[Throwable, EndOfShard])
           .flatMap { response =>
-            if (response.hasChildShards) {
-              val lastRecord     = response.records().asScala.last
-              val lastSequenceNr = ExtendedSequenceNumber(lastRecord.sequenceNumber(), 0L)
+            if (response.hasChildShards)
               ZStream.succeed(response) ++ ZStream.fail(
-                Right(EndOfShard(lastSequenceNr, response.childShards().asScala.toSeq))
+                Right(EndOfShard(response.childShards().asScala.toSeq))
               )
-            } else
+            else
               ZStream.succeed(response)
           }
           .mapConcat(_.records.asScala)
