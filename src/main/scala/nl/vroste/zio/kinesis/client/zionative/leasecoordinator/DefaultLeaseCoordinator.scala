@@ -479,10 +479,8 @@ private class DefaultLeaseCoordinator(
       override def setMaxSequenceNumber(lastSequenceNumber: ExtendedSequenceNumber): UIO[Unit] =
         maxSequenceNumber.set(Some(lastSequenceNumber))
 
-      override def markEndOfShard(): UIO[Unit] = {
-        println(s"Marking end of shard for ${shardId}")
+      override def markEndOfShard(): UIO[Unit] =
         shardEnded.set(true)
-      }
     }
 
   def releaseLeases: ZIO[Logging with Clock, Nothing, Unit] =

@@ -650,7 +650,9 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
   val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
-  val env = ((client.defaultAwsLayer.orDie >+>
+  val useAws = false
+
+  val env = (((if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer).orDie >+>
     (AdminClient.live ++ Client.live ++ DynamoDbLeaseRepository.live)).orDie ++
     zio.test.environment.testEnvironment ++
     Clock.live) >>>
