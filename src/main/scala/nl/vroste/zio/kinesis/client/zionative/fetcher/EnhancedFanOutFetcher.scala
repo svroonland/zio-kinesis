@@ -5,7 +5,7 @@ import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
 import nl.vroste.zio.kinesis.client.zionative.{ DiagnosticEvent, ExtendedSequenceNumber, FetchMode, Fetcher }
 import nl.vroste.zio.kinesis.client.{ Client, Util }
-import software.amazon.awssdk.services.kinesis.model.{ ChildShard, ConsumerStatus, ResourceInUseException }
+import software.amazon.awssdk.services.kinesis.model.{ ConsumerStatus, ResourceInUseException }
 import zio._
 import zio.clock.Clock
 import zio.duration._

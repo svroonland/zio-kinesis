@@ -26,8 +26,6 @@ import zio.logging.{ log, Logging }
 import zio.random.Random
 import zio.stream.ZStream
 
-import scala.jdk.CollectionConverters._
-
 final case class ExtendedSequenceNumber(sequenceNumber: String, subSequenceNumber: Long)
 
 sealed trait FetchMode

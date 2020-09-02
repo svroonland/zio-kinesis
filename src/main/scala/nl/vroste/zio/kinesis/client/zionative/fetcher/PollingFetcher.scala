@@ -2,7 +2,6 @@ package nl.vroste.zio.kinesis.client.zionative.fetcher
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
 import nl.vroste.zio.kinesis.client.zionative.{ Consumer, DiagnosticEvent, ExtendedSequenceNumber, FetchMode, Fetcher }
 import nl.vroste.zio.kinesis.client.{ Client, Util }
-import software.amazon.awssdk.services.kinesis.model.ChildShard
 import zio._
 import zio.clock.Clock
 import zio.duration._
