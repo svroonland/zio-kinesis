@@ -274,7 +274,10 @@ object Consumer {
                                         ZStream.fail(e)
                                     case Right(EndOfShard(childShards @ _)) =>
                                       ZStream.fromEffect(
-                                        log.debug(s"Found end of shard for ${shardId}!!") *>
+                                        log.debug(
+                                          s"Found end of shard for ${shardId}. " +
+                                            s"Child shards are ${childShards.map(_.shardId()).mkString(", ")}"
+                                        ) *>
                                           // TODO can we pick up leases for this shard somehow?
                                           checkpointer.markEndOfShard() *>
                                           leaseCoordinator.childShardsDetected(childShards)

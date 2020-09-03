@@ -678,24 +678,22 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
             for {
               producer    <- produceSampleRecords(streamName, nrRecords, chunkSize = 50, throttle = Some(1.second)).fork
-              client      <- ZIO.service[Client.Service]
               adminClient <- ZIO.service[AdminClient.Service]
 
-              //              events <- Ref.make[List[DiagnosticEvent]](List.empty)
-              stream         <-
+              stream  <-
                 consumer("worker1", e => UIO(println(e.toString))).runCollect.tapCause(e => UIO(println(e))).fork
-              _              <- ZIO.sleep(10.seconds)
-              _               = println("Resharding")
-              _              <- adminClient.updateShardCount(streamName, nrShards * 2)
-              _              <- ZIO.sleep(10.seconds)
-              finishedShards <- stream.join
-              shards         <- TestUtil.getShards(streamName)
-              _               = println(shards.mkString(", "))
-              stream2        <-
+              _       <- ZIO.sleep(10.seconds)
+              _        = println("Resharding")
+              _       <- adminClient.updateShardCount(streamName, nrShards * 2)
+              _       <- ZIO.sleep(10.seconds)
+              _       <- stream.join
+              shards  <- TestUtil.getShards(streamName)
+              _        = println(shards.mkString(", "))
+              stream2 <-
                 consumer("worker1", e => UIO(println(e.toString))).runCollect.tapCause(e => UIO(println(e))).fork
-              _              <- ZIO.sleep(30.seconds)
-              _              <- stream2.interrupt
-              _              <- producer.interrupt
+              _       <- ZIO.sleep(30.seconds)
+              _       <- stream2.interrupt
+              _       <- producer.interrupt
             } yield assertCompletes
         }
       } @@ TestAspect.ifEnvSet("ENABLE_AWS")

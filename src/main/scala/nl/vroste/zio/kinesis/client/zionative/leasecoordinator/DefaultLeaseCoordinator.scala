@@ -652,7 +652,7 @@ object DefaultLeaseCoordinator {
   /**
    *
    * @param currentLeases Latest known state of all leases
-   * @param shards List of all of the stream's shards
+   * @param shards List of all of the stream's shards which are currently active
    */
   final case class State(
     currentLeases: Map[String, LeaseState],

@@ -44,7 +44,8 @@ object ShardAssignmentStrategy {
    * Note that users must make sure that other workers in the pool also use a manual shard assignment
    * strategy, otherwise stealing back of leases by other workers may occur.
    *
-   * You also need to make sure that all shards are covered by the shard assignment of all workers
+   * You also need to make sure that all shards are covered by the shard assignment of all workers.
+   * After resharding, the list of shards must be reconfigured.
    *
    * @param shardAssignment IDs of shards to assign to this worker
    */

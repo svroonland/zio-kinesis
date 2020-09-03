@@ -75,6 +75,10 @@ Features:
 * Manual or otherwise user-defined shard assignment strategy
 * Pluggable lease/checkpoint storage backend
 
+In comparison to the Kinesis Client Library, it has the advantages of:
+* Fast startup and shutdown (less than 500 ms vs 10+ seconds) due to ZIOs superior interruption & fiber coordination mechanisms + optimized startup sequence
+
+
 ### Basic usage
 
 The following example shows a simple ZIO App that consumes from a stream, prints a record and periodically checkpoints.
@@ -158,6 +162,20 @@ When one worker fails or loses connectivity, the other workers will detect that 
 
 When a worker is stopped, its leases are released so that other workers may pick them up.
 
+### Resharding
+
+Changing the stream's shard count, or _resharding_, is fully supported. When a shard is split or two shards are merged, before processing of the new shard starts, the parent shard(s) are processed until the end. When a worker detects the end of a shard it is processing, Kinesis will tell it the new (child) shards and their processing will start immediately after both parent shards have. 
+
+When another worker is processing one of the parent shards, it may take a while for this to be detected.
+
+To ensure that no shard is left behind, the list of shards is refreshed periodically.
+
+### Consuming multiple Kinesis streams
+
+If you want to process more than one Kinesis stream, simply create more than one instance and ensure that the application name is unique per stream. The application name is used to create a lease table. Unique application names will create a lease table per stream, to ensure that shard IDs do not conflict. Unlike the KCL, which heavily uses threads, there should be no performance need to have multi-stream support built into `Consumer`.
+
+For example, if your application name is `"order_processing"` and you want to consume the streams `"orders"` and `"payments`", create one `Consumer` with the application name `"order_processing_orders"` and one `"order_processing_payments"`.
+
 ### Customization
 
 The following parameters can be customized:
@@ -194,15 +212,12 @@ Lease coordination and metrics are fully compatible for running along other KCL 
 ### Unsupported features
 
 Features that are supported by `DynamicConsumer` but not by `Consumer`:
-* Handling resharding (split and merged shards)  
-  As a workaround the workers will have to be restarted to start processing the new shards.
 * KPL record aggregation via Protobuf + subsequence number checkpointing  
   Users can manually deserialize records via Protobuf if desired. Kinesis streams has a at-least once model anyway, so the lack of subsequence number checkpointing does not break that.
 * DynamoDB lease table billing mode configuration  
-  This can be adjusted in AWS Console if desired.
+  This can be adjusted in AWS Console if desired or manually using the AWS DynamoDB SDK.
 * Some metrics  
   Not all metrics published by the KCL are implemented yet. Some of them are not applicable because of different implementations.
-
 
 ## Configuration
 The default environments for `Client`, `AdminClient`, `Consumer`, `DynamicConsumer` and `Producer` will use the [Default Credential/Region Provider](https://docs.aws.amazon.com/sdk-for-java/v1/developer-guide/credentials.html).
@@ -312,7 +327,6 @@ The interface is largely the same as `Consumer`, except for:
  * Retrying is not done automatically by DynamicConsumer's Checkpointer.
 
 Unlike `Consumer`, `DynamicConsumer` also supports:
-* Resharding
 * KPL record aggregation via Protobuf + subsequence number checkpointing
 * Full CloudWatch metrics publishing
 
