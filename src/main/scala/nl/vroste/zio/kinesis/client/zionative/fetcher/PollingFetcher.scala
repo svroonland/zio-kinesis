@@ -1,7 +1,7 @@
 package nl.vroste.zio.kinesis.client.zionative.fetcher
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
 import nl.vroste.zio.kinesis.client.zionative.{ Consumer, DiagnosticEvent, FetchMode, Fetcher }
-import nl.vroste.zio.kinesis.client.{ Client, Util }
+import nl.vroste.zio.kinesis.client.{ childShardToShard, Client, Util }
 import zio._
 import zio.clock.Clock
 import zio.duration._
@@ -90,7 +90,9 @@ object PollingFetcher {
                               ZStream.succeed(response) ++ (ZStream.fromEffect(
                                 log.debug(s"PollingFetcher found end of shard for ${shardId}")
                               ) *>
-                                ZStream.fail(Right(EndOfShard(response.childShards().asScala.toSeq))))
+                                ZStream.fail(
+                                  Right(EndOfShard(response.childShards().asScala.map(childShardToShard).toSeq))
+                                ))
                             else
                               ZStream.succeed(response)
                           }

@@ -4,7 +4,7 @@ import nl.vroste.zio.kinesis.client.AdminClient.StreamDescription
 import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
 import nl.vroste.zio.kinesis.client.zionative.{ DiagnosticEvent, FetchMode, Fetcher }
-import nl.vroste.zio.kinesis.client.{ Client, Util }
+import nl.vroste.zio.kinesis.client.{ childShardToShard, Client, Util }
 import software.amazon.awssdk.services.kinesis.model.{ ConsumerStatus, ResourceInUseException }
 import zio._
 import zio.clock.Clock
@@ -66,7 +66,7 @@ object EnhancedFanOutFetcher {
           .flatMap { response =>
             if (response.hasChildShards)
               ZStream.succeed(response) ++ ZStream.fail(
-                Right(EndOfShard(response.childShards().asScala.toSeq))
+                Right(EndOfShard(response.childShards().asScala.map(childShardToShard).toSeq))
               )
             else
               ZStream.succeed(response)

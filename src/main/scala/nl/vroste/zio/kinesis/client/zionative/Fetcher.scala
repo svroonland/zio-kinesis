@@ -1,7 +1,7 @@
 package nl.vroste.zio.kinesis.client.zionative
 import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
-import software.amazon.awssdk.services.kinesis.model.{ ChildShard, Record => KinesisRecord }
+import software.amazon.awssdk.services.kinesis.model.{ Shard, Record => KinesisRecord }
 import zio.clock.Clock
 import zio.stream.ZStream
 
@@ -22,7 +22,7 @@ private[zionative] trait Fetcher {
 }
 
 private[zionative] object Fetcher {
-  case class EndOfShard(childShards: Seq[ChildShard])
+  case class EndOfShard(childShards: Seq[Shard])
 
   def apply(
     f: (

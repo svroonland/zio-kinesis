@@ -16,6 +16,7 @@ import software.amazon.awssdk.services.kinesis.model.{
   KmsThrottlingException,
   LimitExceededException,
   ProvisionedThroughputExceededException,
+  Shard,
   Record => KinesisRecord
 }
 import zio._
@@ -190,6 +191,15 @@ object Consumer {
         case c: EnhancedFanOut => EnhancedFanOutFetcher.make(streamDescription, workerIdentifier, c, emitDiagnostic)
       }
 
+    val listShards: ZIO[Clock with Client, Throwable, Map[String, Shard]] = Client
+      .listShards(streamName)
+      .runCollect
+      .map(_.map(l => (l.shardId(), l)).toMap)
+      .flatMap { shards =>
+        if (shards.isEmpty) ZIO.fail(new Exception("No shards in stream!"))
+        else ZIO.succeed(shards)
+      }
+
     def createDependencies =
       ZManaged
         .mapParN(
@@ -208,15 +218,7 @@ object Consumer {
           // additional information to the lease coordinator, and the list of leases is used
           // as the list of shards.
           for {
-            fetchShards      <- Client
-                             .listShards(streamName)
-                             .runCollect
-                             .map(_.map(l => (l.shardId(), l)).toMap)
-                             .flatMap { shards =>
-                               if (shards.isEmpty) ZIO.fail(new Exception("No shards in stream!"))
-                               else ZIO.succeed(shards)
-                             }
-                             .forkManaged
+            fetchShards      <- listShards.forkManaged
             leaseCoordinator <- DefaultLeaseCoordinator
                                   .make(
                                     applicationName,
@@ -226,6 +228,11 @@ object Consumer {
                                     fetchShards.join,
                                     shardAssignmentStrategy
                                   )
+            // Periodically refresh shards
+            _                <- (listShards >>= leaseCoordinator.updateShards)
+                   .repeat(Schedule.spaced(leaseCoordinationSettings.shardRefreshInterval))
+                   .delay(leaseCoordinationSettings.shardRefreshInterval)
+                   .forkManaged
           } yield leaseCoordinator
         )(_ -> _)
 
@@ -260,6 +267,7 @@ object Consumer {
                                     case Right(EndOfShard(childShards @ _)) =>
                                       ZStream.fromEffect(
                                         log.debug(s"Found end of shard for ${shardId}!!") *>
+                                          // TODO can we pick up leases for this shard somehow?
                                           checkpointer.markEndOfShard()
                                       ) *> ZStream.empty
                                   }

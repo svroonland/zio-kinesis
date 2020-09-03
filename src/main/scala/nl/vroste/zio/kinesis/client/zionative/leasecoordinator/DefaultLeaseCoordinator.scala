@@ -70,7 +70,7 @@ private class DefaultLeaseCoordinator(
 
   val now = zio.clock.currentDateTime.map(_.toInstant())
 
-  private def updateShards(shards: Map[String, Shard]): UIO[Unit] =
+  def updateShards(shards: Map[String, Shard]): UIO[Unit] =
     state.update(_.updateShards(shards))
 
   /**

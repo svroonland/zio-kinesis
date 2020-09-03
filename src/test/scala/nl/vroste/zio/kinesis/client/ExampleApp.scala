@@ -32,6 +32,7 @@ object ExampleApp extends zio.App {
   val runtime                         = 3.minute
   val maxRandomWorkerStartDelayMillis = 1 + 0 * 60 * 1000
   val recordProcessingTime: Duration  = 1.millisecond
+  val reshardAfter: Option[Duration]  = Some(1.minute)
 
   override def run(
     args: List[String]
@@ -141,6 +142,13 @@ object ExampleApp extends zio.App {
           } yield ()).fork
         )
       // Sleep, but abort early if one of our children dies
+      _          <- reshardAfter
+             .map(delay =>
+               log.info("Resharding") *>
+                 ZIO.service[AdminClient.Service].flatMap(_.updateShardCount(streamName, nrShards * 2)).delay(delay)
+             )
+             .getOrElse(ZIO.unit)
+             .fork
       _          <- ZIO.sleep(runtime) raceFirst ZIO.foreachPar_(kclWorkers ++ workers)(_.join)
       _           = println("Interrupting app")
       _          <- producer.interruptFork
