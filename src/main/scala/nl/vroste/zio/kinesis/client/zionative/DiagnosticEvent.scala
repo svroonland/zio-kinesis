@@ -22,6 +22,11 @@ object DiagnosticEvent {
       extends DiagnosticEvent
 
   /**
+   * A shard has ended and the last record has been checkpointed
+   */
+  final case class ShardEnded(shard: String) extends DiagnosticEvent
+
+  /**
    * Enhanced fanout produced a batch of records
    *
         * @param shardId

@@ -37,6 +37,9 @@ object PollingFetcher {
     } yield Fetcher { (shardId, startingPosition) =>
       ZStream.unwrapManaged {
         for {
+          _                    <- log
+                 .info(s"Creating PollingFetcher for shard ${shardId} with starting position ${startingPosition}")
+                 .toManaged_
           initialShardIterator <- getShardIterator(streamName, shardId, startingPosition)
                                     .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
                                     .mapError(Left(_): Either[Throwable, EndOfShard])

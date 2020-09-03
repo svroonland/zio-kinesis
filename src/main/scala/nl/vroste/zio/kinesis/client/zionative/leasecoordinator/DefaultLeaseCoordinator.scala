@@ -101,7 +101,8 @@ private class DefaultLeaseCoordinator(
     def doUpdateCheckpoint(
       shard: String,
       checkpoint: Either[SpecialCheckpoint, ExtendedSequenceNumber],
-      release: Boolean
+      release: Boolean,
+      shardEnded: Boolean
     ): ZIO[Logging with Clock, Either[Throwable, ShardLeaseLost.type], Unit] =
       for {
         heldleaseWithComplete  <- state.get
@@ -126,8 +127,12 @@ private class DefaultLeaseCoordinator(
                (updateState(_.updateLease(updatedLease, _)) *>
                  (
                    leaseCompleted.succeed(()) *>
-                     updateState(_.releaseLease(updatedLease, _)) *>
-                     emitDiagnostic(DiagnosticEvent.LeaseReleased(shard))
+                     updateState { (s, now) =>
+                       val s2 = s.releaseLease(updatedLease, now)
+                       if (shardEnded) s2.removeShard(shard) else s2
+                     } *>
+                     emitDiagnostic(DiagnosticEvent.LeaseReleased(shard)) *>
+                     emitDiagnostic(DiagnosticEvent.ShardEnded(shard)).when(shardEnded)
                  ).when(release)).orDie
              }
       } yield ()
@@ -236,16 +241,16 @@ private class DefaultLeaseCoordinator(
       .groupByKey(_.shard) {
         case (shard @ _, command) =>
           command.mapM {
-            case UpdateCheckpoint(shard, checkpoint, done, release) =>
-              doUpdateCheckpoint(shard, checkpoint, release).foldM(done.fail, done.succeed).unit
-            case RenewLease(shard, done)                            =>
+            case UpdateCheckpoint(shard, checkpoint, done, release, shardEnded) =>
+              doUpdateCheckpoint(shard, checkpoint, release, shardEnded).foldM(done.fail, done.succeed).unit
+            case RenewLease(shard, done)                                        =>
               doRenewLease(shard).foldM(done.fail, done.succeed).unit
-            case RefreshLease(lease, done)                          =>
+            case RefreshLease(lease, done)                                      =>
               // log.debug(s"Runloop: RefreshLease ${lease}") *>
               doRefreshLease(lease).tap(done.succeed).unit.orDie // Cannot fail
-            case ReleaseLease(shard, done)                          =>
+            case ReleaseLease(shard, done)                                      =>
               doReleaseLease(shard).foldM(done.fail, done.succeed).unit
-            case RegisterNewAcquiredLease(lease, done)              =>
+            case RegisterNewAcquiredLease(lease, done)                          =>
               doRegisterNewAcquiredLease(lease).tap(done.succeed).unit // Cannot fail
           }
       }
@@ -283,21 +288,20 @@ private class DefaultLeaseCoordinator(
    *
    * Also if other workers have taken our leases and we haven't yet checkpointed, we can find out now
    */
-  val refreshLeases = {
+  val refreshLeases =
     for {
       _                 <- log.info("Refreshing leases")
       result            <- table
                   .getLeases(applicationName)
                   .mapMParUnordered(settings.maxParallelLeaseAcquisitions) { lease =>
-                    (log.info(s"RefreshLeases: ${lease}") *>
-                      processCommand(LeaseCommand.RefreshLease(lease, _)))
+                    log.info(s"RefreshLeases: ${lease}") *>
+                      processCommand(LeaseCommand.RefreshLease(lease, _))
                   }
                   .runDrain
                   .timed
       (duration, leases) = result
       _                 <- log.debug(s"Refreshing leases took ${duration.toMillis}")
     } yield ()
-  }
 
   /**
    * Claims all available leases for the current shards (no owner or not existent)
@@ -308,7 +312,8 @@ private class DefaultLeaseCoordinator(
       allLeases          = state.currentLeases.view.mapValues(_.lease).toMap
       _                 <- log.info(s"Found ${allLeases.size} leases")
       // Claim new leases for the shards the database doesn't have leases for
-      shardsWithoutLease = desiredShards.filterNot(shardId => allLeases.values.map(_.key).toList.contains(shardId))
+      shardsWithoutLease =
+        desiredShards.filterNot(shardId => allLeases.values.map(_.key).toList.contains(shardId)).toSeq.sorted
       _                 <- log
              .info(
                s"No leases exist yet for these shards, creating and claiming: ${shardsWithoutLease.mkString(",")}"
@@ -344,17 +349,17 @@ private class DefaultLeaseCoordinator(
    *
    * The effect fails with a Throwable when having failed to take one or more leases
    */
-  val takeLeases: ZIO[Clock with Logging with Random, Throwable, Unit] =
+  val takeLeases: ZIO[Clock with Logging with Random, Throwable, Unit] = {
+    def shardHasEnded(l: Lease) = l.checkpoint.contains(Left(SpecialCheckpoint.ShardEnd))
     for {
       leases        <- state.get.map(_.currentLeases.values.toSet)
       shards        <- state.get.map(_.shards.keySet)
-      desiredShards <- strategy.desiredShards(
-                         leases.map {
-                           case LeaseState(lease, completed @ _, lastUpdated) => (lease, lastUpdated)
-                         }.toSet,
-                         shards,
-                         workerId
-                       )
+      openLeases     = leases.collect {
+                     case LeaseState(lease, completed @ _, lastUpdated) if !shardHasEnded(lease) =>
+                       (lease, lastUpdated)
+                   }
+      openShards     = shards.filter(s => !leases.toSeq.exists(l => l.lease.key == s && shardHasEnded(l.lease)))
+      desiredShards <- strategy.desiredShards(openLeases, openShards, workerId)
       _             <- log.info(s"Desired shard assignment: ${desiredShards.mkString(",")}")
       _             <- claimLeasesForShardsWithoutLease(desiredShards)
       state         <- state.get
@@ -375,6 +380,7 @@ private class DefaultLeaseCoordinator(
              }
            }
     } yield ()
+  }
 
   // Puts it in the state and the queue
   private def registerNewAcquiredLease(lease: Lease): ZIO[Clock, Nothing, Unit] =
@@ -454,7 +460,10 @@ private class DefaultLeaseCoordinator(
                          .map(_ => Left(SpecialCheckpoint.ShardEnd))
                          .getOrElse(Right(sequenceNr))
 
-                     (processCommand(LeaseCommand.UpdateCheckpoint(shardId, checkpoint, _, release = release)) *>
+                     (processCommand(
+                       LeaseCommand
+                         .UpdateCheckpoint(shardId, checkpoint, _, release = release, shardEnded = checkpoint.isLeft)
+                     ) *>
                        lastCheckpoint.set(checkpoint.toOption) *>
                        // only update when the staged record has not changed while checkpointing
                        staged.updateSome { case Some(s) if s == sequenceNr => None }).uninterruptible
@@ -464,7 +473,9 @@ private class DefaultLeaseCoordinator(
                        if release && endOfShardSeen && ((maxSequenceNumber.isEmpty && lastCheckpointValue.isEmpty) || lastCheckpointValue
                          .exists(maxSequenceNumber.contains)) =>
                      val checkpoint = Left(SpecialCheckpoint.ShardEnd)
-                     processCommand(LeaseCommand.UpdateCheckpoint(shardId, checkpoint, _, release = release))
+                     processCommand(
+                       LeaseCommand.UpdateCheckpoint(shardId, checkpoint, _, release = release, shardEnded = true)
+                     )
                    case None if release  =>
                      processCommand(LeaseCommand.ReleaseLease(shardId, _)).mapError(Left(_))
                    case None             =>
@@ -513,7 +524,8 @@ object DefaultLeaseCoordinator {
       shard: String,
       checkpoint: Either[SpecialCheckpoint, ExtendedSequenceNumber],
       done: Promise[Either[Throwable, ShardLeaseLost.type], Unit],
-      release: Boolean
+      release: Boolean,
+      shardEnded: Boolean
     ) extends LeaseCommand
 
     final case class ReleaseLease(shard: String, done: Promise[Throwable, Unit]) extends LeaseCommand
@@ -626,6 +638,8 @@ object DefaultLeaseCoordinator {
     }
 
     def updateShards(shards: Map[String, Shard]): State = copy(shards = shards)
+
+    def removeShard(id: String): State = copy(shards = shards - id)
 
     def updateLease(lease: Lease, now: Instant): State =
       updateLeases(List(lease), now)

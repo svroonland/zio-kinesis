@@ -270,9 +270,6 @@ object Consumer {
                                         records.lastOption.fold(ZIO.unit) { r =>
                                           val extendedSequenceNumber =
                                             ExtendedSequenceNumber(r.sequenceNumber, r.subSequenceNumber)
-                                          println(
-                                            s"Shard ${shardId} setting high watermark to ${extendedSequenceNumber}"
-                                          )
                                           checkpointer.setMaxSequenceNumber(extendedSequenceNumber)
                                         }
                                       }
