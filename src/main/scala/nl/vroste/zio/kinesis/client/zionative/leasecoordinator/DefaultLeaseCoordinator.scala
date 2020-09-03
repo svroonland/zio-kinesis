@@ -368,7 +368,7 @@ private class DefaultLeaseCoordinator(
                      case (shardId, s) =>
                        !leases.toSeq.exists(l =>
                          l.lease.key == shardId && shardHasEnded(l.lease)
-                       ) && parentShardsCompleted(s, shards, leases.map(_.lease))
+                       ) && parentShardsCompleted(s, leases.map(_.lease))
                    }
       desiredShards <- strategy.desiredShards(openLeases, openShards.keySet, workerId)
       _             <- log.info(s"Desired shard assignment: ${desiredShards.mkString(",")}")
@@ -395,7 +395,7 @@ private class DefaultLeaseCoordinator(
 
   private def shardHasEnded(l: Lease) = l.checkpoint.contains(Left(SpecialCheckpoint.ShardEnd))
 
-  private def parentShardsCompleted(shard: Shard, shards: Map[String, Shard], leases: Set[Lease]): Boolean = {
+  private def parentShardsCompleted(shard: Shard, leases: Set[Lease]): Boolean = {
     val parentShardIds = Option(shard.parentShardId()).toList ++ Option(shard.adjacentParentShardId()).toList
 
 //    println(
