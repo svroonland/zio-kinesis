@@ -1,6 +1,6 @@
 package nl.vroste.zio.kinesis.client.zionative.fetcher
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
-import nl.vroste.zio.kinesis.client.zionative.{ Consumer, DiagnosticEvent, ExtendedSequenceNumber, FetchMode, Fetcher }
+import nl.vroste.zio.kinesis.client.zionative.{ Consumer, DiagnosticEvent, FetchMode, Fetcher }
 import nl.vroste.zio.kinesis.client.{ Client, Util }
 import zio._
 import zio.clock.Clock

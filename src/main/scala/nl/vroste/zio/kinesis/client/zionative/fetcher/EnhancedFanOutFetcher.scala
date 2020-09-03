@@ -3,7 +3,7 @@ package nl.vroste.zio.kinesis.client.zionative.fetcher
 import nl.vroste.zio.kinesis.client.AdminClient.StreamDescription
 import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
-import nl.vroste.zio.kinesis.client.zionative.{ DiagnosticEvent, ExtendedSequenceNumber, FetchMode, Fetcher }
+import nl.vroste.zio.kinesis.client.zionative.{ DiagnosticEvent, FetchMode, Fetcher }
 import nl.vroste.zio.kinesis.client.{ Client, Util }
 import software.amazon.awssdk.services.kinesis.model.{ ConsumerStatus, ResourceInUseException }
 import zio._
