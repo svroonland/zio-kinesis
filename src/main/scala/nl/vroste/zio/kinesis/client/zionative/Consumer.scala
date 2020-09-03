@@ -12,6 +12,7 @@ import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepos
 import nl.vroste.zio.kinesis.client.{ sdkClientsLayer, AdminClient, Client, HttpClient, Record, Util }
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.kinesis.model.{
+  ChildShard,
   GetRecordsResponse,
   KmsThrottlingException,
   LimitExceededException,
@@ -26,6 +27,8 @@ import zio.duration._
 import zio.logging.{ log, Logging }
 import zio.random.Random
 import zio.stream.ZStream
+
+import scala.jdk.CollectionConverters._
 
 final case class ExtendedSequenceNumber(sequenceNumber: String, subSequenceNumber: Long)
 
@@ -316,6 +319,27 @@ object Consumer {
     schedule: Schedule[R, Throwable, A]
   ): Schedule[R, Throwable, (Throwable, A)] =
     Schedule.recurWhile[Throwable](e => isThrottlingException.lift(e).isDefined) && schedule
+
+  private[client] def childShardToShard(s: ChildShard): Shard = {
+    val parentShards = s.parentShards().asScala.toSeq
+
+    val builder = Shard
+      .builder()
+      .shardId(s.shardId())
+      .hashKeyRange(s.hashKeyRange())
+
+    if (parentShards.size == 2)
+      builder
+        .parentShardId(parentShards.head)
+        .adjacentParentShardId(parentShards(1))
+        .build()
+    else if (parentShards.size == 1)
+      builder
+        .parentShardId(parentShards.head)
+        .build()
+    else
+      throw new IllegalArgumentException(s"Unexpected nr of child chards: ${parentShards.size}")
+  }
 
   val defaultEnvironment
     : ZLayer[Any, Throwable, AdminClient with Client with LeaseRepository with Has[CloudWatchAsyncClient]] =

@@ -1,7 +1,8 @@
 package nl.vroste.zio.kinesis.client.zionative.fetcher
+import nl.vroste.zio.kinesis.client.zionative.Consumer.childShardToShard
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
 import nl.vroste.zio.kinesis.client.zionative.{ Consumer, DiagnosticEvent, FetchMode, Fetcher }
-import nl.vroste.zio.kinesis.client.{ childShardToShard, Client, Util }
+import nl.vroste.zio.kinesis.client.{ Client, Util }
 import zio._
 import zio.clock.Clock
 import zio.duration._

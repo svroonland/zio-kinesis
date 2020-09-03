@@ -4,10 +4,8 @@ import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
 import software.amazon.awssdk.core.retry.RetryPolicy
 import software.amazon.awssdk.services.cloudwatch.{ CloudWatchAsyncClient, CloudWatchAsyncClientBuilder }
 import software.amazon.awssdk.services.dynamodb.{ DynamoDbAsyncClient, DynamoDbAsyncClientBuilder }
-import software.amazon.awssdk.services.kinesis.model.{ ChildShard, Shard }
 import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyncClientBuilder }
 import zio.{ Has, ZIO, ZLayer, ZManaged }
-import scala.jdk.CollectionConverters._
 
 package object client {
 
@@ -62,26 +60,4 @@ package object client {
     : ZLayer[Any, Throwable, Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[DynamoDbAsyncClient]] =
     HttpClient.make() >>>
       sdkClientsLayer
-
-  private[client] def childShardToShard(s: ChildShard): Shard = {
-    val parentShards = s.parentShards().asScala.toSeq
-
-    val builder = Shard
-      .builder()
-      .shardId(s.shardId())
-      .hashKeyRange(s.hashKeyRange())
-
-    if (parentShards.size == 2)
-      builder
-        .parentShardId(parentShards.head)
-        .adjacentParentShardId(parentShards(1))
-        .build()
-    else if (parentShards.size == 1)
-      builder
-        .parentShardId(parentShards.head)
-        .build()
-    else
-      throw new IllegalArgumentException(s"Unexpected nr of child chards: ${parentShards.size}")
-  }
-
 }

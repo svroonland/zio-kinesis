@@ -87,6 +87,7 @@ private class CloudWatchMetricsPublisher(
           )
         )
       case LeaseReleased(shardId @ _)                               => List.empty // Processed in periodic metrics
+      case NewShardDetected(shardId @ _)                            => List.empty
       case ShardEnded(shard @ _)                                    => List.empty
       case Checkpoint(shardId @ _, checkpoint @ _)                  => List.empty
       case WorkerJoined(workerId @ _)                               => List.empty // Processed in periodic metrics
@@ -138,6 +139,7 @@ private class CloudWatchMetricsPublisher(
       case LeaseRenewed(_, _)        => UIO.unit
       case LeaseReleased(shardId)    => heldLeases.update(_ - shardId)
       case ShardEnded(_)             => UIO.unit
+      case NewShardDetected(_)       => UIO.unit
       case Checkpoint(_, _)          => UIO.unit
       case WorkerJoined(workerId)    => workers.update(_ + workerId)
       case WorkerLeft(workerId)      => workers.update(_ - workerId)
