@@ -21,10 +21,15 @@ object DiagnosticEvent {
   final case class PollComplete(shardId: String, nrRecords: Int, behindLatest: Duration, duration: Duration)
       extends DiagnosticEvent
 
+  sealed trait ShardEvent extends DiagnosticEvent
+
   /**
    * A shard has ended and the last record has been checkpointed
    */
-  final case class ShardEnded(shard: String) extends DiagnosticEvent
+  final case class ShardEnded(shard: String) extends ShardEvent
+
+  // TODO
+  final case class NewShardDetected(shard: String) extends ShardEvent
 
   /**
    * Enhanced fanout produced a batch of records

@@ -21,18 +21,18 @@ import zio.stream.{ ZStream, ZTransducer }
  * Example app that shows the ZIO-native and KCL workers running in parallel
  */
 object ExampleApp extends zio.App {
-  val streamName                      = "zio-test-stream-12" // + java.util.UUID.randomUUID().toString
+  val streamName                      = "zio-test-stream-16" // + java.util.UUID.randomUUID().toString
   val nrRecords                       = 2000000
-  val produceRate                     = 400                  // Nr records to produce per second
+  val produceRate                     = 10                   // Nr records to produce per second
   val nrShards                        = 2
   val enhancedFanout                  = false
   val nrNativeWorkers                 = 1
   val nrKclWorkers                    = 0
-  val applicationName                 = "testApp-1"          // + java.util.UUID.randomUUID().toString(),
+  val applicationName                 = "testApp-5"          // + java.util.UUID.randomUUID().toString(),
   val runtime                         = 3.minute
   val maxRandomWorkerStartDelayMillis = 1 + 0 * 60 * 1000
   val recordProcessingTime: Duration  = 1.millisecond
-  val reshardAfter: Option[Duration]  = Some(1.minute)
+  val reshardAfter: Option[Duration]  = Some(30.seconds)
 
   override def run(
     args: List[String]
@@ -73,8 +73,8 @@ object ExampleApp extends zio.App {
                         .when(recordProcessingTime >= 1.millis)).when(false)
                     )(r)
                 )
-                .aggregateAsyncWithin(ZTransducer.collectAllN(100), Schedule.fixed(5.second))
-                .tap(rs => log.info(s"${id} processed ${rs.size} records on shard ${shardID}"))
+                .aggregateAsyncWithin(ZTransducer.collectAllN(5000), Schedule.fixed(10.second))
+                .tap(rs => log.info(s"${id} processed ${rs.size} records on shard ${shardID}").when(false))
                 .mapConcat(_.lastOption.toList)
                 .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
                 .tap(_ => checkpointer.checkpoint())
@@ -128,6 +128,7 @@ object ExampleApp extends zio.App {
 
     for {
       _          <- TestUtil.createStreamUnmanaged(streamName, nrShards)
+      _          <- TestUtil.getShards(streamName)
       producer   <- produceRecords(streamName, nrRecords).tapError(e => log.error(s"Producer error: ${e}")).fork
 //      _          <- producer.join
       workers    <- ZIO.foreach(1 to nrNativeWorkers)(id => worker(s"worker${id}").runDrain.fork)
@@ -144,8 +145,8 @@ object ExampleApp extends zio.App {
       // Sleep, but abort early if one of our children dies
       _          <- reshardAfter
              .map(delay =>
-               log.info("Resharding") *>
-                 ZIO.service[AdminClient.Service].flatMap(_.updateShardCount(streamName, nrShards * 2)).delay(delay)
+               (log.info("Resharding") *>
+                 ZIO.service[AdminClient.Service].flatMap(_.updateShardCount(streamName, nrShards * 2))).delay(delay)
              )
              .getOrElse(ZIO.unit)
              .fork

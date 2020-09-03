@@ -70,8 +70,15 @@ private class DefaultLeaseCoordinator(
 
   val now = zio.clock.currentDateTime.map(_.toInstant())
 
-  def updateShards(shards: Map[String, Shard]): UIO[Unit] =
+  override def updateShards(shards: Map[String, Shard]): UIO[Unit] =
     state.update(_.updateShards(shards))
+
+  override def childShardsDetected(
+    childShards: Seq[Shard]
+  ): ZIO[Clock with Logging with Random, Throwable, Unit] =
+    state.update(s =>
+      s.updateShards(s.shards ++ childShards.map(shard => shard.shardId() -> shard).toMap)
+    ) *> takeLeases
 
   /**
    * Operations that update a held lease will interfere unless we run them sequentially for each shard

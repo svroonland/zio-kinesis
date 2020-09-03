@@ -201,40 +201,45 @@ object Consumer {
       }
 
     def createDependencies =
-      ZManaged
-        .mapParN(
-          ZManaged
-            .unwrap(
-              AdminClient
-                .describeStream(streamName)
-                .map(makeFetcher)
-            )
-            .ensuring(log.debug("Fetcher shut down")),
-          // Fetch shards and initialize the lease coordinator at the same time
-          // When we have the shards, we inform the lease coordinator. When the lease table
-          // still has to be created, we have the shards in time for lease claiming begins.
-          // If not in time, the next cycle of takeLeases will take care of it
-          // When the lease table already exists, the updateShards call will not provide
-          // additional information to the lease coordinator, and the list of leases is used
-          // as the list of shards.
-          for {
-            fetchShards      <- listShards.forkManaged
-            leaseCoordinator <- DefaultLeaseCoordinator
-                                  .make(
-                                    applicationName,
-                                    workerIdentifier,
-                                    emitDiagnostic,
-                                    leaseCoordinationSettings,
-                                    fetchShards.join,
-                                    shardAssignmentStrategy
-                                  )
-            // Periodically refresh shards
-            _                <- (listShards >>= leaseCoordinator.updateShards)
-                   .repeat(Schedule.spaced(leaseCoordinationSettings.shardRefreshInterval))
-                   .delay(leaseCoordinationSettings.shardRefreshInterval)
-                   .forkManaged
-          } yield leaseCoordinator
-        )(_ -> _)
+      ZManaged.fromEffect(AdminClient.describeStream(streamName).fork).flatMap { streamDescriptionFib =>
+        ZManaged
+          .mapParN(
+            ZManaged
+              .unwrap(streamDescriptionFib.join.map(makeFetcher))
+              .ensuring(log.debug("Fetcher shut down")),
+            // Fetch shards and initialize the lease coordinator at the same time
+            // When we have the shards, we inform the lease coordinator. When the lease table
+            // still has to be created, we have the shards in time for lease claiming begins.
+            // If not in time, the next cycle of takeLeases will take care of it
+            // When the lease table already exists, the updateShards call will not provide
+            // additional information to the lease coordinator, and the list of leases is used
+            // as the list of shards.
+            for {
+              fetchShards      <- ZManaged
+                               .fromEffect(streamDescriptionFib.join.flatMap { streamDescription =>
+                                 if (!streamDescription.hasMoreShards)
+                                   ZIO.succeed(streamDescription.shards.map(s => s.shardId() -> s).toMap)
+                                 else
+                                   listShards
+                               })
+                               .fork
+              leaseCoordinator <- DefaultLeaseCoordinator
+                                    .make(
+                                      applicationName,
+                                      workerIdentifier,
+                                      emitDiagnostic,
+                                      leaseCoordinationSettings,
+                                      fetchShards.join,
+                                      shardAssignmentStrategy
+                                    )
+              // Periodically refresh shards
+              _                <- (listShards >>= leaseCoordinator.updateShards)
+                     .repeat(Schedule.spaced(leaseCoordinationSettings.shardRefreshInterval))
+                     .delay(leaseCoordinationSettings.shardRefreshInterval)
+                     .forkManaged
+            } yield leaseCoordinator
+          )(_ -> _)
+      }
 
     ZStream.unwrapManaged {
       createDependencies.map {
@@ -246,7 +251,7 @@ object Consumer {
             case (shardId, leaseLost) =>
               for {
                 checkpointer        <- leaseCoordinator.makeCheckpointer(shardId)
-                env                 <- ZIO.environment[Blocking with Logging with Clock with R]
+                env                 <- ZIO.environment[Blocking with Logging with Clock with Random with R]
                 startingPositionOpt <- leaseCoordinator.getCheckpointForShard(shardId)
                 startingPosition     = startingPositionOpt.map {
                                      case Left(SpecialCheckpoint.TrimHorizon) => ShardIteratorType.TrimHorizon
@@ -268,7 +273,8 @@ object Consumer {
                                       ZStream.fromEffect(
                                         log.debug(s"Found end of shard for ${shardId}!!") *>
                                           // TODO can we pick up leases for this shard somehow?
-                                          checkpointer.markEndOfShard()
+                                          checkpointer.markEndOfShard() *>
+                                          leaseCoordinator.childShardsDetected(childShards)
                                       ) *> ZStream.empty
                                   }
                                   .mapChunksM { chunk => // mapM is slow
