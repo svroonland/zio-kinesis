@@ -85,9 +85,10 @@ object ShardAssignmentStrategy {
           now          <- zio.clock.currentDateTime.map(_.toInstant()).orDie
           expiredLeases = leases.collect {
                             case (lease, lastUpdated)
-                                if lastUpdated.isBefore(now.minusMillis(expirationTime.toMillis)) =>
+                                if lastUpdated.isBefore(now.minusMillis(expirationTime.toMillis)) &&
+                                  !lease.checkpoint.contains(Left(SpecialCheckpoint.ShardEnd)) =>
                               lease
-                          }.toSet
+                          }
           _            <- log.info(s"Found expired leases: ${expiredLeases.map(_.key).mkString(",")}").when(expiredLeases.nonEmpty)
 
           shardsWithoutLease = shards.filterNot(shard => leases.map(_._1.key).toList.contains(shard))

@@ -21,14 +21,14 @@ import zio.stream.{ ZStream, ZTransducer }
  * Example app that shows the ZIO-native and KCL workers running in parallel
  */
 object ExampleApp extends zio.App {
-  val streamName                      = "zio-test-stream-16" // + java.util.UUID.randomUUID().toString
+  val streamName                      = "zio-test-stream-17" // + java.util.UUID.randomUUID().toString
   val nrRecords                       = 2000000
   val produceRate                     = 10                   // Nr records to produce per second
   val nrShards                        = 2
   val enhancedFanout                  = false
-  val nrNativeWorkers                 = 1
+  val nrNativeWorkers                 = 2
   val nrKclWorkers                    = 0
-  val applicationName                 = "testApp-5"          // + java.util.UUID.randomUUID().toString(),
+  val applicationName                 = "testApp-6"          // + java.util.UUID.randomUUID().toString(),
   val runtime                         = 3.minute
   val maxRandomWorkerStartDelayMillis = 1 + 0 * 60 * 1000
   val recordProcessingTime: Duration  = 1.millisecond
