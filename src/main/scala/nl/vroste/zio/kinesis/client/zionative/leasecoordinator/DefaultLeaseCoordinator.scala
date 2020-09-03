@@ -357,16 +357,20 @@ private class DefaultLeaseCoordinator(
    * The effect fails with a Throwable when having failed to take one or more leases
    */
   val takeLeases: ZIO[Clock with Logging with Random, Throwable, Unit] = {
-    def shardHasEnded(l: Lease) = l.checkpoint.contains(Left(SpecialCheckpoint.ShardEnd))
     for {
       leases        <- state.get.map(_.currentLeases.values.toSet)
-      shards        <- state.get.map(_.shards.keySet)
+      shards        <- state.get.map(_.shards)
       openLeases     = leases.collect {
                      case LeaseState(lease, completed @ _, lastUpdated) if !shardHasEnded(lease) =>
                        (lease, lastUpdated)
                    }
-      openShards     = shards.filter(s => !leases.toSeq.exists(l => l.lease.key == s && shardHasEnded(l.lease)))
-      desiredShards <- strategy.desiredShards(openLeases, openShards, workerId)
+      openShards     = shards.filter {
+                     case (shardId, s) =>
+                       !leases.toSeq.exists(l =>
+                         l.lease.key == shardId && shardHasEnded(l.lease)
+                       ) && parentShardsCompleted(s, shards, leases.map(_.lease))
+                   }
+      desiredShards <- strategy.desiredShards(openLeases, openShards.keySet, workerId)
       _             <- log.info(s"Desired shard assignment: ${desiredShards.mkString(",")}")
       _             <- claimLeasesForShardsWithoutLease(desiredShards)
       state         <- state.get
@@ -387,6 +391,20 @@ private class DefaultLeaseCoordinator(
              }
            }
     } yield ()
+  }
+
+  private def shardHasEnded(l: Lease) = l.checkpoint.contains(Left(SpecialCheckpoint.ShardEnd))
+
+  private def parentShardsCompleted(shard: Shard, shards: Map[String, Shard], leases: Set[Lease]): Boolean = {
+    val parentShardIds = Option(shard.parentShardId()).toList ++ Option(shard.adjacentParentShardId()).toList
+
+//    println(
+//      s"Shard ${shard} has parents ${parentShardIds.mkString(",")}. " +
+//        s"Leases for these: ${parentShardIds.map(id => leases.find(_.key == id).mkString(","))}"
+//    )
+
+    // Either the lease has already been cleaned up or it is checkpointed with SHARD_END
+    parentShardIds.forall(parentShardId => leases.find(_.key == parentShardId).forall(shardHasEnded))
   }
 
   // Puts it in the state and the queue
