@@ -28,6 +28,8 @@ import zio.logging._
 import zio.random.Random
 import zio.stream.ZStream
 import DefaultLeaseCoordinator.State
+import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
+import nl.vroste.zio.kinesis.client.zionative.Consumer.InitialPosition
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.ZioExtensions.foreachParNUninterrupted_
 
 /**
@@ -62,7 +64,8 @@ private class DefaultLeaseCoordinator(
   emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit,
   commandQueue: Queue[LeaseCommand],
   settings: LeaseCoordinationSettings,
-  strategy: ShardAssignmentStrategy
+  strategy: ShardAssignmentStrategy,
+  initialPosition: InitialPosition
 ) extends LeaseCoordinator {
 
   import DefaultLeaseCoordinator._
@@ -317,6 +320,7 @@ private class DefaultLeaseCoordinator(
     for {
       state             <- state.get
       allLeases          = state.currentLeases.view.mapValues(_.lease).toMap
+      shards             = state.shards
       _                 <- log.info(s"Found ${allLeases.size} leases")
       // Claim new leases for the shards the database doesn't have leases for
       shardsWithoutLease =
@@ -328,12 +332,27 @@ private class DefaultLeaseCoordinator(
              .when(shardsWithoutLease.nonEmpty)
       _                 <- ZIO
              .foreachParN_(settings.maxParallelLeaseAcquisitions)(shardsWithoutLease) { shardId =>
+               val shard = shards(shardId)
+
+               val initialCheckpoint: SpecialCheckpoint =
+                 initialPosition match {
+                   case InitialPosition.TrimHorizon                => SpecialCheckpoint.TrimHorizon
+                   case InitialPosition.AtTimestamp(timestamp @ _) => SpecialCheckpoint.AtTimestamp
+                   case InitialPosition.Latest                     =>
+                     if (!shard.hasParents) SpecialCheckpoint.Latest
+                     else {
+                       val parentLeases = shard.parentShardIds.flatMap(allLeases.get)
+                       if (parentLeases.isEmpty) SpecialCheckpoint.Latest
+                       else SpecialCheckpoint.TrimHorizon
+                     }
+                 }
+
                val lease = Lease(
                  key = shardId,
                  owner = Some(workerId),
                  counter = 0L,
-                 checkpoint = None,
-                 parentShardIds = Seq.empty
+                 checkpoint = Some(Left(initialCheckpoint)),
+                 parentShardIds = shard.parentShardIds
                )
 
                (table.createLease(applicationName, lease) <*
@@ -358,27 +377,26 @@ private class DefaultLeaseCoordinator(
    */
   val takeLeases: ZIO[Clock with Logging with Random, Throwable, Unit] = {
     for {
-      leases        <- state.get.map(_.currentLeases.values.toSet)
-      shards        <- state.get.map(_.shards)
-      openLeases     = leases.collect {
+      leases            <- state.get.map(_.currentLeases.values.toSet)
+      shards            <- state.get.map(_.shards)
+      openLeases         = leases.collect {
                      case LeaseState(lease, completed @ _, lastUpdated) if !shardHasEnded(lease) =>
                        (lease, lastUpdated)
                    }
-      openShards     = shards.filter {
-                     case (shardId, s) =>
-                       !leases.toSeq.exists(l =>
-                         l.lease.key == shardId && shardHasEnded(l.lease)
-                       ) && parentShardsCompleted(s, leases.map(_.lease))
-                   }
-      desiredShards <- strategy.desiredShards(openLeases, openShards.keySet, workerId)
-      _             <- log.info(s"Desired shard assignment: ${desiredShards.mkString(",")}")
-      _             <- claimLeasesForShardsWithoutLease(desiredShards)
-      state         <- state.get
-      toTake         = leases.filter(l => desiredShards.contains(l.lease.key) && !l.lease.owner.contains(workerId))
-      _             <- log
+      // Shards that have not been fully processed but whose parents have
+      openAndReadyShards = shards.filter {
+                             case (shardId, s) =>
+                               !leases.toSeq.exists(l => l.lease.key == shardId && shardHasEnded(l.lease)) &&
+                                 parentShardsCompleted(s, leases.map(_.lease))
+                           }
+      desiredShards     <- strategy.desiredShards(openLeases, openAndReadyShards.keySet, workerId)
+      _                 <- log.info(s"Desired shard assignment: ${desiredShards.mkString(",")}")
+      _                 <- claimLeasesForShardsWithoutLease(desiredShards)
+      toTake             = leases.filter(l => desiredShards.contains(l.lease.key) && !l.lease.owner.contains(workerId))
+      _                 <- log
              .info(s"Going to take ${toTake.size} leases: ${toTake.map(_.lease).mkString(",")}")
              .when(toTake.nonEmpty)
-      _             <- foreachParNUninterrupted_(settings.maxParallelLeaseAcquisitions)(toTake) { leaseState =>
+      _                 <- foreachParNUninterrupted_(settings.maxParallelLeaseAcquisitions)(toTake) { leaseState =>
              val updatedLease = leaseState.lease.claim(workerId)
              (table.claimLease(applicationName, updatedLease) *> registerNewAcquiredLease(updatedLease)).catchAll {
                case Right(UnableToClaimLease) =>
@@ -395,17 +413,14 @@ private class DefaultLeaseCoordinator(
 
   private def shardHasEnded(l: Lease) = l.checkpoint.contains(Left(SpecialCheckpoint.ShardEnd))
 
-  private def parentShardsCompleted(shard: Shard, leases: Set[Lease]): Boolean = {
-    val parentShardIds = Option(shard.parentShardId()).toList ++ Option(shard.adjacentParentShardId()).toList
-
+  private def parentShardsCompleted(shard: Shard, leases: Set[Lease]): Boolean =
 //    println(
-//      s"Shard ${shard} has parents ${parentShardIds.mkString(",")}. " +
-//        s"Leases for these: ${parentShardIds.map(id => leases.find(_.key == id).mkString(","))}"
+//      s"Shard ${shard} has parents ${shard.parentShardIds.mkString(",")}. " +
+//        s"Leases for these: ${shard.parentShardIds.map(id => leases.find(_.key == id).mkString(","))}"
 //    )
 
-    // Either the lease has already been cleaned up or it is checkpointed with SHARD_END
-    parentShardIds.forall(parentShardId => leases.find(_.key == parentShardId).forall(shardHasEnded))
-  }
+    // Either there is no lease / the lease has already been cleaned up or it is checkpointed with SHARD_END
+    shard.parentShardIds.forall(parentShardId => leases.find(_.key == parentShardId).forall(shardHasEnded))
 
   // Puts it in the state and the queue
   private def registerNewAcquiredLease(lease: Lease): ZIO[Clock, Nothing, Unit] =
@@ -567,7 +582,8 @@ object DefaultLeaseCoordinator {
     emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit,
     settings: LeaseCoordinationSettings,
     shards: Task[Map[String, Shard]],
-    strategy: ShardAssignmentStrategy
+    strategy: ShardAssignmentStrategy,
+    initialPosition: InitialPosition
   ): ZManaged[
     Clock with Random with Logging with LeaseRepository,
     Throwable,
@@ -595,7 +611,8 @@ object DefaultLeaseCoordinator {
                  emitDiagnostic,
                  commandQueue,
                  settings,
-                 strategy
+                 strategy,
+                 initialPosition
                )
            ).toManaged_
       // Optimized to do initalization in parallel as much as possible
@@ -714,5 +731,10 @@ object DefaultLeaseCoordinator {
       clock.currentDateTime.orDie.map(_.toInstant()).map { now =>
         State(leases.map(l => l.key -> LeaseState(l, None, now)).toMap, shards)
       }
+  }
+
+  implicit class ShardExtensions(s: Shard) {
+    def parentShardIds: Seq[String] = Option(s.parentShardId()).toList ++ Option(s.adjacentParentShardId()).toList
+    def hasParents: Boolean         = parentShardIds.isEmpty
   }
 }

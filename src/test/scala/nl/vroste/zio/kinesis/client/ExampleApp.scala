@@ -21,15 +21,16 @@ import zio.stream.{ ZStream, ZTransducer }
  * Example app that shows the ZIO-native and KCL workers running in parallel
  */
 object ExampleApp extends zio.App {
-  val streamName                      = "zio-test-stream-17" // + java.util.UUID.randomUUID().toString
+  val streamName                      = "zio-test-stream-22" // + java.util.UUID.randomUUID().toString
   val nrRecords                       = 2000000
-  val produceRate                     = 10                   // Nr records to produce per second
-  val nrShards                        = 2
+  val produceRate                     = 100                  // Nr records to produce per second
+  val nrShards                        = 10
+  val reshardFactor                   = 0.5
   val enhancedFanout                  = false
-  val nrNativeWorkers                 = 2
+  val nrNativeWorkers                 = 1
   val nrKclWorkers                    = 0
-  val applicationName                 = "testApp-6"          // + java.util.UUID.randomUUID().toString(),
-  val runtime                         = 3.minute
+  val applicationName                 = "testApp-11"         // + java.util.UUID.randomUUID().toString(),
+  val runtime                         = 2.minute
   val maxRandomWorkerStartDelayMillis = 1 + 0 * 60 * 1000
   val recordProcessingTime: Duration  = 1.millisecond
   val reshardAfter: Option[Duration]  = Some(30.seconds)
@@ -146,7 +147,10 @@ object ExampleApp extends zio.App {
       _          <- reshardAfter
              .map(delay =>
                (log.info("Resharding") *>
-                 ZIO.service[AdminClient.Service].flatMap(_.updateShardCount(streamName, nrShards * 2))).delay(delay)
+                 ZIO
+                   .service[AdminClient.Service]
+                   .flatMap(_.updateShardCount(streamName, Math.ceil(nrShards * reshardFactor).toInt)))
+                 .delay(delay)
              )
              .getOrElse(ZIO.unit)
              .fork

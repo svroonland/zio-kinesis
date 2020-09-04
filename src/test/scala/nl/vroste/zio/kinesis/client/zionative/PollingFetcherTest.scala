@@ -19,6 +19,7 @@ import zio.test.Assertion._
 import zio.test._
 import zio.test.environment.TestClock
 import zio.duration._
+import zio.stream.ZStream
 
 import scala.jdk.CollectionConverters._
 
@@ -176,6 +177,10 @@ object PollingFetcherTest extends DefaultRunnableSpec {
                    fetcher
                      .shardRecordStream("shard1", ShardIteratorType.TrimHorizon)
                      .mapChunks(Chunk.single)
+                     .catchAll {
+                       case Left(e)  => ZStream.fail(e)
+                       case Right(_) => ZStream.empty
+                     }
                      .runCollect
                  }
         } yield assertCompletes)

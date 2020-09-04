@@ -1,5 +1,7 @@
 package nl.vroste.zio.kinesis.client.zionative
 
+import java.time.Instant
+
 import nl.vroste.zio.kinesis.client.AdminClient.StreamDescription
 import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
 import nl.vroste.zio.kinesis.client.serde.Deserializer
@@ -155,7 +157,7 @@ object Consumer {
     workerIdentifier: String = "worker1",
     fetchMode: FetchMode = FetchMode.Polling(),
     leaseCoordinationSettings: LeaseCoordinationSettings = LeaseCoordinationSettings(),
-    initialPosition: ShardIteratorType = ShardIteratorType.TrimHorizon,
+    initialPosition: InitialPosition = InitialPosition.TrimHorizon,
     emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit,
     shardAssignmentStrategy: ShardAssignmentStrategy = ShardAssignmentStrategy.balanced()
   ): ZStream[
@@ -233,7 +235,8 @@ object Consumer {
                                       emitDiagnostic,
                                       leaseCoordinationSettings,
                                       fetchShards.join,
-                                      shardAssignmentStrategy
+                                      shardAssignmentStrategy,
+                                      initialPosition
                                     )
               // Periodically refresh shards
               _                <- (listShards >>= leaseCoordinator.updateShards)
@@ -253,20 +256,14 @@ object Consumer {
           }.mapMParUnordered(leaseCoordinationSettings.maxParallelLeaseAcquisitions) {
             case (shardId, leaseLost) =>
               for {
-                checkpointer        <- leaseCoordinator.makeCheckpointer(shardId)
-                env                 <- ZIO.environment[Blocking with Logging with Clock with Random with R]
-                startingPositionOpt <- leaseCoordinator.getCheckpointForShard(shardId)
-                startingPosition     = startingPositionOpt.map {
-                                     case Left(SpecialCheckpoint.TrimHorizon) => ShardIteratorType.TrimHorizon
-                                     case Left(SpecialCheckpoint.ShardEnd)    =>
-                                       throw new IllegalArgumentException(
-                                         s"SHARD_END is not a valid starting checkpoint for shard ${shardId}"
-                                       )
-                                     case Right(s)                            =>
-                                       ShardIteratorType.AfterSequenceNumber(s.sequenceNumber)
-                                   }.getOrElse(initialPosition)
-                stop                 = ZStream.fromEffect(leaseLost.await).as(Exit.fail(None))
-                shardStream          = (stop mergeTerminateEither fetcher
+                checkpointer    <- leaseCoordinator.makeCheckpointer(shardId)
+                env             <- ZIO.environment[Blocking with Logging with Clock with Random with R]
+                checkpointOpt   <- leaseCoordinator.getCheckpointForShard(shardId)
+                startingPosition = checkpointOpt
+                                     .map(checkpointToShardIteratorType(_, initialPosition))
+                                     .getOrElse(InitialPosition.toShardIteratorType(initialPosition))
+                stop             = ZStream.fromEffect(leaseLost.await).as(Exit.fail(None))
+                shardStream      = (stop mergeTerminateEither fetcher
                                   .shardRecordStream(shardId, startingPosition)
                                   .catchAll {
                                     case Left(e)                            =>
@@ -350,4 +347,29 @@ object Consumer {
       sdkClientsLayer >+>
       (AdminClient.live ++ Client.live ++ DynamoDbLeaseRepository.live)
 
+  sealed trait InitialPosition
+  object InitialPosition {
+    final case object Latest                         extends InitialPosition
+    final case object TrimHorizon                    extends InitialPosition
+    final case class AtTimestamp(timestamp: Instant) extends InitialPosition
+
+    def toShardIteratorType(p: InitialPosition): ShardIteratorType =
+      p match {
+        case InitialPosition.Latest                 => ShardIteratorType.Latest
+        case InitialPosition.TrimHorizon            => ShardIteratorType.Latest
+        case InitialPosition.AtTimestamp(timestamp) => ShardIteratorType.AtTimestamp(timestamp)
+      }
+  }
+
+  private val checkpointToShardIteratorType
+    : (Either[SpecialCheckpoint, ExtendedSequenceNumber], InitialPosition) => ShardIteratorType = {
+    case (Left(SpecialCheckpoint.TrimHorizon), _)                                      => ShardIteratorType.TrimHorizon
+    case (Left(SpecialCheckpoint.Latest), _)                                           => ShardIteratorType.Latest
+    case (Left(SpecialCheckpoint.AtTimestamp), InitialPosition.AtTimestamp(timestamp)) =>
+      ShardIteratorType.AtTimestamp(timestamp)
+    case (Right(s), _)                                                                 =>
+      ShardIteratorType.AfterSequenceNumber(s.sequenceNumber)
+    case s @ _                                                                         =>
+      throw new IllegalArgumentException(s"${s} is not a valid starting checkpoint")
+  }
 }

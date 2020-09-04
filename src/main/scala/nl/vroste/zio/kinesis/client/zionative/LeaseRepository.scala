@@ -17,6 +17,14 @@ object SpecialCheckpoint {
   case object TrimHorizon extends SpecialCheckpoint {
     val stringValue = "TRIM_HORIZON"
   }
+
+  case object Latest extends SpecialCheckpoint {
+    val stringValue = "LATEST"
+  }
+
+  case object AtTimestamp extends SpecialCheckpoint {
+    val stringValue = "AT_TIMESTAMP"
+  }
 }
 
 object LeaseRepository {
