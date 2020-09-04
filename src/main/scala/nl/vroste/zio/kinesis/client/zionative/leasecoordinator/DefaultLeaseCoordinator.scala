@@ -1,6 +1,6 @@
 package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
 
-import java.time.Instant
+import java.time.{ DateTimeException, Instant }
 
 import scala.collection.compat._
 import nl.vroste.zio.kinesis.client.Record
@@ -73,33 +73,34 @@ private class DefaultLeaseCoordinator(
   val now = zio.clock.currentDateTime.map(_.toInstant())
 
   override def updateShards(shards: Map[String, Shard]): UIO[Unit] =
-    updateStateWithDiagnosticEvents((s, _) => s.updateShards(shards))
+    updateStateWithDiagnosticEvents(_.updateShards(shards))
 
   override def childShardsDetected(
     childShards: Seq[Shard]
   ): ZIO[Clock with Logging with Random, Throwable, Unit] =
-    updateStateWithDiagnosticEvents((s, _) =>
+    updateStateWithDiagnosticEvents(s =>
       s.updateShards(s.shards ++ childShards.map(shard => shard.shardId() -> shard).toMap)
     )
 
-  private def updateStateWithDiagnosticEvents(f: (State, Instant) => State) =
-    now.flatMap { n =>
-      for {
-        stateBeforeAndAfter      <- state.modify { s =>
-                                 val newState = f(s, n)
-                                 ((s, newState), newState)
-                               }
-        (stateBefore, stateAfter) = stateBeforeAndAfter
-        _                        <- emitWorkerPoolDiagnostics(
-               stateBefore.currentLeases.map(_._2.lease),
-               stateAfter.currentLeases.map(_._2.lease)
-             )
-        newShards                 = stateAfter.shards.keySet -- stateBefore.shards.keySet
-        removedShards             = stateBefore.shards.keySet -- stateAfter.shards.keySet
-        _                        <- ZIO.foreach(newShards)(shardId => emitDiagnostic(DiagnosticEvent.NewShardDetected(shardId)))
-        _                        <- ZIO.foreach(removedShards)(shardId => emitDiagnostic(DiagnosticEvent.ShardEnded(shardId)))
-      } yield ()
-    }
+  private def updateStateWithDiagnosticEvents(f: (State, Instant) => State): ZIO[Clock, DateTimeException, Unit] =
+    now.flatMap(now => updateStateWithDiagnosticEvents(f(_, now)))
+
+  private def updateStateWithDiagnosticEvents(f: State => State): UIO[Unit] =
+    for {
+      stateBeforeAndAfter      <- state.modify { s =>
+                               val newState = f(s)
+                               ((s, newState), newState)
+                             }
+      (stateBefore, stateAfter) = stateBeforeAndAfter
+      _                        <- emitWorkerPoolDiagnostics(
+             stateBefore.currentLeases.map(_._2.lease),
+             stateAfter.currentLeases.map(_._2.lease)
+           )
+      newShards                 = stateAfter.shards.keySet -- stateBefore.shards.keySet
+      removedShards             = stateBefore.shards.keySet -- stateAfter.shards.keySet
+      _                        <- ZIO.foreach(newShards)(shardId => emitDiagnostic(DiagnosticEvent.NewShardDetected(shardId)))
+      _                        <- ZIO.foreach(removedShards)(shardId => emitDiagnostic(DiagnosticEvent.ShardEnded(shardId)))
+    } yield ()
 
   // Emits WorkerJoined and WorkerLeft after each lease operation
   private def emitWorkerPoolDiagnostics(currentLeases: Iterable[Lease], newLeases: Iterable[Lease]): UIO[Unit] = {
@@ -315,11 +316,12 @@ private class DefaultLeaseCoordinator(
   /**
    * Claims all available leases for the current shards (no owner or not existent)
    */
-  def claimLeasesForShardsWithoutLease(desiredShards: Set[String]): ZIO[Logging with Clock, Throwable, Unit] =
+  private def claimLeasesForShardsWithoutLease(
+    desiredShards: Set[String],
+    shards: Map[String, Shard],
+    allLeases: Map[String, Lease]
+  ): ZIO[Logging with Clock, Throwable, Unit] =
     for {
-      state             <- state.get
-      allLeases          = state.currentLeases.view.mapValues(_.lease).toMap
-      shards             = state.shards
       _                 <- log.info(s"Found ${allLeases.size} leases")
       shardsWithoutLease = desiredShards.filterNot(allLeases.contains).toSeq.sorted
       _                 <- log
@@ -389,7 +391,11 @@ private class DefaultLeaseCoordinator(
                         }
       desiredShards  <- strategy.desiredShards(openLeases, shardsToConsume.keySet, workerId)
       _              <- log.info(s"Desired shard assignment: ${desiredShards.mkString(",")}")
-      _              <- claimLeasesForShardsWithoutLease(desiredShards)
+      _              <- claimLeasesForShardsWithoutLease(
+             desiredShards,
+             shards,
+             leases.map(_.lease).map(l => l.key -> l).toMap
+           )
       toTake          = leases.filter(l => desiredShards.contains(l.lease.key) && !l.lease.owner.contains(workerId))
       _              <- log
              .info(s"Going to take ${toTake.size} leases: ${toTake.map(_.lease).mkString(",")}")
