@@ -96,7 +96,7 @@ private class DefaultLeaseCoordinator(
              stateBefore.currentLeases.map(_._2.lease),
              stateAfter.currentLeases.map(_._2.lease)
            )
-      newShards                 = stateAfter.shards.keySet -- stateBefore.shards.keySet
+      newShards                 = (stateAfter.shards.keySet -- stateBefore.shards.keySet).filter(_ => stateBefore.shards.nonEmpty)
       removedShards             = stateBefore.shards.keySet -- stateAfter.shards.keySet
       _                        <- ZIO.foreach(newShards)(shardId => emitDiagnostic(DiagnosticEvent.NewShardDetected(shardId)))
       _                        <- ZIO.foreach(removedShards)(shardId => emitDiagnostic(DiagnosticEvent.ShardEnded(shardId)))
