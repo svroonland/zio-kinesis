@@ -322,9 +322,7 @@ private class DefaultLeaseCoordinator(
       allLeases          = state.currentLeases.view.mapValues(_.lease).toMap
       shards             = state.shards
       _                 <- log.info(s"Found ${allLeases.size} leases")
-      // Claim new leases for the shards the database doesn't have leases for
-      shardsWithoutLease =
-        desiredShards.filterNot(shardId => allLeases.values.map(_.key).toList.contains(shardId)).toSeq.sorted
+      shardsWithoutLease = desiredShards.filterNot(allLeases.contains).toSeq.sorted
       _                 <- log
              .info(
                s"No leases exist yet for these shards, creating and claiming: ${shardsWithoutLease.mkString(",")}"
@@ -332,41 +330,42 @@ private class DefaultLeaseCoordinator(
              .when(shardsWithoutLease.nonEmpty)
       _                 <- ZIO
              .foreachParN_(settings.maxParallelLeaseAcquisitions)(shardsWithoutLease) { shardId =>
-               val shard = shards(shardId)
+               val lease = newLeaseForShard(shardId, shards, allLeases)
 
-               val initialCheckpoint: SpecialCheckpoint =
-                 initialPosition match {
-                   case InitialPosition.TrimHorizon                => SpecialCheckpoint.TrimHorizon
-                   case InitialPosition.AtTimestamp(timestamp @ _) => SpecialCheckpoint.AtTimestamp
-                   case InitialPosition.Latest                     =>
-                     if (!shard.hasParents) SpecialCheckpoint.Latest
-                     else {
-                       val parentLeases = shard.parentShardIds.flatMap(allLeases.get)
-                       if (parentLeases.isEmpty) SpecialCheckpoint.Latest
-                       else SpecialCheckpoint.TrimHorizon
-                     }
-                 }
-
-               val lease = Lease(
-                 key = shardId,
-                 owner = Some(workerId),
-                 counter = 0L,
-                 checkpoint = Some(Left(initialCheckpoint)),
-                 parentShardIds = shard.parentShardIds
-               )
-
-               (table.createLease(applicationName, lease) <*
-                 registerNewAcquiredLease(lease)).catchAll {
+               (table.createLease(applicationName, lease) <* registerNewAcquiredLease(lease)).catchAll {
                  case Right(LeaseAlreadyExists) =>
-                   log
-                     .info(
-                       s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
-                     )
+                   log.info(s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?")
                  case Left(e)                   =>
                    log.error(s"Error creating lease: ${e}") *> ZIO.fail(e)
                }
              }
     } yield ()
+
+  // TODO Unit test this, also to document behavior
+  private def newLeaseForShard(shardId: String, shards: Map[String, Shard], allLeases: Map[String, Lease]) = {
+    val shard = shards(shardId)
+
+    val initialCheckpoint: SpecialCheckpoint =
+      initialPosition match {
+        case InitialPosition.TrimHorizon                => SpecialCheckpoint.TrimHorizon
+        case InitialPosition.AtTimestamp(timestamp @ _) => SpecialCheckpoint.AtTimestamp
+        case InitialPosition.Latest                     =>
+          if (!shard.hasParents) SpecialCheckpoint.Latest
+          else {
+            val parentLeases = shard.parentShardIds.flatMap(allLeases.get)
+            if (parentLeases.isEmpty) SpecialCheckpoint.Latest
+            else SpecialCheckpoint.TrimHorizon
+          }
+      }
+
+    Lease(
+      key = shardId,
+      owner = Some(workerId),
+      counter = 0L,
+      checkpoint = Some(Left(initialCheckpoint)),
+      parentShardIds = shard.parentShardIds
+    )
+  }
 
   /**
    * Takes leases, unowned or from other workers, to get this worker's number of leases to the target value (nr leases / nr workers)
@@ -735,6 +734,6 @@ object DefaultLeaseCoordinator {
 
   implicit class ShardExtensions(s: Shard) {
     def parentShardIds: Seq[String] = Option(s.parentShardId()).toList ++ Option(s.adjacentParentShardId()).toList
-    def hasParents: Boolean         = parentShardIds.isEmpty
+    def hasParents: Boolean         = parentShardIds.nonEmpty
   }
 }
