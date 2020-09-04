@@ -28,7 +28,6 @@ import zio.logging._
 import zio.random.Random
 import zio.stream.ZStream
 import DefaultLeaseCoordinator.State
-import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
 import nl.vroste.zio.kinesis.client.zionative.Consumer.InitialPosition
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.ZioExtensions.foreachParNUninterrupted_
 
@@ -74,38 +73,55 @@ private class DefaultLeaseCoordinator(
   val now = zio.clock.currentDateTime.map(_.toInstant())
 
   override def updateShards(shards: Map[String, Shard]): UIO[Unit] =
-    state.update(_.updateShards(shards))
+    updateStateWithDiagnosticEvents((s, _) => s.updateShards(shards))
 
   override def childShardsDetected(
     childShards: Seq[Shard]
   ): ZIO[Clock with Logging with Random, Throwable, Unit] =
-    state.update(s =>
+    updateStateWithDiagnosticEvents((s, _) =>
       s.updateShards(s.shards ++ childShards.map(shard => shard.shardId() -> shard).toMap)
-    ) *> takeLeases
+    )
+
+  private def updateStateWithDiagnosticEvents(f: (State, Instant) => State) =
+    now.flatMap { n =>
+      for {
+        stateBeforeAndAfter      <- state.modify { s =>
+                                 val newState = f(s, n)
+                                 ((s, newState), newState)
+                               }
+        (stateBefore, stateAfter) = stateBeforeAndAfter
+        _                        <- emitWorkerPoolDiagnostics(
+               stateBefore.currentLeases.map(_._2.lease),
+               stateAfter.currentLeases.map(_._2.lease)
+             )
+        newShards                 = stateAfter.shards.keySet -- stateBefore.shards.keySet
+        removedShards             = stateBefore.shards.keySet -- stateAfter.shards.keySet
+        _                        <- ZIO.foreach(newShards)(shardId => emitDiagnostic(DiagnosticEvent.NewShardDetected(shardId)))
+        _                        <- ZIO.foreach(removedShards)(shardId => emitDiagnostic(DiagnosticEvent.ShardEnded(shardId)))
+      } yield ()
+    }
+
+  // Emits WorkerJoined and WorkerLeft after each lease operation
+  private def emitWorkerPoolDiagnostics(currentLeases: Iterable[Lease], newLeases: Iterable[Lease]): UIO[Unit] = {
+    val currentWorkers = currentLeases.map(_.owner).collect { case Some(owner) => owner }.toSet
+    val newWorkers     = newLeases.map(_.owner).collect { case Some(owner) => owner }.toSet
+    val workersJoined  = newWorkers -- currentWorkers
+    val workersLeft    = currentWorkers -- newWorkers
+
+    for {
+      _ <- ZIO.foreach_(workersJoined)(w => emitDiagnostic(DiagnosticEvent.WorkerJoined(w)))
+      _ <- ZIO.foreach_(workersLeft)(w => emitDiagnostic(DiagnosticEvent.WorkerLeft(w)))
+    } yield ()
+  }
 
   /**
    * Operations that update a held lease will interfere unless we run them sequentially for each shard
    */
-  val runloop: ZStream[Logging with Clock, Nothing, Unit] = {
-
-    def updateState(f: (State, Instant) => State) =
-      now.flatMap { n =>
-        for {
-          stateBeforeAndAfter      <- state.modify { s =>
-                                   val newState = f(s, n)
-                                   ((s, newState), newState)
-                                 }
-          (stateBefore, stateAfter) = stateBeforeAndAfter
-          _                        <- emitWorkerPoolDiagnostics(
-                 stateBefore.currentLeases.map(_._2.lease),
-                 stateAfter.currentLeases.map(_._2.lease)
-               )
-        } yield ()
-      }
+  val runloop: ZStream[Logging with Clock with Random, Nothing, Unit] = {
 
     def leaseLost(lease: Lease, leaseCompleted: Promise[Nothing, Unit]): ZIO[Clock, Throwable, Unit] =
       leaseCompleted.succeed(()) *>
-        updateState((s, now) => s.releaseLease(lease, now).updateLease(lease.release, now)) *>
+        updateStateWithDiagnosticEvents((s, now) => s.releaseLease(lease, now).updateLease(lease.release, now)) *>
         emitDiagnostic(DiagnosticEvent.ShardLeaseLost(lease.key))
 
     def doUpdateCheckpoint(
@@ -113,7 +129,7 @@ private class DefaultLeaseCoordinator(
       checkpoint: Either[SpecialCheckpoint, ExtendedSequenceNumber],
       release: Boolean,
       shardEnded: Boolean
-    ): ZIO[Logging with Clock, Either[Throwable, ShardLeaseLost.type], Unit] =
+    ): ZIO[Logging with Clock with Random, Either[Throwable, ShardLeaseLost.type], Unit] =
       for {
         heldleaseWithComplete  <- state.get
                                    .map(_.heldLeases.get(shard))
@@ -124,25 +140,21 @@ private class DefaultLeaseCoordinator(
                          checkpoint = Some(checkpoint),
                          owner = lease.owner.filterNot(_ => release)
                        )
-        _                      <- (table
-                 .updateCheckpoint(applicationName, updatedLease) <* emitDiagnostic(
-                 DiagnosticEvent.Checkpoint(shard, checkpoint)
-               )).catchAll {
+        _                      <- (table.updateCheckpoint(applicationName, updatedLease) <*
+                 emitDiagnostic(DiagnosticEvent.Checkpoint(shard, checkpoint))).catchAll {
                case Right(LeaseObsolete) =>
                  leaseLost(updatedLease, leaseCompleted).orDie *>
                    ZIO.fail(Right(ShardLeaseLost))
                case Left(e)              =>
                  log.warn(s"Error updating checkpoint: $e") *> ZIO.fail(Left(e))
              }.onSuccess { _ =>
-               (updateState(_.updateLease(updatedLease, _)) *>
+               (updateStateWithDiagnosticEvents(_.updateLease(updatedLease, _)) *>
                  (
                    leaseCompleted.succeed(()) *>
-                     updateState { (s, now) =>
-                       val s2 = s.releaseLease(updatedLease, now)
-                       if (shardEnded) s2.removeShard(shard) else s2
-                     } *>
+                     updateStateWithDiagnosticEvents(_.releaseLease(updatedLease, _)) *>
                      emitDiagnostic(DiagnosticEvent.LeaseReleased(shard)) *>
-                     emitDiagnostic(DiagnosticEvent.ShardEnded(shard)).when(shardEnded)
+                     emitDiagnostic(DiagnosticEvent.ShardEnded(shard)).when(shardEnded) <*
+                     takeLeases.fork.when(shardEnded)
                  ).when(release)).orDie
              }
       } yield ()
@@ -157,7 +169,7 @@ private class DefaultLeaseCoordinator(
                           .renewLease(applicationName, updatedLease)
                           .timed
                           .map(_._1)
-            _        <- updateState(_.updateLease(updatedLease, _)).mapError(Left(_))
+            _        <- updateStateWithDiagnosticEvents(_.updateLease(updatedLease, _)).mapError(Left(_))
             _        <- emitDiagnostic(DiagnosticEvent.LeaseRenewed(updatedLease.key, duration))
           } yield ()).catchAll {
             // This means the lease was updated by another worker
@@ -189,10 +201,10 @@ private class DefaultLeaseCoordinator(
                    ZIO.unit
                // Lease that is still owned by us but is not actively held
                case (_, None) if lease.owner.contains(workerId)                              =>
-                 updateState(_.updateLease(lease, _)) *> doRegisterNewAcquiredLease(lease)
+                 updateStateWithDiagnosticEvents(_.updateLease(lease, _)) *> doRegisterNewAcquiredLease(lease)
                // Update of a lease that we do not hold or have not yet seen
                case _                                                                        =>
-                 updateState(_.updateLease(lease, _))
+                 updateStateWithDiagnosticEvents(_.updateLease(lease, _))
              }
       } yield ()
 
@@ -221,42 +233,29 @@ private class DefaultLeaseCoordinator(
           }
           .ignore *>
           completed.succeed(()) *>
-          updateState(_.releaseLease(updatedLease, _)) *>
+          updateStateWithDiagnosticEvents(_.releaseLease(updatedLease, _)) *>
           emitDiagnostic(DiagnosticEvent.LeaseReleased(lease.key))
     }
 
     def doRegisterNewAcquiredLease(lease: Lease): ZIO[Clock, Nothing, Unit] =
       for {
         completed <- Promise.make[Nothing, Unit]
-        _         <- updateState((s, now) => s.updateLease(lease, now).holdLease(lease, completed, now)).orDie
+        _         <-
+          updateStateWithDiagnosticEvents((s, now) => s.updateLease(lease, now).holdLease(lease, completed, now)).orDie
         _         <- emitDiagnostic(DiagnosticEvent.LeaseAcquired(lease.key, lease.checkpoint))
         _         <- acquiredLeasesQueue.offer(lease -> completed)
       } yield ()
 
-    // Emits WorkerJoined and WorkerLeft after each lease operation
-    def emitWorkerPoolDiagnostics(currentLeases: Iterable[Lease], newLeases: Iterable[Lease]) = {
-      val currentWorkers = currentLeases.map(_.owner).collect { case Some(owner) => owner }.toSet
-      val newWorkers     = newLeases.map(_.owner).collect { case Some(owner) => owner }.toSet
-      val workersJoined  = newWorkers -- currentWorkers
-      val workersLeft    = currentWorkers -- newWorkers
-
-      for {
-        _ <- ZIO.foreach_(workersJoined)(w => emitDiagnostic(DiagnosticEvent.WorkerJoined(w)))
-        _ <- ZIO.foreach_(workersLeft)(w => emitDiagnostic(DiagnosticEvent.WorkerLeft(w)))
-      } yield ()
-    }
-
     ZStream
       .fromQueue(commandQueue)
       .groupByKey(_.shard) {
-        case (shard @ _, command) =>
+        case (shardId @ _, command) =>
           command.mapM {
             case UpdateCheckpoint(shard, checkpoint, done, release, shardEnded) =>
               doUpdateCheckpoint(shard, checkpoint, release, shardEnded).foldM(done.fail, done.succeed).unit
             case RenewLease(shard, done)                                        =>
               doRenewLease(shard).foldM(done.fail, done.succeed).unit
             case RefreshLease(lease, done)                                      =>
-              // log.debug(s"Runloop: RefreshLease ${lease}") *>
               doRefreshLease(lease).tap(done.succeed).unit.orDie // Cannot fail
             case ReleaseLease(shard, done)                                      =>
               doReleaseLease(shard).foldM(done.fail, done.succeed).unit
@@ -376,26 +375,26 @@ private class DefaultLeaseCoordinator(
    */
   val takeLeases: ZIO[Clock with Logging with Random, Throwable, Unit] = {
     for {
-      leases            <- state.get.map(_.currentLeases.values.toSet)
-      shards            <- state.get.map(_.shards)
-      openLeases         = leases.collect {
+      leases         <- state.get.map(_.currentLeases.values.toSet)
+      shards         <- state.get.map(_.shards)
+      openLeases      = leases.collect {
                      case LeaseState(lease, completed @ _, lastUpdated) if !shardHasEnded(lease) =>
                        (lease, lastUpdated)
                    }
       // Shards that have not been fully processed but whose parents have
-      openAndReadyShards = shards.filter {
-                             case (shardId, s) =>
-                               !leases.toSeq.exists(l => l.lease.key == shardId && shardHasEnded(l.lease)) &&
-                                 parentShardsCompleted(s, leases.map(_.lease))
-                           }
-      desiredShards     <- strategy.desiredShards(openLeases, openAndReadyShards.keySet, workerId)
-      _                 <- log.info(s"Desired shard assignment: ${desiredShards.mkString(",")}")
-      _                 <- claimLeasesForShardsWithoutLease(desiredShards)
-      toTake             = leases.filter(l => desiredShards.contains(l.lease.key) && !l.lease.owner.contains(workerId))
-      _                 <- log
+      shardsToConsume = shards.filter {
+                          case (shardId, s) =>
+                            !leases.toSeq.exists(l => l.lease.key == shardId && shardHasEnded(l.lease)) &&
+                              parentShardsCompleted(s, leases.map(_.lease))
+                        }
+      desiredShards  <- strategy.desiredShards(openLeases, shardsToConsume.keySet, workerId)
+      _              <- log.info(s"Desired shard assignment: ${desiredShards.mkString(",")}")
+      _              <- claimLeasesForShardsWithoutLease(desiredShards)
+      toTake          = leases.filter(l => desiredShards.contains(l.lease.key) && !l.lease.owner.contains(workerId))
+      _              <- log
              .info(s"Going to take ${toTake.size} leases: ${toTake.map(_.lease).mkString(",")}")
              .when(toTake.nonEmpty)
-      _                 <- foreachParNUninterrupted_(settings.maxParallelLeaseAcquisitions)(toTake) { leaseState =>
+      _              <- foreachParNUninterrupted_(settings.maxParallelLeaseAcquisitions)(toTake) { leaseState =>
              val updatedLease = leaseState.lease.claim(workerId)
              (table.claimLease(applicationName, updatedLease) *> registerNewAcquiredLease(updatedLease)).catchAll {
                case Right(UnableToClaimLease) =>
