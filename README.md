@@ -164,7 +164,7 @@ When a worker is stopped, its leases are released so that other workers may pick
 
 ### Resharding
 
-Changing the stream's shard count, or _resharding_, is fully supported. When a shard is split or two shards are merged, before processing of the new shard starts, the parent shard(s) are processed until the end. When a worker detects the end of a shard it is processing, Kinesis will tell it the new (child) shards and their processing will start immediately after both parent shards have. 
+Changing the stream's shard count, or _resharding_, is fully supported while the consumer is active. When a shard is split or two shards are merged, before processing of the new shard starts, the parent shard(s) are processed until the end. When a worker detects the end of a shard it is processing, Kinesis will tell it the new (child) shards and their processing will start immediately after both parent shards have been completely processed. 
 
 When another worker is processing one of the parent shards, it may take a while for this to be detected.
 

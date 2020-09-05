@@ -275,7 +275,6 @@ object Consumer {
                                           s"Found end of shard for ${shardId}. " +
                                             s"Child shards are ${childShards.map(_.shardId()).mkString(", ")}"
                                         ) *>
-                                          // TODO can we pick up leases for this shard somehow?
                                           checkpointer.markEndOfShard() *>
                                           leaseCoordinator.childShardsDetected(childShards)
                                       ) *> ZStream.empty
