@@ -379,42 +379,27 @@ private class DefaultLeaseCoordinator(
     for {
       leases                           <- state.get.map(_.currentLeases.values.toSet)
       shards                           <- state.get.map(_.shards)
+      leaseMap                          = leases.map(s => s.lease.key -> s.lease).toMap
       openLeases                        = leases.collect {
                      case LeaseState(lease, completed @ _, lastUpdated) if !shardHasEnded(lease) =>
                        (lease, lastUpdated)
                    }
-      // Shards that have not been fully processed but whose parents have
-      // TODO this kind of stuff needs to be in a pure function with good unit test coverage
-      (consumableShards, pendingShards) = shards.partition {
-                                            case (shardId, s) =>
-                                              !leases.toSeq.exists(l =>
-                                                l.lease.key == shardId && shardHasEnded(l.lease)
-                                              ) &&
-                                                (parentShardsCompleted(
-                                                  s,
-                                                  leases.map(_.lease)
-                                                ) || allParentShardsExpired(s, shards))
-                                          }
-
+      (consumableShards, pendingShards) = consumableAndPendingShards(shards, leaseMap)
       _                                <- log.info(s"Shards not yet ready for consumption: ${pendingShards.keySet.mkString(",")}")
       desiredShards                    <- strategy.desiredShards(openLeases, consumableShards.keySet, workerId)
       _                                <- log.info(s"Desired shard assignment: ${desiredShards.mkString(",")}")
-      _                                <- claimLeasesForShardsWithoutLease(
-             desiredShards,
-             shards,
-             leases.map(_.lease).map(l => l.key -> l).toMap
-           )
-      toTake                            = leases.filter(l => desiredShards.contains(l.lease.key) && !l.lease.owner.contains(workerId))
+      toTake                            = leaseMap.values.filter(l => desiredShards.contains(l.key) && !l.owner.contains(workerId))
+      _                                <- claimLeasesForShardsWithoutLease(desiredShards, shards, leaseMap)
       _                                <- log
-             .info(s"Going to take ${toTake.size} leases: ${toTake.map(_.lease).mkString(",")}")
+             .info(s"Going to take ${toTake.size} leases from other workers: ${toTake.mkString(",")}")
              .when(toTake.nonEmpty)
-      _                                <- foreachParNUninterrupted_(settings.maxParallelLeaseAcquisitions)(toTake) { leaseState =>
-             val updatedLease = leaseState.lease.claim(workerId)
+      _                                <- foreachParNUninterrupted_(settings.maxParallelLeaseAcquisitions)(toTake) { lease =>
+             val updatedLease = lease.claim(workerId)
              (table.claimLease(applicationName, updatedLease) *> registerNewAcquiredLease(updatedLease)).catchAll {
                case Right(UnableToClaimLease) =>
                  log
                    .info(
-                     s"Unable to claim lease for shard ${leaseState.lease.key}, beaten to it by another worker?"
+                     s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
                    )
                case Left(e)                   =>
                  log.error(s"Got error ${e}") *> ZIO.fail(e)
@@ -422,20 +407,6 @@ private class DefaultLeaseCoordinator(
            }
     } yield ()
   }
-
-  private def shardHasEnded(l: Lease) = l.checkpoint.contains(Left(SpecialCheckpoint.ShardEnd))
-
-  private def parentShardsCompleted(shard: Shard, leases: Set[Lease]): Boolean =
-//    println(
-//      s"Shard ${shard} has parents ${shard.parentShardIds.mkString(",")}. " +
-//        s"Leases for these: ${shard.parentShardIds.map(id => leases.find(_.key == id).mkString(","))}"
-//    )
-
-    // Either there is no lease / the lease has already been cleaned up or it is checkpointed with SHARD_END
-    shard.parentShardIds.forall(parentShardId => leases.find(_.key == parentShardId).exists(shardHasEnded))
-
-  def allParentShardsExpired(shard: Shard, shards: Map[String, Shard]): Boolean =
-    shard.parentShardIds.flatMap(shards.get).isEmpty
 
   // Puts it in the state and the queue
   private def registerNewAcquiredLease(lease: Lease): ZIO[Clock, Nothing, Unit] =
@@ -666,6 +637,35 @@ object DefaultLeaseCoordinator {
              }).forkManaged.ensuringFirst(log.debug("Shutting down renew lease loop"))
     } yield c)
       .tapCause(c => log.error("Error creating DefaultLeaseCoordinator", c).toManaged_)
+
+  /**
+   * A shard can be consumed when it itself has not been processed until the end yet (lease checkpoint = SHARD_END)
+   * and all its parents have been processed to the end (lease checkpoint = SHARD_END) or the parent shards have
+   * expired
+   */
+  def consumableAndPendingShards(
+    shards: Map[String, Shard],
+    leases: Map[String, Lease]
+  ): (Map[String, Shard], Map[String, Shard]) =
+    shards.partition {
+      case (shardId, s) =>
+        val shardProcessedToEnd = !leases.get(shardId).exists(shardHasEnded)
+        shardProcessedToEnd && (parentShardsCompleted(s, leases) || allParentShardsExpired(s, shards))
+    }
+
+  private def shardHasEnded(l: Lease) = l.checkpoint.contains(Left(SpecialCheckpoint.ShardEnd))
+
+  private def parentShardsCompleted(shard: Shard, leases: Map[String, Lease]): Boolean =
+    //    println(
+    //      s"Shard ${shard} has parents ${shard.parentShardIds.mkString(",")}. " +
+    //        s"Leases for these: ${shard.parentShardIds.map(id => leases.find(_.key == id).mkString(","))}"
+    //    )
+
+    // Either there is no lease / the lease has already been cleaned up or it is checkpointed with SHARD_END
+    shard.parentShardIds.forall(leases.get(_).exists(shardHasEnded))
+
+  def allParentShardsExpired(shard: Shard, shards: Map[String, Shard]): Boolean =
+    shard.parentShardIds.flatMap(shards.get).isEmpty
 
   private def repeatAndRetry[R, E, A](interval: Duration)(effect: ZIO[R, E, A]) =
     effect.repeat(Schedule.fixed(interval)).delay(interval).retry(Schedule.forever)
