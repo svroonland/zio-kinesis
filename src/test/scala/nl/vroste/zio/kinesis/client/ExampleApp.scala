@@ -22,16 +22,16 @@ import zio.stream.{ ZStream, ZTransducer }
  * Example app that shows the ZIO-native and KCL workers running in parallel
  */
 object ExampleApp extends zio.App {
-  val streamName                      = "zio-test-stream-24" // + java.util.UUID.randomUUID().toString
+  val streamName                      = "zio-test-stream-25" // + java.util.UUID.randomUUID().toString
   val nrRecords                       = 2000000
   val produceRate                     = 100                  // Nr records to produce per second
   val nrShards                        = 10
   val reshardFactor                   = 0.5
-  val reshardAfter: Option[Duration]  = Some(10.seconds)
+  val reshardAfter: Option[Duration]  = None                 // Some(10.seconds)
   val enhancedFanout                  = false
-  val nrNativeWorkers                 = 1
+  val nrNativeWorkers                 = 2
   val nrKclWorkers                    = 0
-  val applicationName                 = "testApp-13"         // + java.util.UUID.randomUUID().toString(),
+  val applicationName                 = "testApp-14"         // + java.util.UUID.randomUUID().toString(),
   val runtime                         = 2.minute
   val maxRandomWorkerStartDelayMillis = 1 + 0 * 60 * 1000
   val recordProcessingTime: Duration  = 1.millisecond
@@ -45,7 +45,7 @@ object ExampleApp extends zio.App {
         for {
           metrics <- CloudWatchMetricsPublisher.make(applicationName, id)
 //          delay   <- zio.random.nextIntBetween(0, maxRandomWorkerStartDelayMillis).map(_.millis).toManaged_
-          delay    = 30.seconds
+          delay    = 1.seconds
           _       <- log.info(s"Waiting ${delay.toMillis} ms to start worker ${id}").toManaged_
         } yield ZStream.fromEffect(ZIO.sleep(delay)) *> Consumer
           .shardedStream(
@@ -116,7 +116,7 @@ object ExampleApp extends zio.App {
                   .stageOnSuccess(log.info(s"${id} Processing record $r").when(false))(r)
               )
               .aggregateAsyncWithin(ZTransducer.collectAllN(1000), Schedule.fixed(5.second))
-              .mapConcat(_.toList)
+              .mapConcat(_.lastOption.toList)
               .tap(_ => log.info(s"${id} Checkpointing shard ${shardID}") *> checkpointer.checkpoint)
               .catchAll {
                 case _: ShutdownException => // This will be thrown when the shard lease has been stolen
