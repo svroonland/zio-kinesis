@@ -2,7 +2,6 @@ package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
 
 import java.time.{ DateTimeException, Instant }
 
-import scala.collection.compat._
 import nl.vroste.zio.kinesis.client.Record
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative._
@@ -515,7 +514,7 @@ private class DefaultLeaseCoordinator(
         }) *> log.debug("releaseLeases done")
 }
 
-object DefaultLeaseCoordinator {
+private[zionative] object DefaultLeaseCoordinator {
 
   /**
    * Commands relating to leases that need to be executed non-concurrently per lease, because
