@@ -6,7 +6,7 @@ import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.awssdk.services.kinesis.model.KinesisException
 import zio.clock.Clock
-import zio.console._
+import zio.console.putStrLn
 import zio.duration._
 import zio.logging.slf4j.Slf4jLogger
 import zio.stream.ZStream
@@ -21,7 +21,7 @@ object ProducerTest extends DefaultRunnableSpec {
   val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
   val env = (LocalStackServices.localStackAwsLayer.orDie >>> (AdminClient.live ++ Client.live)).orDie >+>
-    (loggingLayer ++ Clock.live)
+    (loggingLayer ++ Clock.live ++ zio.console.Console.live)
 
   def spec =
     suite("Producer")(
@@ -49,74 +49,87 @@ object ProducerTest extends DefaultRunnableSpec {
         val streamName = "zio-test-stream-producer-ramp"
 
         withStream(streamName, 10) {
-          Producer
-            .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 128))
-            .use {
-              producer =>
-                val increment = 1
-                for {
-                  batchSize <- Ref.make(1)
-                  timing    <- Ref.make[Chunk[Chunk[Duration]]](Chunk.empty)
+          (for {
+            totalMetrics <- Ref.make(ProducerMetrics.empty).toManaged_
+            producer     <- Producer
+                          .make(
+                            streamName,
+                            Serde.asciiString,
+                            ProducerSettings(bufferSize = 128),
+                            metrics => totalMetrics.updateAndGet(_ + metrics).flatMap(m => putStrLn(m.toString))
+                          )
+          } yield producer).use {
+            producer =>
+              val increment = 1
+              for {
+                batchSize <- Ref.make(1)
+                timing    <- Ref.make[Chunk[Chunk[Duration]]](Chunk.empty)
 
-                  _       <- ZStream
-                         .tick(1.second)
-                         .take(200)
-                         .mapM(_ => batchSize.getAndUpdate(_ + 1))
-                         .map { batchSize =>
-                           Chunk.fromIterable(
-                             (1 to batchSize * increment)
-                               .map(i => ProducerRecord(s"key${i}" + UUID.randomUUID(), s"value${i}"))
-                           )
-                         }
-                         .mapM { batch =>
-                           for {
-                             _     <- putStrLn(s"Sending batch of size ${batch.size}!")
-                             times <- ZIO.foreachPar(batch)(producer.produce(_).timed.map(_._1))
-                             _     <- timing.update(_ :+ times)
-                             _     <- putStrLn(
-                                    s"Batch size ${batch.size}: avg = ${times.map(_.toMillis).sum / times.length} ms"
-                                  )
-                           } yield ()
-                         }
-                         .runDrain
-                  results <- timing.get
-                  _       <- ZIO.foreach(results)(r => putStrLn(r.map(_.toMillis).mkString(" ")))
-                } yield assertCompletes
-            }
+                _       <- ZStream
+                       .tick(1.second)
+                       .take(200)
+                       .mapM(_ => batchSize.getAndUpdate(_ + 1))
+                       .map { batchSize =>
+                         Chunk.fromIterable(
+                           (1 to batchSize * increment)
+                             .map(i => ProducerRecord(s"key${i}" + UUID.randomUUID(), s"value${i}"))
+                         )
+                       }
+                       .mapM { batch =>
+                         for {
+                           _     <- putStrLn(s"Sending batch of size ${batch.size}!")
+                           times <- ZIO.foreachPar(batch)(producer.produce(_).timed.map(_._1))
+                           _     <- timing.update(_ :+ times)
+                         } yield ()
+                       }
+                       .runDrain
+                results <- timing.get
+                _       <- ZIO.foreach(results)(r => putStrLn(r.map(_.toMillis).mkString(" ")))
+              } yield assertCompletes
+          }
         }
       } @@ TestAspect.ignore,
       testM("produce records to Kinesis successfully and efficiently") {
         // This test demonstrates production of about 5000-6000 records per second on my Mid 2015 Macbook Pro
 
-        val streamName = "zio-test-stream-producer2"
+        val streamName = "zio-test-stream-producer3"
 
         (for {
-          _        <- putStrLn("creating stream").toManaged_
-          _        <- createStreamUnmanaged(streamName, 50).toManaged_
-          _        <- putStrLn("creating producer").toManaged_
-          producer <- Producer
-                        .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 32768))
-        } yield producer).use {
-          producer =>
+          _            <- putStrLn("creating stream").toManaged_
+          _            <- createStreamUnmanaged(streamName, 5).toManaged_
+          _            <- putStrLn("creating producer").toManaged_
+          totalMetrics <- Ref.make(ProducerMetrics.empty).toManaged_
+          producer     <- Producer
+                        .make(
+                          streamName,
+                          Serde.asciiString,
+                          ProducerSettings(bufferSize = 16384),
+                          metrics => totalMetrics.updateAndGet(_ + metrics).flatMap(m => putStrLn(m.toString))
+                        )
+        } yield (producer, totalMetrics)).use {
+          case (producer, totalMetrics) =>
             for {
-              _                <- ZIO.sleep(5.second)
+              _                <- ZIO.sleep(5.second).when(false)
               // Parallelism, but not infinitely (not sure if it matters)
               nrChunks          = 100
               nrRecordsPerChunk = 8000
               time             <- ZIO
                         .collectAllParN_(3)((1 to nrChunks).map { i =>
+                          val records = (1 to nrRecordsPerChunk).map(j =>
+                            // Random UUID to get an even distribution over the shards
+                            ProducerRecord(s"key$i" + UUID.randomUUID(), s"message$i-$j")
+                          )
+
                           for {
-                            _      <- putStrLn(s"Starting chunk $i")
-                            records = (1 to nrRecordsPerChunk).map(j =>
-                                        // Random UUID to get an even distribution over the shards
-                                        ProducerRecord(s"key$i" + UUID.randomUUID(), s"message$i-$j")
-                                      )
-                            _      <- (producer.produceChunk(Chunk.fromIterable(records)) *> putStrLn(s"Chunk $i completed"))
+                            //                            _      <- putStrLn(s"Starting chunk $i")
+                            _ <- producer.produceChunk(Chunk.fromIterable(records))
+                            _ <- putStrLn(s"Chunk $i completed")
                           } yield ()
                         })
                         .timed
                         .map(_._1)
               _                <- putStrLn(s"Produced ${nrChunks * nrRecordsPerChunk * 1000.0 / time.toMillis}")
+              _                <- totalMetrics.get.flatMap(m => putStrLn(m.toString))
             } yield assertCompletes
         }.untraced
       } @@ timeout(5.minute) @@ TestAspect.ignore,

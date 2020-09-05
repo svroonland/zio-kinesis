@@ -13,15 +13,15 @@ object TestUtil {
   ): ZIO[AdminClient with Client with Clock with Console with R, Throwable, A] =
     TestUtil
       .createStream(name, shards)
-      .tapM { _ =>
-        def getShards: ZIO[Client with Clock, Throwable, Chunk[Shard]] =
-          ZIO
-            .service[Client.Service]
-            .flatMap(_.listShards(name).runCollect)
-            .filterOrElse(_.nonEmpty)(_ => getShards.delay(1.second))
-        getShards
-      }
+      .tapM(_ => getShards(name))
       .use_(f)
+
+  def getShards(name: String): ZIO[Client with Clock, Throwable, Chunk[Shard]]                                        =
+    ZIO
+      .service[Client.Service]
+      .flatMap(_.listShards(name).runCollect)
+      .filterOrElse(_.nonEmpty)(_ => getShards(name).delay(1.second))
+      .catchSome { case _: ResourceInUseException => getShards(name).delay(1.second) }
 
   def createStream(streamName: String, nrShards: Int): ZManaged[Console with AdminClient with Clock, Throwable, Unit] =
     createStreamUnmanaged(streamName, nrShards).toManaged(_ =>
