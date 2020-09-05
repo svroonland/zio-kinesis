@@ -692,8 +692,6 @@ object DefaultLeaseCoordinator {
 
     def updateShards(shards: Map[String, Shard]): State = copy(shards = shards)
 
-    def removeShard(id: String): State = copy(shards = shards - id)
-
     def updateLease(lease: Lease, now: Instant): State =
       updateLeases(List(lease), now)
 

@@ -28,7 +28,6 @@ object DiagnosticEvent {
    */
   final case class ShardEnded(shard: String) extends ShardEvent
 
-  // TODO
   final case class NewShardDetected(shard: String) extends ShardEvent
 
   /**
