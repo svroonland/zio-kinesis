@@ -68,15 +68,14 @@ Features:
 * Deserialization of records to any data type
 * Checkpointing of records according to user-defined Schedules
 * Automatic checkpointing at shard stream shutdown due to error or interruption
-* Handling of Kinesis resource limits (throttling and backoff)
+* Handling changes in the number of shards (resharding) while running
+* Correct handling of Kinesis resource limits (throttling and backoff)
 * KCL compatible metrics publishing to CloudWatch
 * Compatibility for running alongside KCL consumers
 * Emission of diagnostic events for custom logging / metrics / testing
 * Manual or otherwise user-defined shard assignment strategy
 * Pluggable lease/checkpoint storage backend
-
-In comparison to the Kinesis Client Library, it has the advantages of:
-* Fast startup and shutdown (less than 500 ms vs 10+ seconds) due to ZIOs superior interruption & fiber coordination mechanisms + optimized startup sequence
+* Optimized startup + shutdown sequence
 
 
 ### Basic usage
