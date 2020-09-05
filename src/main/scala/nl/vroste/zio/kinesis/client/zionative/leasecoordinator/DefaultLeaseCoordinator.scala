@@ -508,7 +508,7 @@ private class DefaultLeaseCoordinator(
     log.debug("Starting releaseLeases") *>
       state.get
         .map(_.heldLeases.values)
-        .flatMap(ZIO.foreachPar_(_) {
+        .flatMap(ZIO.foreachParN_(settings.maxParallelLeaseRenewals)(_) {
           case (lease, _) =>
             processCommand(LeaseCommand.ReleaseLease(lease.key, _)).ignore // We do our best to release the lease
         }) *> log.debug("releaseLeases done")

@@ -356,7 +356,7 @@ object Consumer {
     def toShardIteratorType(p: InitialPosition): ShardIteratorType =
       p match {
         case InitialPosition.Latest                 => ShardIteratorType.Latest
-        case InitialPosition.TrimHorizon            => ShardIteratorType.Latest
+        case InitialPosition.TrimHorizon            => ShardIteratorType.TrimHorizon
         case InitialPosition.AtTimestamp(timestamp) => ShardIteratorType.AtTimestamp(timestamp)
       }
   }

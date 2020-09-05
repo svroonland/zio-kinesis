@@ -307,6 +307,8 @@ private class DynamoDbLeaseRepository(client: DynamoDbAsyncClient, timeout: Dura
     sequenceNumber match {
       case s if s == SpecialCheckpoint.ShardEnd.stringValue    => Left(SpecialCheckpoint.ShardEnd)
       case s if s == SpecialCheckpoint.TrimHorizon.stringValue => Left(SpecialCheckpoint.TrimHorizon)
+      case s if s == SpecialCheckpoint.Latest.stringValue      => Left(SpecialCheckpoint.Latest)
+      case s if s == SpecialCheckpoint.AtTimestamp.stringValue => Left(SpecialCheckpoint.AtTimestamp)
       case s                                                   => Right(ExtendedSequenceNumber(s, subsequenceNumber))
     }
 
