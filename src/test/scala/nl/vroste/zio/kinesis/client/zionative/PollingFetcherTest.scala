@@ -8,6 +8,7 @@ import nl.vroste.zio.kinesis.client.zionative.FetchMode.Polling
 import nl.vroste.zio.kinesis.client.zionative.fetcher.PollingFetcher
 import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.services.kinesis.model.{
+  ChildShard,
   GetRecordsResponse,
   ProvisionedThroughputExceededException,
   Record
@@ -279,8 +280,11 @@ object PollingFetcherTest extends DefaultRunnableSpec {
               val offset             = shardIterator.toInt
               val lastRecordOffset   = offset + limit
               val recordsInResponse  = records.slice(offset, offset + limit)
+              val shouldEnd          = lastRecordOffset >= records.size && endAfterRecords
               val nextShardIterator  =
-                if (lastRecordOffset >= records.size && endAfterRecords) null else lastRecordOffset.toString
+                if (shouldEnd) null else lastRecordOffset.toString
+              val childShards        =
+                if (shouldEnd) Seq(ChildShard.builder().shardId("shard-002").parentShards("001").build) else null
               val millisBehindLatest = if (lastRecordOffset >= records.size) 0 else records.size - lastRecordOffset
 
               //          println(s"GetRecords from ${shardIterator} (max ${limit}. Next iterator: ${nextShardIterator}")
@@ -290,6 +294,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
                 .records(recordsInResponse.asJava)
                 .millisBehindLatest(millisBehindLatest)
                 .nextShardIterator(nextShardIterator)
+                .childShards(childShards.asJava)
                 .build()
             }
         }

@@ -338,7 +338,7 @@ object Consumer {
         .parentShardId(parentShards.head)
         .build()
     else
-      throw new IllegalArgumentException(s"Unexpected nr of child chards: ${parentShards.size}")
+      throw new IllegalArgumentException(s"Unexpected nr of parent shards: ${parentShards.size}")
   }
 
   val defaultEnvironment
