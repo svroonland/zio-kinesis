@@ -28,7 +28,7 @@ object LeaseCoordinatorTest extends DefaultRunnableSpec {
           assert(checkpoint)(equalTo(SpecialCheckpoint.Latest))
         },
         test("for InitialPosition.Latest for shard with parents with open leases") {
-          val leases     = Map(
+          val leases: Map[String, Lease] = Map(
             "001" -> Lease(
               key = "001",
               owner = Some("worker1"),
@@ -37,12 +37,12 @@ object LeaseCoordinatorTest extends DefaultRunnableSpec {
               parentShardIds = Seq.empty
             )
           )
-          val checkpoint = DefaultLeaseCoordinator.initialCheckpointForShard(shard3, InitialPosition.Latest, leases)
+          val checkpoint                 = DefaultLeaseCoordinator.initialCheckpointForShard(shard3, InitialPosition.Latest, leases)
 
           assert(checkpoint)(equalTo(SpecialCheckpoint.TrimHorizon))
         },
         test("for InitialPosition.Latest for shard with parents with ended leases") {
-          val leases     = Map(
+          val leases: Map[String, Lease] = Map(
             "001" -> Lease(
               key = "001",
               owner = Some("worker1"),
@@ -51,7 +51,7 @@ object LeaseCoordinatorTest extends DefaultRunnableSpec {
               parentShardIds = Seq.empty
             )
           )
-          val checkpoint = DefaultLeaseCoordinator.initialCheckpointForShard(shard3, InitialPosition.Latest, leases)
+          val checkpoint                 = DefaultLeaseCoordinator.initialCheckpointForShard(shard3, InitialPosition.Latest, leases)
 
           assert(checkpoint)(equalTo(SpecialCheckpoint.TrimHorizon))
         }
