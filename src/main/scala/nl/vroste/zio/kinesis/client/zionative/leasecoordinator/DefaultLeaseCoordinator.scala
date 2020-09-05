@@ -569,24 +569,20 @@ object DefaultLeaseCoordinator {
                           .bounded[(Lease, Promise[Nothing, Unit])](128)
                           .toManaged(_.shutdown)
                           .ensuring(log.debug("Acquired leases queue shutdown"))
-      c              <- (
-               for {
-                 table <- ZIO.service[LeaseRepository.Service]
-                 state <- Ref.make(State.empty)
-               } yield new DefaultLeaseCoordinator(
-                 table,
-                 applicationName,
-                 workerId,
-                 state,
-                 acquiredLeases,
-                 emitDiagnostic,
-                 commandQueue,
-                 settings,
-                 strategy,
-                 initialPosition
-               )
-           ).toManaged_
-      // Optimized to do initalization in parallel as much as possible
+      table          <- ZIO.service[LeaseRepository.Service].toManaged_
+      state          <- Ref.make(State.empty).toManaged_
+      c               = new DefaultLeaseCoordinator(
+            table,
+            applicationName,
+            workerId,
+            state,
+            acquiredLeases,
+            emitDiagnostic,
+            commandQueue,
+            settings,
+            strategy,
+            initialPosition
+          )
       _              <- c.runloop.runDrain.forkManaged.ensuringFirst(log.debug("Shutting down runloop"))
       _              <- ZManaged.finalizer(
              c.releaseLeases.tap(_ => log.debug("releaseLeases done"))
@@ -606,18 +602,16 @@ object DefaultLeaseCoordinator {
                           (shards >>= c.updateShards)
                     }.toManaged_
                // Initialization. If it fails, we will try in the loop
-               _ <- (
-                        (c.takeLeases.ignore *>
-                          // Periodic refresh
-                          repeatAndRetry(settings.refreshAndTakeInterval) {
-                            (c.refreshLeases *> c.takeLeases)
-                              .tapCause(e => log.error("Refresh & take leases failed, will retry", e))
-                          }).forkManaged
-                    ).ensuringFirst(log.debug("Shutting down refresh & take lease loop"))
-               _ <- (repeatAndRetry(settings.renewInterval) {
-                        c.renewLeases
-                          .tapCause(e => log.error("Renewing leases failed, will retry", e))
-                      }).forkManaged.ensuringFirst(log.debug("Shutting down renew lease loop"))
+               _ <- (c.takeLeases.ignore *>
+                        // Periodic refresh
+                        repeatAndRetry(settings.refreshAndTakeInterval) {
+                          (c.refreshLeases *> c.takeLeases)
+                            .tapCause(e => log.error("Refresh & take leases failed, will retry", e))
+                        }).forkManaged.ensuringFirst(log.debug("Shutting down refresh & take lease loop"))
+               _ <- repeatAndRetry(settings.renewInterval) {
+                      c.renewLeases
+                        .tapCause(e => log.error("Renewing leases failed, will retry", e))
+                    }.forkManaged.ensuringFirst(log.debug("Shutting down renew lease loop"))
              } yield ()).fork
 
     } yield c)
