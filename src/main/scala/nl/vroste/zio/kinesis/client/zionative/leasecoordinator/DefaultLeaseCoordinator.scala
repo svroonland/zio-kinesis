@@ -49,7 +49,7 @@ import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.ZioExtensions.for
  *       than the lease renewal interval.
  *    2. Detecting the number of active workers as input for the lease stealing algorithm
  *    3. Detecting zombie workers / workers that left, so we can take their leases
- * - Parent shard IDs: for resharding and proper sequential handling (not yet handled TODO)
+ * - Parent shard IDs: when the shard was created by resharding, which shard(s) is its predecessor
  *
  * Terminology:
  * - held lease: a lease held by this worker
@@ -300,17 +300,17 @@ private class DefaultLeaseCoordinator(
    */
   val refreshLeases =
     for {
-      _                 <- log.info("Refreshing leases")
-      result            <- table
-                  .getLeases(applicationName)
-                  .mapMParUnordered(settings.maxParallelLeaseAcquisitions) { lease =>
-                    log.info(s"RefreshLeases: ${lease}") *>
-                      processCommand(LeaseCommand.RefreshLease(lease, _))
-                  }
-                  .runDrain
-                  .timed
-      (duration, leases) = result
-      _                 <- log.debug(s"Refreshing leases took ${duration.toMillis}")
+      _        <- log.info("Refreshing leases")
+      duration <- table
+                    .getLeases(applicationName)
+                    .mapMParUnordered(settings.maxParallelLeaseAcquisitions) { lease =>
+                      log.info(s"RefreshLeases: ${lease}") *>
+                        processCommand(LeaseCommand.RefreshLease(lease, _))
+                    }
+                    .runDrain
+                    .timed
+                    .map(_._1)
+      _        <- log.debug(s"Refreshing leases took ${duration.toMillis}")
     } yield ()
 
   /**
@@ -319,19 +319,26 @@ private class DefaultLeaseCoordinator(
   private def claimLeasesForShardsWithoutLease(
     desiredShards: Set[String],
     shards: Map[String, Shard],
-    allLeases: Map[String, Lease]
+    leases: Map[String, Lease]
   ): ZIO[Logging with Clock, Throwable, Unit] =
     for {
-      _                 <- log.info(s"Found ${allLeases.size} leases")
-      shardsWithoutLease = desiredShards.filterNot(allLeases.contains).toSeq.sorted
+      _                 <- log.info(s"Found ${leases.size} leases")
+      shardsWithoutLease = desiredShards.filterNot(leases.contains).toSeq.sorted.map(shards(_))
       _                 <- log
              .info(
-               s"No leases exist yet for these shards, creating and claiming: ${shardsWithoutLease.mkString(",")}"
+               s"No leases exist yet for these shards, creating and claiming: " +
+                 s"${shardsWithoutLease.map(_.shardId()).mkString(",")}"
              )
              .when(shardsWithoutLease.nonEmpty)
       _                 <- ZIO
-             .foreachParN_(settings.maxParallelLeaseAcquisitions)(shardsWithoutLease) { shardId =>
-               val lease = newLeaseForShard(shardId, shards, allLeases)
+             .foreachParN_(settings.maxParallelLeaseAcquisitions)(shardsWithoutLease) { shard =>
+               val lease = Lease(
+                 key = shard.shardId(),
+                 owner = Some(workerId),
+                 counter = 0L,
+                 checkpoint = Some(Left(initialCheckpointForShard(shard, initialPosition, leases))),
+                 parentShardIds = shard.parentShardIds
+               )
 
                (table.createLease(applicationName, lease) <* registerNewAcquiredLease(lease)).catchAll {
                  case Right(LeaseAlreadyExists) =>
@@ -341,32 +348,6 @@ private class DefaultLeaseCoordinator(
                }
              }
     } yield ()
-
-  // TODO Unit test this, also to document behavior
-  private def newLeaseForShard(shardId: String, shards: Map[String, Shard], allLeases: Map[String, Lease]) = {
-    val shard = shards(shardId)
-
-    val initialCheckpoint: SpecialCheckpoint =
-      initialPosition match {
-        case InitialPosition.TrimHorizon                => SpecialCheckpoint.TrimHorizon
-        case InitialPosition.AtTimestamp(timestamp @ _) => SpecialCheckpoint.AtTimestamp
-        case InitialPosition.Latest                     =>
-          if (!shard.hasParents) SpecialCheckpoint.Latest
-          else {
-            val parentLeases = shard.parentShardIds.flatMap(allLeases.get)
-            if (parentLeases.isEmpty) SpecialCheckpoint.Latest
-            else SpecialCheckpoint.TrimHorizon
-          }
-      }
-
-    Lease(
-      key = shardId,
-      owner = Some(workerId),
-      counter = 0L,
-      checkpoint = Some(Left(initialCheckpoint)),
-      parentShardIds = shard.parentShardIds
-    )
-  }
 
   /**
    * Takes leases, unowned or from other workers, to get this worker's number of leases to the target value (nr leases / nr workers)
@@ -666,6 +647,23 @@ object DefaultLeaseCoordinator {
 
   def allParentShardsExpired(shard: Shard, shards: Map[String, Shard]): Boolean =
     shard.parentShardIds.flatMap(shards.get).isEmpty
+
+  def initialCheckpointForShard(
+    shard: Shard,
+    initialPosition: InitialPosition,
+    allLeases: Map[String, Lease]
+  ): SpecialCheckpoint =
+    initialPosition match {
+      case InitialPosition.TrimHorizon                => SpecialCheckpoint.TrimHorizon
+      case InitialPosition.AtTimestamp(timestamp @ _) => SpecialCheckpoint.AtTimestamp
+      case InitialPosition.Latest                     =>
+        if (!shard.hasParents) SpecialCheckpoint.Latest
+        else {
+          val parentLeases = shard.parentShardIds.flatMap(allLeases.get)
+          if (parentLeases.isEmpty) SpecialCheckpoint.Latest
+          else SpecialCheckpoint.TrimHorizon
+        }
+    }
 
   private def repeatAndRetry[R, E, A](interval: Duration)(effect: ZIO[R, E, A]) =
     effect.repeat(Schedule.fixed(interval)).delay(interval).retry(Schedule.forever)

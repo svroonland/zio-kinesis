@@ -2,6 +2,7 @@ package nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.TestUtil.retryOnResourceNotFound
 import nl.vroste.zio.kinesis.client.serde.Serde
+import nl.vroste.zio.kinesis.client.zionative.Consumer.InitialPosition
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
 import nl.vroste.zio.kinesis.client.zionative.metrics.{ CloudWatchMetricsPublisher, CloudWatchMetricsPublisherConfig }
 import nl.vroste.zio.kinesis.client.zionative._
@@ -21,19 +22,19 @@ import zio.stream.{ ZStream, ZTransducer }
  * Example app that shows the ZIO-native and KCL workers running in parallel
  */
 object ExampleApp extends zio.App {
-  val streamName                      = "zio-test-stream-22" // + java.util.UUID.randomUUID().toString
+  val streamName                      = "zio-test-stream-24" // + java.util.UUID.randomUUID().toString
   val nrRecords                       = 2000000
   val produceRate                     = 100                  // Nr records to produce per second
   val nrShards                        = 10
   val reshardFactor                   = 0.5
+  val reshardAfter: Option[Duration]  = Some(10.seconds)
   val enhancedFanout                  = false
   val nrNativeWorkers                 = 1
   val nrKclWorkers                    = 0
-  val applicationName                 = "testApp-11"         // + java.util.UUID.randomUUID().toString(),
+  val applicationName                 = "testApp-13"         // + java.util.UUID.randomUUID().toString(),
   val runtime                         = 2.minute
   val maxRandomWorkerStartDelayMillis = 1 + 0 * 60 * 1000
   val recordProcessingTime: Duration  = 1.millisecond
-  val reshardAfter: Option[Duration]  = Some(30.seconds)
 
   override def run(
     args: List[String]
@@ -43,7 +44,8 @@ object ExampleApp extends zio.App {
       ZStream.unwrapManaged {
         for {
           metrics <- CloudWatchMetricsPublisher.make(applicationName, id)
-          delay   <- zio.random.nextIntBetween(0, maxRandomWorkerStartDelayMillis).map(_.millis).toManaged_
+//          delay   <- zio.random.nextIntBetween(0, maxRandomWorkerStartDelayMillis).map(_.millis).toManaged_
+          delay    = 30.seconds
           _       <- log.info(s"Waiting ${delay.toMillis} ms to start worker ${id}").toManaged_
         } yield ZStream.fromEffect(ZIO.sleep(delay)) *> Consumer
           .shardedStream(
@@ -52,6 +54,7 @@ object ExampleApp extends zio.App {
             deserializer = Serde.asciiString,
             workerIdentifier = id,
             fetchMode = if (enhancedFanout) FetchMode.EnhancedFanOut() else FetchMode.Polling(batchSize = 1000),
+            initialPosition = InitialPosition.Latest,
             emitDiagnostic = ev =>
               (ev match {
                 case ev: DiagnosticEvent.PollComplete =>
