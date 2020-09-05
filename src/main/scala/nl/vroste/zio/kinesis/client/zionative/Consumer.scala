@@ -361,7 +361,7 @@ object Consumer {
       }
   }
 
-  private val checkpointToShardIteratorType
+  private[zionative] val checkpointToShardIteratorType
     : (Either[SpecialCheckpoint, ExtendedSequenceNumber], InitialPosition) => ShardIteratorType = {
     case (Left(SpecialCheckpoint.TrimHorizon), _)                                      => ShardIteratorType.TrimHorizon
     case (Left(SpecialCheckpoint.Latest), _)                                           => ShardIteratorType.Latest

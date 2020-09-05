@@ -786,9 +786,8 @@ object NativeConsumerTest extends DefaultRunnableSpec {
       checkpoints = leases.collect {
                       case l if l.checkpoint.isDefined =>
                         l.key -> (l.checkpoint.get match {
-                          case Left(SpecialCheckpoint.ShardEnd)    => SpecialCheckpoint.ShardEnd.stringValue
-                          case Left(SpecialCheckpoint.TrimHorizon) => SpecialCheckpoint.TrimHorizon.stringValue
-                          case Right(seqnr)                        => seqnr.sequenceNumber
+                          case Left(s @ _)  => s.stringValue
+                          case Right(seqnr) => seqnr.sequenceNumber
                         })
                     }.toMap
     } yield checkpoints
