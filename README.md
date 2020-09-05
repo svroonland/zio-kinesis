@@ -13,6 +13,8 @@ More beta users and feedback are of course welcome.
   * [Basic usage](#basic-usage)
   * [Checkpointing](#checkpointing)
   * [Lease coordination](#lease-coordination)
+  * [Resharding](#resharding)
+  * [Consuming multiple Kinesis streams](#consuming-multiple-kinesis-streams)
   * [Customization](#customization)
   * [Diagnostic event & metrics](#diagnostic-event---metrics)
   * [KCL compatibility](#kcl-compatibility)
@@ -22,11 +24,10 @@ More beta users and feedback are of course welcome.
   * [Metrics](#metrics)
 - [DynamicConsumer](#dynamicconsumer)
   * [Basic usage using `consumeWith`](#basic-usage-using--consumewith-)
-  * [Advanced usage](#advanced-usage-example-)
+  * [Advanced usage](#advanced-usage)
 - [Client and AdminClient](#client-and-adminclient)
-- [Running tests and more usage examples](#running-tests-and-usage-examples)
+- [Running tests and more usage examples](#running-tests-and-more-usage-examples)
 - [Credits](#credits)
-
 
 ## Features
 
