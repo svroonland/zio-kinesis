@@ -30,6 +30,7 @@ import zio.stream.ZStream
 import DefaultLeaseCoordinator.State
 import nl.vroste.zio.kinesis.client.zionative.Consumer.InitialPosition
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.ZioExtensions.foreachParNUninterrupted_
+import software.amazon.awssdk.services.dynamodb.model.ResourceNotFoundException
 
 /**
  * Coordinates leases for shards between different workers
@@ -298,15 +299,19 @@ private class DefaultLeaseCoordinator(
    *
    * Also if other workers have taken our leases and we haven't yet checkpointed, we can find out now
    */
-  val refreshLeases =
+  val refreshLeases: ZIO[Logging with Clock, Throwable, Unit] =
     for {
       _        <- log.info("Refreshing leases")
       duration <- table
                     .getLeases(applicationName)
-                    .mapMParUnordered(settings.maxParallelLeaseAcquisitions) { lease =>
-                      log.info(s"RefreshLeases: ${lease}") *>
-                        processCommand(LeaseCommand.RefreshLease(lease, _))
-                    }
+                    .mapChunksM(
+                      ZIO
+                        .foreachPar_(_) { lease =>
+                          log.info(s"RefreshLeases: ${lease}") *>
+                            processCommand(LeaseCommand.RefreshLease(lease, _))
+                        }
+                        .as(Chunk.unit)
+                    )
                     .runDrain
                     .timed
                     .map(_._1)
@@ -358,23 +363,22 @@ private class DefaultLeaseCoordinator(
    */
   val takeLeases: ZIO[Clock with Logging with Random, Throwable, Unit] = {
     for {
-      leases                           <- state.get.map(_.currentLeases.values.toSet)
-      shards                           <- state.get.map(_.shards)
-      leaseMap                          = leases.map(s => s.lease.key -> s.lease).toMap
-      openLeases                        = leases.collect {
+      leases          <- state.get.map(_.currentLeases.values.toSet)
+      shards          <- state.get.map(_.shards)
+      leaseMap         = leases.map(s => s.lease.key -> s.lease).toMap
+      openLeases       = leases.collect {
                      case LeaseState(lease, completed @ _, lastUpdated) if !shardHasEnded(lease) =>
                        (lease, lastUpdated)
                    }
-      (consumableShards, pendingShards) = consumableAndPendingShards(shards, leaseMap)
-      _                                <- log.info(s"Shards not yet ready for consumption: ${pendingShards.keySet.mkString(",")}")
-      desiredShards                    <- strategy.desiredShards(openLeases, consumableShards.keySet, workerId)
-      _                                <- log.info(s"Desired shard assignment: ${desiredShards.mkString(",")}")
-      toTake                            = leaseMap.values.filter(l => desiredShards.contains(l.key) && !l.owner.contains(workerId))
-      _                                <- claimLeasesForShardsWithoutLease(desiredShards, shards, leaseMap)
-      _                                <- log
+      consumableShards = shardsReadyToConsume(shards, leaseMap)
+      desiredShards   <- strategy.desiredShards(openLeases, consumableShards.keySet, workerId)
+      _               <- log.info(s"Desired shard assignment: ${desiredShards.mkString(",")}")
+      toTake           = leaseMap.values.filter(l => desiredShards.contains(l.key) && !l.owner.contains(workerId))
+      _               <- claimLeasesForShardsWithoutLease(desiredShards, shards, leaseMap)
+      _               <- log
              .info(s"Going to take ${toTake.size} leases from other workers: ${toTake.mkString(",")}")
              .when(toTake.nonEmpty)
-      _                                <- foreachParNUninterrupted_(settings.maxParallelLeaseAcquisitions)(toTake) { lease =>
+      _               <- foreachParNUninterrupted_(settings.maxParallelLeaseAcquisitions)(toTake) { lease =>
              val updatedLease = lease.claim(workerId)
              (table.claimLease(applicationName, updatedLease) *> registerNewAcquiredLease(updatedLease)).catchAll {
                case Right(UnableToClaimLease) =>
@@ -557,15 +561,15 @@ object DefaultLeaseCoordinator {
     LeaseCoordinator
   ] =
     (for {
-      commandQueue        <- Queue
+      commandQueue   <- Queue
                         .bounded[LeaseCommand](128)
                         .toManaged(_.shutdown)
                         .ensuring(log.debug("Command queue shutdown"))
-      acquiredLeases      <- Queue
+      acquiredLeases <- Queue
                           .bounded[(Lease, Promise[Nothing, Unit])](128)
                           .toManaged(_.shutdown)
                           .ensuring(log.debug("Acquired leases queue shutdown"))
-      c                   <- (
+      c              <- (
                for {
                  table <- ZIO.service[LeaseRepository.Service]
                  state <- Ref.make(State.empty)
@@ -583,39 +587,39 @@ object DefaultLeaseCoordinator {
                )
            ).toManaged_
       // Optimized to do initalization in parallel as much as possible
-      _                   <- c.runloop.runDrain.forkManaged.ensuringFirst(log.debug("Shutting down runloop"))
-      _                   <- ZManaged.finalizer(
+      _              <- c.runloop.runDrain.forkManaged.ensuringFirst(log.debug("Shutting down runloop"))
+      _              <- ZManaged.finalizer(
              c.releaseLeases.tap(_ => log.debug("releaseLeases done"))
            ) // We need the runloop to be alive for this operation
-      // TODO we could also find out by refreshing all leases and handling the ResourceNotFound exception
-      leaseTableExists    <-
-        ZIO.service[LeaseRepository.Service].flatMap(_.createLeaseTableIfNotExists(applicationName)).toManaged_
+
       // Wait for shards if the lease table does not exist yet, otherwise we assume there's leases
       // for all shards already, so just fork it. If there's new shards, the next `takeLeases` will
       // claim leases for them.
-      awaitAndUpdateShards = shards.flatMap(c.updateShards)
-      // TODO do we have to await all this stuff..? Just fork it
-      _                   <- (c.refreshLeases.when(leaseTableExists) *>
-               (if (leaseTableExists) awaitAndUpdateShards.fork else awaitAndUpdateShards)).toManaged_
+      // Optimized for the 'second startup or later' situation: lease table exists and covers all shards
+      // Consumer will periodically update shards anyway
+      _              <- (for {
+               _ <- c.refreshLeases.catchSome {
+                      case _: ResourceNotFoundException =>
+                        ZIO
+                          .service[LeaseRepository.Service]
+                          .flatMap(_.createLeaseTableIfNotExists(applicationName)) *>
+                          (shards >>= c.updateShards)
+                    }.toManaged_
+               // Initialization. If it fails, we will try in the loop
+               _ <- (
+                        (c.takeLeases.ignore *>
+                          // Periodic refresh
+                          repeatAndRetry(settings.refreshAndTakeInterval) {
+                            (c.refreshLeases *> c.takeLeases)
+                              .tapCause(e => log.error("Refresh & take leases failed, will retry", e))
+                          }).forkManaged
+                    ).ensuringFirst(log.debug("Shutting down refresh & take lease loop"))
+               _ <- (repeatAndRetry(settings.renewInterval) {
+                        c.renewLeases
+                          .tapCause(e => log.error("Renewing leases failed, will retry", e))
+                      }).forkManaged.ensuringFirst(log.debug("Shutting down renew lease loop"))
+             } yield ()).fork
 
-      // Initialization. If it fails, we will try in the loop
-      _                   <- (
-               (c.takeLeases.ignore *>
-                 // Periodic refresh
-                 /*
-                  * resumeUnreleasedLeases is here because after a temporary connection failure,
-                  * we may have 'internally' released the lease but if no other worker has claimed
-                  * the lease, it will still be in the lease table with us as owner.
-                  */
-                 repeatAndRetry(settings.refreshAndTakeInterval) {
-                   (c.refreshLeases *> c.takeLeases)
-                     .tapCause(e => log.error("Refresh & take leases failed, will retry", e))
-                 }).forkManaged
-           ).ensuringFirst(log.debug("Shutting down refresh & take lease loop"))
-      _                   <- (repeatAndRetry(settings.renewInterval) {
-               c.renewLeases
-                 .tapCause(e => log.error("Renewing leases failed, will retry", e))
-             }).forkManaged.ensuringFirst(log.debug("Shutting down renew lease loop"))
     } yield c)
       .tapCause(c => log.error("Error creating DefaultLeaseCoordinator", c).toManaged_)
 
@@ -624,11 +628,11 @@ object DefaultLeaseCoordinator {
    * and all its parents have been processed to the end (lease checkpoint = SHARD_END) or the parent shards have
    * expired
    */
-  def consumableAndPendingShards(
+  def shardsReadyToConsume(
     shards: Map[String, Shard],
     leases: Map[String, Lease]
-  ): (Map[String, Shard], Map[String, Shard]) =
-    shards.partition {
+  ): Map[String, Shard] =
+    shards.filter {
       case (shardId, s) =>
         val shardProcessedToEnd = !leases.get(shardId).exists(shardHasEnded)
         shardProcessedToEnd && (parentShardsCompleted(s, leases) || allParentShardsExpired(s, shards))

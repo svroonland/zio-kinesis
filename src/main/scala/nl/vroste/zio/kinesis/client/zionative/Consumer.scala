@@ -207,6 +207,13 @@ object Consumer {
 
     def createDependencies =
       ZManaged.fromEffect(AdminClient.describeStream(streamName).fork).flatMap { streamDescriptionFib =>
+        val fetchShards = streamDescriptionFib.join.flatMap { streamDescription =>
+          if (!streamDescription.hasMoreShards)
+            ZIO.succeed(streamDescription.shards.map(s => s.shardId() -> s).toMap)
+          else
+            listShards
+        }
+
         ZManaged
           .mapParN(
             ZManaged
@@ -220,24 +227,18 @@ object Consumer {
             // additional information to the lease coordinator, and the list of leases is used
             // as the list of shards.
             for {
-              fetchShards      <- ZManaged
-                               .fromEffect(streamDescriptionFib.join.flatMap { streamDescription =>
-                                 if (!streamDescription.hasMoreShards)
-                                   ZIO.succeed(streamDescription.shards.map(s => s.shardId() -> s).toMap)
-                                 else
-                                   listShards
-                               })
-                               .fork
+              env              <- ZIO.environment[Clock with Client].toManaged_
               leaseCoordinator <- DefaultLeaseCoordinator
                                     .make(
                                       applicationName,
                                       workerIdentifier,
                                       emitDiagnostic,
                                       leaseCoordinationSettings,
-                                      fetchShards.join,
+                                      fetchShards.provide(env),
                                       shardAssignmentStrategy,
                                       initialPosition
                                     )
+              _                <- log.info("Lease coordinator created").toManaged_
               // Periodically refresh shards
               _                <- (listShards >>= leaseCoordinator.updateShards)
                      .repeat(Schedule.spaced(leaseCoordinationSettings.shardRefreshInterval))
