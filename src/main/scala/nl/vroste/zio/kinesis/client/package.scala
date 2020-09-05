@@ -60,5 +60,4 @@ package object client {
     : ZLayer[Any, Throwable, Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[DynamoDbAsyncClient]] =
     HttpClient.make() >>>
       sdkClientsLayer
-
 }

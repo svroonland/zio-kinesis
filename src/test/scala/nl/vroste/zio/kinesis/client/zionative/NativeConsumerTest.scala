@@ -3,9 +3,11 @@ package nl.vroste.zio.kinesis.client.zionative
 import java.time.Instant
 import java.{ util => ju }
 
+import nl.vroste.zio.kinesis.client
+
 import scala.collection.compat._
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
-import nl.vroste.zio.kinesis.client.{ AdminClient, Client, LocalStackServices, Producer }
+import nl.vroste.zio.kinesis.client.{ AdminClient, Client, LocalStackServices, Producer, ProducerSettings, TestUtil }
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.TestUtil.{ retryOnResourceNotFound, withStream }
 import nl.vroste.zio.kinesis.client.serde.Serde
@@ -22,7 +24,6 @@ import zio.stream.{ ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test._
 import zio.logging._
-import nl.vroste.zio.kinesis.client.ProducerSettings
 
 object NativeConsumerTest extends DefaultRunnableSpec {
   /*
@@ -584,7 +585,118 @@ object NativeConsumerTest extends DefaultRunnableSpec {
               _             <- stream.interrupt
             } yield assertCompletes
         }
-      }
+      },
+      testM("must checkpoint when a shard ends") {
+        val nrRecords = 20000
+        val nrShards  = 3
+
+        withRandomStreamAndApplicationName(nrShards) {
+          (streamName, applicationName) =>
+            def consumer(workerId: String, emitDiagnostic: DiagnosticEvent => UIO[Unit]) =
+              Consumer
+                .shardedStream(
+                  streamName,
+                  applicationName,
+                  Serde.asciiString,
+                  workerIdentifier = workerId,
+                  leaseCoordinationSettings = LeaseCoordinationSettings(
+                    renewInterval = 30.seconds,
+                    refreshAndTakeInterval = 10.seconds,
+                    maxParallelLeaseAcquisitions = 1
+                  ),
+                  emitDiagnostic = emitDiagnostic
+                )
+                .mapM {
+                  case (shard @ _, shardStream, checkpointer) =>
+                    shardStream
+                      .tap(checkpointer.stage)
+                      .aggregateAsyncWithin(ZTransducer.collectAllN(200), Schedule.fixed(1.second))
+                      .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
+                      .map(_.last)
+                      .tap(_ => checkpointer.checkpoint())
+                      .catchAll {
+                        case Right(_) =>
+                          ZStream.empty
+                        case Left(e)  => ZStream.fail(e)
+                      }
+                      .runDrain
+                      .as(shard)
+                }
+                .take(1)
+
+            for {
+              producer      <- produceSampleRecords(streamName, nrRecords, chunkSize = 50, throttle = Some(1.second)).fork
+              adminClient   <- ZIO.service[AdminClient.Service]
+              stream        <-
+                consumer("worker1", e => UIO(println(e.toString))).runCollect.tapCause(e => UIO(println(e))).fork
+              _             <- ZIO.sleep(20.seconds)
+              _              = println("Resharding")
+              _             <- adminClient.updateShardCount(streamName, 4)
+              finishedShard <- stream.join.map(_.head)
+              _             <- producer.interrupt
+              checkpoints   <- getCheckpoints(applicationName)
+            } yield assert(checkpoints(finishedShard))(equalTo("SHARD_END"))
+        }
+      } @@ TestAspect.ifEnvSet("ENABLE_AWS"),
+      testM("must not resume leases for ended shards") {
+        val nrRecords = 20000
+        val nrShards  = 3
+
+        withRandomStreamAndApplicationName(nrShards) {
+          (streamName, applicationName) =>
+            def consumer(workerId: String, emitDiagnostic: DiagnosticEvent => UIO[Unit]) =
+              Consumer
+                .shardedStream(
+                  streamName,
+                  applicationName,
+                  Serde.asciiString,
+                  workerIdentifier = workerId,
+                  leaseCoordinationSettings = LeaseCoordinationSettings(
+                    renewInterval = 30.seconds,
+                    refreshAndTakeInterval = 10.seconds,
+                    maxParallelLeaseAcquisitions = 1
+                  ),
+                  emitDiagnostic = emitDiagnostic
+                )
+                .mapMParUnordered(100) {
+                  case (shard @ _, shardStream, checkpointer) =>
+                    shardStream
+                      .tap(checkpointer.stage)
+                      .aggregateAsyncWithin(ZTransducer.collectAllN(200), Schedule.fixed(1.second))
+                      .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
+                      .map(_.last)
+                      .tap(_ => checkpointer.checkpoint())
+                      .catchAll {
+                        case Right(_) =>
+                          ZStream.empty
+                        case Left(e)  => ZStream.fail(e)
+                      }
+                      .runDrain
+                      .as(shard)
+                }
+                .take(3)
+
+            for {
+              producer    <- produceSampleRecords(streamName, nrRecords, chunkSize = 50, throttle = Some(1.second)).fork
+              adminClient <- ZIO.service[AdminClient.Service]
+
+              stream  <-
+                consumer("worker1", e => UIO(println(e.toString))).runCollect.tapCause(e => UIO(println(e))).fork
+              _       <- ZIO.sleep(10.seconds)
+              _        = println("Resharding")
+              _       <- adminClient.updateShardCount(streamName, nrShards * 2)
+              _       <- ZIO.sleep(10.seconds)
+              _       <- stream.join
+              shards  <- TestUtil.getShards(streamName)
+              _        = println(shards.mkString(", "))
+              stream2 <-
+                consumer("worker1", e => UIO(println(e.toString))).runCollect.tapCause(e => UIO(println(e))).fork
+              _       <- ZIO.sleep(30.seconds)
+              _       <- stream2.interrupt
+              _       <- producer.interrupt
+            } yield assertCompletes
+        }
+      } @@ TestAspect.ifEnvSet("ENABLE_AWS")
     ).provideSomeLayerShared(env) @@
       TestAspect.timed @@
       TestAspect.sequential @@ // For CircleCI
@@ -593,7 +705,9 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
   val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
-  val env = ((LocalStackServices.localStackAwsLayer.orDie >+>
+  val useAws = Runtime.default.unsafeRun(system.envOrElse("ENABLE_AWS", "0")).toInt == 1
+
+  val env = (((if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer).orDie >+>
     (AdminClient.live ++ Client.live ++ DynamoDbLeaseRepository.live)).orDie ++
     zio.test.environment.testEnvironment ++
     Clock.live) >>>
@@ -663,24 +777,39 @@ object NativeConsumerTest extends DefaultRunnableSpec {
       leases <- table.getLeases(applicationName).runCollect
     } yield assert(leases)(forall(hasField("owner", _.owner, isNone)))
 
-  def getCheckpoints(applicationName: String) =
+  def getCheckpoints(
+    applicationName: String
+  ): ZIO[Clock with Has[LeaseRepository.Service], Throwable, Map[String, String]] =
     for {
       table      <- ZIO.service[LeaseRepository.Service]
       leases     <- table.getLeases(applicationName).runCollect
       checkpoints = leases.collect {
-                      case l if l.checkpoint.isDefined => l.key -> l.checkpoint.get.sequenceNumber
+                      case l if l.checkpoint.isDefined =>
+                        l.key -> (l.checkpoint.get match {
+                          case Left(s @ _)  => s.stringValue
+                          case Right(seqnr) => seqnr.sequenceNumber
+                        })
                     }.toMap
     } yield checkpoints
+
+  def deleteTable(applicationName: String) =
+    ZIO
+      .service[LeaseRepository.Service]
+      .flatMap(_.deleteTable(applicationName).unit)
 
   def withRandomStreamAndApplicationName[R, A](
     nrShards: Int
   )(
     f: (String, String) => ZIO[R, Throwable, A]
-  ): ZIO[Client with AdminClient with Clock with Console with R, Throwable, A] =
+  ): ZIO[Client with AdminClient with Clock with Logging with Console with Has[
+    LeaseRepository.Service
+  ] with R, Throwable, A] =
     ZIO.effectTotal((streamPrefix + "testStream", streamPrefix + "testApplication")).flatMap {
       case (streamName, applicationName) =>
         withStream(streamName, shards = nrShards) {
-          f(streamName, applicationName)
+          ZManaged.finalizer(deleteTable(applicationName).orDie).use_ {
+            f(streamName, applicationName)
+          }
         }
     }
 

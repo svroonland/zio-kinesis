@@ -5,12 +5,34 @@ import zio.clock.Clock
 import zio.logging.Logging
 import zio.stream.ZStream
 
+sealed trait SpecialCheckpoint {
+  val stringValue: String
+}
+
+object SpecialCheckpoint {
+  case object ShardEnd extends SpecialCheckpoint {
+    val stringValue = "SHARD_END"
+  }
+
+  case object TrimHorizon extends SpecialCheckpoint {
+    val stringValue = "TRIM_HORIZON"
+  }
+
+  case object Latest extends SpecialCheckpoint {
+    val stringValue = "LATEST"
+  }
+
+  case object AtTimestamp extends SpecialCheckpoint {
+    val stringValue = "AT_TIMESTAMP"
+  }
+}
+
 object LeaseRepository {
   final case class Lease(
     key: String,
     owner: Option[String],
     counter: Long,
-    checkpoint: Option[ExtendedSequenceNumber],
+    checkpoint: Option[Either[SpecialCheckpoint, ExtendedSequenceNumber]],
     parentShardIds: Seq[String]
   ) {
     def increaseCounter: Lease = copy(counter = counter + 1)
@@ -32,6 +54,8 @@ object LeaseRepository {
      * Returns whether the table already existed
      */
     def createLeaseTableIfNotExists(tableName: String): ZIO[Clock with Logging, Throwable, Boolean]
+
+    def deleteTable(tableName: String): ZIO[Clock with Logging, Throwable, Unit]
 
     def getLeases(tableName: String): ZStream[Clock, Throwable, Lease]
 

@@ -2,6 +2,8 @@ package nl.vroste.zio.kinesis.client.zionative.fetcher
 
 import nl.vroste.zio.kinesis.client.AdminClient.StreamDescription
 import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
+import nl.vroste.zio.kinesis.client.zionative.Consumer.childShardToShard
+import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
 import nl.vroste.zio.kinesis.client.zionative.{ DiagnosticEvent, FetchMode, Fetcher }
 import nl.vroste.zio.kinesis.client.{ Client, Util }
 import software.amazon.awssdk.services.kinesis.model.{ ConsumerStatus, ResourceInUseException }
@@ -61,7 +63,16 @@ object EnhancedFanOutFetcher {
             // Retry on connection loss, throttling exception, etc.
             // Note that retry has to be at this level, not the outermost ZStream because that reinitializes the start position
             .retry(config.retrySchedule)
-        }.mapConcat(_.records.asScala)
+        }.mapError(Left(_): Either[Throwable, EndOfShard])
+          .flatMap { response =>
+            if (response.hasChildShards)
+              ZStream.succeed(response) ++ ZStream.fail(
+                Right(EndOfShard(response.childShards().asScala.map(childShardToShard).toSeq))
+              )
+            else
+              ZStream.succeed(response)
+          }
+          .mapConcat(_.records.asScala)
       }.provide(env)
     }
 
