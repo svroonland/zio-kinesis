@@ -2,6 +2,7 @@ package nl.vroste.zio.kinesis.client
 import java.io.IOException
 import java.time.Instant
 
+import com.google.protobuf.ByteString
 import io.netty.handler.timeout.ReadTimeoutException
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
@@ -9,6 +10,7 @@ import nl.vroste.zio.kinesis.client.ProducerLive._
 import nl.vroste.zio.kinesis.client.ProducerMetrics.{ emptyAttempts, emptyLatency }
 import nl.vroste.zio.kinesis.client.serde.Serializer
 import nl.vroste.zio.kinesis.client.zionative.protobuf.Messages
+import nl.vroste.zio.kinesis.client.zionative.protobuf.Messages.AggregatedRecord
 import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.services.kinesis.model.{ KinesisException, PutRecordsRequestEntry }
 import org.HdrHistogram.{ Histogram, IntCountsHistogram }
@@ -200,4 +202,20 @@ private[client] object ProducerLive {
     def empty(now: Instant) =
       CurrentMetrics(start = now, published = emptyAttempts, nrFailed = 0, latency = emptyLatency)
   }
+
+  def recordsToAggregatedRecord(entries: Seq[PutRecordsRequestEntry]): Messages.AggregatedRecord =
+    AggregatedRecord
+      .newBuilder()
+      .addAllRecords(entries.zipWithIndex.map((recordToRecord _).tupled).asJavaCollection)
+      .addAllPartitionKeyTable(entries.map(_.partitionKey()).asJavaCollection)
+      .addAllExplicitHashKeyTable(entries.map(_.explicitHashKey()).asJavaCollection)
+      .build()
+
+  def recordToRecord(r: PutRecordsRequestEntry, tableIndex: Int): Messages.Record =
+    Messages.Record
+      .newBuilder()
+      .setData(ByteString.copyFrom(r.data().asByteArrayUnsafe()))
+      .setPartitionKeyIndex(tableIndex)
+      .setExplicitHashKeyIndex(tableIndex)
+      .build()
 }
