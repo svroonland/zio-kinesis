@@ -10,7 +10,8 @@ More beta users and feedback are of course welcome.
 - [Features](#features)
 - [Installation](#installation)
 - [Consumer](#consumer)
-  * [Basic usage](#basic-usage)
+  * [Basic usage using `consumeWith`](#basic-usage-using--consumewith-)
+  * [More advanced usage](#more-advanced-usage)
   * [Checkpointing](#checkpointing)
   * [Lease coordination](#lease-coordination)
   * [Resharding](#resharding)
@@ -23,7 +24,7 @@ More beta users and feedback are of course welcome.
 - [Producer](#producer)
   * [Metrics](#metrics)
 - [DynamicConsumer](#dynamicconsumer)
-  * [Basic usage using `consumeWith`](#basic-usage-using--consumewith-)
+  * [Basic usage using `consumeWith`](#basic-usage-using--consumewith--1)
   * [Advanced usage](#advanced-usage)
 - [Client and AdminClient](#client-and-adminclient)
 - [Running tests and more usage examples](#running-tests-and-more-usage-examples)
@@ -79,9 +80,39 @@ Features:
 * Optimized startup + shutdown sequence
 
 
-### Basic usage
+### Basic usage using `consumeWith`
+For a lot of use cases where you just want to do something with all messages on a Kinesis stream, `zio-kinesis` provides the 
+convenience method `Consumer.consumeWith`. This method lets you execute a ZIO effect for each message, while retaining all features like parallel shard processing, checkpointing and resharding. 
 
-The following example shows a simple ZIO App that consumes from a stream, prints a record and periodically checkpoints.
+```scala
+import nl.vroste.zio.kinesis.client.serde.Serde
+import nl.vroste.zio.kinesis.client.zionative._
+import zio._
+import zio.console.putStrLn
+import zio.duration._
+import zio.logging.slf4j.Slf4jLogger
+
+object ConsumeWithExample extends zio.App {
+  private val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+
+  override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
+    Consumer
+      .consumeWith(
+        streamName = "my-stream",
+        applicationName = "my-application",
+        deserializer = Serde.asciiString,
+        workerIdentifier = "worker1",
+        checkpointBatchSize = 1000L,
+        checkpointDuration = 5.minutes
+      )(record => putStrLn(s"Processing record $record"))
+      .provideCustomLayer(loggingLayer ++ Consumer.defaultEnvironment ++ loggingLayer)
+      .exitCode
+}
+``` 
+
+### More advanced usage
+
+If you want more fine-grained control over the processing stream, error handling or checkpointing, use `Consumer.shardedStream` to get a stream of shard-streams, like in the following example:
 
 ```scala
 import nl.vroste.zio.kinesis.client._

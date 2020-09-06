@@ -171,21 +171,20 @@ object DynamicConsumer {
              )
              .flatMapPar(Int.MaxValue) {
                case (_, shardStream, checkpointer) =>
-                 ZStream.fromEffect(Ref.make(false) zip ZIO.environment[RC]).flatMap {
-                   case (refSkip, env) =>
-                     shardStream
-                       .tap(record =>
-                         processWithSkipOnError(refSkip)(
-                           recordProcessor(record).provide(env) *> checkpointer.stage(record)
+                 ZStream.fromEffect(Ref.make(false)).flatMap { refSkip =>
+                   shardStream
+                     .tap(record =>
+                       processWithSkipOnError(refSkip)(
+                         recordProcessor(record) *> checkpointer.stage(record)
+                       )
+                     )
+                     .via(
+                       checkpointer
+                         .checkpointBatched[Blocking with Logging with RC](
+                           nr = checkpointBatchSize,
+                           interval = checkpointDuration
                          )
-                       )
-                       .via(
-                         checkpointer
-                           .checkpointBatched[Blocking with Logging](
-                             nr = checkpointBatchSize,
-                             interval = checkpointDuration
-                           )
-                       )
+                     )
                  }
              }
              .runDrain

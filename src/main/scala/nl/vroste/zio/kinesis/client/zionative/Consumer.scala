@@ -4,6 +4,7 @@ import java.time.Instant
 
 import nl.vroste.zio.kinesis.client.AdminClient.StreamDescription
 import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
+import nl.vroste.zio.kinesis.client.Util.processWithSkipOnError
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.{ EnhancedFanOut, Polling }
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
@@ -11,7 +12,7 @@ import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative.fetcher.{ EnhancedFanOutFetcher, PollingFetcher }
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.{ DefaultLeaseCoordinator, LeaseCoordinationSettings }
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
-import nl.vroste.zio.kinesis.client.{ sdkClientsLayer, AdminClient, Client, HttpClient, Record, Util }
+import nl.vroste.zio.kinesis.client._
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.kinesis.model.{
   ChildShard,
@@ -23,7 +24,6 @@ import software.amazon.awssdk.services.kinesis.model.{
   Record => KinesisRecord
 }
 import zio._
-import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.duration._
 import zio.logging.{ log, Logging }
@@ -161,7 +161,7 @@ object Consumer {
     emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit,
     shardAssignmentStrategy: ShardAssignmentStrategy = ShardAssignmentStrategy.balanced()
   ): ZStream[
-    Blocking with Clock with Random with Client with AdminClient with LeaseRepository with Logging with R,
+    Clock with Random with Client with AdminClient with LeaseRepository with Logging with R,
     Throwable,
     (
       String,
@@ -258,7 +258,7 @@ object Consumer {
             case (shardId, leaseLost) =>
               for {
                 checkpointer    <- leaseCoordinator.makeCheckpointer(shardId)
-                env             <- ZIO.environment[Blocking with Logging with Clock with Random with R]
+                env             <- ZIO.environment[Logging with Clock with Random with R]
                 checkpointOpt   <- leaseCoordinator.getCheckpointForShard(shardId)
                 startingPosition = checkpointOpt
                                      .map(checkpointToShardIteratorType(_, initialPosition))
@@ -308,6 +308,65 @@ object Consumer {
       }
     }
   }
+
+  /**
+   * Apply an effectful function to each record in a stream
+   *
+   * This is the easiest way to consume Kinesis records from a stream, while benefiting from all of
+   * Consumer's features like parallel streaming, checkpointing and resharding.
+   *
+   * Simply provide an effectful function that is applied to each record and the rest is taken care of.
+   * @param checkpointBatchSize Maximum number of records before checkpointing
+   * @param checkpointDuration Maximum interval before checkpointing
+   * @param recordProcessor A function for processing a `Record[T]`
+   * @tparam R ZIO environment type required by the `deserializer` and the `recordProcessor`
+   * @tparam T Type of record values
+   * @return A ZIO that completes with Unit when record processing is stopped via requestShutdown or fails when the consumer stream fails
+   */
+  def consumeWith[R, RC, T](
+    streamName: String,
+    applicationName: String,
+    deserializer: Deserializer[R, T],
+    workerIdentifier: String = "worker1",
+    fetchMode: FetchMode = FetchMode.Polling(),
+    leaseCoordinationSettings: LeaseCoordinationSettings = LeaseCoordinationSettings(),
+    initialPosition: InitialPosition = InitialPosition.TrimHorizon,
+    emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit,
+    shardAssignmentStrategy: ShardAssignmentStrategy = ShardAssignmentStrategy.balanced(),
+    checkpointBatchSize: Long = 200,
+    checkpointDuration: Duration = 5.second
+  )(
+    recordProcessor: Record[T] => RIO[RC, Unit]
+  ): ZIO[
+    R with RC with Clock with Random with Client with AdminClient with LeaseRepository with Logging,
+    Throwable,
+    Unit
+  ] =
+    for {
+      _ <- shardedStream(
+             streamName,
+             applicationName,
+             deserializer,
+             workerIdentifier,
+             fetchMode,
+             leaseCoordinationSettings,
+             initialPosition,
+             emitDiagnostic,
+             shardAssignmentStrategy
+           ).flatMapPar(Int.MaxValue) {
+               case (_, shardStream, checkpointer) =>
+                 ZStream.fromEffect(Ref.make(false)).flatMap { refSkip =>
+                   shardStream
+                     .tap(record =>
+                       processWithSkipOnError(refSkip)(
+                         recordProcessor(record) *> checkpointer.stage(record)
+                       )
+                     )
+                     .via(checkpointer.checkpointBatched[RC](nr = checkpointBatchSize, interval = checkpointDuration))
+                 }
+             }
+             .runDrain
+    } yield ()
 
   private[zionative] val isThrottlingException: PartialFunction[Throwable, Unit] = {
     case _: KmsThrottlingException                 => ()

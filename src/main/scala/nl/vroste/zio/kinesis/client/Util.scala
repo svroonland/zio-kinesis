@@ -146,7 +146,7 @@ object Util {
    * @param effect
    * @return the result of the effect or the result of the NOP skip - both are Task[Unit]
    */
-  def processWithSkipOnError(refSkip: Ref[Boolean])(effect: Task[Unit]): ZIO[Any, Throwable, Unit] =
+  def processWithSkipOnError[R](refSkip: Ref[Boolean])(effect: ZIO[R, Throwable, Unit]): ZIO[R, Throwable, Unit] =
     for {
       skip <- refSkip.get
       _    <- ZIO
