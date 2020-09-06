@@ -2,6 +2,8 @@ package nl.vroste.zio.kinesis.client.zionative.fetcher
 import io.github.vigoo.zioaws.kinesis
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model._
+import nl.vroste.zio.kinesis.client.zionative.Consumer.childShardToShard
+import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
 import nl.vroste.zio.kinesis.client.zionative.{ Consumer, DiagnosticEvent, FetchMode, Fetcher }
 import nl.vroste.zio.kinesis.client.Util
 import zio._
@@ -33,18 +35,22 @@ object PollingFetcher {
   ): ZManaged[Clock with Kinesis with Logging, Throwable, Fetcher] =
     for {
       env              <- ZIO.environment[Kinesis with Clock with Logging].toManaged_
-      getShardIterator <- throttledFunction(getShardIteratorRateLimit, 1.second)(kinesis.getShardIterator _)
+      getShardIterator <- throttledFunction(getShardIteratorRateLimit, 1.second)(kinesis.getShardIterator)
     } yield Fetcher { (shardId, startingPosition: StartingPosition) =>
       ZStream.unwrapManaged {
         for {
+          _                    <- log
+                 .info(s"Creating PollingFetcher for shard ${shardId} with starting position ${startingPosition}")
+                 .toManaged_
           initialShardIterator <-
             getShardIterator(
               GetShardIteratorRequest(streamName, shardId, startingPosition.`type`, startingPosition.sequenceNumber)
             ).map(_.shardIteratorValue.get)
               .mapError(_.toThrowable)
               .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
+              .mapError(Left(_): Either[Throwable, EndOfShard])
               .toManaged_
-          getRecordsThrottled  <- throttledFunction(getRecordsRateLimit, 1.second)(kinesis.getRecords _)
+          getRecordsThrottled  <- throttledFunction(getRecordsRateLimit, 1.second)(kinesis.getRecords)
           shardIterator        <- Ref.make[Option[String]](Some(initialShardIterator)).toManaged_
 
           // Failure with None indicates that there's no next shard iterator and the shard has ended
@@ -85,17 +91,30 @@ object PollingFetcher {
           shardStream = ZStream
                           .repeatEffectWith(doPoll, config.pollSchedule)
                           .catchAll {
-                            case None    =>
+                            case None    => // TODO do we still need the None in combination with nextShardIterator?
                               ZStream.empty
                             case Some(e) =>
                               ZStream.fromEffect(
                                 log.warn(s"Error in PollingFetcher for shard ${shardId}: ${e}")
                               ) *> ZStream.fail(e)
                           }
-                          .takeUntil(_.nextShardIterator == null)
-                          .buffer(config.bufferNrBatches)
-                          .mapConcatChunk(response => Chunk.fromIterable(response.recordsValue.map(_.editable)))
                           .retry(config.throttlingBackoff)
+                          .buffer(config.bufferNrBatches)
+                          .mapError(Left(_): Either[Throwable, EndOfShard])
+                          .flatMap { response =>
+                            if (response.childShardsValue.isDefined && response.nextShardIteratorValue.isEmpty)
+                              ZStream.succeed(response) ++ (ZStream.fromEffect(
+                                log.debug(s"PollingFetcher found end of shard for ${shardId}")
+                              ) *>
+                                ZStream.fail(
+                                  Right(
+                                    EndOfShard(response.childShardsValue.toList.flatten.map(childShardToShard))
+                                  )
+                                ))
+                            else
+                              ZStream.succeed(response)
+                          }
+                          .mapConcatChunk(response => Chunk.fromIterable(response.recordsValue.map(_.editable)))
         } yield shardStream
       }.ensuring(log.debug(s"PollingFetcher for shard ${shardId} closed"))
         .provide(env)

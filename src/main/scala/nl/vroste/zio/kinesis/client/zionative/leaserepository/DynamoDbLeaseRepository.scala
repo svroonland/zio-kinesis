@@ -1,7 +1,6 @@
 package nl.vroste.zio.kinesis.client.zionative.leaserepository
 
 import java.util.concurrent.TimeoutException
-import scala.collection.compat._
 
 import DynamoDbUtil._
 import io.github.vigoo.zioaws.dynamodb.model._
@@ -12,7 +11,7 @@ import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.{
   LeaseObsolete,
   UnableToClaimLease
 }
-import nl.vroste.zio.kinesis.client.zionative.{ ExtendedSequenceNumber, LeaseRepository }
+import nl.vroste.zio.kinesis.client.zionative.{ ExtendedSequenceNumber, LeaseRepository, SpecialCheckpoint }
 import software.amazon.awssdk.services.dynamodb.model.{
   ConditionalCheckFailedException,
   ResourceInUseException,
@@ -25,6 +24,7 @@ import zio.logging._
 import zio.stream.ZStream
 
 import scala.util.{ Failure, Try }
+import scala.collection.compat._
 
 // TODO this thing should have a global throttling / backoff
 // via a Tap that tries to find the optimal maximal throughput
@@ -38,7 +38,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb.Service, timeout: Duratio
     val keySchema            = List(keySchemaElement("leaseKey", KeyType.HASH))
     val attributeDefinitions = List(attributeDefinition("leaseKey", ScalarAttributeType.S))
 
-    val request = CreateTableRequest(
+    val request = model.CreateTableRequest(
       tableName = tableName,
       billingMode = Some(BillingMode.PAY_PER_REQUEST),
       keySchema = keySchema,
@@ -178,10 +178,11 @@ private class DynamoDbLeaseRepository(client: DynamoDb.Service, timeout: Duratio
           "leaseOwner"                   -> lease.owner.map(putAttributeValueUpdate(_)).getOrElse(deleteAttributeValueUpdate),
           "leaseCounter"                 -> putAttributeValueUpdate(lease.counter),
           "checkpoint"                   -> lease.checkpoint
-            .map(_.sequenceNumber)
+            .map(_.fold(_.stringValue, _.sequenceNumber))
             .map(putAttributeValueUpdate)
             .getOrElse(putAttributeValueUpdate(null)),
           "checkpointSubSequenceNumber"  -> lease.checkpoint
+            .flatMap(_.toOption)
             .map(_.subSequenceNumber)
             .map(putAttributeValueUpdate)
             .getOrElse(putAttributeValueUpdate(0L)),
@@ -245,6 +246,17 @@ private class DynamoDbLeaseRepository(client: DynamoDb.Service, timeout: Duratio
       }
   }
 
+  override def deleteTable(
+    tableName: String
+  ): ZIO[Clock with Logging, Throwable, Unit] = {
+    val request = DeleteTableRequest(tableName)
+    client
+      .deleteTable(request)
+      .mapError(_.toThrowable)
+      .timeoutFail(new TimeoutException(s"Timeout creating lease"))(timeout)
+      .unit
+  }
+
   private def toLease(item: DynamoDbItem): Try[Lease] =
     Try {
       Lease(
@@ -256,10 +268,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb.Service, timeout: Duratio
           .filterNot(_.nul.isDefined)
           .flatMap(_.s)
           .map(
-            ExtendedSequenceNumber(
-              _,
-              subSequenceNumber = item("checkpointSubSequenceNumber").n.get.toLong
-            )
+            toSequenceNumberOrSpecialCheckpoint(_, item("checkpointSubSequenceNumber").n.get.toLong)
           ),
         parentShardIds = item.get("parentShardIds").map(_.ss.toList.flatten).getOrElse(List.empty)
       )
@@ -269,13 +278,25 @@ private class DynamoDbLeaseRepository(client: DynamoDb.Service, timeout: Duratio
         Failure(e)
     }
 
+  private def toSequenceNumberOrSpecialCheckpoint(
+    sequenceNumber: String,
+    subsequenceNumber: Long
+  ): Either[SpecialCheckpoint, ExtendedSequenceNumber] =
+    sequenceNumber match {
+      case s if s == SpecialCheckpoint.ShardEnd.stringValue    => Left(SpecialCheckpoint.ShardEnd)
+      case s if s == SpecialCheckpoint.TrimHorizon.stringValue => Left(SpecialCheckpoint.TrimHorizon)
+      case s if s == SpecialCheckpoint.Latest.stringValue      => Left(SpecialCheckpoint.Latest)
+      case s if s == SpecialCheckpoint.AtTimestamp.stringValue => Left(SpecialCheckpoint.AtTimestamp)
+      case s                                                   => Right(ExtendedSequenceNumber(s, subsequenceNumber))
+    }
+
   private def toDynamoItem(lease: Lease): DynamoDbItem = {
     import DynamoDbUtil.ImplicitConversions.toAttributeValue
     DynamoDbItem(
       "leaseKey"                    -> lease.key,
       "leaseCounter"                -> lease.counter,
-      "checkpoint"                  -> lease.checkpoint.map(_.sequenceNumber).getOrElse(null),
-      "checkpointSubSequenceNumber" -> lease.checkpoint.map(_.subSequenceNumber).getOrElse(null)
+      "checkpoint"                  -> lease.checkpoint.map(_.fold(_.stringValue, _.sequenceNumber)).getOrElse(null),
+      "checkpointSubSequenceNumber" -> lease.checkpoint.map(_.fold(_ => 0L, _.subSequenceNumber)).getOrElse(null)
     ) ++ (if (lease.parentShardIds.nonEmpty) DynamoDbItem("parentShardIds" -> lease.parentShardIds)
           else DynamoDbItem.empty) ++
       lease.owner.fold(DynamoDbItem.empty)(owner => DynamoDbItem("leaseOwner" -> owner))

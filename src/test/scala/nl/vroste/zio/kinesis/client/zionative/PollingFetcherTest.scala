@@ -13,8 +13,9 @@ import io.github.vigoo.zioaws.kinesis.model.{
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.Polling
 import nl.vroste.zio.kinesis.client.zionative.fetcher.PollingFetcher
-import software.amazon.awssdk.services.kinesis.model.ProvisionedThroughputExceededException
 import software.amazon.awssdk.services.kinesis.{ model => aws }
+import aws.ChildShard
+import software.amazon.awssdk.services.kinesis.model.ProvisionedThroughputExceededException
 import zio._
 import zio.logging.Logging
 import zio.logging.slf4j.Slf4jLogger
@@ -22,6 +23,7 @@ import zio.test.Assertion._
 import zio.test._
 import zio.test.environment.TestClock
 import zio.duration._
+import zio.stream.ZStream
 
 import scala.jdk.CollectionConverters._
 
@@ -179,6 +181,10 @@ object PollingFetcherTest extends DefaultRunnableSpec {
                    fetcher
                      .shardRecordStream("shard1", StartingPosition(ShardIteratorType.TRIM_HORIZON))
                      .mapChunks(Chunk.single)
+                     .catchAll {
+                       case Left(e)  => ZStream.fail(e)
+                       case Right(_) => ZStream.empty
+                     }
                      .runCollect
                  }
         } yield assertCompletes)
@@ -275,8 +281,11 @@ object PollingFetcherTest extends DefaultRunnableSpec {
             val offset             = shardIterator.toInt
             val lastRecordOffset   = offset + limit
             val recordsInResponse  = records.slice(offset, offset + limit)
+            val shouldEnd          = lastRecordOffset >= records.size && endAfterRecords
             val nextShardIterator  =
-              if (lastRecordOffset >= records.size && endAfterRecords) null else lastRecordOffset.toString
+              if (shouldEnd) null else lastRecordOffset.toString
+            val childShards        =
+              if (shouldEnd) Seq(ChildShard.builder().shardId("shard-002").parentShards("001").build) else null
             val millisBehindLatest = if (lastRecordOffset >= records.size) 0 else records.size - lastRecordOffset
 
             //          println(s"GetRecords from ${shardIterator} (max ${limit}. Next iterator: ${nextShardIterator}")
@@ -285,6 +294,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
               .builder()
               .millisBehindLatest(millisBehindLatest)
               .nextShardIterator(nextShardIterator)
+              .childShards(childShards.asJava)
               .records(recordsInResponse.map(_.buildAwsValue()).asJavaCollection)
               .build()
 

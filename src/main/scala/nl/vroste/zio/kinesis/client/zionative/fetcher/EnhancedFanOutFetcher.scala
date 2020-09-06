@@ -4,6 +4,8 @@ import io.github.vigoo.zioaws.kinesis
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model._
 import nl.vroste.zio.kinesis.client.Util
+import nl.vroste.zio.kinesis.client.zionative.Consumer.childShardToShard
+import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
 import nl.vroste.zio.kinesis.client.zionative.{ DiagnosticEvent, FetchMode, Fetcher }
 import software.amazon.awssdk.services.kinesis.model.ResourceInUseException
 import zio._
@@ -19,14 +21,14 @@ object EnhancedFanOutFetcher {
   import Util.ZStreamExtensions
 
   def make(
-    streamDescription: StreamDescription,
+    streamDescription: StreamDescription.ReadOnly,
     workerId: String,
     config: FetchMode.EnhancedFanOut,
     emitDiagnostic: DiagnosticEvent => UIO[Unit]
   ): ZManaged[Clock with Kinesis with Logging, Throwable, Fetcher] =
     for {
       env                <- ZIO.environment[Logging with Clock with Kinesis].toManaged_
-      consumerARN        <- registerConsumerIfNotExists(streamDescription.streamARN, workerId).toManaged_
+      consumerARN        <- registerConsumerIfNotExists(streamDescription.streamARNValue, workerId).toManaged_
       subscribeThrottled <- Util.throttledFunctionN(config.maxSubscriptionsPerSecond, 1.second) {
                               (pos: StartingPosition, shardId: String) =>
                                 ZIO.succeed(
@@ -68,7 +70,16 @@ object EnhancedFanOutFetcher {
             // Retry on connection loss, throttling exception, etc.
             // Note that retry has to be at this level, not the outermost ZStream because that reinitializes the start position
             .retry(config.retrySchedule)
-        }.mapConcat(_.recordsValue.map(_.editable))
+        }.mapError(Left(_): Either[Throwable, EndOfShard])
+          .flatMap { response =>
+            if (response.childShardsValue.isDefined)
+              ZStream.succeed(response) ++ ZStream.fail(
+                Right(EndOfShard(response.childShardsValue.toList.flatten.map(childShardToShard)))
+              )
+            else
+              ZStream.succeed(response)
+          }
+          .mapConcat(_.recordsValue.map(_.editable))
       }.provide(env)
     }
 

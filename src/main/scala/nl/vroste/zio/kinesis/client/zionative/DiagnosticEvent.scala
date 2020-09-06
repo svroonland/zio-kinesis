@@ -21,6 +21,15 @@ object DiagnosticEvent {
   final case class PollComplete(shardId: String, nrRecords: Int, behindLatest: Duration, duration: Duration)
       extends DiagnosticEvent
 
+  sealed trait ShardEvent extends DiagnosticEvent
+
+  /**
+   * A shard has ended and the last record has been checkpointed
+   */
+  final case class ShardEnded(shard: String) extends ShardEvent
+
+  final case class NewShardDetected(shard: String) extends ShardEvent
+
   /**
    * Enhanced fanout produced a batch of records
    *
@@ -39,7 +48,8 @@ object DiagnosticEvent {
     * @param shardId Shard ID
    * @param checkpoint The last checkpoint made for this shard
    */
-  final case class LeaseAcquired(shardId: String, checkpoint: Option[ExtendedSequenceNumber]) extends LeaseEvent
+  final case class LeaseAcquired(shardId: String, checkpoint: Option[Either[SpecialCheckpoint, ExtendedSequenceNumber]])
+      extends LeaseEvent
 
   /**
    * The worker discovered that it had lost the lease for the given shard
@@ -71,7 +81,8 @@ object DiagnosticEvent {
     * @param shardId Shard ID
    * @param checkpoint Checkpoint
    */
-  final case class Checkpoint(shardId: String, checkpoint: ExtendedSequenceNumber) extends LeaseEvent
+  final case class Checkpoint(shardId: String, checkpoint: Either[SpecialCheckpoint, ExtendedSequenceNumber])
+      extends LeaseEvent
 
   sealed trait WorkerEvent extends DiagnosticEvent
 

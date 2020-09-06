@@ -1,15 +1,17 @@
 package nl.vroste.zio.kinesis.client
 import akka.actor.ActorSystem
-import akka.http.scaladsl.settings.{ ClientConnectionSettings, ConnectionPoolSettings }
+import akka.http.scaladsl.settings.ConnectionPoolSettings
 import com.github.matsluni.akkahttpspi.AkkaHttpClient
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.core.config
 import io.github.vigoo.zioaws.core.httpclient.HttpClient
 import io.github.vigoo.zioaws.dynamodb.DynamoDb
 import io.github.vigoo.zioaws.kinesis.Kinesis
-import io.github.vigoo.zioaws.{ akkahttp, cloudwatch, dynamodb, kinesis }
+import io.github.vigoo.zioaws.kinesis.model.{ ScalingType, UpdateShardCountRequest }
+import io.github.vigoo.zioaws.{ cloudwatch, dynamodb, kinesis }
 import nl.vroste.zio.kinesis.client.TestUtil.retryOnResourceNotFound
 import nl.vroste.zio.kinesis.client.serde.Serde
+import nl.vroste.zio.kinesis.client.zionative.Consumer.InitialPosition
 import nl.vroste.zio.kinesis.client.zionative._
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
 import nl.vroste.zio.kinesis.client.zionative.metrics.{ CloudWatchMetricsPublisher, CloudWatchMetricsPublisherConfig }
@@ -27,15 +29,17 @@ import zio.stream.{ ZStream, ZTransducer }
  * Example app that shows the ZIO-native and KCL workers running in parallel
  */
 object ExampleApp extends zio.App {
-  val streamName                      = "zio-test-stream-13" // + java.util.UUID.randomUUID().toString
+  val streamName                      = "zio-test-stream-25" // + java.util.UUID.randomUUID().toString
   val nrRecords                       = 2000000
-  val produceRate                     = 400                  // Nr records to produce per second
-  val nrShards                        = 2
+  val produceRate                     = 100                  // Nr records to produce per second
+  val nrShards                        = 10
+  val reshardFactor                   = 0.5
+  val reshardAfter: Option[Duration]  = None                 // Some(10.seconds)
   val enhancedFanout                  = false
-  val nrNativeWorkers                 = 1
+  val nrNativeWorkers                 = 2
   val nrKclWorkers                    = 0
-  val applicationName                 = "testApp-30"         // + java.util.UUID.randomUUID().toString(),
-  val runtime                         = 3.minute
+  val applicationName                 = "testApp-14"         // + java.util.UUID.randomUUID().toString(),
+  val runtime                         = 2.minute
   val maxRandomWorkerStartDelayMillis = 1 + 0 * 60 * 1000
   val recordProcessingTime: Duration  = 1.millisecond
 
@@ -47,7 +51,8 @@ object ExampleApp extends zio.App {
       ZStream.unwrapManaged {
         for {
           metrics <- CloudWatchMetricsPublisher.make(applicationName, id)
-          delay   <- zio.random.nextIntBetween(0, maxRandomWorkerStartDelayMillis).map(_.millis).toManaged_
+//          delay   <- zio.random.nextIntBetween(0, maxRandomWorkerStartDelayMillis).map(_.millis).toManaged_
+          delay    = 1.seconds
           _       <- log.info(s"Waiting ${delay.toMillis} ms to start worker ${id}").toManaged_
         } yield ZStream.fromEffect(ZIO.sleep(delay)) *> Consumer
           .shardedStream(
@@ -56,6 +61,7 @@ object ExampleApp extends zio.App {
             deserializer = Serde.asciiString,
             workerIdentifier = id,
             fetchMode = if (enhancedFanout) FetchMode.EnhancedFanOut() else FetchMode.Polling(batchSize = 1000),
+            initialPosition = InitialPosition.Latest,
             emitDiagnostic = ev =>
               (ev match {
                 case ev: DiagnosticEvent.PollComplete =>
@@ -78,8 +84,8 @@ object ExampleApp extends zio.App {
                         .when(recordProcessingTime >= 1.millis)).when(false)
                     )(r)
                 )
-                .aggregateAsyncWithin(ZTransducer.collectAllN(100), Schedule.fixed(5.second))
-                .tap(rs => log.info(s"${id} processed ${rs.size} records on shard ${shardID}"))
+                .aggregateAsyncWithin(ZTransducer.collectAllN(5000), Schedule.fixed(10.second))
+                .tap(rs => log.info(s"${id} processed ${rs.size} records on shard ${shardID}").when(false))
                 .mapConcat(_.lastOption.toList)
                 .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
                 .tap(_ => checkpointer.checkpoint())
@@ -132,6 +138,7 @@ object ExampleApp extends zio.App {
 
     for {
       _          <- TestUtil.createStreamUnmanaged(streamName, nrShards)
+      _          <- TestUtil.getShards(streamName)
       producer   <- produceRecords(streamName, nrRecords).tapError(e => log.error(s"Producer error: ${e}")).fork
 //      _          <- producer.join
       workers    <- ZIO.foreach(1 to nrNativeWorkers)(id => worker(s"worker${id}").runDrain.fork)
@@ -146,6 +153,20 @@ object ExampleApp extends zio.App {
           } yield ()).fork
         )
       // Sleep, but abort early if one of our children dies
+      _          <- reshardAfter
+             .map(delay =>
+               (log.info("Resharding") *>
+                 kinesis.updateShardCount(
+                   UpdateShardCountRequest(
+                     streamName,
+                     Math.ceil(nrShards * reshardFactor).toInt,
+                     ScalingType.UNIFORM_SCALING
+                   )
+                 ))
+                 .delay(delay)
+             )
+             .getOrElse(ZIO.unit)
+             .fork
       _          <- ZIO.sleep(runtime) raceFirst ZIO.foreachPar_(kclWorkers ++ workers)(_.join)
       _           = println("Interrupting app")
       _          <- producer.interruptFork

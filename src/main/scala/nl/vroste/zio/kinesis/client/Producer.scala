@@ -1,20 +1,13 @@
 package nl.vroste.zio.kinesis.client
-import java.io.IOException
-
-import io.github.vigoo.zioaws.kinesis
 import io.github.vigoo.zioaws.kinesis.Kinesis
-import io.github.vigoo.zioaws.kinesis.model.{ PutRecordsRequest, PutRecordsRequestEntry }
-import io.netty.handler.timeout.ReadTimeoutException
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
+import nl.vroste.zio.kinesis.client.ProducerLive.{ CurrentMetrics, ProduceRequest }
 import nl.vroste.zio.kinesis.client.serde.Serializer
-import software.amazon.awssdk.services.kinesis.model.KinesisException
 import zio._
-import zio.clock.Clock
+import zio.clock.{ instant, Clock }
 import zio.duration.{ Duration, _ }
 import zio.logging._
-import zio.stream.{ ZSink, ZStream, ZTransducer }
-
-import scala.util.control.NonFatal
+import zio.stream.ZSink
 
 /**
  * Producer for Kinesis records
@@ -27,7 +20,7 @@ import scala.util.control.NonFatal
  * - Retry individual records
  * - Rate limiting to respect shard capacity (TODO)
  *
- * Records are batched for up to `maxBufferDuration` time, or 500 records or 5MB of payload size,
+ * Records are batched for up to 500 records or 5MB of payload size,
  * whichever comes first. The latter two are Kinesis API limits.
  *
  * Individual records which cannot be produced due to Kinesis shard rate limits are retried.
@@ -71,127 +64,43 @@ trait Producer[T] {
 }
 
 final case class ProducerSettings(
-  bufferSize: Int = 8192, // Prefer powers of 2
-  maxBufferDuration: Duration = 500.millis,
+  bufferSize: Int = 8192,
   maxParallelRequests: Int = 24,
   backoffRequests: Schedule[Clock, Throwable, Any] = Schedule.exponential(500.millis) && Schedule.recurs(5),
-  failedDelay: Duration = 100.millis
+  failedDelay: Duration = 100.millis,
+  metricsInterval: Duration = 30.seconds
 )
 
-// TODO add logging
 object Producer {
-  def make[R, T](
+  final case class ProduceResponse(shardId: String, sequenceNumber: String)
+
+  def make[R, R1, T](
     streamName: String,
     serializer: Serializer[R, T],
-    settings: ProducerSettings = ProducerSettings()
-  ): ZManaged[R with Clock with Kinesis with Logging, Throwable, Producer[T]] =
+    settings: ProducerSettings = ProducerSettings(),
+    metricsCollector: ProducerMetrics => ZIO[R1, Nothing, Unit] = (_: ProducerMetrics) => ZIO.unit
+  ): ZManaged[R with R1 with Clock with Kinesis with Logging, Throwable, Producer[T]] =
     for {
-      env   <- ZIO.environment[R with Clock].toManaged_
-      queue <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
+      client         <- ZManaged.service[Kinesis.Service]
+      env            <- ZIO.environment[R with Clock].toManaged_
+      queue          <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
+      now            <- instant.toManaged_
+      currentMetrics <- Ref.make(CurrentMetrics.empty(now)).toManaged_
 
       failedQueue <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
 
-      // Failed records get precedence)
-      _ <- (ZStream.fromQueue(failedQueue) merge ZStream.fromQueue(queue))
-           // Buffer records up to maxBufferDuration or up to the Kinesis PutRecords request limit
-             .aggregateAsyncWithin(
-               ZTransducer.fold(PutRecordsBatch.empty)(_.isWithinLimits)(_.add(_)),
-               Schedule.duration(settings.maxBufferDuration)
-             )
-             // Several putRecords requests in parallel
-             .mapMParUnordered(settings.maxParallelRequests) { batch: PutRecordsBatch =>
-               (for {
-                 response              <- kinesis
-                               .putRecords(PutRecordsRequest(batch.entriesInOrder.map(_.r), streamName))
-                               .mapError(_.toThrowable)
-                               .tapError(e => log.warn(s"Error producing records, will retry if recoverable: $e"))
-                               .retry(scheduleCatchRecoverable && settings.backoffRequests)
-
-                 maybeSucceeded         = response.recordsValue
-                                    .zip(batch.entriesInOrder)
-                 (newFailed, succeeded) = if (response.failedRecordCountValue.getOrElse(0) > 0)
-                                            maybeSucceeded.partition {
-                                              case (result, _) =>
-                                                result.errorCodeValue.exists(recoverableErrorCodes.contains)
-                                            }
-                                          else
-                                            (Seq.empty, maybeSucceeded)
-
-                 _                     <- log.info(s"Failed to produce ${newFailed.size} records").when(newFailed.nonEmpty)
-                 // TODO backoff for shard limit stuff
-                 _                     <- failedQueue
-                        .offerAll(newFailed.map(_._2))
-                        .delay(settings.failedDelay)
-                        .fork
-                        .when(newFailed.nonEmpty) // TODO should be per shard
-                 _                     <- ZIO.foreach_(succeeded) {
-                        case (response, request) =>
-                          request.done.succeed(
-                            ProduceResponse(response.shardIdValue.get, response.sequenceNumberValue.get)
-                          )
-                      }
-               } yield ()).catchAll { case NonFatal(e) => ZIO.foreach_(batch.entries.map(_.done))(_.fail(e)) }
-             }
-             .runDrain
-             .toManaged_
-             .fork
-    } yield new Producer[T] {
-      override def produce(r: ProducerRecord[T]): Task[ProduceResponse] =
-        (for {
-          request  <- makeProduceRequest(r)
-          _        <- queue.offer(request)
-          response <- request.done.await
-        } yield response).provide(env)
-
-      override def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[Seq[ProduceResponse]] =
-        (for {
-          requests <- ZIO.foreach(chunk)(makeProduceRequest)
-          _        <- queue.offerAll(requests)
-          results  <- ZIO.foreach(requests)(_.done.await)
-        } yield results)
-          .provide(env)
-
-      private def makeProduceRequest(r: ProducerRecord[T]) =
-        for {
-          done <- Promise.make[Throwable, ProduceResponse]
-          data <- serializer.serialize(r.data)
-          entry = PutRecordsRequestEntry(Chunk.fromByteBuffer(data), partitionKey = r.partitionKey)
-        } yield ProduceRequest(entry, done)
-    }
-
-  val maxRecordsPerRequest     = 499             // This is a Kinesis API limitation // TODO because of fold issue, reduced by 1
-  val maxPayloadSizePerRequest = 5 * 1024 * 1024 // 5 MB
-
-  val recoverableErrorCodes = Set("ProvisionedThroughputExceededException", "InternalFailure", "ServiceUnavailable");
-
-  final case class ProduceResponse(shardId: String, sequenceNumber: String)
-
-  private final case class ProduceRequest(r: PutRecordsRequestEntry, done: Promise[Throwable, ProduceResponse])
-
-  private final case class PutRecordsBatch(entries: List[ProduceRequest], nrRecords: Int, payloadSize: Long) {
-    def add(entry: ProduceRequest): PutRecordsBatch =
-      copy(
-        entries = entry +: entries,
-        nrRecords = nrRecords + 1,
-        payloadSize = payloadSize + entry.r.partitionKey.length + entry.r.data.length
-      )
-
-    lazy val entriesInOrder: List[ProduceRequest] = entries.reverse
-
-    def isWithinLimits =
-      nrRecords <= maxRecordsPerRequest &&
-        payloadSize < maxPayloadSizePerRequest
-  }
-
-  private object PutRecordsBatch {
-    val empty = PutRecordsBatch(List.empty, 0, 0)
-  }
-
-  private final def scheduleCatchRecoverable: Schedule[Any, Throwable, Throwable] =
-    Schedule.recurWhile {
-      case e: KinesisException if e.statusCode() / 100 != 4 => true
-      case _: ReadTimeoutException                          => true
-      case _: IOException                                   => true
-      case _                                                => false
-    }
+      producer = new ProducerLive[R, R1, T](
+                   client,
+                   env,
+                   queue,
+                   failedQueue,
+                   serializer,
+                   currentMetrics,
+                   settings,
+                   streamName,
+                   metricsCollector
+                 )
+      _       <- producer.runloop.forkManaged
+      _       <- producer.metricsCollection.forkManaged
+    } yield producer
 }

@@ -5,9 +5,11 @@ import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model.{
   CreateStreamRequest,
   DeleteStreamRequest,
+  ListShardsRequest,
   PutRecordsRequest,
   PutRecordsRequestEntry,
-  PutRecordsResponse
+  PutRecordsResponse,
+  Shard
 }
 import nl.vroste.zio.kinesis.client.serde.Serializer
 import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException }
@@ -17,6 +19,21 @@ import zio.duration._
 import zio.{ Chunk, Schedule, ZIO, ZManaged }
 
 object TestUtil {
+
+  def withStream[R, A](name: String, shards: Int)(
+    f: ZIO[R, Throwable, A]
+  ): ZIO[Kinesis with Clock with Console with R, Throwable, A] =
+    createStream(name, shards)
+      .tapM(_ => getShards(name))
+      .use_(f)
+
+  def getShards(name: String): ZIO[Kinesis with Clock, Throwable, Chunk[Shard.ReadOnly]]                          =
+    kinesis
+      .listShards(ListShardsRequest(streamName = Some(name)))
+      .mapError(_.toThrowable)
+      .runCollect
+      .filterOrElse(_.nonEmpty)(_ => getShards(name).delay(1.second))
+      .catchSome { case _: ResourceInUseException => getShards(name).delay(1.second) }
 
   def createStream(streamName: String, nrShards: Int): ZManaged[Console with Clock with Kinesis, Throwable, Unit] =
     createStreamUnmanaged(streamName, nrShards).toManaged(_ =>
