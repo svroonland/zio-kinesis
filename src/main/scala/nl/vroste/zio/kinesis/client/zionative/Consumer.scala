@@ -162,7 +162,7 @@ object Consumer {
     emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit,
     shardAssignmentStrategy: ShardAssignmentStrategy = ShardAssignmentStrategy.balanced()
   ): ZStream[
-    Blocking with Clock with Random with Client with AdminClient with LeaseRepository with Logging with R,
+    Clock with Random with Client with AdminClient with LeaseRepository with Logging with R,
     Throwable,
     (
       String,
@@ -339,7 +339,7 @@ object Consumer {
   )(
     recordProcessor: Record[T] => RIO[RC, Unit]
   ): ZIO[
-    R with RC with Blocking with Clock with Random with Client with AdminClient with LeaseRepository with Logging with R,
+    R with RC with Clock with Random with Client with AdminClient with LeaseRepository with Logging,
     Throwable,
     Unit
   ] =
@@ -356,21 +356,20 @@ object Consumer {
              shardAssignmentStrategy
            ).flatMapPar(Int.MaxValue) {
                case (_, shardStream, checkpointer) =>
-                 ZStream.fromEffect(Ref.make(false) zip ZIO.environment[RC]).flatMap {
-                   case (refSkip, env) =>
-                     shardStream
-                       .tap(record =>
-                         processWithSkipOnError(refSkip)(
-                           recordProcessor(record).provide(env) *> checkpointer.stage(record)
+                 ZStream.fromEffect(Ref.make(false)).flatMap { refSkip =>
+                   shardStream
+                     .tap(record =>
+                       processWithSkipOnError(refSkip)(
+                         recordProcessor(record) *> checkpointer.stage(record)
+                       )
+                     )
+                     .via(
+                       checkpointer
+                         .checkpointBatched[RC](
+                           nr = checkpointBatchSize,
+                           interval = checkpointDuration
                          )
-                       )
-                       .via(
-                         checkpointer
-                           .checkpointBatched[Blocking with Logging](
-                             nr = checkpointBatchSize,
-                             interval = checkpointDuration
-                           )
-                       )
+                     )
                  }
              }
              .runDrain

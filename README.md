@@ -112,7 +112,7 @@ object ConsumeWithExample extends zio.App {
 
 ### More advanced usage
 
-The following example shows a simple ZIO App that consumes from a stream, prints a record and periodically checkpoints.
+If you want more fine-grained control over the processing stream, error handling or checkpointing, use `Consumer.shardedStream` to get a stream of shard-streams, like in the following example:
 
 ```scala
 import nl.vroste.zio.kinesis.client._
