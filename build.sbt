@@ -12,6 +12,8 @@ lazy val silencer = {
   )
 }
 
+enablePlugins(ProtobufPlugin)
+
 inThisBuild(
   List(
     organization := "nl.vroste",
