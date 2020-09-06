@@ -24,7 +24,6 @@ import software.amazon.awssdk.services.kinesis.model.{
   Record => KinesisRecord
 }
 import zio._
-import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.duration._
 import zio.logging.{ log, Logging }
@@ -259,7 +258,7 @@ object Consumer {
             case (shardId, leaseLost) =>
               for {
                 checkpointer    <- leaseCoordinator.makeCheckpointer(shardId)
-                env             <- ZIO.environment[Blocking with Logging with Clock with Random with R]
+                env             <- ZIO.environment[Logging with Clock with Random with R]
                 checkpointOpt   <- leaseCoordinator.getCheckpointForShard(shardId)
                 startingPosition = checkpointOpt
                                      .map(checkpointToShardIteratorType(_, initialPosition))
@@ -363,13 +362,7 @@ object Consumer {
                          recordProcessor(record) *> checkpointer.stage(record)
                        )
                      )
-                     .via(
-                       checkpointer
-                         .checkpointBatched[RC](
-                           nr = checkpointBatchSize,
-                           interval = checkpointDuration
-                         )
-                     )
+                     .via(checkpointer.checkpointBatched[RC](nr = checkpointBatchSize, interval = checkpointDuration))
                  }
              }
              .runDrain
