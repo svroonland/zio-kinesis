@@ -15,6 +15,7 @@ import nl.vroste.zio.kinesis.client.zionative.FetchMode.Polling
 import nl.vroste.zio.kinesis.client.zionative.fetcher.PollingFetcher
 import software.amazon.awssdk.services.kinesis.{ model => aws }
 import aws.ChildShard
+import aws.HashKeyRange
 import software.amazon.awssdk.services.kinesis.model.ProvisionedThroughputExceededException
 import zio._
 import zio.logging.Logging
@@ -285,7 +286,16 @@ object PollingFetcherTest extends DefaultRunnableSpec {
             val nextShardIterator  =
               if (shouldEnd) null else lastRecordOffset.toString
             val childShards        =
-              if (shouldEnd) Seq(ChildShard.builder().shardId("shard-002").parentShards("001").build) else null
+              if (shouldEnd)
+                Seq(
+                  ChildShard
+                    .builder()
+                    .shardId("shard-002")
+                    .parentShards("001")
+                    .hashKeyRange(HashKeyRange.builder().startingHashKey("123").endingHashKey("456").build())
+                    .build
+                )
+              else null
             val millisBehindLatest = if (lastRecordOffset >= records.size) 0 else records.size - lastRecordOffset
 
             //          println(s"GetRecords from ${shardIterator} (max ${limit}. Next iterator: ${nextShardIterator}")
