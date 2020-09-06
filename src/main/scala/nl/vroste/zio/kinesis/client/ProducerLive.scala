@@ -8,6 +8,7 @@ import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.ProducerLive._
 import nl.vroste.zio.kinesis.client.ProducerMetrics.{ emptyAttempts, emptyLatency }
 import nl.vroste.zio.kinesis.client.serde.Serializer
+import nl.vroste.zio.kinesis.client.zionative.protobuf.Messages
 import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.services.kinesis.model.{ KinesisException, PutRecordsRequestEntry }
 import org.HdrHistogram.{ Histogram, IntCountsHistogram }
@@ -29,7 +30,8 @@ private[client] final class ProducerLive[R, R1, T](
   currentMetrics: Ref[CurrentMetrics],
   settings: ProducerSettings,
   streamName: String,
-  metricsCollector: ProducerMetrics => ZIO[R1, Nothing, Unit]
+  metricsCollector: ProducerMetrics => ZIO[R1, Nothing, Unit],
+  aggregate: Boolean = false
 ) extends Producer[T] {
   var runloop: ZIO[Logging with Clock, Nothing, Unit] =
     // Failed records get precedence)
@@ -45,7 +47,8 @@ private[client] final class ProducerLive[R, R1, T](
 
   private def processBatch(batch: PutRecordsBatch) =
     (for {
-      _             <- log.info(s"Producing batch of size ${batch.nrRecords}")
+      _ <- log.info(s"Producing batch of size ${batch.nrRecords}")
+
       response      <- client
                     .putRecords(streamName, batch.entriesInOrder.map(_.r))
                     .tapError(e => log.warn(s"Error producing records, will retry if recoverable: $e"))
