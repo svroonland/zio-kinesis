@@ -22,17 +22,17 @@ import zio.stream.{ ZStream, ZTransducer }
  * Example app that shows the ZIO-native and KCL workers running in parallel
  */
 object ExampleApp extends zio.App {
-  val streamName                      = "zio-test-stream-25" // + java.util.UUID.randomUUID().toString
-  val nrRecords                       = 2000000
-  val produceRate                     = 100                  // Nr records to produce per second
+  val streamName                      = "zio-test-stream-26" // + java.util.UUID.randomUUID().toString
+  val nrRecords                       = 50000
+  val produceRate                     = 1000                 // Nr records to produce per second
   val nrShards                        = 10
   val reshardFactor                   = 0.5
   val reshardAfter: Option[Duration]  = None                 // Some(10.seconds)
   val enhancedFanout                  = false
-  val nrNativeWorkers                 = 2
+  val nrNativeWorkers                 = 1
   val nrKclWorkers                    = 0
-  val applicationName                 = "testApp-14"         // + java.util.UUID.randomUUID().toString(),
-  val runtime                         = 2.minute
+  val applicationName                 = "testApp-15"         // + java.util.UUID.randomUUID().toString(),
+  val runtime                         = 10.minute
   val maxRandomWorkerStartDelayMillis = 1 + 0 * 60 * 1000
   val recordProcessingTime: Duration  = 1.millisecond
 
@@ -44,8 +44,8 @@ object ExampleApp extends zio.App {
       ZStream.unwrapManaged {
         for {
           metrics <- CloudWatchMetricsPublisher.make(applicationName, id)
-//          delay   <- zio.random.nextIntBetween(0, maxRandomWorkerStartDelayMillis).map(_.millis).toManaged_
-          delay    = 1.seconds
+          delay   <- zio.random.nextIntBetween(0, maxRandomWorkerStartDelayMillis).map(_.millis).toManaged_
+//          delay    = 1.seconds
           _       <- log.info(s"Waiting ${delay.toMillis} ms to start worker ${id}").toManaged_
         } yield ZStream.fromEffect(ZIO.sleep(delay)) *> Consumer
           .shardedStream(
@@ -54,7 +54,7 @@ object ExampleApp extends zio.App {
             deserializer = Serde.asciiString,
             workerIdentifier = id,
             fetchMode = if (enhancedFanout) FetchMode.EnhancedFanOut() else FetchMode.Polling(batchSize = 1000),
-            initialPosition = InitialPosition.Latest,
+            initialPosition = InitialPosition.TrimHorizon,
             emitDiagnostic = ev =>
               (ev match {
                 case ev: DiagnosticEvent.PollComplete =>
@@ -78,8 +78,7 @@ object ExampleApp extends zio.App {
                     )(r)
                 )
                 .aggregateAsyncWithin(ZTransducer.collectAllN(5000), Schedule.fixed(10.second))
-                .tap(rs => log.info(s"${id} processed ${rs.size} records on shard ${shardID}").when(false))
-                .mapConcat(_.lastOption.toList)
+                .tap(rs => log.info(s"${id} processed ${rs.size} records on shard ${shardID}").when(true))
                 .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
                 .tap(_ => checkpointer.checkpoint())
                 .catchAll {
@@ -93,6 +92,7 @@ object ExampleApp extends zio.App {
                     ) *> ZStream.fail(e)
                 }
           }
+          .mapConcatChunk(identity)
           .ensuring(log.info(s"Worker ${id} stream completed"))
       }
 
@@ -135,7 +135,7 @@ object ExampleApp extends zio.App {
       _          <- TestUtil.getShards(streamName)
       producer   <- produceRecords(streamName, nrRecords).tapError(e => log.error(s"Producer error: ${e}")).fork
 //      _          <- producer.join
-      workers    <- ZIO.foreach(1 to nrNativeWorkers)(id => worker(s"worker${id}").runDrain.fork)
+      workers    <- ZIO.foreach(1 to nrNativeWorkers)(id => worker(s"worker${id}").runCount.fork)
       kclWorkers <-
         ZIO.foreach((1 + nrNativeWorkers) to (nrKclWorkers + nrNativeWorkers))(id =>
           (for {
@@ -157,11 +157,14 @@ object ExampleApp extends zio.App {
              )
              .getOrElse(ZIO.unit)
              .fork
-      _          <- ZIO.sleep(runtime) raceFirst ZIO.foreachPar_(kclWorkers ++ workers)(_.join)
+      _          <- ZIO.sleep(runtime) raceFirst ZIO.foreachPar_(kclWorkers ++ workers)(_.join) raceFirst producer.join
       _           = println("Interrupting app")
       _          <- producer.interruptFork
       _          <- ZIO.foreachPar(kclWorkers)(_.interrupt)
-      _          <- ZIO.foreachPar(workers)(_.interrupt)
+      _          <- ZIO.foreachPar(workers)(_.interrupt.map { exit =>
+             exit.fold(_ => (), nrRecordsProcessed => println(s"Worker processed ${nrRecordsProcessed}"))
+
+           })
     } yield ExitCode.success
   }.foldCauseM(e => log.error(s"Program failed: ${e.prettyPrint}", e).as(ExitCode.failure), ZIO.succeed(_))
     .provideCustomLayer(
@@ -209,26 +212,27 @@ object ExampleApp extends zio.App {
   }
 
   def produceRecords(streamName: String, nrRecords: Int) =
-    Producer.make(streamName, Serde.asciiString).use { producer =>
-      ZStream
-        .range(1, nrRecords)
-        .map(i => ProducerRecord(s"key$i", s"msg$i"))
-        .chunkN(produceRate)
-        .mapChunksM(
-          producer
-            .produceChunk(_)
-            .tap(_ => log.debug("Produced chunk"))
-            .tapError(e => putStrLn(s"error: $e").provideLayer(Console.live))
-            .retry(retryOnResourceNotFound && Schedule.recurs(1))
-            .as(Chunk.unit)
-            .tapCause(e => log.error("Producing records chunk failed, will retry", e))
-            .retry(Schedule.exponential(1.second))
-            .fork
-            .map(Chunk.single(_))
-            .delay(1.second) // TODO Until we fix throttling bug in Producer
-        )
-        .mapMPar(1)(_.join)
-        .runDrain
-        .tapCause(e => log.error("Producing records chunk failed", e))
-    }
+    Producer
+      .make(streamName, Serde.asciiString, ProducerSettings(aggregate = true), metrics => putStrLn(metrics.toString))
+      .use { producer =>
+        ZStream
+          .range(1, nrRecords)
+          .map(i => ProducerRecord(s"key$i", s"msg$i"))
+          .chunkN(produceRate)
+          .mapChunksM(
+            producer
+              .produceChunk(_)
+              .tap(_ => log.debug("Produced chunk"))
+              .tapError(e => log.error(s"error: $e"))
+              .retry(retryOnResourceNotFound && Schedule.recurs(1))
+              .as(Chunk.unit)
+              .tapCause(e => log.error("Producing records chunk failed, will retry", e))
+              .retry(Schedule.exponential(1.second))
+              .delay(1.second) // TODO Until we fix throttling bug in Producer
+          )
+          .runDrain
+          .tapCause(e => log.error("Producing records chunk failed", e)) *>
+          log.info("Producing records is done!")
+
+      }
 }

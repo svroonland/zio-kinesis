@@ -1,24 +1,26 @@
 package nl.vroste.zio.kinesis.client
 import java.io.IOException
+import java.nio.charset.StandardCharsets
 import java.time.Instant
 
-import com.google.protobuf.ByteString
 import io.netty.handler.timeout.ReadTimeoutException
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.ProducerLive._
 import nl.vroste.zio.kinesis.client.ProducerMetrics.{ emptyAttempts, emptyLatency }
+import nl.vroste.zio.kinesis.client.ProtobufAggregation.putRecordsRequestEntryToRecord
 import nl.vroste.zio.kinesis.client.serde.Serializer
 import nl.vroste.zio.kinesis.client.zionative.protobuf.Messages
 import nl.vroste.zio.kinesis.client.zionative.protobuf.Messages.AggregatedRecord
-import software.amazon.awssdk.core.SdkBytes
-import software.amazon.awssdk.services.kinesis.model.{ KinesisException, PutRecordsRequestEntry }
 import org.HdrHistogram.{ Histogram, IntCountsHistogram }
+import software.amazon.awssdk.core.SdkBytes
+import software.amazon.awssdk.services.kinesis.model.{ KinesisException, PutRecordsRequestEntry, Shard }
+import software.amazon.awssdk.utils.Md5Utils
+import zio._
 import zio.clock.{ instant, Clock }
+import zio.duration._
 import zio.logging.{ log, Logging }
 import zio.stream.{ ZStream, ZTransducer }
-import zio.duration._
-import zio._
 
 import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
@@ -30,33 +32,47 @@ private[client] final class ProducerLive[R, R1, T](
   failedQueue: Queue[ProduceRequest],
   serializer: Serializer[R, T],
   currentMetrics: Ref[CurrentMetrics],
+  shards: Ref[ShardMap],
   settings: ProducerSettings,
   streamName: String,
   metricsCollector: ProducerMetrics => ZIO[R1, Nothing, Unit],
   aggregate: Boolean = false
 ) extends Producer[T] {
+  val folder: ZTransducer[Any, Nothing, ProduceRequest, Seq[ProduceRequest]] =
+    if (aggregate)
+      ZTransducer
+        .foldM(PutRecordsBatchAggregated.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
+          shards.get.map(batch.add(record, _))
+        }
+        .mapM(_.toAggregatedRecords)
+    else
+      ZTransducer
+        .fold(PutRecordsBatch.empty)(_.isWithinLimits)(_.add(_: ProduceRequest))
+        .map(_.entriesInOrder)
+
   var runloop: ZIO[Logging with Clock, Nothing, Unit] =
     // Failed records get precedence)
+    // TODO gotta make sure we don't re-aggregate aggregated records
     (ZStream
       .tick(100.millis)
       .mapConcatChunkM(_ => failedQueue.takeBetween(1, Int.MaxValue).map(Chunk.fromIterable)) merge ZStream
       .fromQueue(queue))
     // Batch records up to the Kinesis PutRecords request limits as long as downstream is busy
-      .aggregateAsync(ZTransducer.fold(PutRecordsBatch.empty)(_.isWithinLimits)(_.add(_)))
+      .aggregateAsync(folder)
       // Several putRecords requests in parallel
       .mapMParUnordered(settings.maxParallelRequests)(processBatch)
       .runDrain
 
-  private def processBatch(batch: PutRecordsBatch) =
+  private def processBatch(batch: Seq[ProduceRequest]) =
     (for {
-      _ <- log.info(s"Producing batch of size ${batch.nrRecords}")
+      _ <- log.info(s"Producing batch of size ${batch.size} (possibly after aggregation)")
 
       response      <- client
-                    .putRecords(streamName, batch.entriesInOrder.map(_.r))
+                    .putRecords(streamName, batch.map(_.r))
                     .tapError(e => log.warn(s"Error producing records, will retry if recoverable: $e"))
                     .retry(scheduleCatchRecoverable && settings.backoffRequests)
 
-      maybeSucceeded = response.records().asScala.zip(batch.entriesInOrder)
+      maybeSucceeded = response.records().asScala.zip(batch)
 
       (newFailed, succeeded) = if (response.failedRecordCount() > 0)
                                  maybeSucceeded.partition {
@@ -68,6 +84,7 @@ private[client] final class ProducerLive[R, R1, T](
 
       // Collect metrics
       now                   <- instant
+      // TODO this should be moved to the `produce()` methods to have correct counts for aggregation
       _                     <- currentMetrics.update(
              _.add(
                succeeded.map(_._2.attemptNumber).toSeq,
@@ -77,6 +94,7 @@ private[client] final class ProducerLive[R, R1, T](
                  .map(timestamp => java.time.Duration.between(timestamp, now))
              )
            )
+      // TODO invalidate shard map if predicted != actual
       _                     <- log.info(s"Failed to produce ${newFailed.size} records").when(newFailed.nonEmpty)
       // TODO backoff for shard limit stuff
       _                     <- failedQueue
@@ -91,7 +109,7 @@ private[client] final class ProducerLive[R, R1, T](
     } yield ()).catchAll {
       case NonFatal(e) =>
         log.warn("Failed to process batch") *>
-          ZIO.foreach_(batch.entries.map(_.done))(_.fail(e))
+          ZIO.foreach_(batch.map(_.done))(_.fail(e))
     }
 
 // Repeatedly produce metrics
@@ -136,6 +154,7 @@ private[client] final class ProducerLive[R, R1, T](
 private[client] object ProducerLive {
   val maxRecordsPerRequest     = 499             // This is a Kinesis API limitation // TODO because of fold issue, reduced by 1
   val maxPayloadSizePerRequest = 5 * 1024 * 1024 // 5 MB
+  val maxPayloadSizePerRecord  = 1 * 1024 * 1024 // 5 MB
 
   val recoverableErrorCodes = Set("ProvisionedThroughputExceededException", "InternalFailure", "ServiceUnavailable");
 
@@ -165,6 +184,113 @@ private[client] object ProducerLive {
 
   object PutRecordsBatch {
     val empty = PutRecordsBatch(List.empty, 0, 0)
+  }
+
+  final case class PutRecordsAggregatedBatchForShard(
+    entries: List[ProduceRequest],
+    aggregate: Messages.AggregatedRecord.Builder
+  ) {
+    // TODO not very efficient to build it every time
+    def serializedSize: Int =
+      ProtobufAggregation.encodedSize(aggregate.build())
+
+    def add(r: ProduceRequest): PutRecordsAggregatedBatchForShard =
+      copy(
+        entries = r +: entries,
+        aggregate = aggregate
+          .addRecords(ProtobufAggregation.putRecordsRequestEntryToRecord(r.r, aggregate.getRecordsCount))
+          .addExplicitHashKeyTable(Option(r.r.explicitHashKey()).getOrElse(r.r.partitionKey())) // TODO optimize
+          .addPartitionKeyTable(r.r.partitionKey())
+      )
+
+    def isWithinLimits: Boolean = serializedSize <= maxPayloadSizePerRecord
+
+    def toProduceRequest: UIO[ProduceRequest] =
+      for {
+        done <- Promise.make[Throwable, ProduceResponse]
+
+        r  = PutRecordsRequestEntry
+              .builder()
+              .partitionKey(entries.head.r.partitionKey()) // First one?
+              .data(SdkBytes.fromByteArray(ProtobufAggregation.encodeAggregatedRecord(aggregate.build()).toArray))
+              .build()
+        _ <- ZIO.foreach_(entries)(e => e.done.completeWith(done.await))
+      } yield ProduceRequest(r, done, entries.head.timestamp, 1)
+  }
+
+  object PutRecordsAggregatedBatchForShard {
+    val empty: PutRecordsAggregatedBatchForShard =
+      PutRecordsAggregatedBatchForShard(List.empty, AggregatedRecord.newBuilder())
+
+  }
+
+  type ShardId      = String
+  type PartitionKey = String
+  type NEL[+T]      = List[T]
+
+  case class ShardMap(shards: Iterable[(ShardId, BigInt, BigInt)]) {
+    def shardForPartitionKey(key: PartitionKey): ShardId = {
+      val hashBytes = Md5Utils.computeMD5Hash(key.getBytes(StandardCharsets.US_ASCII))
+      val hashInt   = BigInt.apply(1, hashBytes)
+
+      shards.collectFirst {
+        case (shardId, minHashKey, maxHashKey) if hashInt >= minHashKey && hashInt <= maxHashKey => shardId
+      }.getOrElse(throw new IllegalArgumentException(s"Could not find shard for partition key ${key}"))
+    }
+
+  }
+
+  object ShardMap {
+    def fromShards(shards: Chunk[Shard]): ShardMap =
+      ShardMap(
+        shards
+          .map(s => (s.shardId(), BigInt(s.hashKeyRange().startingHashKey()), BigInt(s.hashKeyRange().endingHashKey())))
+          .sortBy(_._2)
+      )
+  }
+
+  final case class PutRecordsBatchAggregated(batches: Map[ShardId, NEL[PutRecordsAggregatedBatchForShard]]) {
+    val nrBatches = batches.values.map(_.size).sum
+
+    def payloadSize: Int =
+      batches.values.flatten.map { batch =>
+        batch.serializedSize + batch.entries.head.r.partitionKey().length
+      }.sum
+
+    def add(entry: ProduceRequest, shardMap: ShardMap): PutRecordsBatchAggregated = {
+      val shardId: ShardId =
+        shardMap.shardForPartitionKey(Option(entry.r.explicitHashKey()).getOrElse(entry.r.partitionKey()))
+
+      // TODO can we somehow ensure that there's always at least one entry in a batch?
+      val shardBatches = batches.getOrElse(shardId, List(PutRecordsAggregatedBatchForShard.empty))
+      val batch        = shardBatches.head
+
+      val updatedBatch = batch.add(entry)
+
+      val updatedShardBatches =
+        if (updatedBatch.isWithinLimits)
+          updatedBatch +: shardBatches.tail
+        else {
+          val newBatch = PutRecordsAggregatedBatchForShard.empty.add(entry)
+          newBatch +: shardBatches
+        }
+
+      copy(batches = batches + (shardId -> updatedShardBatches))
+    }
+
+    def isWithinLimits: Boolean =
+      nrBatches <= maxRecordsPerRequest &&
+        payloadSize < maxPayloadSizePerRequest
+
+    def toAggregatedRecords: UIO[Seq[ProduceRequest]] =
+      UIO(println(s"Aggregated ${batches.values.flatten.map(_.entries.size).sum} records")) *>
+        ZIO
+          .foreach(batches.values.flatten.toSeq)(_.toProduceRequest)
+          .map(_.reverse)
+  }
+
+  object PutRecordsBatchAggregated {
+    def empty: PutRecordsBatchAggregated = PutRecordsBatchAggregated(Map.empty)
   }
 
   final def scheduleCatchRecoverable: Schedule[Any, Throwable, Throwable] =
@@ -203,19 +329,4 @@ private[client] object ProducerLive {
       CurrentMetrics(start = now, published = emptyAttempts, nrFailed = 0, latency = emptyLatency)
   }
 
-  def recordsToAggregatedRecord(entries: Seq[PutRecordsRequestEntry]): Messages.AggregatedRecord =
-    AggregatedRecord
-      .newBuilder()
-      .addAllRecords(entries.zipWithIndex.map((recordToRecord _).tupled).asJavaCollection)
-      .addAllPartitionKeyTable(entries.map(_.partitionKey()).asJavaCollection)
-      .addAllExplicitHashKeyTable(entries.map(_.explicitHashKey()).asJavaCollection)
-      .build()
-
-  def recordToRecord(r: PutRecordsRequestEntry, tableIndex: Int): Messages.Record =
-    Messages.Record
-      .newBuilder()
-      .setData(ByteString.copyFrom(r.data().asByteArrayUnsafe()))
-      .setPartitionKeyIndex(tableIndex)
-      .setExplicitHashKeyIndex(tableIndex)
-      .build()
 }

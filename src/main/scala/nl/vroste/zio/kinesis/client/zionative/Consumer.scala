@@ -13,6 +13,7 @@ import nl.vroste.zio.kinesis.client.zionative.fetcher.{ EnhancedFanOutFetcher, P
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.{ DefaultLeaseCoordinator, LeaseCoordinationSettings }
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
 import nl.vroste.zio.kinesis.client._
+import nl.vroste.zio.kinesis.client.zionative.protobuf.Messages
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.kinesis.model.{
   ChildShard,
@@ -23,12 +24,13 @@ import software.amazon.awssdk.services.kinesis.model.{
   Shard,
   Record => KinesisRecord
 }
+import software.amazon.awssdk.utils.Md5Utils
 import zio._
 import zio.clock.Clock
 import zio.duration._
 import zio.logging.{ log, Logging }
 import zio.random.Random
-import zio.stream.ZStream
+import zio.stream.{ ZStream, ZTransducer }
 
 import scala.jdk.CollectionConverters._
 
@@ -173,20 +175,54 @@ object Consumer {
       Checkpointer
     )
   ] = {
-    def toRecord(shardId: String, r: KinesisRecord): ZIO[R, Throwable, Record[T]] =
-      deserializer.deserialize(r.data.asByteBuffer()).map { data =>
-        Record(
-          shardId,
-          r.sequenceNumber,
-          r.approximateArrivalTimestamp,
-          data,
-          r.partitionKey,
-          r.encryptionType,
-          0,    // r.subSequenceNumber,
-          "",   // r.explicitHashKey,
-          false //r.aggregated,
-        )
-      }
+    def toRecords(shardId: String, r: KinesisRecord): ZIO[R, Throwable, Chunk[Record[T]]] = {
+      val data      = r.data().asByteBuffer()
+      val dataChunk = Chunk.fromByteBuffer(data)
+
+      if (ProtobufAggregation.isAggregatedRecord(dataChunk))
+        for {
+          aggregatedRecord <- ZIO.fromTry(ProtobufAggregation.decodeAggregatedRecord(dataChunk))
+          records          <- ZIO.foreach(aggregatedRecord.getRecordsList.asScala.zipWithIndex.toSeq) {
+                       case (subRecord, subSequenceNr) =>
+                         val data = subRecord.getData.asReadOnlyByteBuffer()
+
+                         deserializer
+                           .deserialize(data)
+                           .map { data =>
+                             Record(
+                               shardId,
+                               r.sequenceNumber,
+                               r.approximateArrivalTimestamp,
+                               data,
+                               aggregatedRecord.getPartitionKeyTable(subRecord.getPartitionKeyIndex.toInt),
+                               r.encryptionType,
+                               Some(subSequenceNr),
+                               if (subRecord.hasExplicitHashKeyIndex)
+                                 Some(aggregatedRecord.getExplicitHashKeyTable(subRecord.getExplicitHashKeyIndex.toInt))
+                               else None,
+                               aggregated = true
+                             )
+                           }
+                     }
+        } yield Chunk.fromIterable(records)
+      else
+        deserializer
+          .deserialize(r.data.asByteBuffer())
+          .map { data =>
+            Record(
+              shardId,
+              r.sequenceNumber,
+              r.approximateArrivalTimestamp,
+              data,
+              r.partitionKey,
+              r.encryptionType,
+              subSequenceNumber = None,
+              explicitHashKey = None,
+              aggregated = false
+            )
+          }
+          .map(Chunk.single)
+    }
 
     def makeFetcher(
       streamDescription: StreamDescription
@@ -282,11 +318,15 @@ object Consumer {
                                   }
                                   .mapChunksM { chunk => // mapM is slow
                                     chunk
-                                      .mapM(record => toRecord(shardId, record))
+                                      .mapM(record => toRecords(shardId, record))
+                                      .map(_.flatten)
                                       .tap { records =>
                                         records.lastOption.fold(ZIO.unit) { r =>
                                           val extendedSequenceNumber =
-                                            ExtendedSequenceNumber(r.sequenceNumber, r.subSequenceNumber)
+                                            ExtendedSequenceNumber(
+                                              r.sequenceNumber,
+                                              r.subSequenceNumber.getOrElse(0L)
+                                            )
                                           checkpointer.setMaxSequenceNumber(extendedSequenceNumber)
                                         }
                                       }

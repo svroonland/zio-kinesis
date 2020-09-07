@@ -1,7 +1,7 @@
 package nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
-import nl.vroste.zio.kinesis.client.ProducerLive.{ CurrentMetrics, ProduceRequest }
+import nl.vroste.zio.kinesis.client.ProducerLive.{ CurrentMetrics, ProduceRequest, ShardMap }
 import nl.vroste.zio.kinesis.client.serde.Serializer
 import zio._
 import zio.clock.{ instant, Clock }
@@ -68,7 +68,9 @@ final case class ProducerSettings(
   maxParallelRequests: Int = 24,
   backoffRequests: Schedule[Clock, Throwable, Any] = Schedule.exponential(500.millis) && Schedule.recurs(5),
   failedDelay: Duration = 100.millis,
-  metricsInterval: Duration = 30.seconds
+  metricsInterval: Duration = 30.seconds,
+  updateShardInterval: Duration = 30.seconds,
+  aggregate: Boolean = false
 )
 
 object Producer {
@@ -81,13 +83,23 @@ object Producer {
     metricsCollector: ProducerMetrics => ZIO[R1, Nothing, Unit] = (_: ProducerMetrics) => ZIO.unit
   ): ZManaged[R with R1 with Clock with Client with Logging, Throwable, Producer[T]] =
     for {
-      client         <- ZManaged.service[Client.Service]
-      env            <- ZIO.environment[R with Clock].toManaged_
-      queue          <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
-      now            <- instant.toManaged_
-      currentMetrics <- Ref.make(CurrentMetrics.empty(now)).toManaged_
+      client          <- ZManaged.service[Client.Service]
+      env             <- ZIO.environment[R with Clock].toManaged_
+      queue           <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
+      now             <- instant.toManaged_
+      currentMetrics  <- Ref.make(CurrentMetrics.empty(now)).toManaged_
+      shards          <- client.listShards(streamName).runCollect.toManaged_
+      currentShardMap <- Ref.make(ShardMap.fromShards(shards)).toManaged_
+      _               <- client
+             .listShards(streamName)
+             .runCollect
+             .map(ShardMap.fromShards)
+             .flatMap(currentShardMap.set)
+             .repeat(Schedule.spaced(settings.updateShardInterval))
+             .delay(settings.updateShardInterval)
+             .forkManaged
 
-      failedQueue <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
+      failedQueue     <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
 
       producer = new ProducerLive[R, R1, T](
                    client,
@@ -96,9 +108,11 @@ object Producer {
                    failedQueue,
                    serializer,
                    currentMetrics,
+                   currentShardMap,
                    settings,
                    streamName,
-                   metricsCollector
+                   metricsCollector,
+                   settings.aggregate
                  )
       _       <- producer.runloop.forkManaged
       _       <- producer.metricsCollection.forkManaged

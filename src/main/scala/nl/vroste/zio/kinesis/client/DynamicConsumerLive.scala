@@ -167,8 +167,8 @@ private[client] class DynamicConsumerLive(
           data,
           r.partitionKey(),
           r.encryptionType(),
-          r.subSequenceNumber(),
-          r.explicitHashKey(),
+          Option(r.subSequenceNumber()).filterNot(_ == 0L),
+          Option(r.explicitHashKey()).filterNot(_.isEmpty),
           r.aggregated()
         )
       }

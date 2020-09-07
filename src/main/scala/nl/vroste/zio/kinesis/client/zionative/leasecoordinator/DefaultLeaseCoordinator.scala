@@ -495,7 +495,7 @@ private class DefaultLeaseCoordinator(
         }
 
       override def stage(r: Record[_]): zio.UIO[Unit] =
-        staged.set(Some(ExtendedSequenceNumber(r.sequenceNumber, r.subSequenceNumber)))
+        staged.set(Some(ExtendedSequenceNumber(r.sequenceNumber, r.subSequenceNumber.getOrElse(0L))))
 
       override def setMaxSequenceNumber(lastSequenceNumber: ExtendedSequenceNumber): UIO[Unit] =
         maxSequenceNumber.set(Some(lastSequenceNumber))
