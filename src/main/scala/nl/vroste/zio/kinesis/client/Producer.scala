@@ -90,6 +90,7 @@ object Producer {
       currentMetrics  <- Ref.make(CurrentMetrics.empty(now)).toManaged_
       shards          <- client.listShards(streamName).runCollect.toManaged_
       currentShardMap <- Ref.make(ShardMap.fromShards(shards)).toManaged_
+      // TODO move to producer implementaiton, needs to be called on invalidate shard map
       _               <- client
              .listShards(streamName)
              .runCollect

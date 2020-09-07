@@ -73,7 +73,7 @@ object FetchMode {
      * @param interval Fixed interval for polling when no more records are currently available
      */
     def dynamicSchedule(interval: Duration): Schedule[Clock, GetRecordsResponse, Any] =
-      (Schedule.recurWhile[Boolean](_ == true) || Schedule.fixed(interval))
+      (Schedule.recurWhile[Boolean](_ == true) || Schedule.spaced(interval))
         .contramap((_: GetRecordsResponse).millisBehindLatest() != 0)
   }
 
