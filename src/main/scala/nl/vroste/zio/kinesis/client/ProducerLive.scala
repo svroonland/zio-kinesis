@@ -83,17 +83,7 @@ private[client] final class ProducerLive[R, R1, T](
                                  (Seq.empty, maybeSucceeded)
 
       // Collect metrics
-      now                   <- instant
-      // TODO this should be moved to the `produce()` methods to have correct counts for aggregation
-      _                     <- currentMetrics.update(
-             _.add(
-               succeeded.map(_._2.attemptNumber).toSeq,
-               newFailed.size.toLong,
-               succeeded
-                 .map(_._2.timestamp)
-                 .map(timestamp => java.time.Duration.between(timestamp, now))
-             )
-           )
+      _                     <- currentMetrics.update(_.addFailures(newFailed.size))
       // TODO invalidate shard map if predicted != actual
       _                     <- log.info(s"Failed to produce ${newFailed.size} records").when(newFailed.nonEmpty)
       // TODO backoff for shard limit stuff
@@ -103,7 +93,7 @@ private[client] final class ProducerLive[R, R1, T](
       _                     <- ZIO.foreach_(succeeded) {
              case (response, request) =>
                request.done.completeWith(
-                 ZIO.succeed(ProduceResponse(response.shardId(), response.sequenceNumber()))
+                 ZIO.succeed(ProduceResponse(response.shardId(), response.sequenceNumber(), request.attemptNumber))
                )
            }
     } yield ()).catchAll {
@@ -128,6 +118,9 @@ private[client] final class ProducerLive[R, R1, T](
       request  <- makeProduceRequest(r, now)
       _        <- queue.offer(request)
       response <- request.done.await
+      finish   <- instant
+      latency   = java.time.Duration.between(now, finish)
+      _        <- currentMetrics.getAndUpdate(_.addSuccess(response.attempts, latency))
     } yield response).provide(env)
 
   override def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[Seq[ProduceResponse]] =
@@ -135,8 +128,18 @@ private[client] final class ProducerLive[R, R1, T](
       now      <- instant
       requests <- ZIO.foreach(chunk)(makeProduceRequest(_, now))
       _        <- queue.offerAll(requests)
-      results  <- ZIO.foreach(requests)(_.done.await)
-    } yield results)
+      results  <- ZIO.foreachParN(100)(requests) { r =>
+                   for {
+                     response <- r.done.await
+                     finish   <- instant
+                     latency   = java.time.Duration.between(now, finish)
+
+                   } yield (response, latency)
+                 }
+      responses = results.map(_._1)
+      latencies = results.map(_._2)
+      _        <- currentMetrics.getAndUpdate(_.addSuccesses(responses.map(_.attempts), latencies))
+    } yield responses)
       .provide(env)
 
   private def makeProduceRequest(r: ProducerRecord[T], now: Instant) =
@@ -313,18 +316,27 @@ private[client] object ProducerLive {
   ) {
     val nrPublished = published.getTotalCount
 
-    def add(publishedWithAttempts: Seq[Int], failed: Long, latencies: Iterable[Duration]): CurrentMetrics = {
+    def addSuccess(attempts: Int, latency1: Duration): CurrentMetrics = {
       val newLatency = latency.copy()
-      latencies.map(_.toMillis).foreach(newLatency.recordValue)
+      newLatency.recordValue(latency1.toMillis max 0)
+
+      val newPublished = published.copy()
+      newPublished.recordValue(attempts.toLong)
+
+      copy(published = newPublished, latency = newLatency)
+    }
+
+    def addFailures(nr: Int): CurrentMetrics =
+      copy(nrFailed = nrFailed + nr)
+
+    def addSuccesses(publishedWithAttempts: Seq[Int], latencies: Seq[Duration]): CurrentMetrics = {
+      val newLatency = latency.copy()
+      latencies.map(_.toMillis max 0).foreach(newLatency.recordValue)
 
       val newPublished = published.copy()
       publishedWithAttempts.map(_.toLong).foreach(newPublished.recordValue)
 
-      copy(
-        published = newPublished,
-        nrFailed = nrFailed + failed,
-        latency = newLatency
-      )
+      copy(published = newPublished, latency = newLatency)
     }
   }
 

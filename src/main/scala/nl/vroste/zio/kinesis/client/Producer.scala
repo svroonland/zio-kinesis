@@ -74,7 +74,7 @@ final case class ProducerSettings(
 )
 
 object Producer {
-  final case class ProduceResponse(shardId: String, sequenceNumber: String)
+  final case class ProduceResponse(shardId: String, sequenceNumber: String, attempts: Int)
 
   def make[R, R1, T](
     streamName: String,

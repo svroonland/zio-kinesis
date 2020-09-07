@@ -29,8 +29,8 @@ object ExampleApp extends zio.App {
   val reshardFactor                   = 0.5
   val reshardAfter: Option[Duration]  = None                // Some(10.seconds)
   val enhancedFanout                  = false
-  val nrNativeWorkers                 = 0
-  val nrKclWorkers                    = 1
+  val nrNativeWorkers                 = 1
+  val nrKclWorkers                    = 0
   val applicationName                 = "testApp-1"         // + java.util.UUID.randomUUID().toString(),
   val runtime                         = 10.minute
   val maxRandomWorkerStartDelayMillis = 1 + 0 * 60 * 1000
@@ -216,7 +216,7 @@ object ExampleApp extends zio.App {
       .make(
         streamName,
         Serde.asciiString,
-        ProducerSettings(aggregate = true, metricsInterval = 5.seconds),
+        ProducerSettings(aggregate = true, metricsInterval = 5.seconds, bufferSize = 8192 * 4),
         metrics => putStrLn(metrics.toString)
       )
       .use { producer =>
@@ -233,7 +233,7 @@ object ExampleApp extends zio.App {
               .as(Chunk.unit)
               .tapCause(e => log.error("Producing records chunk failed, will retry", e))
               .retry(Schedule.exponential(1.second))
-              .delay(1.second) // TODO Until we fix throttling bug in Producer
+//              .delay(1.second) // TODO Until we fix throttling bug in Producer
           )
           .runDrain
           .tapCause(e => log.error("Producing records chunk failed", e)) *>
