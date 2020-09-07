@@ -191,8 +191,10 @@ private[client] object ProducerLive {
     aggregate: Messages.AggregatedRecord.Builder
   ) {
     // TODO not very efficient to build it every time
-    def serializedSize: Int =
-      ProtobufAggregation.encodedSize(aggregate.build())
+    lazy val builtAggregate = aggregate.build()
+
+    lazy val serializedSize: Int =
+      ProtobufAggregation.encodedSize(builtAggregate)
 
     def add(r: ProduceRequest): PutRecordsAggregatedBatchForShard =
       copy(
@@ -213,7 +215,7 @@ private[client] object ProducerLive {
         r  = PutRecordsRequestEntry
               .builder()
               .partitionKey(entries.head.r.partitionKey()) // First one?
-              .data(SdkBytes.fromByteArray(ProtobufAggregation.encodeAggregatedRecord(aggregate.build()).toArray))
+              .data(SdkBytes.fromByteArray(ProtobufAggregation.encodeAggregatedRecord(builtAggregate).toArray))
               .build()
         _ <- ZIO.foreach_(entries)(e => e.done.completeWith(done.await))
       } yield ProduceRequest(r, done, entries.head.timestamp, 1)
