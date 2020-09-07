@@ -30,8 +30,8 @@ final case class ProducerMetrics(
     if (nrRecordsPublished + nrFailures > 0) (nrRecordsPublished * 1.0 / (nrRecordsPublished + nrFailures))
     else 1
 
-  val throughput: Option[Long] =
-    if (interval.toMillis > 0) Some(nrRecordsPublished * 1000 / interval.toMillis) else None
+  val throughput: Option[Double] =
+    if (interval.toMillis > 0) Some(nrRecordsPublished * 1000.0 / interval.toMillis) else None
 
   override def toString: String =
     s"{" +

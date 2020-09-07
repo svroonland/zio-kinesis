@@ -12,13 +12,16 @@ object ProtobufAggregation {
   val magicBytes: Array[Byte] = List(0xf3, 0x89, 0x9a, 0xc2).map(_.toByte).toArray
   val checksumSize            = 16
 
-  def putRecordsRequestEntryToRecord(r: PutRecordsRequestEntry, tableIndex: Int): Messages.Record =
-    Messages.Record
+  def putRecordsRequestEntryToRecord(r: PutRecordsRequestEntry, tableIndex: Int): Messages.Record = {
+    val b = Messages.Record
       .newBuilder()
       .setData(ByteString.copyFrom(r.data().asByteArrayUnsafe()))
       .setPartitionKeyIndex(tableIndex)
-      .setExplicitHashKeyIndex(tableIndex)
+
+    Option(r.explicitHashKey())
+      .fold(b)(_ => b.setExplicitHashKeyIndex(tableIndex.toLong))
       .build()
+  }
 
   def encodedSize(ar: AggregatedRecord): Int =
     magicBytes.length + ar.getSerializedSize + checksumSize

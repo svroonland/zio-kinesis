@@ -198,8 +198,9 @@ private[client] object ProducerLive {
       copy(
         entries = r +: entries,
         aggregate = aggregate
+          .clone()
           .addRecords(ProtobufAggregation.putRecordsRequestEntryToRecord(r.r, aggregate.getRecordsCount))
-          .addExplicitHashKeyTable(Option(r.r.explicitHashKey()).getOrElse(r.r.partitionKey())) // TODO optimize
+          .addExplicitHashKeyTable(Option(r.r.explicitHashKey()).getOrElse("0")) // TODO optimize: only filled ones
           .addPartitionKeyTable(r.r.partitionKey())
       )
 
@@ -271,6 +272,7 @@ private[client] object ProducerLive {
         if (updatedBatch.isWithinLimits)
           updatedBatch +: shardBatches.tail
         else {
+          println(s"Creating a new batch for shard ${shardId}")
           val newBatch = PutRecordsAggregatedBatchForShard.empty.add(entry)
           newBatch +: shardBatches
         }

@@ -22,16 +22,16 @@ import zio.stream.{ ZStream, ZTransducer }
  * Example app that shows the ZIO-native and KCL workers running in parallel
  */
 object ExampleApp extends zio.App {
-  val streamName                      = "zio-test-stream-26" // + java.util.UUID.randomUUID().toString
-  val nrRecords                       = 50000
-  val produceRate                     = 1000                 // Nr records to produce per second
+  val streamName                      = "zio-test-stream-1" // + java.util.UUID.randomUUID().toString
+  val nrRecords                       = 200000
+  val produceRate                     = 1000                // Nr records to produce per second
   val nrShards                        = 10
   val reshardFactor                   = 0.5
-  val reshardAfter: Option[Duration]  = None                 // Some(10.seconds)
+  val reshardAfter: Option[Duration]  = None                // Some(10.seconds)
   val enhancedFanout                  = false
-  val nrNativeWorkers                 = 1
-  val nrKclWorkers                    = 0
-  val applicationName                 = "testApp-15"         // + java.util.UUID.randomUUID().toString(),
+  val nrNativeWorkers                 = 0
+  val nrKclWorkers                    = 1
+  val applicationName                 = "testApp-1"         // + java.util.UUID.randomUUID().toString(),
   val runtime                         = 10.minute
   val maxRandomWorkerStartDelayMillis = 1 + 0 * 60 * 1000
   val recordProcessingTime: Duration  = 1.millisecond
@@ -213,7 +213,12 @@ object ExampleApp extends zio.App {
 
   def produceRecords(streamName: String, nrRecords: Int) =
     Producer
-      .make(streamName, Serde.asciiString, ProducerSettings(aggregate = true), metrics => putStrLn(metrics.toString))
+      .make(
+        streamName,
+        Serde.asciiString,
+        ProducerSettings(aggregate = true, metricsInterval = 5.seconds),
+        metrics => putStrLn(metrics.toString)
+      )
       .use { producer =>
         ZStream
           .range(1, nrRecords)

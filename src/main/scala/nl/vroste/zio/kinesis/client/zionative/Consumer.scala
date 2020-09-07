@@ -182,6 +182,7 @@ object Consumer {
       if (ProtobufAggregation.isAggregatedRecord(dataChunk))
         for {
           aggregatedRecord <- ZIO.fromTry(ProtobufAggregation.decodeAggregatedRecord(dataChunk))
+          _                 = println(s"Found aggregated record with ${aggregatedRecord.getRecordsCount} sub records")
           records          <- ZIO.foreach(aggregatedRecord.getRecordsList.asScala.zipWithIndex.toSeq) {
                        case (subRecord, subSequenceNr) =>
                          val data = subRecord.getData.asReadOnlyByteBuffer()
