@@ -105,18 +105,27 @@ private[client] final class ProducerLive[R, R1, T](
     }
 
   private def handleFailures(newFailed: collection.Seq[(PutRecordsResultEntry, ProduceRequest)], repredict: Boolean) = {
-    val failedCount = newFailed.map(_._2.aggregateCount).sum
+    val requests    = newFailed.map(_._2)
+    val responses   = newFailed.map(_._1)
+    val failedCount = requests.map(_.aggregateCount).sum
 
     for {
       _ <- currentMetrics.update(_.addFailures(failedCount))
       _ <- log.warn(s"Failed to produce ${failedCount} records").when(newFailed.nonEmpty)
-      _ <- log.warn(newFailed.take(10).map(_._1.errorMessage()).mkString(",, ")).when(newFailed.nonEmpty)
+      _ <- log.warn(responses.take(10).map(_.errorMessage()).mkString(",, ")).when(newFailed.nonEmpty)
 
-      // TODO re-predict their shards
+      // The shard map may not yet be updated unless we're experiencing high latency
+      updatedFailed <-
+        if (repredict)
+          shards.get.map(shardMap =>
+            requests.map(r => r.newAttempt.copy(predictedShard = shardMap.shardForPutRecordsRequestEntry(r.r)))
+          )
+        else
+          ZIO.succeed(requests.map(_.newAttempt))
 
       // TODO backoff for shard limit stuff
       _ <- failedQueue
-             .offerAll(newFailed.map(_._2.newAttempt))
+             .offerAll(updatedFailed)
              .when(newFailed.nonEmpty) // TODO should be per shard
     } yield ()
   }
@@ -306,6 +315,10 @@ private[client] object ProducerLive {
   }
 
   case class ShardMap(shards: Iterable[(ShardId, BigInt, BigInt)], lastUpdated: Instant, invalid: Boolean = false) {
+
+    def shardForPutRecordsRequestEntry(e: PutRecordsRequestEntry): ShardId =
+      shardForPartitionKey(Option(e.explicitHashKey()).getOrElse(e.partitionKey()))
+
     def shardForPartitionKey(key: PartitionKey): ShardId = {
       val hashBytes = Md5Utils.computeMD5Hash(key.getBytes(StandardCharsets.US_ASCII))
       val hashInt   = BigInt.apply(1, hashBytes)
