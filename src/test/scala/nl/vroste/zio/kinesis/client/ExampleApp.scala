@@ -1,4 +1,6 @@
 package nl.vroste.zio.kinesis.client
+import java.util.UUID
+
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.TestUtil.retryOnResourceNotFound
 import nl.vroste.zio.kinesis.client.serde.Serde
@@ -22,19 +24,27 @@ import zio.stream.{ ZStream, ZTransducer }
  * Example app that shows the ZIO-native and KCL workers running in parallel
  */
 object ExampleApp extends zio.App {
-  val streamName                      = "zio-test-stream-1" // + java.util.UUID.randomUUID().toString
-  val nrRecords                       = 200000
-  val produceRate                     = 1000                // Nr records to produce per second
+  val streamName                      = "zio-test-stream-3" // + java.util.UUID.randomUUID().toString
+  val applicationName                 = "testApp-3"         // + java.util.UUID.randomUUID().toString(),
+  val nrRecords                       = 40000000
+  val produceRate                     = 30000               // Nr records to produce per second
   val nrShards                        = 10
   val reshardFactor                   = 0.5
   val reshardAfter: Option[Duration]  = None                // Some(10.seconds)
   val enhancedFanout                  = false
   val nrNativeWorkers                 = 1
   val nrKclWorkers                    = 0
-  val applicationName                 = "testApp-1"         // + java.util.UUID.randomUUID().toString(),
   val runtime                         = 10.minute
   val maxRandomWorkerStartDelayMillis = 1 + 0 * 60 * 1000
   val recordProcessingTime: Duration  = 1.millisecond
+
+  val producerSettings = ProducerSettings(
+    aggregate = true,
+    metricsInterval = 5.seconds,
+    bufferSize = 8192 * 8,
+    maxParallelRequests = 5,
+    chunkSize = 256
+  )
 
   override def run(
     args: List[String]
@@ -44,8 +54,8 @@ object ExampleApp extends zio.App {
       ZStream.unwrapManaged {
         for {
           metrics <- CloudWatchMetricsPublisher.make(applicationName, id)
-          delay   <- zio.random.nextIntBetween(0, maxRandomWorkerStartDelayMillis).map(_.millis).toManaged_
-//          delay    = 1.seconds
+//          delay   <- zio.random.nextIntBetween(0, maxRandomWorkerStartDelayMillis).map(_.millis).toManaged_
+          delay    = 130.seconds
           _       <- log.info(s"Waiting ${delay.toMillis} ms to start worker ${id}").toManaged_
         } yield ZStream.fromEffect(ZIO.sleep(delay)) *> Consumer
           .shardedStream(
@@ -211,33 +221,49 @@ object ExampleApp extends zio.App {
       (client ++ adminClient ++ dynamicConsumer ++ leaseRepo ++ logging ++ metricsPublisherConfig)
   }
 
-  def produceRecords(streamName: String, nrRecords: Int) =
-    Producer
-      .make(
-        streamName,
-        Serde.asciiString,
-        ProducerSettings(aggregate = true, metricsInterval = 5.seconds, bufferSize = 8192 * 4),
-        metrics => putStrLn(metrics.toString)
-      )
+  def produceRecords(streamName: String, nrRecords: Int) = {
+    val chunkSize = 1000
+    Ref
+      .make(ProducerMetrics.empty)
+      .toManaged_
+      .flatMap { totalMetrics =>
+        Producer
+          .make(
+            streamName,
+            Serde.asciiString,
+            producerSettings,
+            metrics =>
+              putStrLn(metrics.toString) *>
+                totalMetrics
+                  .updateAndGet(_ + metrics)
+                  .flatMap(m => putStrLn(s"Total metrics: ${m.toString}"))
+          )
+      }
       .use { producer =>
         ZStream
-          .range(1, nrRecords)
-          .map(i => ProducerRecord(s"key$i", s"msg$i"))
-          .chunkN(produceRate)
-          .mapChunksM(
+          .unfoldChunk(0)(i =>
+            if ((i + 1) * chunkSize < nrRecords)
+              Some((Chunk.fromIterable((i * chunkSize) to ((i + 1) * chunkSize))), i + 1)
+            else
+              None
+          )
+          .throttleShape(produceRate / 10, 100.millis)(_.size)
+          .map(i => ProducerRecord(s"key$i", "value"))
+          .mapChunks(Chunk.single(_))
+          .mapMParUnordered(20) { chunk =>
+            println(s"Producing chunkie of size ${chunk.size}")
             producer
-              .produceChunk(_)
-              .tap(_ => log.debug("Produced chunk"))
-              .tapError(e => log.error(s"error: $e"))
+              .produceChunk(chunk)
+              //              .tapBoth(e => log.error(s"error: $e"), _ => log.debug("Produced chunk"))
               .retry(retryOnResourceNotFound && Schedule.recurs(1))
-              .as(Chunk.unit)
               .tapCause(e => log.error("Producing records chunk failed, will retry", e))
               .retry(Schedule.exponential(1.second))
 //              .delay(1.second) // TODO Until we fix throttling bug in Producer
-          )
+          }
           .runDrain
           .tapCause(e => log.error("Producing records chunk failed", e)) *>
           log.info("Producing records is done!")
 
       }
+  }
 }

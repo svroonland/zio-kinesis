@@ -35,9 +35,10 @@ private[client] final class ProducerLive[R, R1, T](
   settings: ProducerSettings,
   streamName: String,
   metricsCollector: ProducerMetrics => ZIO[R1, Nothing, Unit],
-  aggregate: Boolean = false
+  aggregate: Boolean = false,
+  inFlightCalls: Ref[Int]
 ) extends Producer[T] {
-  val batcher: ZTransducer[Any, Nothing, ProduceRequest, Seq[ProduceRequest]] =
+  val batcher: ZTransducer[Logging, Nothing, ProduceRequest, Seq[ProduceRequest]] =
     if (aggregate)
       ZTransducer
         .foldM(PutRecordsBatchAggregated.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
@@ -53,22 +54,37 @@ private[client] final class ProducerLive[R, R1, T](
     // Failed records get precedence
     (ZStream
       .tick(100.millis)
-      .mapConcatChunkM(_ => failedQueue.takeBetween(1, Int.MaxValue).map(Chunk.fromIterable)) merge ZStream
-      .fromQueue(queue))
-    // Batch records up to the Kinesis PutRecords request limits as long as downstream is busy
+      .mapConcatChunkM(_ => failedQueue.takeBetween(1, Int.MaxValue).map(Chunk.fromIterable)) merge
+      zStreamFromQueueWithMaxChunkSize(queue, settings.chunkSize))
+      .mapChunksM(chunk => log.trace(s"Dequeued chunk of size ${chunk.size}").as(chunk))
+      // Batch records up to the Kinesis PutRecords request limits as long as downstream is busy
       .aggregateAsync(batcher)
       // Several putRecords requests in parallel
-      .mapMParUnordered(settings.maxParallelRequests)(processBatch)
+      .mapMParUnordered(settings.maxParallelRequests)(b => countInFlight(processBatch(b)))
       .runDrain
+
+  private def countInFlight[R1, E, A](e: ZIO[R1, E, A]): ZIO[R1 with Logging, E, A] =
+    inFlightCalls
+      .updateAndGet(_ + 1)
+      .tap(inFlightCalls => log.debug(s"${inFlightCalls} PutRecords calls in flight"))
+      .toManaged(_ =>
+        inFlightCalls
+          .updateAndGet(_ - 1)
+          .tap(inFlightCalls => log.debug(s"${inFlightCalls} PutRecords calls in flight"))
+      )
+      .use_(e)
 
   private def processBatch(batch: Seq[ProduceRequest]) =
     (for {
-      _ <- log.info(s"Producing batch of size ${batch.map(_.aggregateCount).sum} (${batch.size} aggregated)")
+      _ <- log.info(s"PutRecords for batch of size ${batch.map(_.aggregateCount).sum} (${batch.size} aggregated)")
 
-      response      <- client
-                    .putRecords(streamName, batch.map(_.r))
-                    .tapError(e => log.warn(s"Error producing records, will retry if recoverable: $e"))
-                    .retry(scheduleCatchRecoverable && settings.backoffRequests)
+      responseAndTiming <- client
+                             .putRecords(streamName, batch.map(_.r))
+                             .tapError(e => log.warn(s"Error producing records, will retry if recoverable: $e"))
+                             .retry(scheduleCatchRecoverable && settings.backoffRequests)
+                             .timed
+      response           = responseAndTiming._2
+      _                 <- log.debug(s"PutRecords took ${responseAndTiming._1}")
 
       maybeSucceeded = response.records().asScala.zip(batch)
 
@@ -85,6 +101,7 @@ private[client] final class ProducerLive[R, R1, T](
       failedCount            = newFailed.map(_._2.aggregateCount).sum
       _                     <- currentMetrics.update(_.addFailures(failedCount))
       _                     <- log.warn(s"Failed to produce ${failedCount} records").when(newFailed.nonEmpty)
+      _                     <- log.warn(newFailed.take(10).map(_._1.errorMessage()).mkString(",, ")).when(newFailed.nonEmpty)
 
       // TODO backoff for shard limit stuff
       _ <- failedQueue
@@ -187,25 +204,27 @@ private[client] object ProducerLive {
 
   final case class PutRecordsAggregatedBatchForShard(
     entries: List[ProduceRequest],
-    aggregate: Messages.AggregatedRecord.Builder
+    payloadSize: Int
   ) {
-    // TODO not very efficient to build it every time
-    lazy val builtAggregate = aggregate.build()
+    private def builtAggregate: AggregatedRecord = {
+      val builder = Messages.AggregatedRecord.newBuilder()
 
-    lazy val serializedSize: Int =
-      ProtobufAggregation.encodedSize(builtAggregate)
+      builder
+        .addAllRecords(entries.zipWithIndex.map {
+          case (e, index) => ProtobufAggregation.putRecordsRequestEntryToRecord(e.r, index)
+        }.asJava)
+        .addAllExplicitHashKeyTable(
+          entries.map(e => Option(e.r.explicitHashKey()).getOrElse("0")).asJava
+        ) // TODO optimize: only filled ones
+        .addAllPartitionKeyTable(entries.map(e => e.r.partitionKey()).asJava)
+        .build()
+    }
 
     def add(r: ProduceRequest): PutRecordsAggregatedBatchForShard =
-      copy(
-        entries = r +: entries,
-        aggregate = aggregate
-          .clone()
-          .addRecords(ProtobufAggregation.putRecordsRequestEntryToRecord(r.r, aggregate.getRecordsCount))
-          .addExplicitHashKeyTable(Option(r.r.explicitHashKey()).getOrElse("0")) // TODO optimize: only filled ones
-          .addPartitionKeyTable(r.r.partitionKey())
-      )
+      copy(entries = r +: entries, payloadSize = payloadSize + payloadSizeForEntryAggregated(r.r))
 
-    def isWithinLimits: Boolean = serializedSize <= maxPayloadSizePerRecord
+    def isWithinLimits: Boolean =
+      payloadSize <= maxPayloadSizePerRecord
 
     def toProduceRequest: UIO[ProduceRequest] =
       for {
@@ -221,14 +240,14 @@ private[client] object ProducerLive {
   }
 
   object PutRecordsAggregatedBatchForShard {
-    val empty: PutRecordsAggregatedBatchForShard =
-      PutRecordsAggregatedBatchForShard(List.empty, AggregatedRecord.newBuilder())
-
+    val empty: PutRecordsAggregatedBatchForShard = PutRecordsAggregatedBatchForShard(
+      List.empty,
+      ProtobufAggregation.magicBytes.size + ProtobufAggregation.checksumSize
+    )
   }
 
   type ShardId      = String
   type PartitionKey = String
-  type NEL[+T]      = List[T]
 
   case class ShardMap(shards: Iterable[(ShardId, BigInt, BigInt)]) {
     def shardForPartitionKey(key: PartitionKey): ShardId = {
@@ -254,19 +273,16 @@ private[client] object ProducerLive {
   // One batch per shard because the record limit of 1 MB is also the throughput limit for the shard (1 MB per second)
   final case class PutRecordsBatchAggregated(
     batches: Map[ShardId, PutRecordsAggregatedBatchForShard],
-    retries: List[ProduceRequest]
+    retries: List[ProduceRequest],
+    payloadSizeRetries: Int
   ) {
     val nrBatches = batches.size
 
-    def payloadSize: Int =
-      retries.map(_.r).map(payloadSizeForEntry).sum +
-        batches.values.map { batch =>
-          batch.serializedSize + batch.entries.head.r.partitionKey().length
-        }.sum
+    def payloadSize = payloadSizeRetries + batches.values.map(_.payloadSize).sum
 
     def add(entry: ProduceRequest, shardMap: ShardMap): PutRecordsBatchAggregated =
       if (entry.isAggregated)
-        copy(retries = entry +: retries)
+        copy(retries = entry +: retries, payloadSizeRetries = payloadSizeRetries + payloadSizeForEntry(entry.r))
       else {
         val shardId: ShardId =
           shardMap.shardForPartitionKey(Option(entry.r.explicitHashKey()).getOrElse(entry.r.partitionKey()))
@@ -275,24 +291,23 @@ private[client] object ProducerLive {
         val shardBatch = batches.getOrElse(shardId, PutRecordsAggregatedBatchForShard.empty)
 
         val updatedBatch = shardBatch.add(entry)
-        copy(batches = batches + (shardId -> updatedBatch))
+
+        // TODO this is an approximation
+        copy(
+          batches = batches + (shardId -> updatedBatch)
+        )
       }
 
-    def isWithinLimits: Boolean = {
-      val is = (retries.length + nrBatches) <= maxRecordsPerRequest &&
+    def isWithinLimits: Boolean =
+      (retries.length + nrBatches) <= maxRecordsPerRequest &&
         batches.values.forall(_.isWithinLimits) &&
         payloadSize < maxPayloadSizePerRequest
-      if (!is) println("Is no longer in limits!")
-      is
-    }
 
-    def toProduceRequests: UIO[Seq[ProduceRequest]] =
-      UIO(
-        println(
-          s"Aggregated ${batches.values.map(_.entries.size).sum} records. " +
-            s"Payload sizes: ${batches.values.map(_.serializedSize).mkString(", ")}, " +
-            s"total size: ${batches.values.map(_.serializedSize).sum}"
-        )
+    def toProduceRequests: ZIO[Logging, Nothing, Seq[ProduceRequest]] =
+      log.debug(
+        s"Aggregated ${batches.values.map(_.entries.size).sum} records. " +
+          s"Payload sizes: ${batches.values.map(_.payloadSize).mkString(", ")}, " +
+          s"total size: ${batches.values.map(_.payloadSize).sum}"
       ) *>
         ZIO
           .foreach(batches.values.toSeq)(_.toProduceRequest)
@@ -301,7 +316,7 @@ private[client] object ProducerLive {
   }
 
   object PutRecordsBatchAggregated {
-    def empty: PutRecordsBatchAggregated = PutRecordsBatchAggregated(Map.empty, List.empty)
+    def empty: PutRecordsBatchAggregated = PutRecordsBatchAggregated(Map.empty, List.empty, 0)
   }
 
   final def scheduleCatchRecoverable: Schedule[Any, Throwable, Throwable] =
@@ -351,5 +366,25 @@ private[client] object ProducerLive {
 
   def payloadSizeForEntry(entry: PutRecordsRequestEntry): Int =
     entry.partitionKey().length + entry.data().asByteArray().length
+
+  def payloadSizeForEntryAggregated(entry: PutRecordsRequestEntry): Int =
+    payloadSizeForEntry(entry) + 4 // To do find out overhead per record
+
+  def zStreamFromQueueWithMaxChunkSize[R, E, O](
+    queue: ZQueue[Nothing, R, Any, E, Nothing, O],
+    chunkSize: Int = Int.MaxValue
+  ): ZStream[R, E, O] =
+    ZStream.repeatEffectChunkOption {
+      queue
+      // This is important for batching to work properly. Too large chunks means suboptimal usage of the max parallel requests
+        .takeBetween(1, chunkSize)
+        .map(Chunk.fromIterable)
+        .catchAllCause(c =>
+          queue.isShutdown.flatMap { down =>
+            if (down && c.interrupted) IO.fail(None)
+            else IO.halt(c).asSomeError
+          }
+        )
+    }
 
 }

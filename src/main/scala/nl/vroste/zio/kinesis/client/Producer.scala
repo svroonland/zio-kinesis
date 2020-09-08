@@ -70,7 +70,8 @@ final case class ProducerSettings(
   failedDelay: Duration = 100.millis,
   metricsInterval: Duration = 30.seconds,
   updateShardInterval: Duration = 30.seconds,
-  aggregate: Boolean = false
+  aggregate: Boolean = false,
+  chunkSize: Int = 512
 )
 
 object Producer {
@@ -90,6 +91,7 @@ object Producer {
       currentMetrics  <- Ref.make(CurrentMetrics.empty(now)).toManaged_
       shards          <- client.listShards(streamName).runCollect.toManaged_
       currentShardMap <- Ref.make(ShardMap.fromShards(shards)).toManaged_
+      inFlightCalls   <- Ref.make(0).toManaged_
       // TODO move to producer implementaiton, needs to be called on invalidate shard map
       _               <- client
              .listShards(streamName)
@@ -113,7 +115,8 @@ object Producer {
                    settings,
                    streamName,
                    metricsCollector,
-                   settings.aggregate
+                   settings.aggregate,
+                   inFlightCalls
                  )
       _       <- producer.runloop.forkManaged
       _       <- producer.metricsCollection.forkManaged
