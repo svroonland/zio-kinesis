@@ -251,15 +251,16 @@ private[client] object ProducerLive {
       )
   }
 
+  // One batch per shard because the record limit of 1 MB is also the throughput limit for the shard (1 MB per second)
   final case class PutRecordsBatchAggregated(
-    batches: Map[ShardId, NEL[PutRecordsAggregatedBatchForShard]],
+    batches: Map[ShardId, PutRecordsAggregatedBatchForShard],
     retries: List[ProduceRequest]
   ) {
-    val nrBatches = batches.values.map(_.size).sum
+    val nrBatches = batches.size
 
     def payloadSize: Int =
       retries.map(_.r).map(payloadSizeForEntry).sum +
-        batches.values.flatten.map { batch =>
+        batches.values.map { batch =>
           batch.serializedSize + batch.entries.head.r.partitionKey().length
         }.sum
 
@@ -271,34 +272,30 @@ private[client] object ProducerLive {
           shardMap.shardForPartitionKey(Option(entry.r.explicitHashKey()).getOrElse(entry.r.partitionKey()))
 
         // TODO can we somehow ensure that there's always at least one entry in a batch?
-        val shardBatches = batches.getOrElse(shardId, List(PutRecordsAggregatedBatchForShard.empty))
-        val batch        = shardBatches.head
+        val shardBatch = batches.getOrElse(shardId, PutRecordsAggregatedBatchForShard.empty)
 
-        val updatedBatch = batch.add(entry)
-
-        val updatedShardBatches =
-          if (updatedBatch.isWithinLimits)
-            updatedBatch +: shardBatches.tail
-          else {
-            println(s"Creating a new batch for shard ${shardId}")
-            val newBatch = PutRecordsAggregatedBatchForShard.empty.add(entry)
-            newBatch +: shardBatches
-          }
-
-        copy(batches = batches + (shardId -> updatedShardBatches))
+        val updatedBatch = shardBatch.add(entry)
+        copy(batches = batches + (shardId -> updatedBatch))
       }
 
-    def isWithinLimits: Boolean =
-//      val is = (retries.length + nrBatches) <= maxRecordsPerRequest &&
-//        payloadSize < maxPayloadSizePerRequest
-//      if (!is) println("Is no longer in limits!")
-//      is
-      true
+    def isWithinLimits: Boolean = {
+      val is = (retries.length + nrBatches) <= maxRecordsPerRequest &&
+        batches.values.forall(_.isWithinLimits) &&
+        payloadSize < maxPayloadSizePerRequest
+      if (!is) println("Is no longer in limits!")
+      is
+    }
 
     def toProduceRequests: UIO[Seq[ProduceRequest]] =
-      UIO(println(s"Aggregated ${batches.values.flatten.map(_.entries.size).sum} records")) *>
+      UIO(
+        println(
+          s"Aggregated ${batches.values.map(_.entries.size).sum} records. " +
+            s"Payload sizes: ${batches.values.map(_.serializedSize).mkString(", ")}, " +
+            s"total size: ${batches.values.map(_.serializedSize).sum}"
+        )
+      ) *>
         ZIO
-          .foreach(batches.values.flatten.toSeq)(_.toProduceRequest)
+          .foreach(batches.values.toSeq)(_.toProduceRequest)
           .map(_.reverse)
           .map(retries.reverse ++ _)
   }
