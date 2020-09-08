@@ -42,8 +42,7 @@ object ExampleApp extends zio.App {
     aggregate = true,
     metricsInterval = 5.seconds,
     bufferSize = 8192 * 8,
-    maxParallelRequests = 5,
-    chunkSize = 256
+    maxParallelRequests = 5
   )
 
   override def run(

@@ -1,13 +1,14 @@
 package nl.vroste.zio.kinesis.client
-import nl.vroste.zio.kinesis.client.Client.ProducerRecord
+import nl.vroste.zio.kinesis.client.Client.{ listShards, ProducerRecord }
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.ProducerLive.{ CurrentMetrics, ProduceRequest, ShardMap }
 import nl.vroste.zio.kinesis.client.serde.Serializer
+import software.amazon.awssdk.services.kinesis.model.{ ShardFilter, ShardFilterType }
 import zio._
 import zio.clock.{ instant, Clock }
 import zio.duration.{ Duration, _ }
 import zio.logging._
-import zio.stream.ZSink
+import zio.stream.{ ZSink, ZStream }
 
 /**
  * Producer for Kinesis records
@@ -99,24 +100,18 @@ object Producer {
       client          <- ZManaged.service[Client.Service]
       env             <- ZIO.environment[R with Clock].toManaged_
       queue           <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
-      now             <- instant.toManaged_
-      currentMetrics  <- Ref.make(CurrentMetrics.empty(now)).toManaged_
-      shards          <- client.listShards(streamName).runCollect.toManaged_
-      currentShardMap <- Ref.make(ShardMap.fromShards(shards)).toManaged_
+      currentMetrics  <- instant.map(CurrentMetrics.empty).flatMap(Ref.make).toManaged_
+      shardMap        <- getShardMap(streamName).toManaged_
+      currentShardMap <- Ref.make(shardMap).toManaged_
       inFlightCalls   <- Ref.make(0).toManaged_
-      // TODO move to producer implementaiton, needs to be called on invalidate shard map
-      _               <- client
-             .listShards(streamName)
-             .runCollect
-             .map(ShardMap.fromShards)
-             .flatMap(currentShardMap.set)
-             .repeat(Schedule.spaced(settings.updateShardInterval))
-             .delay(settings.updateShardInterval)
-             .forkManaged
-
       failedQueue     <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
 
-      producer = new ProducerLive[R, R1, T](
+      triggerUpdateShards <- Util.periodicAndTriggerableOperation(
+                               getShardMap(streamName) >>= currentShardMap.set,
+                               settings.updateShardInterval
+                             )
+
+      producer             = new ProducerLive[R, R1, T](
                    client,
                    env,
                    queue,
@@ -128,9 +123,21 @@ object Producer {
                    streamName,
                    metricsCollector,
                    settings.aggregate,
-                   inFlightCalls
+                   inFlightCalls,
+                   triggerUpdateShards
                  )
-      _       <- producer.runloop.forkManaged
-      _       <- producer.metricsCollection.forkManaged
+      _                   <- producer.runloop.forkManaged
+      _                   <- producer.metricsCollection.forkManaged
     } yield producer
+
+  private def getShardMap(streamName: String): ZIO[Clock with Client, Throwable, ShardMap] = {
+    val shardFilter = ShardFilter.builder().`type`(ShardFilterType.AT_LATEST).build() // Currently open shards
+    ZIO
+      .service[Client.Service]
+      .flatMap(
+        _.listShards(streamName, filter = Some(shardFilter)).runCollect
+          .map(ShardMap.fromShards)
+      )
+  }
+
 }

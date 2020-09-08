@@ -36,7 +36,8 @@ private[client] final class ProducerLive[R, R1, T](
   streamName: String,
   metricsCollector: ProducerMetrics => ZIO[R1, Nothing, Unit],
   aggregate: Boolean = false,
-  inFlightCalls: Ref[Int]
+  inFlightCalls: Ref[Int],
+  triggerUpdateShards: UIO[Unit]
 ) extends Producer[T] {
   val batcher: ZTransducer[Logging, Nothing, ProduceRequest, Seq[ProduceRequest]] =
     if (aggregate)
