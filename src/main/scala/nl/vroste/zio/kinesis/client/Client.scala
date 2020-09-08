@@ -56,7 +56,8 @@ object Client {
     def listShards(
       streamName: String,
       streamCreationTimestamp: Option[Instant] = None,
-      chunkSize: Int = 10000
+      chunkSize: Int = 10000,
+      filter: Option[ShardFilter] = None
     ): ZStream[Clock, Throwable, Shard]
 
     def getShardIterator(
