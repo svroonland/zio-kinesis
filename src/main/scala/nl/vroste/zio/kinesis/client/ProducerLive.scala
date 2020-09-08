@@ -271,15 +271,21 @@ private[client] object ProducerLive {
     private def builtAggregate: AggregatedRecord = {
       val builder = Messages.AggregatedRecord.newBuilder()
 
-      builder
-        .addAllRecords(entries.zipWithIndex.map {
-          case (e, index) => ProtobufAggregation.putRecordsRequestEntryToRecord(e.r, index)
-        }.asJava)
+      val records   = entries.zipWithIndex.map {
+        case (e, index) => ProtobufAggregation.putRecordsRequestEntryToRecord(e.r, index)
+      }
+      val aggregate = builder
+        .addAllRecords(records.asJava)
         .addAllExplicitHashKeyTable(
           entries.map(e => Option(e.r.explicitHashKey()).getOrElse("0")).asJava
         ) // TODO optimize: only filled ones
         .addAllPartitionKeyTable(entries.map(e => e.r.partitionKey()).asJava)
         .build()
+
+      println(
+        s"Aggregate size: ${aggregate.getSerializedSize}, predicted: ${payloadSize} (${aggregate.getSerializedSize * 100.0 / payloadSize} %)"
+      )
+      aggregate
     }
 
     def add(r: ProduceRequest): PutRecordsAggregatedBatchForShard =
@@ -311,7 +317,7 @@ private[client] object ProducerLive {
   object PutRecordsAggregatedBatchForShard {
     private val empty: PutRecordsAggregatedBatchForShard = PutRecordsAggregatedBatchForShard(
       List.empty,
-      ProtobufAggregation.magicBytes.size + ProtobufAggregation.checksumSize
+      ProtobufAggregation.magicBytes.length + ProtobufAggregation.checksumSize
     )
 
     def from(r: ProduceRequest): PutRecordsAggregatedBatchForShard =
@@ -441,7 +447,10 @@ private[client] object ProducerLive {
     entry.partitionKey().length + entry.data().asByteArray().length
 
   def payloadSizeForEntryAggregated(entry: PutRecordsRequestEntry): Int =
-    payloadSizeForEntry(entry) + 4 // TODO estimate, find out protobuf overhead per record
+    payloadSizeForEntry(entry) +
+      3 +                                                                // Data
+      3 + 2 +                                                            // Partition key
+      Option(entry.explicitHashKey()).map(_.length + 2).getOrElse(1) + 3 // Explicit hash key
 
   def zStreamFromQueueWithMaxChunkSize[R, E, O](
     queue: ZQueue[Nothing, R, Any, E, Nothing, O],
