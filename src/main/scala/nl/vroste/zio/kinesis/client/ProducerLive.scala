@@ -24,6 +24,7 @@ import zio._
 import zio.clock.{ instant, Clock }
 import zio.duration._
 import zio.logging.{ log, Logging }
+import zio.stream.ZTransducer.Push
 import zio.stream.{ ZStream, ZTransducer }
 
 import scala.jdk.CollectionConverters._
@@ -46,15 +47,13 @@ private[client] final class ProducerLive[R, R1, T](
 ) extends Producer[T] {
   val batcher: ZTransducer[Logging, Nothing, ProduceRequest, Seq[ProduceRequest]] =
     if (aggregate)
-      ZTransducer
-        .foldM(PutRecordsBatchAggregated.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
-          shards.get.map(batch.add(record, _))
-        }
-        .mapM(_.toProduceRequests)
+      foldWhileM(PutRecordsBatchAggregated.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
+        shards.get.map(batch.add(record, _))
+      }.mapM(_.toProduceRequests)
     else
-      ZTransducer
-        .fold(PutRecordsBatch.empty)(_.isWithinLimits)(_.add(_: ProduceRequest))
-        .map(_.entriesInOrder)
+      foldWhileM(PutRecordsBatch.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
+        ZIO.succeed(batch.add(record))
+      }.map(_.entriesInOrder)
 
   var runloop: ZIO[Logging with Clock, Nothing, Unit] =
     // Failed records get precedence
@@ -82,7 +81,7 @@ private[client] final class ProducerLive[R, R1, T](
 
       responseAndRequests = response.records().asScala.zip(batch)
 
-      (newFailed, succeeded)    = if (response.failedRecordCount() > 0)
+      (newFailed, succeeded) = if (response.failedRecordCount() > 0)
                                  responseAndRequests.partition {
                                    case (result, _) =>
                                      result.errorCode() != null && recoverableErrorCodes.contains(result.errorCode())
@@ -90,18 +89,23 @@ private[client] final class ProducerLive[R, R1, T](
                                else
                                  (Seq.empty, responseAndRequests)
 
-      hasShardPredictionErrors <- checkShardPredictionErrors(responseAndRequests)
-      _                        <- handleFailures(newFailed, repredict = hasShardPredictionErrors)
-      _                        <- ZIO.foreach_(succeeded) {
+//      hasShardPredictionErrors <- checkShardPredictionErrors(responseAndRequests)
+//      _                        <- handleFailures(newFailed, repredict = hasShardPredictionErrors)
+      _                     <- ZIO.foreach_(succeeded) {
              case (response, request) =>
                request.done.completeWith(
                  ZIO.succeed(ProduceResponse(response.shardId(), response.sequenceNumber(), request.attemptNumber))
                )
            }
+      // TODO handle connection failure
     } yield ()).catchAll {
       case NonFatal(e) =>
         log.warn("Failed to process batch") *>
           ZIO.foreach_(batch.map(_.done))(_.fail(e))
+    }.catchAllCause {
+      case e: Cause[Throwable] =>
+        log.error(s"oh noes!: ${e}") *>
+          ZIO.foreach_(batch.map(_.done))(_.halt(e))
     }
 
   private def handleFailures(newFailed: collection.Seq[(PutRecordsResultEntry, ProduceRequest)], repredict: Boolean) = {
@@ -223,9 +227,9 @@ private[client] object ProducerLive {
   type PartitionKey = String
 
   val maxChunkSize: Int        = 512                        // Stream-internal max chunk size
-  val maxRecordsPerRequest     = 499                        // This is a Kinesis API limitation // TODO because of fold issue, reduced by 1
-  val maxPayloadSizePerRequest = 5 * 1024 * 1024 - 2 * 1024 // 5 MB TODO because of fold overflow issue
-  val maxPayloadSizePerRecord  = 1 * 1024 * 1024 - 2 * 1024 // 1 MB TODO because of fold overflow issue
+  val maxRecordsPerRequest     = 500                        // This is a Kinesis API limitation
+  val maxPayloadSizePerRequest = 5 * 1024 * 1024 - 2 * 1024 // 5 MB
+  val maxPayloadSizePerRecord  = 1 * 1024 * 1024 - 2 * 1024 // 1 MB
 
   val recoverableErrorCodes = Set("ProvisionedThroughputExceededException", "InternalFailure", "ServiceUnavailable");
 
@@ -456,4 +460,34 @@ private[client] object ProducerLive {
         )
     }
 
+  /**
+   * Like ZTransducer.foldM, but with 'while' instead of 'until' semantics regarding `contFn`
+   */
+  def foldWhileM[R, E, I, O](z: O)(contFn: O => Boolean)(f: (O, I) => ZIO[R, E, O]): ZTransducer[R, E, I, O] =
+    ZTransducer {
+      val initial = Some(z)
+
+      def go(in: Chunk[I], state: O): ZIO[R, E, (Chunk[O], O)] =
+        in.foldM[R, E, (Chunk[O], O)]((Chunk.empty, state)) {
+          case ((os0, state), i) =>
+            f(state, i).flatMap { o =>
+              if (contFn(o))
+                ZIO.succeed((os0, o))
+              else
+                f(z, i).map(zi => (os0 :+ state, zi))
+            }
+        }
+
+      ZRef.makeManaged[Option[O]](initial).map { state =>
+        {
+          case Some(in) =>
+            state.get.flatMap(s => go(in, s.getOrElse(z))).flatMap {
+              case (os, s) =>
+                state.set(Some(s)) *> Push.emit(os)
+            }
+          case None     =>
+            state.getAndSet(None).map(_.fold[Chunk[O]](Chunk.empty)(Chunk.single(_)))
+        }
+      }
+    }
 }
