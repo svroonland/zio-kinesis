@@ -297,6 +297,13 @@ object ProducerExample extends zio.App {
 }
 ```
 
+### Aggregation
+Each shard has an ingestion limit of 1 MB/s and 1000 records/s. When your records are small, you may not reach the 1MB/s but you will be limited by the 1000 records/s. 
+
+`Producer` can aggregate multiple user records into one Kinesis record to optimize usage of the shard capacity. `Consumer` and `DynamicConsumer` can automatically deaggregate these records transparently to the user. Checkpointing within an aggregate is supported as well.
+
+Aggregation is off by default but can be enabled by setting `ProducerSettings.aggregate` to `true`.
+
 ### Metrics
 `Producer` periodically collects metrics like success rate and throughput and makes them available as `ProducerMetrics` values. Statistical values are collected in a `HdrHistogram`.  Metrics are collected every 30 seconds by default, but the interval can be customized. 
 
