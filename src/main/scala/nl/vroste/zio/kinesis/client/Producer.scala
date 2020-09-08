@@ -107,7 +107,9 @@ object Producer {
       failedQueue     <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
 
       triggerUpdateShards <- Util.periodicAndTriggerableOperation(
-                               getShardMap(streamName) >>= currentShardMap.set,
+                               (log.debug("Refreshing shard map") *>
+                                 (getShardMap(streamName) >>= currentShardMap.set) *>
+                                 log.info("Shard map was refreshed")).orDie,
                                settings.updateShardInterval
                              )
 
@@ -132,12 +134,10 @@ object Producer {
 
   private def getShardMap(streamName: String): ZIO[Clock with Client, Throwable, ShardMap] = {
     val shardFilter = ShardFilter.builder().`type`(ShardFilterType.AT_LATEST).build() // Currently open shards
-    ZIO
-      .service[Client.Service]
-      .flatMap(
-        _.listShards(streamName, filter = Some(shardFilter)).runCollect
-          .map(ShardMap.fromShards)
-      )
+    Client
+      .listShards(streamName, filter = Some(shardFilter))
+      .runCollect
+      .flatMap(shards => instant.map(ShardMap.fromShards(shards, _)))
   }
 
 }

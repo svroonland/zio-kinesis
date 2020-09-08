@@ -157,16 +157,17 @@ object Util {
   /**
    * Creates a resource that executes `effect`` with intervals of `period` or via manual invocation
    *
-     * After manual invocation, the next effect execution will be after interval
+   * After manual invocation, the next effect execution will be after interval. Any triggers during
+   * effect execution are ignored.
    *
-     * @return ZIO that when executed, immediately executes the `effect`
+   * @return ZIO that when executed, immediately executes the `effect`
    */
   def periodicAndTriggerableOperation[R, E, A](
     effect: ZIO[R, E, A],
     period: Duration
   ): ZManaged[R with Clock, E, UIO[Unit]] =
     for {
-      queue <- Queue.bounded[Unit](1).toManaged(_.shutdown)
-      _     <- ((queue.take raceFirst ZIO.sleep(period)) *> effect).forever.forkManaged
+      queue <- Queue.dropping[Unit](1).toManaged(_.shutdown)
+      _     <- ((queue.take raceFirst ZIO.sleep(period)) *> effect *> queue.takeAll).forever.forkManaged
     } yield queue.offer(()).unit
 }

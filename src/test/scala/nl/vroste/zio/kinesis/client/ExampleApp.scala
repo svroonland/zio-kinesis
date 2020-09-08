@@ -21,7 +21,7 @@ import zio.logging.{ log, Logging }
 import zio.stream.{ ZStream, ZTransducer }
 
 /**
- * Example app that shows the ZIO-native and KCL workers running in parallel
+ * Runnable used for manually testing various features
  */
 object ExampleApp extends zio.App {
   val streamName                      = "zio-test-stream-3" // + java.util.UUID.randomUUID().toString
@@ -29,8 +29,8 @@ object ExampleApp extends zio.App {
   val nrRecords                       = 40000000
   val produceRate                     = 30000               // Nr records to produce per second
   val nrShards                        = 10
-  val reshardFactor                   = 0.5
-  val reshardAfter: Option[Duration]  = None                // Some(10.seconds)
+  val reshardFactor                   = 2
+  val reshardAfter: Option[Duration]  = Some(10.seconds)
   val enhancedFanout                  = false
   val nrNativeWorkers                 = 1
   val nrKclWorkers                    = 0
