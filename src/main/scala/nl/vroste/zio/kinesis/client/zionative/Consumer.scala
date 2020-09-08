@@ -332,6 +332,7 @@ object Consumer {
                                         }
                                       }
                                   }
+                                  .dropUntil(r => checkpointOpt.forall(aggregatedRecordIsAfterCheckpoint(r, _)))
                                   .map(Exit.succeed(_))).collectWhileSuccess
               } yield (
                 shardId,
@@ -467,9 +468,22 @@ object Consumer {
     case (Left(SpecialCheckpoint.Latest), _)                                           => ShardIteratorType.Latest
     case (Left(SpecialCheckpoint.AtTimestamp), InitialPosition.AtTimestamp(timestamp)) =>
       ShardIteratorType.AtTimestamp(timestamp)
-    case (Right(s), _)                                                                 =>
-      ShardIteratorType.AfterSequenceNumber(s.sequenceNumber)
+    case (Right(s), _)                                                                 => // TODO could be a subseq
+      ShardIteratorType.AtSequenceNumber(s.sequenceNumber)
     case s @ _                                                                         =>
       throw new IllegalArgumentException(s"${s} is not a valid starting checkpoint")
   }
+
+  private[zionative] def aggregatedRecordIsAfterCheckpoint(
+    record: Record[_],
+    checkpoint: Either[SpecialCheckpoint, ExtendedSequenceNumber]
+  ): Boolean =
+    (checkpoint, record.subSequenceNumber) match {
+      case (Left(_), _)                                                                                      => true
+      case (Right(ExtendedSequenceNumber(sequenceNumber, subSequenceNumber)), Some(recordSubSequenceNumber)) =>
+        (BigInt(record.sequenceNumber) > BigInt(sequenceNumber)) ||
+          (BigInt(record.sequenceNumber) == BigInt(sequenceNumber) && recordSubSequenceNumber > subSequenceNumber)
+      case (Right(ExtendedSequenceNumber(sequenceNumber, _)), None)                                          =>
+        BigInt(record.sequenceNumber) > BigInt(sequenceNumber)
+    }
 }
