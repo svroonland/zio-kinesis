@@ -81,7 +81,7 @@ private[client] final class ProducerLive[R, R1, T](
 
       responseAndRequests = response.records().asScala.zip(batch)
 
-      (newFailed, succeeded) = if (response.failedRecordCount() > 0)
+      (newFailed, succeeded)    = if (response.failedRecordCount() > 0)
                                  responseAndRequests.partition {
                                    case (result, _) =>
                                      result.errorCode() != null && recoverableErrorCodes.contains(result.errorCode())
@@ -89,9 +89,9 @@ private[client] final class ProducerLive[R, R1, T](
                                else
                                  (Seq.empty, responseAndRequests)
 
-//      hasShardPredictionErrors <- checkShardPredictionErrors(responseAndRequests)
-//      _                        <- handleFailures(newFailed, repredict = hasShardPredictionErrors)
-      _                     <- ZIO.foreach_(succeeded) {
+      hasShardPredictionErrors <- checkShardPredictionErrors(responseAndRequests)
+      _                        <- handleFailures(newFailed, repredict = hasShardPredictionErrors)
+      _                        <- ZIO.foreach_(succeeded) {
              case (response, request) =>
                request.done.completeWith(
                  ZIO.succeed(ProduceResponse(response.shardId(), response.sequenceNumber(), request.attemptNumber))
@@ -282,9 +282,9 @@ private[client] object ProducerLive {
         .addAllPartitionKeyTable(entries.map(e => e.r.partitionKey()).asJava)
         .build()
 
-      println(
-        s"Aggregate size: ${aggregate.getSerializedSize}, predicted: ${payloadSize} (${aggregate.getSerializedSize * 100.0 / payloadSize} %)"
-      )
+//      println(
+//        s"Aggregate size: ${aggregate.getSerializedSize}, predicted: ${payloadSize} (${aggregate.getSerializedSize * 100.0 / payloadSize} %)"
+//      )
       aggregate
     }
 
