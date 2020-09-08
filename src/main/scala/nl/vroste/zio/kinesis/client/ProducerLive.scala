@@ -149,7 +149,7 @@ private[client] final class ProducerLive[R, R1, T](
       .as(shardPredictionErrors.nonEmpty)
   }
 
-  private def countInFlight[R1, E, A](e: ZIO[R1, E, A]): ZIO[R1 with Logging, E, A] =
+  private def countInFlight[R0, E, A](e: ZIO[R0, E, A]): ZIO[R0 with Logging, E, A] =
     inFlightCalls
       .updateAndGet(_ + 1)
       .tap(inFlightCalls => log.debug(s"${inFlightCalls} PutRecords calls in flight"))
@@ -213,10 +213,10 @@ private[client] object ProducerLive {
   type ShardId      = String
   type PartitionKey = String
 
-  val maxChunkSize: Int        = 512                          // Stream-internal max chunk size
-  val maxRecordsPerRequest     = 499                          // This is a Kinesis API limitation // TODO because of fold issue, reduced by 1
-  val maxPayloadSizePerRequest = 5 * 1024 * 1024 - 512 * 1024 // 5 MB
-  val maxPayloadSizePerRecord  = 1 * 1024 * 1024 - 128 * 1024 // 1 MB
+  val maxChunkSize: Int        = 512                        // Stream-internal max chunk size
+  val maxRecordsPerRequest     = 499                        // This is a Kinesis API limitation // TODO because of fold issue, reduced by 1
+  val maxPayloadSizePerRequest = 5 * 1024 * 1024 - 2 * 1024 // 5 MB TODO because of fold overflow issue
+  val maxPayloadSizePerRecord  = 1 * 1024 * 1024 - 2 * 1024 // 1 MB TODO because of fold overflow issue
 
   val recoverableErrorCodes = Set("ProvisionedThroughputExceededException", "InternalFailure", "ServiceUnavailable");
 
@@ -296,10 +296,13 @@ private[client] object ProducerLive {
   }
 
   object PutRecordsAggregatedBatchForShard {
-    val empty: PutRecordsAggregatedBatchForShard = PutRecordsAggregatedBatchForShard(
+    private val empty: PutRecordsAggregatedBatchForShard = PutRecordsAggregatedBatchForShard(
       List.empty,
       ProtobufAggregation.magicBytes.size + ProtobufAggregation.checksumSize
     )
+
+    def from(r: ProduceRequest): PutRecordsAggregatedBatchForShard =
+      empty.add(r)
   }
 
   case class ShardMap(shards: Iterable[(ShardId, BigInt, BigInt)], lastUpdated: Instant, invalid: Boolean = false) {
@@ -341,12 +344,11 @@ private[client] object ProducerLive {
       else {
         val shardId: ShardId = entry.predictedShard
 
-        // TODO can we somehow ensure that there's always at least one entry in a batch?
-        val shardBatch = batches.getOrElse(shardId, PutRecordsAggregatedBatchForShard.empty)
+        val shardBatch   = batches.get(shardId)
+        val updatedBatch = shardBatch
+          .map(_.add(entry))
+          .getOrElse(PutRecordsAggregatedBatchForShard.from(entry))
 
-        val updatedBatch = shardBatch.add(entry)
-
-        // TODO this is an approximation
         copy(
           batches = batches + (shardId -> updatedBatch)
         )
@@ -422,7 +424,7 @@ private[client] object ProducerLive {
     entry.partitionKey().length + entry.data().asByteArray().length
 
   def payloadSizeForEntryAggregated(entry: PutRecordsRequestEntry): Int =
-    payloadSizeForEntry(entry) + 4 // To do find out overhead per record
+    payloadSizeForEntry(entry) + 4 // TODO estimate, find out protobuf overhead per record
 
   def zStreamFromQueueWithMaxChunkSize[R, E, O](
     queue: ZQueue[Nothing, R, Any, E, Nothing, O],
