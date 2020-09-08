@@ -63,6 +63,19 @@ trait Producer[T] {
     ZSink.drain.contramapM(produceChunk)
 }
 
+/**
+ *
+ * @param bufferSize Maximum number of records to be queued for processing
+ *                   When this number is reached, calls to `produce` or `produceChunk` will backpressure.
+ * @param maxParallelRequests Maximum number of `PutRecords` calls that are in flight concurrently
+ * @param backoffRequests
+ * @param failedDelay
+ * @param metricsInterval Interval at which metrics are published
+ * @param updateShardInterval Interval at which the stream's shards are refreshed
+ * @param aggregate Aggregate records
+ *                  Enabling this setting can give higher throughput for small records, by working around
+ *                  the 1000 records/s limit per shard.
+ */
 final case class ProducerSettings(
   bufferSize: Int = 8192,
   maxParallelRequests: Int = 24,
@@ -70,8 +83,7 @@ final case class ProducerSettings(
   failedDelay: Duration = 100.millis,
   metricsInterval: Duration = 30.seconds,
   updateShardInterval: Duration = 30.seconds,
-  aggregate: Boolean = false,
-  chunkSize: Int = 512
+  aggregate: Boolean = false
 )
 
 object Producer {

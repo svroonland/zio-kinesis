@@ -55,7 +55,7 @@ private[client] final class ProducerLive[R, R1, T](
     (ZStream
       .tick(100.millis)
       .mapConcatChunkM(_ => failedQueue.takeBetween(1, Int.MaxValue).map(Chunk.fromIterable)) merge
-      zStreamFromQueueWithMaxChunkSize(queue, settings.chunkSize))
+      zStreamFromQueueWithMaxChunkSize(queue, maxChunkSize))
       .mapChunksM(chunk => log.trace(s"Dequeued chunk of size ${chunk.size}").as(chunk))
       // Batch records up to the Kinesis PutRecords request limits as long as downstream is busy
       .aggregateAsync(batcher)
@@ -166,6 +166,7 @@ private[client] final class ProducerLive[R, R1, T](
 }
 
 private[client] object ProducerLive {
+  val maxChunkSize: Int        = 512                          // Stream-internal max chunk size
   val maxRecordsPerRequest     = 499                          // This is a Kinesis API limitation // TODO because of fold issue, reduced by 1
   val maxPayloadSizePerRequest = 5 * 1024 * 1024 - 512 * 1024 // 5 MB
   val maxPayloadSizePerRecord  = 1 * 1024 * 1024 - 128 * 1024 // 1 MB
