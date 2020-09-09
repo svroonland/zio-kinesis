@@ -97,4 +97,14 @@ object DynamicConsumerFake {
     ZStream.fromIterable(listOfShards)
   }
 
+  def shardsFromStreams[R, T](
+    serializer: Serializer[R, T],
+    streams: ZStream[R, Throwable, T]*
+  ): ZStream[Any, Nothing, (String, ZStream[R, Throwable, ByteBuffer])] = {
+    val listOfShards = streams.zipWithIndex.map {
+      case (stream, i) => (s"shard$i", stream.mapM(serializer.serialize))
+    }
+    ZStream.fromIterable(listOfShards)
+  }
+
 }
