@@ -13,7 +13,8 @@ import zio.logging.slf4j.Slf4jLogger
 object DynamicConsumerFakeExample extends zio.App {
   private val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
-  private val shards = DynamicConsumerFake.shardsFromIterable(Serde.asciiString, List("msg1", "msg2"))
+  private val shards =
+    DynamicConsumerFake.shardsFromIterables(Serde.asciiString, List("msg1", "msg2"), List("msg3", "msg4"))
 
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     for {
