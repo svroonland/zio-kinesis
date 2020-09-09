@@ -29,38 +29,36 @@ private[client] class DynamicConsumerFake(
     Throwable,
     (String, ZStream[Blocking, Throwable, Record[T]], DynamicConsumer.Checkpointer)
   ] = {
-    def record(shardName: String, recData: T): Record[T] =
+    def record(shardName: String, i: Long, recData: T): Record[T] =
       new Record[T](
-        sequenceNumber = "sequenceNumber",
+        sequenceNumber = s"$i",
         approximateArrivalTimestamp = java.time.Instant.now(),
         data = recData,
-        partitionKey = "partitionKey",
+        partitionKey = s"${shardName}_$i",
         encryptionType = EncryptionType.NONE,
-        subSequenceNumber = 0L,
-        explicitHashKey = "explicitHashKey",
+        subSequenceNumber = i,
+        explicitHashKey = "",
         aggregated = false,
         shardId = shardName
       )
 
-    val value1: ZStream[R with Blocking, Throwable, (String, ZStream[Any, Throwable, Record[T]], Checkpointer)] =
-      shards.flatMap {
-        case (shardName, stream) =>
-          ZStream.fromEffect {
-            val value: ZIO[R with Blocking, Throwable, (String, ZStream[Any, Throwable, Record[T]], Checkpointer)] =
-              for {
-                env   <- ZIO.environment[R with Blocking]
-                tuple <- CheckpointerFake.make(refCheckpointedList).map { checkpointer =>
-                           (
-                             shardName,
-                             stream.mapM(deserializer.deserialize(_).map(record(shardName, _)).provide(env)),
-                             checkpointer
-                           )
-                         }
-              } yield tuple
-            value
-          }
-      }
-    value1
+    shards.flatMap {
+      case (shardName, stream) =>
+        ZStream.fromEffect {
+          for {
+            env    <- ZIO.environment[R with Blocking]
+            tuple3 <- CheckpointerFake.make(refCheckpointedList).map { checkpointer =>
+                        (
+                          shardName,
+                          stream.zipWithIndex.mapM {
+                            case (bb, i) => deserializer.deserialize(bb).map(record(shardName, i, _)).provide(env)
+                          },
+                          checkpointer
+                        )
+                      }
+          } yield tuple3
+        }
+    }
 
   }
 }
