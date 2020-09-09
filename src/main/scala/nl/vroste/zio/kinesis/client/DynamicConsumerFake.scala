@@ -87,23 +87,14 @@ object CheckpointerFake {
 
 object DynamicConsumerFake {
 
-  // TODO: def shardsFromIterables
-
-  def shardFromIterable[R, T](
+  def shardsFromIterables[R, T](
     serializer: Serializer[R, T],
-    list: List[T]
-  ): UIO[(String, ZStream[R, Throwable, ByteBuffer])] =
-    UIO(
-      (
-        "shard1",
-        ZStream.fromIterable(list).mapM(serializer.serialize)
-      )
-    )
-
-  def shardsFromIterable[R, T](
-    serializer: Serializer[R, T],
-    list: List[T]
-  ): ZStream[Any, Nothing, (String, ZStream[R, Throwable, ByteBuffer])] =
-    ZStream.fromEffect(shardFromIterable(serializer, list))
+    lists: List[T]*
+  ): ZStream[Any, Nothing, (String, ZStream[R, Throwable, ByteBuffer])] = {
+    val listOfShards = lists.zipWithIndex.map {
+      case (xs, i) => (s"shard$i", ZStream.fromIterable(xs).mapM(serializer.serialize))
+    }
+    ZStream.fromIterable(listOfShards)
+  }
 
 }
