@@ -1,15 +1,18 @@
 package nl.vroste.zio.kinesis.client
 
+import java.time.Instant
 import java.util.UUID
 
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
-import nl.vroste.zio.kinesis.client.serde.Serde
+import nl.vroste.zio.kinesis.client.ProducerLive.{ ProduceRequest, ShardMap }
+import nl.vroste.zio.kinesis.client.serde.{ Serde, Serializer }
 import software.amazon.awssdk.services.kinesis.model.KinesisException
 import zio.clock.Clock
 import zio.console.putStrLn
 import zio.duration._
+import zio.logging.Logging
 import zio.logging.slf4j.Slf4jLogger
-import zio.stream.ZStream
+import zio.stream.{ ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test._
@@ -144,6 +147,29 @@ object ProducerTest extends DefaultRunnableSpec {
           producer
             .produceChunk(Chunk.fromIterable(records)) *> putStrLn(s"Chunk completed")
         }.run.map(r => assert(r)(fails(isSubtype[KinesisException](anything))))
-      } @@ timeout(1.minute)
+      } @@ timeout(1.minute),
+      suite("aggregation")(
+        testM("batch aggregated records") {
+          val shardMap = ShardMap(Seq(("001", ShardMap.minHashKey, ShardMap.maxHashKey)), Instant.now)
+          val batcher  = batcherForProducerRecord(shardMap, Serde.asciiString)
+
+          val records = (1 to 10).map(j => ProducerRecord(s"key$j", s"message$j-$j"))
+
+          for {
+            batches <- runTransducer(batcher, records)
+          } yield assert(batches.size)(equalTo(1))
+        }
+      )
     ).provideCustomLayerShared(env) @@ sequential
+
+  def batcherForProducerRecord[R, T](
+    shardMap: ShardMap,
+    serializer: Serializer[R, T]
+  ): ZTransducer[R with Logging, Throwable, ProducerRecord[T], Seq[ProduceRequest]] =
+    ProducerLive.aggregatingBatcher.contramapM((r: ProducerRecord[T]) =>
+      ProducerLive.makeProduceRequest(r, serializer, Instant.now, shardMap)
+    )
+
+  def runTransducer[R, E, I, O](parser: ZTransducer[R, E, I, O], input: Iterable[I]): ZIO[R, E, Chunk[O]] =
+    ZStream.fromIterable(input).transduce(parser).runCollect
 }

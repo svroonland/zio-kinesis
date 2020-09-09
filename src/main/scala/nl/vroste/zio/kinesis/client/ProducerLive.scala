@@ -45,16 +45,6 @@ private[client] final class ProducerLive[R, R1, T](
   inFlightCalls: Ref[Int],
   triggerUpdateShards: UIO[Unit]
 ) extends Producer[T] {
-  val batcher: ZTransducer[Logging, Nothing, ProduceRequest, Seq[ProduceRequest]] =
-    if (aggregate)
-      foldWhileM(PutRecordsBatchAggregated.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
-        shards.get.map(batch.add(record, _))
-      }.mapM(_.toProduceRequests)
-    else
-      foldWhileM(PutRecordsBatch.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
-        ZIO.succeed(batch.add(record))
-      }.map(_.entriesInOrder)
-
   var runloop: ZIO[Logging with Clock, Nothing, Unit] =
     // Failed records get precedence
     (ZStream
@@ -63,7 +53,7 @@ private[client] final class ProducerLive[R, R1, T](
       zStreamFromQueueWithMaxChunkSize(queue, maxChunkSize))
       .mapChunksM(chunk => log.trace(s"Dequeued chunk of size ${chunk.size}").as(chunk))
       // Batch records up to the Kinesis PutRecords request limits as long as downstream is busy
-      .aggregateAsync(batcher)
+      .aggregateAsync(if (aggregate) aggregatingBatcher else nonAggregatingBatcher)
       // Several putRecords requests in parallel
       .mapMParUnordered(settings.maxParallelRequests)(b => countInFlight(processBatch(b)))
       .runDrain
@@ -187,7 +177,7 @@ private[client] final class ProducerLive[R, R1, T](
     (for {
       shardMap <- shards.get
       now      <- instant
-      request  <- makeProduceRequest(r, now, shardMap)
+      request  <- makeProduceRequest(r, serializer, now, shardMap)
       _        <- queue.offer(request)
       response <- request.done.await
       finish   <- instant
@@ -199,7 +189,7 @@ private[client] final class ProducerLive[R, R1, T](
     (for {
       shardMap <- shards.get
       now      <- instant
-      requests <- ZIO.foreach(chunk)(makeProduceRequest(_, now, shardMap))
+      requests <- ZIO.foreach(chunk)(makeProduceRequest(_, serializer, now, shardMap))
       _        <- queue.offerAll(requests)
       results  <- ZIO.foreachParN(100)(requests)(_.done.await)
       finish   <- instant
@@ -208,18 +198,6 @@ private[client] final class ProducerLive[R, R1, T](
       _        <- currentMetrics.getAndUpdate(_.addSuccesses(results.map(_.attempts), latencies))
     } yield results)
       .provide(env)
-
-  private def makeProduceRequest(r: ProducerRecord[T], now: Instant, shardMap: ShardMap) =
-    for {
-      done          <- Promise.make[Throwable, ProduceResponse]
-      data          <- serializer.serialize(r.data)
-      entry          = PutRecordsRequestEntry
-                .builder()
-                .partitionKey(r.partitionKey)
-                .data(SdkBytes.fromByteBuffer(data))
-                .build()
-      predictedShard = shardMap.shardForPartitionKey(Option(entry.explicitHashKey()).getOrElse(entry.partitionKey()))
-    } yield ProduceRequest(entry, done, now, predictedShard)
 }
 
 private[client] object ProducerLive {
@@ -244,6 +222,23 @@ private[client] object ProducerLive {
   ) {
     def newAttempt = copy(attemptNumber = attemptNumber + 1)
   }
+
+  def makeProduceRequest[R, T](
+    r: ProducerRecord[T],
+    serializer: Serializer[R, T],
+    now: Instant,
+    shardMap: ShardMap
+  ): ZIO[R, Throwable, ProduceRequest] =
+    for {
+      done          <- Promise.make[Throwable, ProduceResponse]
+      data          <- serializer.serialize(r.data)
+      entry          = PutRecordsRequestEntry
+                .builder()
+                .partitionKey(r.partitionKey)
+                .data(SdkBytes.fromByteBuffer(data))
+                .build()
+      predictedShard = shardMap.shardForPartitionKey(Option(entry.explicitHashKey()).getOrElse(entry.partitionKey()))
+    } yield ProduceRequest(entry, done, now, predictedShard)
 
   final case class PutRecordsBatch(entries: List[ProduceRequest], nrRecords: Int, payloadSize: Long) {
     def add(entry: ProduceRequest): PutRecordsBatch =
@@ -343,6 +338,9 @@ private[client] object ProducerLive {
   }
 
   object ShardMap {
+    val minHashKey: BigInt = BigInt(0)
+    val maxHashKey: BigInt = BigInt("340282366920938463463374607431768211455")
+
     def fromShards(shards: Chunk[Shard], now: Instant): ShardMap =
       ShardMap(
         shards
@@ -362,7 +360,7 @@ private[client] object ProducerLive {
 
     def payloadSize = payloadSizeRetries + batches.values.map(_.payloadSize).sum
 
-    def add(entry: ProduceRequest, shardMap: ShardMap): PutRecordsBatchAggregated =
+    def add(entry: ProduceRequest): PutRecordsBatchAggregated =
       if (entry.isAggregated)
         copy(retries = entry +: retries, payloadSizeRetries = payloadSizeRetries + payloadSizeForEntry(entry.r))
       else {
@@ -500,4 +498,14 @@ private[client] object ProducerLive {
         }
       }
     }
+
+  val aggregatingBatcher: ZTransducer[Logging, Nothing, ProduceRequest, Seq[ProduceRequest]] =
+    foldWhileM(PutRecordsBatchAggregated.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
+      ZIO.succeed(batch.add(record))
+    }.mapM(_.toProduceRequests)
+
+  val nonAggregatingBatcher: ZTransducer[Any, Nothing, ProduceRequest, Seq[ProduceRequest]] =
+    foldWhileM(PutRecordsBatch.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
+      ZIO.succeed(batch.add(record))
+    }.map(_.entriesInOrder)
 }
