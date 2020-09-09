@@ -49,6 +49,49 @@ object Util {
           }
         } yield pull
       }
+
+    // ZStream's groupBy using distributedWithDynamic is not performant enough, maybe because
+    // it breaks chunks
+    final def groupByKey2[K](
+      getKey: O => K,
+      buffer: Int = 16
+    ): ZStream[R, E, (K, ZStream[Any, E, O])] =
+      ZStream.unwrapManaged {
+        type GroupQueueValues = Exit[Option[E], Chunk[O]]
+
+        for {
+          substreamsQueue     <- Queue
+                               .bounded[Exit[Option[E], (K, Queue[GroupQueueValues])]](buffer)
+                               .toManaged(_.shutdown)
+          substreamsQueuesMap <- Ref.make(Map.empty[K, Queue[GroupQueueValues]]).toManaged_
+          addToSubStream       = (key: K, values: Chunk[O]) => {
+                             for {
+                               substreams <- substreamsQueuesMap.get
+                               _          <- if (substreams.contains(key))
+                                      substreams(key).offer(Exit.succeed(values))
+                                    else
+                                      Queue
+                                        .bounded[GroupQueueValues](buffer)
+                                        .tap(_.offer(Exit.succeed(values)))
+                                        .tap(q => substreamsQueue.offer(Exit.succeed((key, q))))
+                                        .tap(q => substreamsQueuesMap.update(_ + (key -> q)))
+                                        .unit
+                             } yield ()
+                           }
+          _                   <- (stream.foreachChunk { chunk =>
+                   ZIO.foreach_(chunk.groupBy(getKey))(addToSubStream.tupled)
+                 } *> substreamsQueue.offer(Exit.fail(None))).catchSome {
+                 case e: E => substreamsQueue.offer(Exit.fail(Some(e)))
+               }.forkManaged
+        } yield ZStream.fromQueueWithShutdown(substreamsQueue).collectWhileSuccess.map {
+          case (key, substreamQueue) =>
+            val substream = ZStream
+              .fromQueueWithShutdown(substreamQueue)
+              .collectWhileSuccess
+              .flattenChunks
+            (key, substream)
+        }
+      }
   }
 
   def asZIO[T](f: => CompletableFuture[T]): Task[T] =
@@ -57,9 +100,9 @@ object Util {
       .flatMap(ZIO.fromCompletionStage(_))
       .catchSome {
         case e: CompletionException =>
-          ZIO.fail(Option(e.getCause()).getOrElse(e))
+          ZIO.fail(Option(e.getCause).getOrElse(e))
         case e: SdkException        =>
-          ZIO.fail(Option(e.getCause()).getOrElse(e))
+          ZIO.fail(Option(e.getCause).getOrElse(e))
       }
 
   // TODO there might be some optimization here
