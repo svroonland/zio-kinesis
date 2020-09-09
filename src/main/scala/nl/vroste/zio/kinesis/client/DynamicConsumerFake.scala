@@ -2,7 +2,7 @@ package nl.vroste.zio.kinesis.client
 
 import java.nio.ByteBuffer
 
-import nl.vroste.zio.kinesis.client.DynamicConsumer.{ Checkpointer, Record }
+import nl.vroste.zio.kinesis.client.DynamicConsumer.Checkpointer
 import nl.vroste.zio.kinesis.client.serde.{ Deserializer, Serializer }
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import software.amazon.kinesis.common.InitialPositionInStreamExtended
