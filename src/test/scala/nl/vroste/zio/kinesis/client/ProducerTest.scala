@@ -150,14 +150,7 @@ object ProducerTest extends DefaultRunnableSpec {
       } @@ timeout(1.minute),
       suite("aggregation")(
         testM("batch aggregated records per shard") {
-          val shardMap = ShardMap(
-            Seq(
-              ("001", ShardMap.minHashKey, ShardMap.maxHashKey / 2),
-              ("002", ShardMap.maxHashKey / 2 + 1, ShardMap.maxHashKey)
-            ),
-            Instant.now
-          )
-          val batcher  = aggregatingBatcherForProducerRecord(shardMap, Serde.asciiString)
+          val batcher = aggregatingBatcherForProducerRecord(shardMap, Serde.asciiString)
 
           val nrRecords = 10
           val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))
@@ -168,14 +161,7 @@ object ProducerTest extends DefaultRunnableSpec {
             assert(batches.flatMap(Chunk.fromIterable).map(_.aggregateCount).sum)(equalTo(nrRecords))
         },
         testM("aggregate records up to the record size limit") {
-          val shardMap = ShardMap(
-            Seq(
-              ("001", ShardMap.minHashKey, ShardMap.maxHashKey / 2),
-              ("002", ShardMap.maxHashKey / 2 + 1, ShardMap.maxHashKey)
-            ),
-            Instant.now
-          )
-          val batcher  = aggregatingBatcherForProducerRecord(shardMap, Serde.asciiString)
+          val batcher = aggregatingBatcherForProducerRecord(shardMap, Serde.asciiString)
 
           val nrRecords = 100000
           val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))
@@ -184,6 +170,18 @@ object ProducerTest extends DefaultRunnableSpec {
             batches           <- runTransducer(batcher, records)
             recordPayloadSizes = batches.flatMap(Chunk.fromIterable).map(_.r.data().asByteArrayUnsafe().length)
           } yield assert(recordPayloadSizes)(forall(isLessThanEqualTo(ProducerLive.maxPayloadSizePerRecord)))
+        },
+        testM("aggregate records up to the batch size limit") {
+          val batcher = aggregatingBatcherForProducerRecord(shardMap, Serde.asciiString)
+
+          val nrRecords = 100000
+          val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))
+
+          for {
+            batches          <- runTransducer(batcher, records)
+            batchPayloadSizes = batches.map(_.map(_.r.data().asByteArrayUnsafe().length).sum)
+          } yield assert(batches.map(_.size))(forall(isLessThanEqualTo(ProducerLive.maxRecordsPerRequest))) &&
+            assert(batchPayloadSizes)(forall(isLessThanEqualTo(ProducerLive.maxPayloadSizePerRequest)))
         }
         // TODO test that retries end up in the output
       )
@@ -199,4 +197,12 @@ object ProducerTest extends DefaultRunnableSpec {
 
   def runTransducer[R, E, I, O](parser: ZTransducer[R, E, I, O], input: Iterable[I]): ZIO[R, E, Chunk[O]] =
     ZStream.fromIterable(input).transduce(parser).runCollect
+
+  val shardMap = ShardMap(
+    Seq(
+      ("001", ShardMap.minHashKey, ShardMap.maxHashKey / 2),
+      ("002", ShardMap.maxHashKey / 2 + 1, ShardMap.maxHashKey)
+    ),
+    Instant.now
+  )
 }
