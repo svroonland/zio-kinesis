@@ -726,9 +726,44 @@ object NativeConsumerTest extends DefaultRunnableSpec {
               ) &&
               assert(records.map(_.aggregated))(forall(isTrue))
         }
+      },
+      testM("resume at a subsequence number") {
+        val nrShards  = 1
+        val nrRecords = 10
 
+        withRandomStreamAndApplicationName(nrShards) {
+          (streamName, applicationName) =>
+            def consume(nr: Int) =
+              Consumer
+                .shardedStream(
+                  streamName,
+                  applicationName,
+                  Serde.asciiString,
+                  emitDiagnostic = e => UIO(println(e.toString))
+                )
+                .mapMParUnordered(nrShards) {
+                  case (shard @ _, shardStream, checkpointer @ _) =>
+                    shardStream
+                      .tap(checkpointer.stage)
+                      .take(nr)
+                      .runCollect
+                }
+                .flattenChunks
+                .take(nr)
+
+            for {
+              _        <- produceSampleRecords(streamName, nrRecords, aggregated = true)
+              records1 <- consume(5).runCollect
+              _        <- putStrLn(records1.mkString("\n"))
+              records2 <- consume(5).runCollect
+              _        <- putStrLn(records2.mkString("\n"))
+              records   = records1 ++ records2
+            } yield assert(records)(hasSize(equalTo(nrRecords))) &&
+              assert(records.flatMap(_.subSequenceNumber.toList).map(_.toInt).toList)(
+                equalTo((0 until nrRecords).toList)
+              )
+        }
       }
-//      testM("resume at a subsequence number")(assertCompletes) @@ TestAspect.ignore
     ).provideSomeLayerShared(env) @@
       TestAspect.timed @@
       TestAspect.sequential @@ // For CircleCI
