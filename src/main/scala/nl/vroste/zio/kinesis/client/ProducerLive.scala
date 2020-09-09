@@ -442,25 +442,24 @@ private[client] object ProducerLive {
   /**
    * Like ZTransducer.foldM, but with 'while' instead of 'until' semantics regarding `contFn`
    */
-  def foldWhileM[R, E, I, O](z: O)(contFn: O => Boolean)(f: (O, I) => ZIO[R, E, O]): ZTransducer[R, E, I, O] =
+  def foldWhile[R, E, I, O](z: O)(contFn: O => Boolean)(f: (O, I) => O): ZTransducer[R, E, I, O] =
     ZTransducer {
       val initial = Some(z)
 
-      def go(in: Chunk[I], state: O): ZIO[R, E, (Chunk[O], O)] =
-        in.foldM[R, E, (Chunk[O], O)]((Chunk.empty, state)) {
+      def go(in: Chunk[I], state: O): (Chunk[O], O) =
+        in.foldLeft[(Chunk[O], O)]((Chunk.empty, state)) {
           case ((os0, state), i) =>
-            f(state, i).flatMap { o =>
-              if (contFn(o))
-                ZIO.succeed((os0, o))
-              else
-                f(z, i).map(zi => (os0 :+ state, zi))
-            }
+            val o = f(state, i)
+            if (contFn(o))
+              (os0, o)
+            else
+              (os0 :+ state, f(z, i))
         }
 
       ZRef.makeManaged[Option[O]](initial).map { state =>
         {
           case Some(in) =>
-            state.get.flatMap(s => go(in, s.getOrElse(z))).flatMap {
+            state.get.map(s => go(in, s.getOrElse(z))).flatMap {
               case (os, s) =>
                 state.set(Some(s)) *> Push.emit(os)
             }
@@ -471,12 +470,12 @@ private[client] object ProducerLive {
     }
 
   val batcher: ZTransducer[Any, Nothing, ProduceRequest, Seq[ProduceRequest]] =
-    foldWhileM(PutRecordsBatch.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
-      ZIO.succeed(batch.add(record))
+    foldWhile(PutRecordsBatch.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
+      batch.add(record)
     }.map(_.entriesInOrder)
 
   val aggregator: ZTransducer[Any, Nothing, ProduceRequest, ProduceRequest] =
-    foldWhileM(PutRecordsAggregatedBatchForShard.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
-      ZIO.succeed(batch.add(record))
+    foldWhile(PutRecordsAggregatedBatchForShard.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
+      batch.add(record)
     }.mapM(_.toProduceRequest)
 }
