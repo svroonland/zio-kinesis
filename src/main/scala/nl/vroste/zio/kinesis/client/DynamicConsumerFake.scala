@@ -45,18 +45,17 @@ private[client] class DynamicConsumerFake(
     shards.flatMap {
       case (shardName, stream) =>
         ZStream.fromEffect {
-          for {
-            env    <- ZIO.environment[R with Blocking]
-            tuple3 <- CheckpointerFake.make(refCheckpointedList).map { checkpointer =>
-                        (
-                          shardName,
-                          stream.zipWithIndex.mapM {
-                            case (bb, i) => deserializer.deserialize(bb).map(record(shardName, i, _)).provide(env)
-                          },
-                          checkpointer
-                        )
-                      }
-          } yield tuple3
+          ZIO.environment[R with Blocking].flatMap { env =>
+            CheckpointerFake.make(refCheckpointedList).map { checkpointer =>
+              (
+                shardName,
+                stream.zipWithIndex.mapM {
+                  case (bb, i) => deserializer.deserialize(bb).map(record(shardName, i, _)).provide(env)
+                },
+                checkpointer
+              )
+            }
+          }
         }
     }
 
@@ -88,17 +87,18 @@ object CheckpointerFake {
 
 object DynamicConsumerFake {
 
+  // TODO: def shardsFromIterables
+
   def shardFromIterable[R, T](
     serializer: Serializer[R, T],
     list: List[T]
-  ): UIO[(String, ZStream[R, Throwable, ByteBuffer])] = {
-    println("")
-    val stream: ZStream[R, Throwable, ByteBuffer]               = for {
-      s <- ZStream.fromIterable(list).mapM(serializer.serialize)
-    } yield s
-    val value: UIO[(String, ZStream[R, Throwable, ByteBuffer])] = UIO(("shard1", stream))
-    value
-  }
+  ): UIO[(String, ZStream[R, Throwable, ByteBuffer])] =
+    UIO(
+      (
+        "shard1",
+        ZStream.fromIterable(list).mapM(serializer.serialize)
+      )
+    )
 
   def shardsFromIterable[R, T](
     serializer: Serializer[R, T],
