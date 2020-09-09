@@ -37,7 +37,7 @@ object DynamicConsumer {
     }
 
   def fake(
-    shards: ZStream[Any, Nothing, (String, ZStream[Any, Throwable, ByteBuffer])],
+    shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, ByteBuffer])],
     refCheckpointedList: Ref[Seq[Any]]
   ): ULayer[DynamicConsumer] = ZLayer.succeed(new DynamicConsumerFake(shards, refCheckpointedList))
 
