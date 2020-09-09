@@ -332,7 +332,7 @@ object Consumer {
                                         }
                                       }
                                   }
-                                  .dropUntil(r => checkpointOpt.forall(aggregatedRecordIsAfterCheckpoint(r, _)))
+                                  .dropWhile(r => !checkpointOpt.forall(aggregatedRecordIsAfterCheckpoint(r, _)))
                                   .map(Exit.succeed(_))).collectWhileSuccess
               } yield (
                 shardId,
@@ -468,7 +468,7 @@ object Consumer {
     case (Left(SpecialCheckpoint.Latest), _)                                           => ShardIteratorType.Latest
     case (Left(SpecialCheckpoint.AtTimestamp), InitialPosition.AtTimestamp(timestamp)) =>
       ShardIteratorType.AtTimestamp(timestamp)
-    case (Right(s), _)                                                                 => // TODO could be a subseq
+    case (Right(s), _)                                                                 =>
       ShardIteratorType.AtSequenceNumber(s.sequenceNumber)
     case s @ _                                                                         =>
       throw new IllegalArgumentException(s"${s} is not a valid starting checkpoint")

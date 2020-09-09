@@ -271,15 +271,16 @@ private[client] object ProducerLive {
     private def builtAggregate: AggregatedRecord = {
       val builder = Messages.AggregatedRecord.newBuilder()
 
-      val records   = entries.zipWithIndex.map {
+      val entriesInOrder = entries.reverse
+      val records        = entriesInOrder.zipWithIndex.map {
         case (e, index) => ProtobufAggregation.putRecordsRequestEntryToRecord(e.r, index)
       }
-      val aggregate = builder
+      val aggregate      = builder
         .addAllRecords(records.asJava)
         .addAllExplicitHashKeyTable(
-          entries.map(e => Option(e.r.explicitHashKey()).getOrElse("0")).asJava
+          entriesInOrder.map(e => Option(e.r.explicitHashKey()).getOrElse("0")).asJava
         ) // TODO optimize: only filled ones
-        .addAllPartitionKeyTable(entries.map(e => e.r.partitionKey()).asJava)
+        .addAllPartitionKeyTable(entriesInOrder.map(e => e.r.partitionKey()).asJava)
         .build()
 
 //      println(
