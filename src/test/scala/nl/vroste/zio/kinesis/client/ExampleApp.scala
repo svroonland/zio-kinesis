@@ -20,14 +20,17 @@ import zio.logging.slf4j.Slf4jLogger
 import zio.logging.{ log, Logging }
 import zio.stream.{ ZStream, ZTransducer }
 
+import scala.util.Random
+
 /**
  * Runnable used for manually testing various features
  */
 object ExampleApp extends zio.App {
   val streamName                      = "zio-test-stream-3" // + java.util.UUID.randomUUID().toString
   val applicationName                 = "testApp-3"         // + java.util.UUID.randomUUID().toString(),
-  val nrRecords                       = 40000000
-  val produceRate                     = 30000               // Nr records to produce per second
+  val nrRecords                       = 3000000
+  val produceRate                     = 20000               // Nr records to produce per second
+  val recordSize                      = 50
   val nrShards                        = 5
   val reshardFactor                   = 2
   val reshardAfter: Option[Duration]  = None                // Some(10.seconds)
@@ -42,7 +45,7 @@ object ExampleApp extends zio.App {
     aggregate = true,
     metricsInterval = 5.seconds,
     bufferSize = 8192 * 8,
-    maxParallelRequests = 5
+    maxParallelRequests = 3
   )
 
   override def run(
@@ -54,7 +57,7 @@ object ExampleApp extends zio.App {
         for {
           metrics <- CloudWatchMetricsPublisher.make(applicationName, id)
 //          delay   <- zio.random.nextIntBetween(0, maxRandomWorkerStartDelayMillis).map(_.millis).toManaged_
-          delay    = 30.seconds
+          delay    = 2230.seconds
           _       <- log.info(s"Waiting ${delay.toMillis} ms to start worker ${id}").toManaged_
         } yield ZStream.fromEffect(ZIO.sleep(delay)) *> Consumer
           .shardedStream(
@@ -246,8 +249,9 @@ object ExampleApp extends zio.App {
             else
               None
           )
-          .throttleShape(produceRate / 10, 100.millis)(_.size)
-          .map(i => ProducerRecord(s"key$i", "value"))
+          .throttleShape(produceRate / 10, 100.millis, produceRate / 10)(_.size)
+          .map(i => ProducerRecord(s"key$i", Random.nextString(recordSize)))
+          .buffer(produceRate * 10)
           .mapChunks(Chunk.single(_))
           .mapMParUnordered(20) { chunk =>
             println(s"Producing chunkie of size ${chunk.size}")
@@ -257,7 +261,6 @@ object ExampleApp extends zio.App {
               .retry(retryOnResourceNotFound && Schedule.recurs(1))
               .tapCause(e => log.error("Producing records chunk failed, will retry", e))
               .retry(Schedule.exponential(1.second))
-//              .delay(1.second) // TODO Until we fix throttling bug in Producer
           }
           .runDrain
           .tapCause(e => log.error("Producing records chunk failed", e)) *>

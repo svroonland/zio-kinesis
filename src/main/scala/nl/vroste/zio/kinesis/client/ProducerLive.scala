@@ -50,17 +50,30 @@ private[client] final class ProducerLive[R, R1, T](
     (ZStream
       .tick(100.millis)
       .mapConcatChunkM(_ => failedQueue.takeBetween(1, Int.MaxValue).map(Chunk.fromIterable)) merge
-      zStreamFromQueueWithMaxChunkSize(queue, maxChunkSize))
-      .mapChunksM(chunk => log.trace(s"Dequeued chunk of size ${chunk.size}").as(chunk))
-      // Batch records up to the Kinesis PutRecords request limits as long as downstream is busy
-      .aggregateAsync(if (aggregate) aggregatingBatcher else nonAggregatingBatcher)
+      zStreamFromQueueWithMaxChunkSize(queue, maxChunkSize)
+        .mapChunksM(chunk => log.trace(s"Dequeued chunk of size ${chunk.size}").as(chunk))
+        // Aggregate records per shard
+        .groupByKey2(_.predictedShard)
+        .flatMapPar(Int.MaxValue, 1) {
+          case (shardId @ _, requests) =>
+            requests
+              .aggregateAsync(if (aggregate) aggregator else ZTransducer.identity)
+        })
+    // Batch records up to the Kinesis PutRecords request limits as long as downstream is busy
+      .aggregateAsync(batcher)
+      .filter(_.nonEmpty) // TODO why would this be necessary?
       // Several putRecords requests in parallel
       .mapMParUnordered(settings.maxParallelRequests)(b => countInFlight(processBatch(b)))
       .runDrain
 
-  private def processBatch(batch: Seq[ProduceRequest]) =
+  private def processBatch(batch: Seq[ProduceRequest]) = {
+    val totalPayload = batch.map(_.r.data().asByteArrayUnsafe().length).sum
     (for {
-      _ <- log.info(s"PutRecords for batch of size ${batch.map(_.aggregateCount).sum} (${batch.size} aggregated)")
+      _                  <- log.info(
+             s"PutRecords for batch of size ${batch.map(_.aggregateCount).sum} (${batch.size} aggregated). " +
+               s"Payload sizes: ${batch.map(_.r.data().asByteArrayUnsafe().length).mkString(",")} " +
+               s"(total = ${totalPayload} = ${totalPayload * 100.0 / maxPayloadSizePerRequest}%)."
+           )
 
       response           <- client
                     .putRecords(streamName, batch.map(_.r))
@@ -97,6 +110,7 @@ private[client] final class ProducerLive[R, R1, T](
         log.error(s"oh noes!: ${e}") *>
           ZIO.foreach_(batch.map(_.done))(_.halt(e))
     }
+  }
 
   private def handleFailures(newFailed: collection.Seq[(PutRecordsResultEntry, ProduceRequest)], repredict: Boolean) = {
     val requests    = newFailed.map(_._2)
@@ -252,7 +266,7 @@ private[client] object ProducerLive {
 
     def isWithinLimits =
       nrRecords <= maxRecordsPerRequest &&
-        payloadSize < maxPayloadSizePerRequest
+        payloadSize <= maxPayloadSizePerRequest
   }
 
   object PutRecordsBatch {
@@ -284,8 +298,8 @@ private[client] object ProducerLive {
       aggregate
     }
 
-    def add(r: ProduceRequest): PutRecordsAggregatedBatchForShard =
-      copy(entries = r +: entries, payloadSize = payloadSize + payloadSizeForEntryAggregated(r.r))
+    def add(entry: ProduceRequest): PutRecordsAggregatedBatchForShard =
+      copy(entries = entry +: entries, payloadSize = payloadSize + payloadSizeForEntryAggregated(entry.r))
 
     def isWithinLimits: Boolean =
       payloadSize <= maxPayloadSizePerRecord
@@ -300,6 +314,8 @@ private[client] object ProducerLive {
               .data(SdkBytes.fromByteArray(ProtobufAggregation.encodeAggregatedRecord(builtAggregate).toArray))
               .build()
         _ <- ZIO.foreach_(entries)(e => e.done.completeWith(done.await))
+
+        _ = println(s"Aggregated ${entries.size} records. Payload size: $payloadSize")
       } yield ProduceRequest(
         r,
         done,
@@ -311,7 +327,7 @@ private[client] object ProducerLive {
   }
 
   object PutRecordsAggregatedBatchForShard {
-    private val empty: PutRecordsAggregatedBatchForShard = PutRecordsAggregatedBatchForShard(
+    val empty: PutRecordsAggregatedBatchForShard = PutRecordsAggregatedBatchForShard(
       List.empty,
       ProtobufAggregation.magicBytes.length + ProtobufAggregation.checksumSize
     )
@@ -348,51 +364,6 @@ private[client] object ProducerLive {
           .sortBy(_._2),
         now
       )
-  }
-
-  // One batch per shard because the record limit of 1 MB is also the throughput limit for the shard (1 MB per second)
-  final case class PutRecordsBatchAggregated(
-    batches: Map[ShardId, PutRecordsAggregatedBatchForShard],
-    retries: List[ProduceRequest],
-    payloadSizeRetries: Int
-  ) {
-    val nrBatches = batches.size
-
-    def payloadSize = payloadSizeRetries + batches.values.map(_.payloadSize).sum
-
-    def add(entry: ProduceRequest): PutRecordsBatchAggregated =
-      if (entry.isAggregated)
-        copy(retries = entry +: retries, payloadSizeRetries = payloadSizeRetries + payloadSizeForEntry(entry.r))
-      else {
-        val shardId: ShardId = entry.predictedShard
-
-        val shardBatch   = batches.get(shardId)
-        val updatedBatch = shardBatch
-          .map(_.add(entry))
-          .getOrElse(PutRecordsAggregatedBatchForShard.from(entry))
-
-        copy(
-          batches = batches + (shardId -> updatedBatch)
-        )
-      }
-
-    def isWithinLimits: Boolean = batches.values.forall(_.isWithinLimits)
-
-    def toProduceRequests: ZIO[Logging, Nothing, Chunk[ProduceRequest]] =
-      log.debug(
-        s"Aggregated ${batches.values.map(_.entries.size).sum} records. " +
-          s"Payload sizes: ${batches.values.map(_.payloadSize).mkString(", ")}, " +
-          s"total size: ${batches.values.map(_.payloadSize).sum}"
-      ) *>
-        ZIO
-          .foreach(batches.values.toSeq)(_.toProduceRequest)
-          .map(_.reverse)
-          .map(retries.reverse ++ _)
-          .map(Chunk.fromIterable)
-  }
-
-  object PutRecordsBatchAggregated {
-    def empty: PutRecordsBatchAggregated = PutRecordsBatchAggregated(Map.empty, List.empty, 0)
   }
 
   final def scheduleCatchRecoverable: Schedule[Any, Throwable, Throwable] =
@@ -497,15 +468,59 @@ private[client] object ProducerLive {
       }
     }
 
-  val nonAggregatingBatcher: ZTransducer[Any, Nothing, ProduceRequest, Seq[ProduceRequest]] =
+  val batcher: ZTransducer[Any, Nothing, ProduceRequest, Seq[ProduceRequest]] =
     foldWhileM(PutRecordsBatch.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
       ZIO.succeed(batch.add(record))
     }.map(_.entriesInOrder)
 
-  // TODO: ideally we only peel off the shard that is now full and keep the others. Otherwise, if your data is skewed,
-  // you may end up with one partition always filling up and the rest staying empty
-  val aggregatingBatcher =
-    foldWhileM(PutRecordsBatchAggregated.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
+  val aggregator: ZTransducer[Any, Nothing, ProduceRequest, ProduceRequest] =
+    foldWhileM(PutRecordsAggregatedBatchForShard.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
       ZIO.succeed(batch.add(record))
-    }.mapM(_.toProduceRequests).mapChunks(_.flatten) >>> nonAggregatingBatcher
+    }.mapM(_.toProduceRequest)
+
+  implicit class ZStreamExtensions[R, E, O](stream: ZStream[R, E, O]) {
+    // ZStream's groupBy using distributedWithDynamic is not performant enough, maybe because
+    // it breaks chunks
+    final def groupByKey2[K](
+      getKey: O => K,
+      buffer: Int = 16
+    ): ZStream[R, E, (K, ZStream[Any, E, O])] =
+      ZStream.unwrapManaged {
+        type GroupQueueValues = Exit[Option[E], Chunk[O]]
+
+        for {
+          substreamsQueue     <- Queue
+                               .bounded[Exit[Option[E], (K, Queue[GroupQueueValues])]](buffer)
+                               .toManaged(_.shutdown)
+          substreamsQueuesMap <- Ref.make(Map.empty[K, Queue[GroupQueueValues]]).toManaged_
+          addToSubStream       = (key: K, values: Chunk[O]) => {
+                             for {
+                               substreams <- substreamsQueuesMap.get
+                               _          <- if (substreams.contains(key))
+                                      substreams(key).offer(Exit.succeed(values))
+                                    else
+                                      Queue
+                                        .bounded[GroupQueueValues](buffer)
+                                        .tap(_.offer(Exit.succeed(values)))
+                                        .tap(q => substreamsQueue.offer(Exit.succeed((key, q))))
+                                        .tap(q => substreamsQueuesMap.update(_ + (key -> q)))
+                                        .unit
+                             } yield ()
+                           }
+          _                   <- (stream.foreachChunk { chunk =>
+                   ZIO.foreach_(chunk.groupBy(getKey))(addToSubStream.tupled)
+                 } *> substreamsQueue.offer(Exit.fail(None))).catchSome {
+                 case e: E => substreamsQueue.offer(Exit.fail(Some(e)))
+               }.forkManaged
+        } yield ZStream.fromQueueWithShutdown(substreamsQueue).collectWhileSuccess.map {
+          case (key, substreamQueue) =>
+            val substream = ZStream
+              .fromQueueWithShutdown(substreamQueue)
+              .collectWhileSuccess
+              .flattenChunks
+            (key, substream)
+        }
+      }
+
+  }
 }

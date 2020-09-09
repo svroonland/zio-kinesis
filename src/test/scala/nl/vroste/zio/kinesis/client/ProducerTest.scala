@@ -191,9 +191,9 @@ object ProducerTest extends DefaultRunnableSpec {
     shardMap: ShardMap,
     serializer: Serializer[R, T]
   ): ZTransducer[R with Logging, Throwable, ProducerRecord[T], Seq[ProduceRequest]] =
-    ProducerLive.aggregatingBatcher.contramapM((r: ProducerRecord[T]) =>
+    ProducerLive.aggregator.contramapM((r: ProducerRecord[T]) =>
       ProducerLive.makeProduceRequest(r, serializer, Instant.now, shardMap)
-    )
+    ) >>> ProducerLive.batcher
 
   def runTransducer[R, E, I, O](parser: ZTransducer[R, E, I, O], input: Iterable[I]): ZIO[R, E, Chunk[O]] =
     ZStream.fromIterable(input).transduce(parser).runCollect
