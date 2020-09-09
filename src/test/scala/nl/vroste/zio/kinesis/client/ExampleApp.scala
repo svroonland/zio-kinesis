@@ -28,9 +28,9 @@ object ExampleApp extends zio.App {
   val applicationName                 = "testApp-3"         // + java.util.UUID.randomUUID().toString(),
   val nrRecords                       = 40000000
   val produceRate                     = 30000               // Nr records to produce per second
-  val nrShards                        = 10
+  val nrShards                        = 5
   val reshardFactor                   = 2
-  val reshardAfter: Option[Duration]  = Some(10.seconds)
+  val reshardAfter: Option[Duration]  = None                // Some(10.seconds)
   val enhancedFanout                  = false
   val nrNativeWorkers                 = 1
   val nrKclWorkers                    = 0
@@ -54,7 +54,7 @@ object ExampleApp extends zio.App {
         for {
           metrics <- CloudWatchMetricsPublisher.make(applicationName, id)
 //          delay   <- zio.random.nextIntBetween(0, maxRandomWorkerStartDelayMillis).map(_.millis).toManaged_
-          delay    = 130.seconds
+          delay    = 30.seconds
           _       <- log.info(s"Waiting ${delay.toMillis} ms to start worker ${id}").toManaged_
         } yield ZStream.fromEffect(ZIO.sleep(delay)) *> Consumer
           .shardedStream(
