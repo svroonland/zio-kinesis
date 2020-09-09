@@ -149,20 +149,27 @@ object ProducerTest extends DefaultRunnableSpec {
         }.run.map(r => assert(r)(fails(isSubtype[KinesisException](anything))))
       } @@ timeout(1.minute),
       suite("aggregation")(
-        testM("batch aggregated records") {
-          val shardMap = ShardMap(Seq(("001", ShardMap.minHashKey, ShardMap.maxHashKey)), Instant.now)
-          val batcher  = batcherForProducerRecord(shardMap, Serde.asciiString)
+        testM("batch aggregated records per shard") {
+          val shardMap = ShardMap(
+            Seq(
+              ("001", ShardMap.minHashKey, ShardMap.maxHashKey / 2),
+              ("002", ShardMap.maxHashKey / 2 + 1, ShardMap.maxHashKey)
+            ),
+            Instant.now
+          )
+          val batcher  = aggregatingBatcherForProducerRecord(shardMap, Serde.asciiString)
 
-          val records = (1 to 10).map(j => ProducerRecord(s"key$j", s"message$j-$j"))
+          val records = (1 to 10).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))
 
           for {
             batches <- runTransducer(batcher, records)
-          } yield assert(batches.size)(equalTo(1))
+          } yield assert(batches.size)(equalTo(1)) && assert(batches.head.size)(equalTo(2))
         }
+        // TODO test that retries end up in the output
       )
     ).provideCustomLayerShared(env) @@ sequential
 
-  def batcherForProducerRecord[R, T](
+  def aggregatingBatcherForProducerRecord[R, T](
     shardMap: ShardMap,
     serializer: Serializer[R, T]
   ): ZTransducer[R with Logging, Throwable, ProducerRecord[T], Seq[ProduceRequest]] =

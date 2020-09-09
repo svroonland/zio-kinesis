@@ -376,12 +376,9 @@ private[client] object ProducerLive {
         )
       }
 
-    def isWithinLimits: Boolean =
-      (retries.length + nrBatches) <= maxRecordsPerRequest &&
-        batches.values.forall(_.isWithinLimits) &&
-        payloadSize < maxPayloadSizePerRequest
+    def isWithinLimits: Boolean = batches.values.forall(_.isWithinLimits)
 
-    def toProduceRequests: ZIO[Logging, Nothing, Seq[ProduceRequest]] =
+    def toProduceRequests: ZIO[Logging, Nothing, Chunk[ProduceRequest]] =
       log.debug(
         s"Aggregated ${batches.values.map(_.entries.size).sum} records. " +
           s"Payload sizes: ${batches.values.map(_.payloadSize).mkString(", ")}, " +
@@ -391,6 +388,7 @@ private[client] object ProducerLive {
           .foreach(batches.values.toSeq)(_.toProduceRequest)
           .map(_.reverse)
           .map(retries.reverse ++ _)
+          .map(Chunk.fromIterable)
   }
 
   object PutRecordsBatchAggregated {
@@ -499,13 +497,15 @@ private[client] object ProducerLive {
       }
     }
 
-  val aggregatingBatcher: ZTransducer[Logging, Nothing, ProduceRequest, Seq[ProduceRequest]] =
-    foldWhileM(PutRecordsBatchAggregated.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
-      ZIO.succeed(batch.add(record))
-    }.mapM(_.toProduceRequests)
-
   val nonAggregatingBatcher: ZTransducer[Any, Nothing, ProduceRequest, Seq[ProduceRequest]] =
     foldWhileM(PutRecordsBatch.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
       ZIO.succeed(batch.add(record))
     }.map(_.entriesInOrder)
+
+  // TODO: ideally we only peel off the shard that is now full and keep the others. Otherwise, if your data is skewed,
+  // you may end up with one partition always filling up and the rest staying empty
+  val aggregatingBatcher =
+    foldWhileM(PutRecordsBatchAggregated.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
+      ZIO.succeed(batch.add(record))
+    }.mapM(_.toProduceRequests).mapChunks(_.flatten) >>> nonAggregatingBatcher
 }
