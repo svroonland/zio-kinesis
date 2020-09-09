@@ -13,7 +13,7 @@ import zio.stream.ZStream
 /**
  * Basic usage example for `DynamicConsumerFake`
  */
-object FakeDynamicConsumerExample extends zio.App {
+object DynamicConsumerFakeExample extends zio.App {
   private val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
   val shard: UIO[(String, ZStream[Any, Throwable, ByteBuffer])]                    =
