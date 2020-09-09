@@ -1,5 +1,6 @@
 package nl.vroste.zio.kinesis.client
 
+import java.nio.ByteBuffer
 import java.util.UUID
 
 import nl.vroste.zio.kinesis.client.Util.processWithSkipOnError
@@ -34,6 +35,11 @@ object DynamicConsumer {
     ], KinesisAsyncClient, CloudWatchAsyncClient, DynamoDbAsyncClient, DynamicConsumer.Service] {
       new DynamicConsumerLive(_, _, _, _)
     }
+
+  def fake(
+    shards: ZStream[Any, Nothing, (String, ZStream[Any, Throwable, ByteBuffer])],
+    refCheckpointedList: Ref[Seq[Any]]
+  ): ULayer[DynamicConsumer] = ZLayer.succeed(new DynamicConsumerFake(shards, refCheckpointedList))
 
   trait Service {
 
