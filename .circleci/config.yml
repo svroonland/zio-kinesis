@@ -57,6 +57,7 @@ jobs:
       - checkout
       - restore_cache:
           key: sbt-cache
+      - run: apt install -y protobuf-compiler
       - run: sbt ++2.13.1! test
       - store_test_results:
           path: target/test-reports
@@ -83,6 +84,7 @@ jobs:
       - checkout
       - restore_cache:
           key: sbt-cache
+      - run: apt install -y protobuf-compiler
       - run: sbt ++2.12.11! test
       - save_cache:
           key: sbt-cache
@@ -107,6 +109,7 @@ jobs:
       - checkout
       - restore_cache:
           key: sbt-cache
+      - run: apt install -y protobuf-compiler
       - run: sbt ++2.12.11! test
       - save_cache:
           key: sbt-cache
