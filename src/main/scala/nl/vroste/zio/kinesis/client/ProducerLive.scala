@@ -106,10 +106,18 @@ private[client] final class ProducerLive[R, R1, T](
 
       hasShardPredictionErrors <- checkShardPredictionErrors(responseAndRequests)
       _                        <- handleFailures(newFailed, repredict = hasShardPredictionErrors)
+      now                      <- instant
       _                        <- ZIO.foreach_(succeeded) {
              case (response, request) =>
                request.done.completeWith(
-                 ZIO.succeed(ProduceResponse(response.shardId(), response.sequenceNumber(), request.attemptNumber))
+                 ZIO.succeed(
+                   ProduceResponse(
+                     response.shardId(),
+                     response.sequenceNumber(),
+                     request.attemptNumber,
+                     completed = now
+                   )
+                 )
                )
            }
       // TODO handle connection failure
@@ -212,8 +220,7 @@ private[client] final class ProducerLive[R, R1, T](
       request  <- makeProduceRequest(r, serializer, now, shardMap)
       _        <- queue.offer(request)
       response <- request.done.await
-      finish   <- instant
-      latency   = java.time.Duration.between(now, finish)
+      latency   = java.time.Duration.between(now, response.completed)
       _        <- currentMetrics.getAndUpdate(_.addSuccess(response.attempts, latency))
     } yield response).provide(env)
 
@@ -223,10 +230,8 @@ private[client] final class ProducerLive[R, R1, T](
       now      <- instant
       requests <- ZIO.foreach(chunk)(makeProduceRequest(_, serializer, now, shardMap))
       _        <- queue.offerAll(requests)
-      results  <- ZIO.foreachParN(100)(requests)(_.done.await)
-      finish   <- instant
-      latency   = java.time.Duration.between(now, finish)
-      latencies = results.map(_ => latency)
+      results  <- ZIO.foreach(requests)(_.done.await)
+      latencies = results.map(r => java.time.Duration.between(now, r.completed))
       _        <- currentMetrics.getAndUpdate(_.addSuccesses(results.map(_.attempts), latencies))
     } yield results)
       .provide(env)
