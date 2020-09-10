@@ -17,14 +17,16 @@ import zio.stream.{ ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test._
-import zio.{ Chunk, Ref, ZIO }
+import zio.{ system, Chunk, Ref, Runtime, ZIO }
 
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
 
   val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
-  val env = (client.defaultAwsLayer.orDie >>> (AdminClient.live ++ Client.live)).orDie >+>
+  val useAws = Runtime.default.unsafeRun(system.envOrElse("ENABLE_AWS", "0")).toInt == 1
+  val env    = ((if (useAws) client.defaultAwsLayer
+              else LocalStackServices.localStackAwsLayer).orDie >>> (AdminClient.live ++ Client.live)).orDie >+>
     (loggingLayer ++ Clock.live ++ zio.console.Console.live)
 
   def spec =
