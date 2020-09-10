@@ -169,7 +169,7 @@ private[client] final class ProducerLive[R, R1, T](
           shards
             .getAndUpdate(_.invalidate)
             .map(shardMap => !shardMap.invalid && shardMap.lastUpdated.toEpochMilli < maxProduceRequestTimestamp)
-        }
+        } *> currentMetrics.update(_.addShardPredictionErrors(shardPredictionErrors.map(_._2.aggregateCount).sum))
       }
       .as(shardPredictionErrors.nonEmpty)
   }
@@ -188,7 +188,13 @@ private[client] final class ProducerLive[R, R1, T](
   val collectMetrics: ZIO[R1 with Clock, Nothing, Unit] = for {
     now    <- instant
     m      <- currentMetrics.getAndUpdate(_ => CurrentMetrics.empty(now))
-    metrics = ProducerMetrics(java.time.Duration.between(m.start, now), m.published, m.nrFailed, m.latency)
+    metrics = ProducerMetrics(
+                java.time.Duration.between(m.start, now),
+                m.published,
+                m.nrFailed,
+                m.latency,
+                m.shardPredictionErrors
+              )
     _      <- metricsCollector(metrics)
   } yield ()
 
@@ -394,7 +400,8 @@ private[client] object ProducerLive {
     start: Instant,
     published: IntCountsHistogram, // Tracks number of attempts
     nrFailed: Long,
-    latency: Histogram
+    latency: Histogram,
+    shardPredictionErrors: Long
   ) {
     val nrPublished = published.getTotalCount
 
@@ -420,11 +427,19 @@ private[client] object ProducerLive {
 
       copy(published = newPublished, latency = newLatency)
     }
+
+    def addShardPredictionErrors(nr: Long): CurrentMetrics = copy(shardPredictionErrors = shardPredictionErrors + nr)
   }
 
   object CurrentMetrics {
-    def empty(now: Instant) =
-      CurrentMetrics(start = now, published = emptyAttempts, nrFailed = 0, latency = emptyLatency)
+    def empty(now: Instant): CurrentMetrics =
+      CurrentMetrics(
+        start = now,
+        published = emptyAttempts,
+        nrFailed = 0,
+        latency = emptyLatency,
+        shardPredictionErrors = 0
+      )
   }
 
   def payloadSizeForEntry(entry: PutRecordsRequestEntry): Int =

@@ -17,7 +17,8 @@ final case class ProducerMetrics(
   interval: Duration,
   attempts: IntCountsHistogram,
   nrFailures: Long,
-  latency: AbstractHistogram
+  latency: AbstractHistogram,
+  shardPredictionErrors: Long
 ) {
   val nrRecordsPublished: Long = attempts.getTotalCount
 
@@ -40,6 +41,7 @@ final case class ProducerMetrics(
       s"throughput=${throughput.map(_ + "/s").getOrElse("unknown")}, " +
       s"success rate=${successRate * 100}%, " +
       s"failed attempts=${nrFailures}, " +
+      s"shard prediction errors=${shardPredictionErrors}, " +
       s"mean latency=${latency.getMean.toInt}ms, " +
       s"95% latency=${latency.getValueAtPercentile(95).toInt}.ms, " +
       s"min latency=${latency.getMinValue.toInt}ms, " +
@@ -55,7 +57,8 @@ final case class ProducerMetrics(
       interval = interval + that.interval,
       attempts = { val newAttempts = attempts.copy(); newAttempts.add(that.attempts); newAttempts },
       nrFailures = nrFailures + that.nrFailures,
-      latency = { val newLatency = latency.copy(); newLatency.add(that.latency); newLatency }
+      latency = { val newLatency = latency.copy(); newLatency.add(that.latency); newLatency },
+      shardPredictionErrors = shardPredictionErrors + that.shardPredictionErrors
     )
 }
 
@@ -63,5 +66,11 @@ object ProducerMetrics {
   private[client] val emptyAttempts = new IntCountsHistogram(1, 20, 2)
   private[client] val emptyLatency  = new Histogram(1, 120000, 3)
 
-  val empty = ProducerMetrics(interval = 0.millis, attempts = emptyAttempts, nrFailures = 0, latency = emptyLatency)
+  val empty = ProducerMetrics(
+    interval = 0.millis,
+    attempts = emptyAttempts,
+    nrFailures = 0,
+    latency = emptyLatency,
+    shardPredictionErrors = 0
+  )
 }
