@@ -314,8 +314,9 @@ This feature is fully compatible with the KPL and KCL.
 ```scala
 import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
+import nl.vroste.zio.kinesis.client.producer.ProducerMetrics
 import nl.vroste.zio.kinesis.client.serde.Serde
-import nl.vroste.zio.kinesis.client.{ Client, Producer, ProducerMetrics, ProducerSettings }
+import nl.vroste.zio.kinesis.client.{ Client, Producer, ProducerSettings }
 import zio._
 import zio.console.putStrLn
 import zio.logging.slf4j.Slf4jLogger
@@ -351,7 +352,6 @@ object ProducerWithMetricsExample extends zio.App {
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     program.provideCustomLayer(env).exitCode
 }
-
 ```
 
 ## DynamicConsumer

@@ -4,7 +4,8 @@ import java.time.Instant
 
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
-import nl.vroste.zio.kinesis.client.ProducerLive.{ CurrentMetrics, ProduceRequest, ShardMap }
+import nl.vroste.zio.kinesis.client.producer.ProducerLive.ProduceRequest
+import nl.vroste.zio.kinesis.client.producer.{ CurrentMetrics, ProducerLive, ProducerMetrics, ShardMap }
 import nl.vroste.zio.kinesis.client.serde.Serializer
 import software.amazon.awssdk.services.kinesis.model.{ ShardFilter, ShardFilterType }
 import zio._
@@ -142,5 +143,4 @@ object Producer {
       .runCollect
       .flatMap(shards => instant.map(ShardMap.fromShards(shards, _)))
   }
-
 }
