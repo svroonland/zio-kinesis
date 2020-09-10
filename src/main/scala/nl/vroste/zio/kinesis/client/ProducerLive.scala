@@ -47,33 +47,43 @@ private[client] final class ProducerLive[R, R1, T](
 ) extends Producer[T] {
   import Util.ZStreamExtensions
 
-  var runloop: ZIO[Logging with Clock, Nothing, Unit] =
-    // Failed records get precedence
-    (ZStream
+  var runloop: ZIO[Logging with Clock, Nothing, Unit] = {
+    val retries = ZStream
       .tick(100.millis)
-      .mapConcatChunkM(_ => failedQueue.takeBetween(1, Int.MaxValue).map(Chunk.fromIterable)) merge
-      zStreamFromQueueWithMaxChunkSize(queue, maxChunkSize)
-        .mapChunksM(chunk => log.trace(s"Dequeued chunk of size ${chunk.size}").as(chunk))
-        // Aggregate records per shard
-        .groupByKey2(_.predictedShard)
-        .flatMapPar(Int.MaxValue, 1) {
-          case (shardId @ _, requests) =>
-            requests
-              .aggregateAsync(if (aggregate) aggregator else ZTransducer.identity)
-        })
-    // Batch records up to the Kinesis PutRecords request limits as long as downstream is busy
+      .mapConcatChunkM(_ => failedQueue.takeBetween(1, Int.MaxValue).map(Chunk.fromIterable))
+
+    // Failed records get precedence
+    (retries merge zStreamFromQueueWithMaxChunkSize(queue, maxChunkSize)
+      .mapChunksM(chunk => log.trace(s"Dequeued chunk of size ${chunk.size}").as(chunk))
+      // Aggregate records per shard
+      .groupByKey2(_.predictedShard)
+      .flatMapPar(Int.MaxValue, 1) {
+        case (shardId @ _, requests) =>
+          requests.aggregateAsync(if (aggregate) aggregator else ZTransducer.identity)
+      })
+      .groupByKey2(_.predictedShard) // TODO can we avoid this second group by?
+      .flatMapPar(Int.MaxValue, 1) {
+        // Do shard rate limiting here
+        case (shardId @ _, requests) =>
+          requests
+            .throttleShape(maxRecordsPerShardPerSecond, 1.second)(_.size)
+            .throttleShape(maxIngestionPerShardPerSecond, 1.second)(_.map(_.payloadSize).sum)
+        // TODO can we put 'Tap' like functionality here? Add backoff?
+      }
+      // Batch records up to the Kinesis PutRecords request limits as long as downstream is busy
       .aggregateAsync(batcher)
-      .filter(_.nonEmpty) // TODO why would this be necessary?
+      .filter(_.nonEmpty)            // TODO why would this be necessary?
       // Several putRecords requests in parallel
       .mapMParUnordered(settings.maxParallelRequests)(b => countInFlight(processBatch(b)))
       .runDrain
+  }
 
-  private def processBatch(batch: Seq[ProduceRequest]) = {
+  private def processBatch(batch: Seq[ProduceRequest]): ZIO[Clock with Logging, Nothing, Unit] = {
     val totalPayload = batch.map(_.r.data().asByteArrayUnsafe().length).sum
     (for {
       _                  <- log.info(
              s"PutRecords for batch of size ${batch.map(_.aggregateCount).sum} (${batch.size} aggregated). " +
-               s"Payload sizes: ${batch.map(_.r.data().asByteArrayUnsafe().length).mkString(",")} " +
+//               s"Payload sizes: ${batch.map(_.r.data().asByteArrayUnsafe().length).mkString(",")} " +
                s"(total = ${totalPayload} = ${totalPayload * 100.0 / maxPayloadSizePerRequest}%)."
            )
 
@@ -107,10 +117,6 @@ private[client] final class ProducerLive[R, R1, T](
       case NonFatal(e) =>
         log.warn("Failed to process batch") *>
           ZIO.foreach_(batch.map(_.done))(_.fail(e))
-    }.catchAllCause {
-      case e: Cause[Throwable] =>
-        log.error(s"oh noes!: ${e}") *>
-          ZIO.foreach_(batch.map(_.done))(_.halt(e))
     }
   }
 
@@ -122,7 +128,7 @@ private[client] final class ProducerLive[R, R1, T](
     for {
       _ <- currentMetrics.update(_.addFailures(failedCount))
       _ <- log.warn(s"Failed to produce ${failedCount} records").when(newFailed.nonEmpty)
-      _ <- log.warn(responses.take(10).map(_.errorMessage()).mkString(",, ")).when(newFailed.nonEmpty)
+      _ <- log.warn(responses.take(10).map(_.errorCode()).mkString(", ")).when(newFailed.nonEmpty)
 
       // The shard map may not yet be updated unless we're experiencing high latency
       updatedFailed <-
@@ -136,7 +142,7 @@ private[client] final class ProducerLive[R, R1, T](
       // TODO backoff for shard limit stuff
       _ <- failedQueue
              .offerAll(updatedFailed)
-             .when(newFailed.nonEmpty) // TODO should be per shard
+             .when(newFailed.nonEmpty)
     } yield ()
   }
 
@@ -222,10 +228,12 @@ private[client] object ProducerLive {
   type ShardId      = String
   type PartitionKey = String
 
-  val maxChunkSize: Int        = 512                        // Stream-internal max chunk size
-  val maxRecordsPerRequest     = 500                        // This is a Kinesis API limitation
-  val maxPayloadSizePerRequest = 5 * 1024 * 1024 - 2 * 1024 // 5 MB
-  val maxPayloadSizePerRecord  = 1 * 1024 * 1024 - 2 * 1024 // 1 MB
+  val maxChunkSize: Int             = 512             // Stream-internal max chunk size
+  val maxRecordsPerRequest          = 500             // This is a Kinesis API limitation
+  val maxPayloadSizePerRequest      = 5 * 1024 * 1024 // 5 MB
+  val maxPayloadSizePerRecord       = 1 * 1024 * 1024 // 1 MB
+  val maxIngestionPerShardPerSecond = 1 * 1024 * 1024 // 1 MB
+  val maxRecordsPerShardPerSecond   = 1000
 
   val recoverableErrorCodes = Set("ProvisionedThroughputExceededException", "InternalFailure", "ServiceUnavailable");
 
@@ -239,6 +247,8 @@ private[client] object ProducerLive {
     aggregateCount: Int = 1
   ) {
     def newAttempt = copy(attemptNumber = attemptNumber + 1)
+
+    def payloadSize: Int = r.data().asByteArrayUnsafe().length + r.partitionKey().length
   }
 
   def makeProduceRequest[R, T](
@@ -361,13 +371,15 @@ private[client] object ProducerLive {
     val minHashKey: BigInt = BigInt(0)
     val maxHashKey: BigInt = BigInt("340282366920938463463374607431768211455")
 
-    def fromShards(shards: Chunk[Shard], now: Instant): ShardMap =
+    def fromShards(shards: Chunk[Shard], now: Instant): ShardMap = {
+      if (shards.isEmpty) throw new IllegalArgumentException("Cannot create ShardMap from empty shards list")
       ShardMap(
         shards
           .map(s => (s.shardId(), BigInt(s.hashKeyRange().startingHashKey()), BigInt(s.hashKeyRange().endingHashKey())))
           .sortBy(_._2),
         now
       )
+    }
   }
 
   final def scheduleCatchRecoverable: Schedule[Any, Throwable, Throwable] =
