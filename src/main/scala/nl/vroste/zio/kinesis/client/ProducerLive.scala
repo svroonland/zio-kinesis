@@ -66,8 +66,8 @@ private[client] final class ProducerLive[R, R1, T](
         // Do shard rate limiting here
         case (shardId @ _, requests) =>
           requests
-            .throttleShape(maxRecordsPerShardPerSecond, 1.second)(_.size)
-            .throttleShape(maxIngestionPerShardPerSecond, 1.second)(_.map(_.payloadSize).sum)
+            .throttleShape(maxRecordsPerShardPerSecond.toLong, 1.second)(_.size.toLong)
+            .throttleShape(maxIngestionPerShardPerSecond.toLong, 1.second)(_.map(_.payloadSize).sum.toLong)
         // TODO can we put 'Tap' like functionality here? Add backoff?
       }
       // Batch records up to the Kinesis PutRecords request limits as long as downstream is busy
@@ -169,7 +169,9 @@ private[client] final class ProducerLive[R, R1, T](
           shards
             .getAndUpdate(_.invalidate)
             .map(shardMap => !shardMap.invalid && shardMap.lastUpdated.toEpochMilli < maxProduceRequestTimestamp)
-        } *> currentMetrics.update(_.addShardPredictionErrors(shardPredictionErrors.map(_._2.aggregateCount).sum))
+        } *> currentMetrics.update(
+          _.addShardPredictionErrors(shardPredictionErrors.map(_._2.aggregateCount).sum.toLong)
+        )
       }
       .as(shardPredictionErrors.nonEmpty)
   }

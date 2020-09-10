@@ -64,25 +64,28 @@ object Util {
                                .bounded[Exit[Option[E], (K, Queue[GroupQueueValues])]](buffer)
                                .toManaged(_.shutdown)
           substreamsQueuesMap <- Ref.make(Map.empty[K, Queue[GroupQueueValues]]).toManaged_
-          addToSubStream       = (key: K, values: Chunk[O]) => {
-                             for {
-                               substreams <- substreamsQueuesMap.get
-                               _          <- if (substreams.contains(key))
-                                      substreams(key).offer(Exit.succeed(values))
-                                    else
-                                      Queue
-                                        .bounded[GroupQueueValues](buffer)
-                                        .tap(_.offer(Exit.succeed(values)))
-                                        .tap(q => substreamsQueue.offer(Exit.succeed((key, q))))
-                                        .tap(q => substreamsQueuesMap.update(_ + (key -> q)))
-                                        .unit
-                             } yield ()
-                           }
-          _                   <- (stream.foreachChunk { chunk =>
-                   ZIO.foreach_(chunk.groupBy(getKey))(addToSubStream.tupled)
-                 } *> substreamsQueue.offer(Exit.fail(None))).catchSome {
-                 case e: E => substreamsQueue.offer(Exit.fail(Some(e)))
-               }.forkManaged
+          _                   <- {
+            val addToSubStream: (K, Chunk[O]) => ZIO[Any, Nothing, Unit] = (key: K, values: Chunk[O]) => {
+              for {
+                substreams <- substreamsQueuesMap.get
+                _          <- if (substreams.contains(key))
+                       substreams(key).offer(Exit.succeed(values))
+                     else
+                       Queue
+                         .bounded[GroupQueueValues](buffer)
+                         .tap(_.offer(Exit.succeed(values)))
+                         .tap(q => substreamsQueue.offer(Exit.succeed((key, q))))
+                         .tap(q => substreamsQueuesMap.update(_ + (key -> q)))
+                         .unit
+              } yield ()
+            }
+            (stream.foreachChunk { chunk =>
+              ZIO.foreach_(chunk.groupBy(getKey))(addToSubStream.tupled)
+            } *> substreamsQueue.offer(Exit.fail(None))).catchSome {
+              case e =>
+                substreamsQueue.offer(Exit.fail(Some(e)))
+            }.forkManaged
+          }
         } yield ZStream.fromQueueWithShutdown(substreamsQueue).collectWhileSuccess.map {
           case (key, substreamQueue) =>
             val substream = ZStream

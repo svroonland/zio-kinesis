@@ -12,10 +12,6 @@ import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.TestUtil.{ retryOnResourceNotFound, withStream }
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
-import nl.vroste.zio.kinesis.client.zionative.NativeConsumerTest.{
-  produceSampleRecords,
-  withRandomStreamAndApplicationName
-}
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.LeaseCoordinationSettings
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
 import zio._
@@ -716,7 +712,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                   emitDiagnostic = e => UIO(println(e.toString))
                 )
                 .flatMapPar(nrShards) { case (shard @ _, shardStream, checkpointer @ _) => shardStream }
-                .take(nrRecords)
+                .take(nrRecords.toLong)
             for {
               _ <- produceSampleRecords(streamName, nrRecords, aggregated = true)
               records <- consumer.runCollect
@@ -745,11 +741,11 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                   case (shard @ _, shardStream, checkpointer @ _) =>
                     shardStream
                       .tap(checkpointer.stage)
-                      .take(nr)
+                      .take(nr.toLong)
                       .runCollect
                 }
                 .flattenChunks
-                .take(nr)
+                .take(nr.toLong)
 
             for {
               _        <- produceSampleRecords(streamName, nrRecords, aggregated = true)

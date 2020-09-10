@@ -1,5 +1,6 @@
 package nl.vroste.zio.kinesis.client
-import nl.vroste.zio.kinesis.client.Client.{ listShards, ProducerRecord }
+
+import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.ProducerLive.{ CurrentMetrics, ProduceRequest, ShardMap }
 import nl.vroste.zio.kinesis.client.serde.Serializer
@@ -8,7 +9,7 @@ import zio._
 import zio.clock.{ instant, Clock }
 import zio.duration.{ Duration, _ }
 import zio.logging._
-import zio.stream.{ ZSink, ZStream }
+import zio.stream.ZSink
 
 /**
  * Producer for Kinesis records

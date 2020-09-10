@@ -16,7 +16,7 @@ object ProtobufAggregation {
     val b = Messages.Record
       .newBuilder()
       .setData(ByteString.copyFrom(r.data().asByteArrayUnsafe()))
-      .setPartitionKeyIndex(tableIndex)
+      .setPartitionKeyIndex(tableIndex.toLong)
 
     Option(r.explicitHashKey())
       .fold(b)(_ => b.setExplicitHashKeyIndex(tableIndex.toLong))

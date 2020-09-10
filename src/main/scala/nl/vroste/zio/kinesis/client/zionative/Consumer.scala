@@ -5,6 +5,7 @@ import java.time.Instant
 import nl.vroste.zio.kinesis.client.AdminClient.StreamDescription
 import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
 import nl.vroste.zio.kinesis.client.Util.processWithSkipOnError
+import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.{ EnhancedFanOut, Polling }
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
@@ -12,8 +13,6 @@ import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative.fetcher.{ EnhancedFanOutFetcher, PollingFetcher }
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.{ DefaultLeaseCoordinator, LeaseCoordinationSettings }
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
-import nl.vroste.zio.kinesis.client._
-import nl.vroste.zio.kinesis.client.zionative.protobuf.Messages
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.kinesis.model.{
   ChildShard,
@@ -24,13 +23,12 @@ import software.amazon.awssdk.services.kinesis.model.{
   Shard,
   Record => KinesisRecord
 }
-import software.amazon.awssdk.utils.Md5Utils
 import zio._
 import zio.clock.Clock
 import zio.duration._
 import zio.logging.{ log, Logging }
 import zio.random.Random
-import zio.stream.{ ZStream, ZTransducer }
+import zio.stream.ZStream
 
 import scala.jdk.CollectionConverters._
 
@@ -197,7 +195,7 @@ object Consumer {
                                data,
                                aggregatedRecord.getPartitionKeyTable(subRecord.getPartitionKeyIndex.toInt),
                                r.encryptionType,
-                               Some(subSequenceNr),
+                               Some(subSequenceNr.toLong),
                                if (subRecord.hasExplicitHashKeyIndex)
                                  Some(aggregatedRecord.getExplicitHashKeyTable(subRecord.getExplicitHashKeyIndex.toInt))
                                else None,

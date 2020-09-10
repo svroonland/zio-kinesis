@@ -1,5 +1,4 @@
 package nl.vroste.zio.kinesis.client
-import java.util.UUID
 
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.TestUtil.retryOnResourceNotFound
@@ -164,7 +163,7 @@ object ExampleApp extends zio.App {
                (log.info("Resharding") *>
                  ZIO
                    .service[AdminClient.Service]
-                   .flatMap(_.updateShardCount(streamName, Math.ceil(nrShards * reshardFactor).toInt)))
+                   .flatMap(_.updateShardCount(streamName, Math.ceil(nrShards.toDouble * reshardFactor).toInt)))
                  .delay(delay)
              )
              .getOrElse(ZIO.unit)
@@ -245,11 +244,11 @@ object ExampleApp extends zio.App {
         ZStream
           .unfoldChunk(0)(i =>
             if ((i + 1) * chunkSize < nrRecords)
-              Some((Chunk.fromIterable((i * chunkSize) to ((i + 1) * chunkSize))), i + 1)
+              Some((Chunk.fromIterable((i * chunkSize) to ((i + 1) * chunkSize)), i + 1))
             else
               None
           )
-          .throttleShape(produceRate / 10, 100.millis, produceRate / 10)(_.size)
+          .throttleShape(produceRate.toLong / 10, 100.millis, produceRate.toLong / 10)(_.size.toLong)
           .map(i => ProducerRecord(s"key$i", Random.nextString(recordSize)))
           .buffer(produceRate * 10)
           .mapChunks(Chunk.single(_))
