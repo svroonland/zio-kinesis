@@ -3,6 +3,7 @@ package nl.vroste.zio.kinesis.client
 import java.time.Instant
 import java.util.UUID
 
+import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.ProducerLive.{ ProduceRequest, ShardMap }
 import nl.vroste.zio.kinesis.client.serde.{ Serde, Serializer }
@@ -23,7 +24,7 @@ object ProducerTest extends DefaultRunnableSpec {
 
   val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
-  val env = (LocalStackServices.localStackAwsLayer.orDie >>> (AdminClient.live ++ Client.live)).orDie >+>
+  val env = (client.defaultAwsLayer.orDie >>> (AdminClient.live ++ Client.live)).orDie >+>
     (loggingLayer ++ Clock.live ++ zio.console.Console.live)
 
   def spec =
@@ -91,51 +92,59 @@ object ProducerTest extends DefaultRunnableSpec {
               } yield assertCompletes
           }
         }
-      } @@ TestAspect.ignore,
+      } @@ TestAspect.ifEnvSet("ENABLE_AWS"),
       testM("produce records to Kinesis successfully and efficiently") {
         // This test demonstrates production of about 5000-6000 records per second on my Mid 2015 Macbook Pro
 
         val streamName = "zio-test-stream-producer3"
 
-        (for {
-          _            <- putStrLn("creating stream").toManaged_
-          _            <- createStreamUnmanaged(streamName, 5).toManaged_
-          _            <- putStrLn("creating producer").toManaged_
-          totalMetrics <- Ref.make(ProducerMetrics.empty).toManaged_
-          producer     <- Producer
-                        .make(
-                          streamName,
-                          Serde.asciiString,
-                          ProducerSettings(bufferSize = 16384),
-                          metrics => totalMetrics.updateAndGet(_ + metrics).flatMap(m => putStrLn(m.toString))
-                        )
-        } yield (producer, totalMetrics)).use {
-          case (producer, totalMetrics) =>
-            for {
-              _                <- ZIO.sleep(5.second).when(false)
-              // Parallelism, but not infinitely (not sure if it matters)
-              nrChunks          = 100
-              nrRecordsPerChunk = 8000
-              time             <- ZIO
-                        .collectAllParN_(3)((1 to nrChunks).map { i =>
-                          val records = (1 to nrRecordsPerChunk).map(j =>
-                            // Random UUID to get an even distribution over the shards
-                            ProducerRecord(s"key$i" + UUID.randomUUID(), s"message$i-$j")
-                          )
+        Ref
+          .make(ProducerMetrics.empty)
+          .flatMap {
+            totalMetrics =>
+              (for {
+                _        <- putStrLn("creating stream").toManaged_
+                _        <- createStreamUnmanaged(streamName, 5).toManaged_
+                _        <- putStrLn("creating producer").toManaged_
+                producer <- Producer
+                              .make(
+                                streamName,
+                                Serde.asciiString,
+                                ProducerSettings(
+                                  bufferSize = 16384 * 4,
+                                  maxParallelRequests = 24,
+                                  metricsInterval = 5.seconds
+                                ),
+                                metrics => totalMetrics.updateAndGet(_ + metrics).flatMap(m => putStrLn(m.toString))
+                              )
+              } yield producer).use {
+                producer =>
+                  for {
+                    _                <- ZIO.sleep(5.second).when(false)
+                    // Parallelism, but not infinitely (not sure if it matters)
+                    nrChunks          = 100
+                    nrRecordsPerChunk = 8000
+                    time             <- ZIO
+                              .collectAllParN_(3)((1 to nrChunks).map { i =>
+                                val records = (1 to nrRecordsPerChunk).map(j =>
+                                  // Random UUID to get an even distribution over the shards
+                                  ProducerRecord(s"key$i" + UUID.randomUUID(), s"message$i-$j")
+                                )
 
-                          for {
-                            //                            _      <- putStrLn(s"Starting chunk $i")
-                            _ <- producer.produceChunk(Chunk.fromIterable(records))
-                            _ <- putStrLn(s"Chunk $i completed")
-                          } yield ()
-                        })
-                        .timed
-                        .map(_._1)
-              _                <- putStrLn(s"Produced ${nrChunks * nrRecordsPerChunk * 1000.0 / time.toMillis}")
-              _                <- totalMetrics.get.flatMap(m => putStrLn(m.toString))
-            } yield assertCompletes
-        }.untraced
-      } @@ timeout(5.minute) @@ TestAspect.ignore,
+                                for {
+                                  //                            _      <- putStrLn(s"Starting chunk $i")
+                                  _ <- producer.produceChunk(Chunk.fromIterable(records))
+                                  _ <- putStrLn(s"Chunk $i completed")
+                                } yield ()
+                              })
+                              .timed
+                              .map(_._1)
+                    _                <- putStrLn(s"Produced ${nrChunks * nrRecordsPerChunk * 1000.0 / time.toMillis}")
+                  } yield ()
+              } *> totalMetrics.get.flatMap(m => putStrLn(m.toString)).as(assertCompletes)
+          }
+          .untraced
+      } @@ timeout(5.minute) @@ TestAspect.ifEnvSet("ENABLE_AWS"),
       testM("fail when attempting to produce to a stream that does not exist") {
         val streamName = "zio-test-stream-not-existing"
 
@@ -157,7 +166,7 @@ object ProducerTest extends DefaultRunnableSpec {
 
           for {
             batches <- runTransducer(batcher, records)
-          } yield assert(batches.size)(equalTo(1)) && assert(batches.head.size)(equalTo(2)) &&
+          } yield assert(batches.size)(equalTo(1)) &&
             assert(batches.flatMap(Chunk.fromIterable).map(_.aggregateCount).sum)(equalTo(nrRecords))
         },
         testM("aggregate records up to the record size limit") {
