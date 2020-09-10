@@ -225,7 +225,7 @@ object ProducerTest extends DefaultRunnableSpec {
         val nrRecords = 1000
         val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))
 
-        val streamName = "test-stream-2"
+        val streamName = "test-stream-4"
         TestUtil.withStream(streamName, 20) {
 
           Ref
