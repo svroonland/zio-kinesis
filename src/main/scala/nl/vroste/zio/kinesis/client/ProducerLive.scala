@@ -334,8 +334,6 @@ private[client] object ProducerLive {
               .data(SdkBytes.fromByteArray(ProtobufAggregation.encodeAggregatedRecord(builtAggregate).toArray))
               .build()
         _ <- ZIO.foreach_(entries)(e => e.done.completeWith(done.await))
-
-        _ = println(s"Aggregated ${entries.size} records. Payload size: $payloadSize")
       } yield ProduceRequest(
         r,
         done,

@@ -220,6 +220,30 @@ object ProducerTest extends DefaultRunnableSpec {
               } yield assert(endMetrics.shardPredictionErrors)(isZero)
             }
         }
+      },
+      testM("count aggregated records correctly in metrics") {
+        val nrRecords = 1000
+        val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))
+
+        val streamName = "test-stream-2"
+        TestUtil.withStream(streamName, 20) {
+
+          Ref
+            .make(ProducerMetrics.empty)
+            .flatMap { totalMetrics =>
+              for {
+                _          <- Producer
+                       .make(
+                         streamName,
+                         Serde.asciiString,
+                         ProducerSettings(aggregate = true),
+                         metricsCollector = m => totalMetrics.update(_ + m)
+                       )
+                       .use(_.produceChunk(Chunk.fromIterable(records)))
+                endMetrics <- totalMetrics.get
+              } yield assert(endMetrics.nrRecordsPublished)(equalTo(nrRecords.toLong))
+            }
+        }
       }
     ).provideCustomLayerShared(env) @@ sequential
 
