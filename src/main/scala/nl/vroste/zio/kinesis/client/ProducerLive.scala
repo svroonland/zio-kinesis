@@ -211,7 +211,7 @@ private[client] final class ProducerLive[R, R1, T](
 // Repeatedly produce metrics
   var metricsCollection: ZIO[R1 with Clock, Nothing, Long] = collectMetrics
     .delay(settings.metricsInterval)
-    .repeat(Schedule.spaced(settings.metricsInterval))
+    .repeat(Schedule.spaced(settings.metricsInterval)) // TODO replace with fixed when ZIO 1.0.2 is out
 
   override def produce(r: ProducerRecord[T]): Task[ProduceResponse] =
     (for {

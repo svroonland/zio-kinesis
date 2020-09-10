@@ -1,5 +1,7 @@
 package nl.vroste.zio.kinesis.client
 
+import java.time.Instant
+
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.ProducerLive.{ CurrentMetrics, ProduceRequest, ShardMap }
@@ -89,7 +91,7 @@ final case class ProducerSettings(
 )
 
 object Producer {
-  final case class ProduceResponse(shardId: String, sequenceNumber: String, attempts: Int)
+  final case class ProduceResponse(shardId: String, sequenceNumber: String, attempts: Int, completed: Instant)
 
   def make[R, R1, T](
     streamName: String,

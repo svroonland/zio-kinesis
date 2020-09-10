@@ -9,6 +9,7 @@ import zio.Chunk
 import scala.util.{ Failure, Try }
 
 object ProtobufAggregation {
+  // From https://github.com/awslabs/amazon-kinesis-producer/blob/master/aggregation-format.md
   val magicBytes: Array[Byte] = List(0xf3, 0x89, 0x9a, 0xc2).map(_.toByte).toArray
   val checksumSize            = 16
 
@@ -39,8 +40,8 @@ object ProtobufAggregation {
     if (!isAggregatedRecord(dataChunk))
       Failure(new IllegalArgumentException("Data is not an aggregated record"))
     else {
-      val payload  = dataChunk.slice(magicBytes.length, dataChunk.size - 16)
-      val checksum = dataChunk.slice(dataChunk.size - 16, dataChunk.size)
+      val payload  = dataChunk.slice(magicBytes.length, dataChunk.size - checksumSize)
+      val checksum = dataChunk.slice(dataChunk.size - checksumSize, dataChunk.size)
 
       val calculatedChecksum = Chunk.fromArray(Md5Utils.computeMD5Hash(payload.toArray))
 
