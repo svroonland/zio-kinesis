@@ -8,11 +8,13 @@ import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import software.amazon.kinesis.common.InitialPositionInStreamExtended
 import zio._
 import zio.blocking.Blocking
+import zio.clock.Clock
 import zio.stream.ZStream
 
 private[client] class DynamicConsumerFake(
   shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, ByteBuffer])],
-  refCheckpointedList: Ref[Seq[Any]]
+  refCheckpointedList: Ref[Seq[Any]],
+  clock: Clock.Service
 ) extends DynamicConsumer.Service {
   override def shardedStream[R, T](
     streamName: String,
@@ -29,10 +31,12 @@ private[client] class DynamicConsumerFake(
     Throwable,
     (String, ZStream[Blocking, Throwable, Record[T]], DynamicConsumer.Checkpointer)
   ] = {
-    def record(shardName: String, i: Long, recData: T): Record[T] =
-      new Record[T](
+    def record(shardName: String, i: Long, recData: T): UIO[Record[T]] =
+      (for {
+        dateTime <- clock.currentDateTime
+      } yield new Record[T](
         sequenceNumber = s"$i",
-        approximateArrivalTimestamp = java.time.Instant.now(),
+        approximateArrivalTimestamp = dateTime.toInstant,
         data = recData,
         partitionKey = s"${shardName}_$i",
         encryptionType = EncryptionType.NONE,
@@ -40,7 +44,7 @@ private[client] class DynamicConsumerFake(
         explicitHashKey = "",
         aggregated = false,
         shardId = shardName
-      )
+      )).orDie
 
     shards.flatMap {
       case (shardName, stream) =>
@@ -50,7 +54,7 @@ private[client] class DynamicConsumerFake(
               (
                 shardName,
                 stream.zipWithIndex.mapM {
-                  case (bb, i) => deserializer.deserialize(bb).map(record(shardName, i, _)).provide(env)
+                  case (bb, i) => deserializer.deserialize(bb).flatMap(record(shardName, i, _)).provide(env)
                 },
                 checkpointer
               )

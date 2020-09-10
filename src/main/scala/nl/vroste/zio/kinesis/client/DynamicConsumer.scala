@@ -39,7 +39,10 @@ object DynamicConsumer {
   def fake(
     shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, ByteBuffer])],
     refCheckpointedList: Ref[Seq[Any]]
-  ): ULayer[DynamicConsumer] = ZLayer.succeed(new DynamicConsumerFake(shards, refCheckpointedList))
+  ): ZLayer[Clock, Nothing, Has[Service]] =
+    ZLayer.fromService[Clock.Service, DynamicConsumer.Service] { clock =>
+      new DynamicConsumerFake(shards, refCheckpointedList, clock)
+    }
 
   trait Service {
 
