@@ -150,14 +150,15 @@ object ProducerTest extends DefaultRunnableSpec {
       testM("fail when attempting to produce to a stream that does not exist") {
         val streamName = "zio-test-stream-not-existing"
 
-        (for {
-          producer <- Producer
-                        .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 32768))
-        } yield producer).use { producer =>
-          val records = (1 to 10).map(j => ProducerRecord(s"key$j", s"message$j-$j"))
-          producer
-            .produceChunk(Chunk.fromIterable(records)) *> putStrLn(s"Chunk completed")
-        }.run.map(r => assert(r)(fails(isSubtype[KinesisException](anything))))
+        Producer
+          .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 32768))
+          .use { producer =>
+            val records = (1 to 10).map(j => ProducerRecord(s"key$j", s"message$j-$j"))
+            producer
+              .produceChunk(Chunk.fromIterable(records)) *> putStrLn(s"Chunk completed")
+          }
+          .run
+          .map(r => assert(r)(fails(isSubtype[KinesisException](anything))))
       } @@ timeout(1.minute),
       suite("aggregation")(
         testM("batch aggregated records per shard") {
@@ -195,7 +196,31 @@ object ProducerTest extends DefaultRunnableSpec {
             assert(batchPayloadSizes)(forall(isLessThanEqualTo(ProducerLive.maxPayloadSizePerRequest)))
         }
         // TODO test that retries end up in the output
-      )
+      ),
+      testM("produce to the right shard when aggregating") {
+        val nrRecords = 1000
+        val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))
+
+        val streamName = "test-stream-2"
+        TestUtil.withStream(streamName, 20) {
+
+          Ref
+            .make(ProducerMetrics.empty)
+            .flatMap { totalMetrics =>
+              for {
+                _          <- Producer
+                       .make(
+                         streamName,
+                         Serde.asciiString,
+                         ProducerSettings(aggregate = true),
+                         metricsCollector = m => totalMetrics.update(_ + m)
+                       )
+                       .use(_.produceChunk(Chunk.fromIterable(records)) *> putStrLn(s"Chunk completed"))
+                endMetrics <- totalMetrics.get
+              } yield assert(endMetrics.shardPredictionErrors)(isZero)
+            }
+        }
+      }
     ).provideCustomLayerShared(env) @@ sequential
 
   def aggregatingBatcherForProducerRecord[R, T](
