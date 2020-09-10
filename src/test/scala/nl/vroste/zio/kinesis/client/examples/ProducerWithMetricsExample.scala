@@ -2,8 +2,9 @@ package nl.vroste.zio.kinesis.client.examples
 
 import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
+import nl.vroste.zio.kinesis.client.producer.ProducerMetrics
 import nl.vroste.zio.kinesis.client.serde.Serde
-import nl.vroste.zio.kinesis.client.{ Client, Producer, ProducerMetrics, ProducerSettings }
+import nl.vroste.zio.kinesis.client.{ Client, Producer, ProducerSettings }
 import zio._
 import zio.console.putStrLn
 import zio.logging.slf4j.Slf4jLogger

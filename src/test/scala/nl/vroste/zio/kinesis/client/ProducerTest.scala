@@ -5,7 +5,8 @@ import java.util.UUID
 
 import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
-import nl.vroste.zio.kinesis.client.ProducerLive.{ ProduceRequest, ShardMap }
+import nl.vroste.zio.kinesis.client.producer.ProducerLive.ProduceRequest
+import nl.vroste.zio.kinesis.client.producer.{ ProducerLive, ProducerMetrics, ShardMap }
 import nl.vroste.zio.kinesis.client.serde.{ Serde, Serializer }
 import software.amazon.awssdk.services.kinesis.model.KinesisException
 import zio.clock.Clock
