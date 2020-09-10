@@ -1,26 +1,32 @@
 package nl.vroste.zio.kinesis.client
 
+import java.time.Instant
 import java.util.UUID
 
+import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
-import nl.vroste.zio.kinesis.client.serde.Serde
+import nl.vroste.zio.kinesis.client.ProducerLive.{ ProduceRequest, ShardMap }
+import nl.vroste.zio.kinesis.client.serde.{ Serde, Serializer }
 import software.amazon.awssdk.services.kinesis.model.KinesisException
 import zio.clock.Clock
 import zio.console.putStrLn
 import zio.duration._
+import zio.logging.Logging
 import zio.logging.slf4j.Slf4jLogger
-import zio.stream.ZStream
+import zio.stream.{ ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test._
-import zio.{ Chunk, Ref, ZIO }
+import zio.{ system, Chunk, Queue, Ref, Runtime, ZIO }
 
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
 
   val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
 
-  val env = (LocalStackServices.localStackAwsLayer.orDie >>> (AdminClient.live ++ Client.live)).orDie >+>
+  val useAws = Runtime.default.unsafeRun(system.envOrElse("ENABLE_AWS", "0")).toInt == 1
+  val env    = ((if (useAws) client.defaultAwsLayer
+              else LocalStackServices.localStackAwsLayer).orDie >>> (AdminClient.live ++ Client.live)).orDie >+>
     (loggingLayer ++ Clock.live ++ zio.console.Console.live)
 
   def spec =
@@ -88,62 +94,222 @@ object ProducerTest extends DefaultRunnableSpec {
               } yield assertCompletes
           }
         }
-      } @@ TestAspect.ignore,
+      } @@ TestAspect.ifEnvSet("ENABLE_AWS"),
       testM("produce records to Kinesis successfully and efficiently") {
         // This test demonstrates production of about 5000-6000 records per second on my Mid 2015 Macbook Pro
 
         val streamName = "zio-test-stream-producer3"
 
-        (for {
-          _            <- putStrLn("creating stream").toManaged_
-          _            <- createStreamUnmanaged(streamName, 5).toManaged_
-          _            <- putStrLn("creating producer").toManaged_
-          totalMetrics <- Ref.make(ProducerMetrics.empty).toManaged_
-          producer     <- Producer
-                        .make(
-                          streamName,
-                          Serde.asciiString,
-                          ProducerSettings(bufferSize = 16384),
-                          metrics => totalMetrics.updateAndGet(_ + metrics).flatMap(m => putStrLn(m.toString))
-                        )
-        } yield (producer, totalMetrics)).use {
-          case (producer, totalMetrics) =>
-            for {
-              _                <- ZIO.sleep(5.second).when(false)
-              // Parallelism, but not infinitely (not sure if it matters)
-              nrChunks          = 100
-              nrRecordsPerChunk = 8000
-              time             <- ZIO
-                        .collectAllParN_(3)((1 to nrChunks).map { i =>
-                          val records = (1 to nrRecordsPerChunk).map(j =>
-                            // Random UUID to get an even distribution over the shards
-                            ProducerRecord(s"key$i" + UUID.randomUUID(), s"message$i-$j")
-                          )
+        Ref
+          .make(ProducerMetrics.empty)
+          .flatMap {
+            totalMetrics =>
+              (for {
+                _        <- putStrLn("creating stream").toManaged_
+                _        <- createStreamUnmanaged(streamName, 5).toManaged_
+                _        <- putStrLn("creating producer").toManaged_
+                producer <- Producer
+                              .make(
+                                streamName,
+                                Serde.asciiString,
+                                ProducerSettings(
+                                  bufferSize = 16384 * 4,
+                                  maxParallelRequests = 24,
+                                  metricsInterval = 5.seconds
+                                ),
+                                metrics => totalMetrics.updateAndGet(_ + metrics).flatMap(m => putStrLn(m.toString))
+                              )
+              } yield producer).use {
+                producer =>
+                  for {
+                    _                <- ZIO.sleep(5.second).when(false)
+                    // Parallelism, but not infinitely (not sure if it matters)
+                    nrChunks          = 100
+                    nrRecordsPerChunk = 8000
+                    time             <- ZIO
+                              .collectAllParN_(3)((1 to nrChunks).map { i =>
+                                val records = (1 to nrRecordsPerChunk).map(j =>
+                                  // Random UUID to get an even distribution over the shards
+                                  ProducerRecord(s"key$i" + UUID.randomUUID(), s"message$i-$j")
+                                )
 
-                          for {
-                            //                            _      <- putStrLn(s"Starting chunk $i")
-                            _ <- producer.produceChunk(Chunk.fromIterable(records))
-                            _ <- putStrLn(s"Chunk $i completed")
-                          } yield ()
-                        })
-                        .timed
-                        .map(_._1)
-              _                <- putStrLn(s"Produced ${nrChunks * nrRecordsPerChunk * 1000.0 / time.toMillis}")
-              _                <- totalMetrics.get.flatMap(m => putStrLn(m.toString))
-            } yield assertCompletes
-        }.untraced
-      } @@ timeout(5.minute) @@ TestAspect.ignore,
+                                for {
+                                  //                            _      <- putStrLn(s"Starting chunk $i")
+                                  _ <- producer.produceChunk(Chunk.fromIterable(records))
+                                  _ <- putStrLn(s"Chunk $i completed")
+                                } yield ()
+                              })
+                              .timed
+                              .map(_._1)
+                    _                <- putStrLn(s"Produced ${nrChunks * nrRecordsPerChunk * 1000.0 / time.toMillis}")
+                  } yield ()
+              } *> totalMetrics.get.flatMap(m => putStrLn(m.toString)).as(assertCompletes)
+          }
+          .untraced
+      } @@ timeout(5.minute) @@ TestAspect.ifEnvSet("ENABLE_AWS"),
       testM("fail when attempting to produce to a stream that does not exist") {
         val streamName = "zio-test-stream-not-existing"
 
-        (for {
-          producer <- Producer
-                        .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 32768))
-        } yield producer).use { producer =>
-          val records = (1 to 10).map(j => ProducerRecord(s"key$j", s"message$j-$j"))
-          producer
-            .produceChunk(Chunk.fromIterable(records)) *> putStrLn(s"Chunk completed")
-        }.run.map(r => assert(r)(fails(isSubtype[KinesisException](anything))))
-      } @@ timeout(1.minute)
+        Producer
+          .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 32768))
+          .use { producer =>
+            val records = (1 to 10).map(j => ProducerRecord(s"key$j", s"message$j-$j"))
+            producer
+              .produceChunk(Chunk.fromIterable(records)) *> putStrLn(s"Chunk completed")
+          }
+          .run
+          .map(r => assert(r)(fails(isSubtype[KinesisException](anything))))
+      } @@ timeout(1.minute),
+      suite("aggregation")(
+        testM("batch aggregated records per shard") {
+          val batcher = aggregatingBatcherForProducerRecord(shardMap, Serde.asciiString)
+
+          val nrRecords = 10
+          val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))
+
+          for {
+            batches <- runTransducer(batcher, records)
+          } yield assert(batches.size)(equalTo(1)) &&
+            assert(batches.flatMap(Chunk.fromIterable).map(_.aggregateCount).sum)(equalTo(nrRecords))
+        },
+        testM("aggregate records up to the record size limit") {
+          val batcher = aggregatingBatcherForProducerRecord(shardMap, Serde.asciiString)
+
+          val nrRecords = 100000
+          val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))
+
+          for {
+            batches           <- runTransducer(batcher, records)
+            recordPayloadSizes = batches.flatMap(Chunk.fromIterable).map(_.r.data().asByteArrayUnsafe().length)
+          } yield assert(recordPayloadSizes)(forall(isLessThanEqualTo(ProducerLive.maxPayloadSizePerRecord)))
+        },
+        testM("aggregate records up to the batch size limit") {
+          val batcher = aggregatingBatcherForProducerRecord(shardMap, Serde.asciiString)
+
+          val nrRecords = 100000
+          val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))
+
+          for {
+            batches          <- runTransducer(batcher, records)
+            batchPayloadSizes = batches.map(_.map(_.r.data().asByteArrayUnsafe().length).sum)
+          } yield assert(batches.map(_.size))(forall(isLessThanEqualTo(ProducerLive.maxRecordsPerRequest))) &&
+            assert(batchPayloadSizes)(forall(isLessThanEqualTo(ProducerLive.maxPayloadSizePerRequest)))
+        }
+        // TODO test that retries end up in the output
+      ),
+      testM("produce to the right shard when aggregating") {
+        val nrRecords = 1000
+        val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))
+
+        val streamName = "test-stream-2"
+        TestUtil.withStream(streamName, 20) {
+
+          Ref
+            .make(ProducerMetrics.empty)
+            .flatMap { totalMetrics =>
+              for {
+                _          <- Producer
+                       .make(
+                         streamName,
+                         Serde.asciiString,
+                         ProducerSettings(aggregate = true),
+                         metricsCollector = m => totalMetrics.update(_ + m)
+                       )
+                       .use(_.produceChunk(Chunk.fromIterable(records)) *> putStrLn(s"Chunk completed"))
+                endMetrics <- totalMetrics.get
+              } yield assert(endMetrics.shardPredictionErrors)(isZero)
+            }
+        }
+      },
+      testM("count aggregated records correctly in metrics") {
+        val nrRecords = 1000
+        val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))
+
+        val streamName = "test-stream-4"
+        TestUtil.withStream(streamName, 20) {
+
+          Ref
+            .make(ProducerMetrics.empty)
+            .flatMap { totalMetrics =>
+              for {
+                _          <- Producer
+                       .make(
+                         streamName,
+                         Serde.asciiString,
+                         ProducerSettings(aggregate = true),
+                         metricsCollector = m => totalMetrics.update(_ + m)
+                       )
+                       .use(_.produceChunk(Chunk.fromIterable(records)))
+                endMetrics <- totalMetrics.get
+              } yield assert(endMetrics.nrRecordsPublished)(equalTo(nrRecords.toLong))
+            }
+        }
+      },
+      testM("updates the shard map after a reshard is detected") {
+        val nrRecords = 1000
+        val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))
+
+        val streamName = "test-stream-5"
+        TestUtil.withStream(streamName, 2) {
+
+          for {
+            metrics     <- Queue.unbounded[ProducerMetrics]
+            producerFib <- Producer
+                             .make(
+                               streamName,
+                               Serde.asciiString,
+                               ProducerSettings(aggregate = true, metricsInterval = 3.second),
+                               metricsCollector = metrics.offer(_).unit
+                             )
+                             .use { producer =>
+                               ZStream
+                                 .fromIterable(records)
+                                 .chunkN(10) // TODO Until https://github.com/zio/zio/issues/4190 is fixed
+                                 .throttleShape(10, 1.second)(_.size.toLong)
+                                 .mapM(producer.produce)
+                                 .runDrain
+                             }
+                             .fork
+            // Wait for one or more shard prediction errors and then wait for recovery: no more errors
+            done        <- ZStream
+                      .fromQueue(metrics)
+                      .tap(m =>
+                        putStrLn(s"Detected shard prediction errors: ${m.shardPredictionErrors}").when(
+                          m.shardPredictionErrors > 0
+                        )
+                      )
+                      .dropWhile(_.shardPredictionErrors == 0)
+                      .dropWhile(_.shardPredictionErrors != 0)
+                      .take(3) // This is not quite '3 consecutive', but close enough
+                      .runDrain
+                      .fork
+            _           <- ZIO.sleep(10.seconds)
+            _           <- putStrLn("Resharding")
+            _           <- ZIO.service[AdminClient.Service].flatMap(_.updateShardCount(streamName, 4))
+            _           <- done.join race producerFib.join
+            _            = println("Done!")
+            _           <- producerFib.interrupt
+          } yield assertCompletes
+        }
+      } @@ TestAspect.timeout(2.minute) @@ TestAspect.ifEnvSet("ENABLE_AWS") // LocalStack does not support resharding
     ).provideCustomLayerShared(env) @@ sequential
+
+  def aggregatingBatcherForProducerRecord[R, T](
+    shardMap: ShardMap,
+    serializer: Serializer[R, T]
+  ): ZTransducer[R with Logging, Throwable, ProducerRecord[T], Seq[ProduceRequest]] =
+    ProducerLive.aggregator.contramapM((r: ProducerRecord[T]) =>
+      ProducerLive.makeProduceRequest(r, serializer, Instant.now, shardMap)
+    ) >>> ProducerLive.batcher
+
+  def runTransducer[R, E, I, O](parser: ZTransducer[R, E, I, O], input: Iterable[I]): ZIO[R, E, Chunk[O]] =
+    ZStream.fromIterable(input).transduce(parser).runCollect
+
+  val shardMap = ShardMap(
+    Seq(
+      ("001", ShardMap.minHashKey, ShardMap.maxHashKey / 2),
+      ("002", ShardMap.maxHashKey / 2 + 1, ShardMap.maxHashKey)
+    ),
+    Instant.now
+  )
 }

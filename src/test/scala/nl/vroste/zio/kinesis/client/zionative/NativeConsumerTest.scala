@@ -696,7 +696,70 @@ object NativeConsumerTest extends DefaultRunnableSpec {
               _       <- producer.interrupt
             } yield assertCompletes
         }
-      } @@ TestAspect.ifEnvSet("ENABLE_AWS")
+      } @@ TestAspect.ifEnvSet("ENABLE_AWS"),
+      testM("parse aggregated records") {
+        val nrShards  = 1
+        val nrRecords = 10
+
+        withRandomStreamAndApplicationName(nrShards) {
+          (streamName, applicationName) =>
+            val consumer =
+              Consumer
+                .shardedStream(
+                  streamName,
+                  applicationName,
+                  Serde.asciiString,
+                  emitDiagnostic = e => UIO(println(e.toString))
+                )
+                .flatMapPar(nrShards) { case (shard @ _, shardStream, checkpointer @ _) => shardStream }
+                .take(nrRecords.toLong)
+            for {
+              _ <- produceSampleRecords(streamName, nrRecords, aggregated = true)
+              records <- consumer.runCollect
+            } yield assert(records)(hasSize(equalTo(nrRecords))) &&
+              assert(records.flatMap(_.subSequenceNumber.toList).map(_.toInt).toList)(
+                equalTo((0 until nrRecords).toList)
+              ) &&
+              assert(records.map(_.aggregated))(forall(isTrue))
+        }
+      },
+      testM("resume at a subsequence number") {
+        val nrShards  = 1
+        val nrRecords = 10
+
+        withRandomStreamAndApplicationName(nrShards) {
+          (streamName, applicationName) =>
+            def consume(nr: Int) =
+              Consumer
+                .shardedStream(
+                  streamName,
+                  applicationName,
+                  Serde.asciiString,
+                  emitDiagnostic = e => UIO(println(e.toString))
+                )
+                .mapMParUnordered(nrShards) {
+                  case (shard @ _, shardStream, checkpointer @ _) =>
+                    shardStream
+                      .tap(checkpointer.stage)
+                      .take(nr.toLong)
+                      .runCollect
+                }
+                .flattenChunks
+                .take(nr.toLong)
+
+            for {
+              _        <- produceSampleRecords(streamName, nrRecords, aggregated = true)
+              records1 <- consume(5).runCollect
+              _        <- putStrLn(records1.mkString("\n"))
+              records2 <- consume(5).runCollect
+              _        <- putStrLn(records2.mkString("\n"))
+              records   = records1 ++ records2
+            } yield assert(records)(hasSize(equalTo(nrRecords))) &&
+              assert(records.flatMap(_.subSequenceNumber.toList).map(_.toInt).toList)(
+                equalTo((0 until nrRecords).toList)
+              )
+        }
+      }
     ).provideSomeLayerShared(env) @@
       TestAspect.timed @@
       TestAspect.sequential @@ // For CircleCI
@@ -718,25 +781,28 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     nrRecords: Int,
     chunkSize: Int = 100,
     throttle: Option[Duration] = None,
-    indexStart: Int = 1
+    indexStart: Int = 1,
+    aggregated: Boolean = false
   ): ZIO[Client with Clock with Logging, Throwable, Chunk[ProduceResponse]] =
-    Producer.make(streamName, Serde.asciiString, ProducerSettings(maxParallelRequests = 1)).use { producer =>
-      val records =
-        (indexStart until (nrRecords + indexStart)).map(i => ProducerRecord(s"key$i", s"msg$i"))
-      ZStream
-        .fromIterable(records)
-        .chunkN(chunkSize)
-        .mapChunksM { chunk =>
-          producer
-            .produceChunk(chunk)
-            .tapError(e => putStrLn(s"Error in producing fiber: $e").provideLayer(Console.live))
-            .retry(retryOnResourceNotFound)
-            .tap(_ => throttle.map(ZIO.sleep(_)).getOrElse(UIO.unit))
-            .map(Chunk.fromIterable)
-        }
-        .runCollect
-        .map(Chunk.fromIterable)
-    }
+    Producer
+      .make(streamName, Serde.asciiString, ProducerSettings(maxParallelRequests = 1, aggregate = aggregated))
+      .use { producer =>
+        val records =
+          (indexStart until (nrRecords + indexStart)).map(i => ProducerRecord(s"key$i", s"msg$i"))
+        ZStream
+          .fromIterable(records)
+          .chunkN(chunkSize)
+          .mapChunksM { chunk =>
+            producer
+              .produceChunk(chunk)
+              .tapError(e => putStrLn(s"Error in producing fiber: $e").provideLayer(Console.live))
+              .retry(retryOnResourceNotFound)
+              .tap(_ => throttle.map(ZIO.sleep(_)).getOrElse(UIO.unit))
+              .map(Chunk.fromIterable)
+          }
+          .runCollect
+          .map(Chunk.fromIterable)
+      }
 
   def produceSampleRecordsMassivelyParallel(
     streamName: String,
@@ -792,10 +858,10 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                     }.toMap
     } yield checkpoints
 
-  def deleteTable(applicationName: String) =
+  def deleteTable(tableName: String) =
     ZIO
       .service[LeaseRepository.Service]
-      .flatMap(_.deleteTable(applicationName).unit)
+      .flatMap(_.deleteTable(tableName).unit)
 
   def withRandomStreamAndApplicationName[R, A](
     nrShards: Int
@@ -807,7 +873,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     ZIO.effectTotal((streamPrefix + "testStream", streamPrefix + "testApplication")).flatMap {
       case (streamName, applicationName) =>
         withStream(streamName, shards = nrShards) {
-          ZManaged.finalizer(deleteTable(applicationName).orDie).use_ {
+          ZManaged.finalizer(deleteTable(applicationName).ignore).use_ { // Table may not have been created
             f(streamName, applicationName)
           }
         }

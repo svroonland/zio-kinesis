@@ -24,15 +24,16 @@ object TestUtil {
       .catchSome { case _: ResourceInUseException => getShards(name).delay(1.second) }
 
   def createStream(streamName: String, nrShards: Int): ZManaged[Console with AdminClient with Clock, Throwable, Unit] =
-    createStreamUnmanaged(streamName, nrShards).toManaged(_ =>
-      ZIO
-        .service[AdminClient.Service]
-        .flatMap(_.deleteStream(streamName, enforceConsumerDeletion = true))
-        .catchSome {
-          case _: ResourceNotFoundException => ZIO.unit
-        }
-        .orDie
-    )
+    createStreamUnmanaged(streamName, nrShards)
+      .toManaged(_ =>
+        ZIO
+          .service[AdminClient.Service]
+          .flatMap(_.deleteStream(streamName, enforceConsumerDeletion = true))
+          .catchSome {
+            case _: ResourceNotFoundException => ZIO.unit
+          }
+          .orDie
+      )
 
   def createStreamUnmanaged(
     streamName: String,

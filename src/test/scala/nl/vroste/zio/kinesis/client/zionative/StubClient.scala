@@ -3,6 +3,7 @@ import java.time.Instant
 
 import nl.vroste.zio.kinesis.client.Client
 import nl.vroste.zio.kinesis.client.serde.Serializer
+import software.amazon.awssdk.services.kinesis.model.ShardFilter
 import zio.clock.Clock
 import zio.stream.ZStream
 import zio.{ Task, ZIO, ZManaged }
@@ -30,7 +31,8 @@ class StubClient extends Client.Service {
   override def listShards(
     streamName: String,
     streamCreationTimestamp: Option[Instant],
-    chunkSize: Int
+    chunkSize: Int,
+    filter: Option[ShardFilter] = None
   ): ZStream[Clock, Throwable, Shard] = ???
 
   override def getShardIterator(
