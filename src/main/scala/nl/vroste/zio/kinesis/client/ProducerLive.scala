@@ -179,13 +179,15 @@ private[client] final class ProducerLive[R, R1, T](
       )
       .use_(e)
 
-// Repeatedly produce metrics
-  var metricsCollection: ZIO[R1 with Clock, Nothing, Long] = (for {
+  val collectMetrics: ZIO[R1 with Clock, Nothing, Unit] = for {
     now    <- instant
     m      <- currentMetrics.getAndUpdate(_ => CurrentMetrics.empty(now))
     metrics = ProducerMetrics(java.time.Duration.between(m.start, now), m.published, m.nrFailed, m.latency)
     _      <- metricsCollector(metrics)
-  } yield ())
+  } yield ()
+
+// Repeatedly produce metrics
+  var metricsCollection: ZIO[R1 with Clock, Nothing, Long] = collectMetrics
     .delay(settings.metricsInterval)
     .repeat(Schedule.spaced(settings.metricsInterval))
 

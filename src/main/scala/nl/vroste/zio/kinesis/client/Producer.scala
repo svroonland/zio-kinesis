@@ -129,7 +129,7 @@ object Producer {
                    triggerUpdateShards
                  )
       _                   <- producer.runloop.forkManaged
-      _                   <- producer.metricsCollection.forkManaged
+      _                   <- producer.metricsCollection.forkManaged.ensuring(producer.collectMetrics)
     } yield producer
 
   private def getShardMap(streamName: String): ZIO[Clock with Client, Throwable, ShardMap] = {
