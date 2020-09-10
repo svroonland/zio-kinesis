@@ -258,7 +258,7 @@ object ProducerTest extends DefaultRunnableSpec {
                              .make(
                                streamName,
                                Serde.asciiString,
-                               ProducerSettings(aggregate = false, metricsInterval = 3.second),
+                               ProducerSettings(aggregate = true, metricsInterval = 3.second),
                                metricsCollector = metrics.offer(_).unit
                              )
                              .use { producer =>
