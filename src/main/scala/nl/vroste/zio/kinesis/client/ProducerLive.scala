@@ -142,7 +142,7 @@ private[client] final class ProducerLive[R, R1, T](
 
   private def checkShardPredictionErrors(responseAndRequests: Iterable[(PutRecordsResultEntry, ProduceRequest)]) = {
     val shardPredictionErrors = responseAndRequests.filter {
-      case (result, request) => result.shardId() != request.predictedShard
+      case (result, request) => Option(result.shardId()).exists(_ != request.predictedShard)
     }
 
     val (succeeded, failed) = shardPredictionErrors.partition(_._1.errorCode() == null)
