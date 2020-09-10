@@ -22,6 +22,7 @@ More beta users and feedback are of course welcome.
   * [Unsupported features](#unsupported-features)
 - [Configuration](#configuration)
 - [Producer](#producer)
+  * [Aggregation](#aggregation)
   * [Metrics](#metrics)
 - [DynamicConsumer](#dynamicconsumer)
   * [Basic usage using `consumeWith`](#basic-usage-using--consumewith--1)
@@ -71,6 +72,7 @@ Features:
 * Checkpointing of records according to user-defined Schedules
 * Automatic checkpointing at shard stream shutdown due to error or interruption
 * Handling changes in the number of shards (resharding) while running
+* Support for protobuf-aggregated records (KPL / KCL compatible)
 * Correct handling of Kinesis resource limits (throttling and backoff)
 * KCL compatible metrics publishing to CloudWatch
 * Compatibility for running alongside KCL consumers
@@ -243,8 +245,6 @@ Lease coordination and metrics are fully compatible for running along other KCL 
 ### Unsupported features
 
 Features that are supported by `DynamicConsumer` but not by `Consumer`:
-* KPL record aggregation via Protobuf + subsequence number checkpointing  
-  Users can manually deserialize records via Protobuf if desired. Kinesis streams has a at-least once model anyway, so the lack of subsequence number checkpointing does not break that.
 * DynamoDB lease table billing mode configuration  
   This can be adjusted in AWS Console if desired or manually using the AWS DynamoDB SDK.
 * Some metrics  
@@ -303,6 +303,8 @@ Each shard has an ingestion limit of 1 MB/s and 1000 records/s. When your record
 `Producer` can aggregate multiple user records into one Kinesis record to optimize usage of the shard capacity. `Consumer` and `DynamicConsumer` can automatically deaggregate these records transparently to the user. Checkpointing within an aggregate is supported as well.
 
 Aggregation is off by default but can be enabled by setting `ProducerSettings.aggregate` to `true`.
+
+This feature is fully compatible with the KPL and KCL.
 
 ### Metrics
 `Producer` periodically collects metrics like success rate and throughput and makes them available as `ProducerMetrics` values. Statistical values are collected in a `HdrHistogram`.  Metrics are collected every 30 seconds by default, but the interval can be customized. 
@@ -478,4 +480,3 @@ The Serde construct in this library is inspired by [zio-kafka](https://github.co
  [this AWS blog post](https://aws.amazon.com/blogs/big-data/implementing-efficient-and-reliable-producers-with-the-amazon-kinesis-producer-library/)
  
 Table of contents generated with [markdown-toc](http://ecotrust-canada.github.io/markdown-toc/).
-
