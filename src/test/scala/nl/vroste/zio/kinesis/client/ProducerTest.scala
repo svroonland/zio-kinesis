@@ -17,7 +17,7 @@ import zio.stream.{ ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test._
-import zio.{ system, Chunk, Ref, Runtime, ZIO }
+import zio.{ system, Chunk, Queue, Ref, Runtime, ZIO }
 
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
@@ -244,7 +244,54 @@ object ProducerTest extends DefaultRunnableSpec {
               } yield assert(endMetrics.nrRecordsPublished)(equalTo(nrRecords.toLong))
             }
         }
-      }
+      },
+      testM("updates the shard map after a reshard is detected") {
+        val nrRecords = 1000
+        val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))
+
+        val streamName = "test-stream-5"
+        TestUtil.withStream(streamName, 2) {
+
+          for {
+            metrics     <- Queue.unbounded[ProducerMetrics]
+            producerFib <- Producer
+                             .make(
+                               streamName,
+                               Serde.asciiString,
+                               ProducerSettings(aggregate = false, metricsInterval = 3.second),
+                               metricsCollector = metrics.offer(_).unit
+                             )
+                             .use { producer =>
+                               ZStream
+                                 .fromIterable(records)
+                                 .chunkN(10) // TODO Until https://github.com/zio/zio/issues/4190 is fixed
+                                 .throttleShape(10, 1.second)(_.size.toLong)
+                                 .mapM(producer.produce)
+                                 .runDrain
+                             }
+                             .fork
+            // Wait for one or more shard prediction errors and then wait for recovery: no more errors
+            done        <- ZStream
+                      .fromQueue(metrics)
+                      .tap(m =>
+                        putStrLn(s"Detected shard prediction errors: ${m.shardPredictionErrors}").when(
+                          m.shardPredictionErrors > 0
+                        )
+                      )
+                      .dropWhile(_.shardPredictionErrors == 0)
+                      .dropWhile(_.shardPredictionErrors != 0)
+                      .take(3) // This is not quite '3 consecutive', but close enough
+                      .runDrain
+                      .fork
+            _           <- ZIO.sleep(10.seconds)
+            _           <- putStrLn("Resharding")
+            _           <- ZIO.service[AdminClient.Service].flatMap(_.updateShardCount(streamName, 4))
+            _           <- done.join race producerFib.join
+            _            = println("Done!")
+            _           <- producerFib.interrupt
+          } yield assertCompletes
+        }
+      } @@ TestAspect.timeout(2.minute) @@ TestAspect.ifEnvSet("ENABLE_AWS") // LocalStack does not support resharding
     ).provideCustomLayerShared(env) @@ sequential
 
   def aggregatingBatcherForProducerRecord[R, T](
