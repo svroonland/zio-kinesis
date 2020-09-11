@@ -23,12 +23,16 @@ import zio.{ system, Chunk, Queue, Ref, Runtime, ZIO }
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
 
-  val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val loggingLayer =
+    Logging.console(
+      format = (_, logEntry) => logEntry,
+      Some(getClass.getName)
+    )
 
   val useAws = Runtime.default.unsafeRun(system.envOrElse("ENABLE_AWS", "0")).toInt == 1
   val env    = ((if (useAws) client.defaultAwsLayer
               else LocalStackServices.localStackAwsLayer).orDie >>> (AdminClient.live ++ Client.live)).orDie >+>
-    (loggingLayer ++ Clock.live ++ zio.console.Console.live)
+    (Clock.live ++ zio.console.Console.live >+> loggingLayer)
 
   def spec =
     suite("Producer")(
@@ -118,7 +122,15 @@ object ProducerTest extends DefaultRunnableSpec {
                                   maxParallelRequests = 24,
                                   metricsInterval = 5.seconds
                                 ),
-                                metrics => totalMetrics.updateAndGet(_ + metrics).flatMap(m => putStrLn(m.toString))
+                                metrics =>
+                                  totalMetrics
+                                    .updateAndGet(_ + metrics)
+                                    .flatMap(m =>
+                                      putStrLn(
+                                        s"""${metrics.toString}
+                                           |${m.toString}""".stripMargin
+                                      )
+                                    )
                               )
               } yield producer).use {
                 producer =>
@@ -300,7 +312,7 @@ object ProducerTest extends DefaultRunnableSpec {
     serializer: Serializer[R, T]
   ): ZTransducer[R with Logging, Throwable, ProducerRecord[T], Seq[ProduceRequest]] =
     ProducerLive.aggregator.contramapM((r: ProducerRecord[T]) =>
-      ProducerLive.makeProduceRequest(r, serializer, Instant.now, shardMap)
+      ProducerLive.makeProduceRequest(r, serializer, Instant.now, shardMap).map(_._2)
     ) >>> ProducerLive.batcher
 
   def runTransducer[R, E, I, O](parser: ZTransducer[R, E, I, O], input: Iterable[I]): ZIO[R, E, Chunk[O]] =

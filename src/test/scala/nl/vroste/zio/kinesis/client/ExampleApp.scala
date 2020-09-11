@@ -235,10 +235,10 @@ object ExampleApp extends zio.App {
             Serde.asciiString,
             producerSettings,
             metrics =>
-              putStrLn(metrics.toString) *>
-                totalMetrics
-                  .updateAndGet(_ + metrics)
-                  .flatMap(m => putStrLn(s"Total metrics: ${m.toString}"))
+              totalMetrics
+                .updateAndGet(_ + metrics)
+                .flatMap(m => putStrLn(s"""${metrics.toString}
+                                          |Total metrics: ${m.toString}""".stripMargin))
           )
       }
       .use { producer =>

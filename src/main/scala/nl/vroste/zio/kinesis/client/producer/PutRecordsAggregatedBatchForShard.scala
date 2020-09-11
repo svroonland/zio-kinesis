@@ -47,23 +47,21 @@ final case class PutRecordsAggregatedBatchForShard(
     payloadSize <= maxPayloadSizePerRecord
 
   def toProduceRequest: UIO[ProduceRequest] =
-    for {
-      done <- Promise.make[Throwable, ProduceResponse]
-
-      r  = PutRecordsRequestEntry
-            .builder()
-            .partitionKey(entries.head.r.partitionKey()) // First one?
-            .data(SdkBytes.fromByteArray(ProtobufAggregation.encodeAggregatedRecord(builtAggregate).toArray))
-            .build()
-      _ <- ZIO.foreach_(entries)(e => e.done.completeWith(done.await))
-    } yield ProduceRequest(
-      r,
-      done,
-      entries.head.timestamp,
-      isAggregated = true,
-      aggregateCount = entries.size,
-      predictedShard = entries.head.predictedShard
-    )
+    UIO {
+      val r = PutRecordsRequestEntry
+        .builder()
+        .partitionKey(entries.head.r.partitionKey()) // First one?
+        .data(SdkBytes.fromByteArray(ProtobufAggregation.encodeAggregatedRecord(builtAggregate).toArray))
+        .build()
+      ProduceRequest(
+        r,
+        result => ZIO.foreach_(entries)(e => e.complete(result)),
+        entries.head.timestamp,
+        isAggregated = true,
+        aggregateCount = entries.size,
+        predictedShard = entries.head.predictedShard
+      )
+    }
 }
 
 object PutRecordsAggregatedBatchForShard {
