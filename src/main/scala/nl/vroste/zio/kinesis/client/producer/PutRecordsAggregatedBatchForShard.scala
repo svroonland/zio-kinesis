@@ -1,6 +1,5 @@
 package nl.vroste.zio.kinesis.client.producer
 
-import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.ProtobufAggregation
 import nl.vroste.zio.kinesis.client.producer.ProducerLive.{
   maxPayloadSizePerRecord,
@@ -11,7 +10,7 @@ import nl.vroste.zio.kinesis.client.zionative.protobuf.Messages
 import nl.vroste.zio.kinesis.client.zionative.protobuf.Messages.AggregatedRecord
 import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.services.kinesis.model.PutRecordsRequestEntry
-import zio.{ Promise, UIO, ZIO }
+import zio.{ UIO, ZIO }
 
 import scala.jdk.CollectionConverters._
 
@@ -26,18 +25,13 @@ final case class PutRecordsAggregatedBatchForShard(
     val records        = entriesInOrder.zipWithIndex.map {
       case (e, index) => ProtobufAggregation.putRecordsRequestEntryToRecord(e.r, index)
     }
-    val aggregate      = builder
+    builder
       .addAllRecords(records.asJava)
       .addAllExplicitHashKeyTable(
         entriesInOrder.map(e => Option(e.r.explicitHashKey()).getOrElse("0")).asJava
       ) // TODO optimize: only filled ones
       .addAllPartitionKeyTable(entriesInOrder.map(e => e.r.partitionKey()).asJava)
       .build()
-
-    //      println(
-    //        s"Aggregate size: ${aggregate.getSerializedSize}, predicted: ${payloadSize} (${aggregate.getSerializedSize * 100.0 / payloadSize} %)"
-    //      )
-    aggregate
   }
 
   def add(entry: ProduceRequest): PutRecordsAggregatedBatchForShard =
