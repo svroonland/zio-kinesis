@@ -240,39 +240,38 @@ object ProducerTest extends DefaultRunnableSpec {
         val streamName = "zio-test-stream-producer3"
 
         def makeProducer(
-          workerId: String
+          workerId: String,
+          totalMetrics: Ref[ProducerMetrics]
         ): ZManaged[Any with Console with Clock with Client with Logging, Throwable, Producer[String]] =
-          Ref.make(ProducerMetrics.empty).toManaged_.flatMap {
-            totalMetrics =>
-              Producer
-                .make(
-                  streamName,
-                  Serde.asciiString,
-                  ProducerSettings(
-                    bufferSize = 16384 * 4,
-                    maxParallelRequests = 12,
-                    metricsInterval = 5.seconds
-                  ),
-                  metrics =>
-                    totalMetrics
-                      .updateAndGet(_ + metrics)
-                      .flatMap(m =>
-                        putStrLn(
-                          s"""${workerId}: ${metrics.toString}
-                             |${workerId}: ${m.toString}""".stripMargin
-                        )
-                      )
-                )
-                .updateService[Logger[String]](l => l.named(workerId))
-          }
+          Producer
+            .make(
+              streamName,
+              Serde.asciiString,
+              ProducerSettings(
+                bufferSize = 16384 * 4,
+                maxParallelRequests = 12,
+                metricsInterval = 5.seconds
+              ),
+              metrics =>
+                totalMetrics
+                  .updateAndGet(_ + metrics)
+                  .flatMap(m =>
+                    putStrLn(
+                      s"""${workerId}: ${metrics.toString}
+                         |${workerId}: ${m.toString}""".stripMargin
+                    )
+                  )
+            )
+            .updateService[Logger[String]](l => l.named(workerId))
 
         val nrRecords = 200000
 
         (for {
-          _ <- putStrLn("creating stream")
-          _ <- createStreamUnmanaged(streamName, 1)
-          _ <- putStrLn("creating producer")
-          _ <- (makeProducer("producer1") zip makeProducer("producer2")).use {
+          _          <- putStrLn("creating stream")
+          _          <- createStreamUnmanaged(streamName, 1)
+          _          <- putStrLn("creating producer")
+          metrics    <- Ref.make(ProducerMetrics.empty)
+          _          <- (makeProducer("producer1", metrics) zip makeProducer("producer2", metrics)).use {
                  case (p1, p2) =>
                    for {
                      run1 <- TestUtil.massProduceRecords(p1, nrRecords / 2, nrRecords / 100, 14).fork
@@ -280,7 +279,9 @@ object ProducerTest extends DefaultRunnableSpec {
                      _    <- run1.join <&> run2.join
                    } yield ()
                }
-        } yield assertCompletes).untraced
+          _          <- putStrLn(metrics.toString)
+          endMetrics <- metrics.get
+        } yield assert(endMetrics.successRate)(isGreaterThan(0.75))).untraced
       } @@ timeout(5.minute) @@ TestAspect.ifEnvSet("ENABLE_AWS"),
       testM("updates the shard map after a reshard is detected") {
         import zio.ZManaged

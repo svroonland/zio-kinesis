@@ -29,7 +29,10 @@ import zio.stream.ZSink
  * - Batching of records into a single PutRecords calls to Kinesis for reduced IO overhead
  * - Retry requests with backoff on recoverable errors
  * - Retry individual records
- * - Rate limiting to respect shard capacity (TODO)
+ * - Rate limiting to respect shard capacity
+ * - Dynamic throttling: when other systems are producing records, Producer will find a rate that optimizes
+ *   the success rate while maintaining high throughput.
+ *  - Aggregatting of small records into one Kinesis records.
  *
  * Records are batched for up to 500 records or 5MB of payload size,
  * whichever comes first. The latter two are Kinesis API limits.
@@ -86,6 +89,7 @@ trait Producer[T] {
  * @param aggregate Aggregate records
  *                  Enabling this setting can give higher throughput for small records, by working around
  *                  the 1000 records/s limit per shard.
+ * @param allowedErrorRate The maximum allowed rate of errors before throttling is applied
  */
 final case class ProducerSettings(
   bufferSize: Int = 8192,
@@ -94,8 +98,11 @@ final case class ProducerSettings(
   failedDelay: Duration = 100.millis,
   metricsInterval: Duration = 30.seconds,
   updateShardInterval: Duration = 30.seconds,
-  aggregate: Boolean = false
-)
+  aggregate: Boolean = false,
+  allowedErrorRate: Double = 0.05
+) {
+  require(allowedErrorRate > 0 && allowedErrorRate <= 1.0, "allowedErrorRate must be between 0 and 1 (inclusive)")
+}
 
 object Producer {
   final case class ProduceResponse(shardId: String, sequenceNumber: String, attempts: Int, completed: Instant)
@@ -122,7 +129,7 @@ object Producer {
                                  log.info("Shard map was refreshed")).orDie,
                                settings.updateShardInterval
                              )
-      throttler           <- ShardedThrottler.make()
+      throttler           <- ShardedThrottler.make(allowedError = settings.allowedErrorRate)
 
       producer = new ProducerLive[R, R1, T](
                    client,
