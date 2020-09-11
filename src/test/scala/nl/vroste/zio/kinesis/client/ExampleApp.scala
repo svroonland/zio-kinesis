@@ -11,8 +11,8 @@ import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio._
 import zio.clock.Clock
+import zio.console.Console
 import zio.duration._
-import zio.logging.slf4j.Slf4jLogger
 import zio.logging.{ log, Logging }
 import zio.stream.{ ZStream, ZTransducer }
 
@@ -180,7 +180,8 @@ object ExampleApp extends zio.App {
             }
       }
 
-  val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val loggingLayer: ZLayer[Any, Nothing, Logging] =
+    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   val localStackEnv =
     LocalStackServices.localStackAwsLayer >+>

@@ -280,7 +280,7 @@ object ProducerExample extends zio.App {
   val streamName      = "my_stream"
   val applicationName = "my_awesome_zio_application"
 
-  val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val loggingLayer = Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
   val env          = client.defaultAwsLayer >+> Client.live ++ loggingLayer
 
   val program = Producer.make(streamName, Serde.asciiString).use { producer =>
@@ -338,7 +338,7 @@ object ProducerWithMetricsExample extends zio.App {
   val streamName      = "my_stream"
   val applicationName = "my_awesome_zio_application"
 
-  val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val loggingLayer = Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
   val env          = client.defaultAwsLayer >+> Client.live ++ loggingLayer
 
   val program = (for {

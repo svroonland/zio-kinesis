@@ -4,10 +4,11 @@ import java.util.UUID
 
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.DynamicConsumer.consumeWith
-import nl.vroste.zio.kinesis.client.LocalStackServices.localStackAwsLayer
 import nl.vroste.zio.kinesis.client.serde.Serde
+import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
+import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
+import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import zio._
-import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.console._
 import zio.duration._
@@ -19,14 +20,13 @@ import zio.test._
 object ConsumeWithTest extends DefaultRunnableSpec {
   import TestUtil._
 
-  private val loggingLayer: ZLayer[Any, Nothing, Logging] =
-    Console.live ++ Clock.live >>> Logging.console(
-      format = (_, logEntry) => logEntry,
-      rootLoggerName = Some("default-logger")
-    )
+  val loggingLayer: ZLayer[Any, Nothing, Logging] =
+    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
-  private val env =
-    (LocalStackServices.localHttpClient >>> LocalStackServices.kinesisAsyncClientLayer >>> (Client.live ++ AdminClient.live ++ (loggingLayer ++ localStackAwsLayer >>> DynamicConsumer.live))) ++ Clock.live ++ Blocking.live ++ loggingLayer
+  private val env: ZLayer[Console with Clock, Throwable, Logging with Has[CloudWatchAsyncClient] with Has[
+    KinesisAsyncClient
+  ] with Has[DynamoDbAsyncClient] with Has[DynamicConsumer.Service] with Client with AdminClient] =
+    loggingLayer >+> LocalStackServices.localStackAwsLayer >+> (DynamicConsumer.live ++ Client.live ++ AdminClient.live)
 
   def testConsume1 =
     testM("consumeWith should consume records produced on all shards") {

@@ -4,15 +4,17 @@ import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio._
 import zio.blocking.Blocking
+import zio.clock.Clock
 import zio.console.{ putStrLn, Console }
 import zio.duration._
-import zio.logging.slf4j.Slf4jLogger
+import zio.logging.Logging
 
 /**
  * Basic usage example for DynamicConsumer
  */
 object DynamicConsumerBasicUsageExample extends zio.App {
-  private val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val loggingLayer: ZLayer[Any, Nothing, Logging] =
+    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     DynamicConsumer

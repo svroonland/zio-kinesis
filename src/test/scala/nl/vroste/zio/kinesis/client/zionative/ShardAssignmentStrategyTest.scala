@@ -5,9 +5,9 @@ import zio.test._
 import zio.test.Assertion._
 import zio.test.Gen
 import zio.test.DefaultRunnableSpec
-import zio.logging.slf4j.Slf4jLogger
 import zio.random.Random
 import ShardAssignmentStrategy.leasesToTake
+import zio.logging.Logging
 
 object ShardAssignmentStrategyTest extends DefaultRunnableSpec {
   val leaseDistributionGen = leases(Gen.int(2, 100), Gen.int(2, 10))
@@ -103,7 +103,7 @@ object ShardAssignmentStrategyTest extends DefaultRunnableSpec {
   def changedElements[A](as: List[A]): List[A] =
     as.foldLeft(List.empty[A]) { case (acc, a) => if (acc.lastOption.contains(a)) acc else acc :+ a }
 
-  val loggingLayer                             = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val loggingLayer                             = Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   def genTraverse[R, A, B](elems: Iterable[A])(f: A => Gen[R, B]): Gen[R, List[B]] =
     Gen.crossAll(elems.map(f))

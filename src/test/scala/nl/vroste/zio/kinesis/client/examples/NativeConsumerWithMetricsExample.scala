@@ -6,7 +6,7 @@ import nl.vroste.zio.kinesis.client.zionative.metrics.{ CloudWatchMetricsPublish
 import zio._
 import zio.console.{ putStrLn, Console }
 import zio.duration._
-import zio.logging.slf4j.Slf4jLogger
+import zio.logging.Logging
 
 object NativeConsumerWithMetricsExample extends zio.App {
 
@@ -39,5 +39,5 @@ object NativeConsumerWithMetricsExample extends zio.App {
       .provideCustomLayer(Consumer.defaultEnvironment ++ loggingLayer ++ ZLayer.succeed(metricsConfig))
       .exitCode
 
-  val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val loggingLayer = Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 }
