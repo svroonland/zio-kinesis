@@ -88,14 +88,18 @@ convenience method `Consumer.consumeWith`. This method lets you execute a ZIO ef
 
 ```scala
 import nl.vroste.zio.kinesis.client.serde.Serde
-import nl.vroste.zio.kinesis.client.zionative._
 import zio._
-import zio.console.putStrLn
+import zio.clock.Clock
+import zio.console.{ putStrLn, Console }
 import zio.duration._
-import zio.logging.slf4j.Slf4jLogger
+import zio.logging.Logging
 
+/**
+ * Basic usage example for `Consumer.consumeWith` convenience method
+ */
 object ConsumeWithExample extends zio.App {
-  private val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val loggingLayer: ZLayer[Any, Nothing, Logging] =
+    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     Consumer
@@ -117,16 +121,14 @@ object ConsumeWithExample extends zio.App {
 If you want more fine-grained control over the processing stream, error handling or checkpointing, use `Consumer.shardedStream` to get a stream of shard-streams, like in the following example:
 
 ```scala
-import nl.vroste.zio.kinesis.client._
-import nl.vroste.zio.kinesis.client.zionative._
 import nl.vroste.zio.kinesis.client.serde.Serde
+import nl.vroste.zio.kinesis.client.zionative.Consumer
 import zio._
 import zio.console.{ putStrLn, Console }
 import zio.duration._
 import zio.logging.Logging
-import zio.logging.slf4j.Slf4jLogger
 
-object BasicUsage extends zio.App {
+object NativeConsumerBasicUsageExample extends zio.App {
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     Consumer
       .shardedStream(
@@ -143,11 +145,11 @@ object BasicUsage extends zio.App {
             .via(checkpointer.checkpointBatched[Console](nr = 1000, interval = 5.second))
       }
       .runDrain
-      .provideCustomLayer(Consumer.defaultEnvironment ++ Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName)))
+      .provideCustomLayer(Consumer.defaultEnvironment ++ loggingLayer)
       .exitCode
 
-  }
-
+  val loggingLayer = Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
+}
 ```
 
 Let's go over some particulars of this example:
@@ -273,23 +275,26 @@ import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.{ Client, Producer }
 import zio._
-import zio.console.putStrLn
-import zio.logging.slf4j.Slf4jLogger
+import zio.clock.Clock
+import zio.console.{ putStrLn, Console }
+import zio.logging.Logging
 
 object ProducerExample extends zio.App {
   val streamName      = "my_stream"
   val applicationName = "my_awesome_zio_application"
 
-  val loggingLayer = Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
-  val env          = client.defaultAwsLayer >+> Client.live ++ loggingLayer
+  val loggingLayer: ZLayer[Any, Nothing, Logging] =
+    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
+
+  val env = client.defaultAwsLayer >+> Client.live ++ loggingLayer
 
   val program = Producer.make(streamName, Serde.asciiString).use { producer =>
     val record = ProducerRecord("key1", "message1")
 
     for {
       _ <- producer.produce(record)
-      r <- putStrLn(s"All records in the chunk were produced")
-    } yield r
+      _ <- putStrLn(s"All records in the chunk were produced")
+    } yield ()
   }
 
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
@@ -331,15 +336,18 @@ import nl.vroste.zio.kinesis.client.producer.ProducerMetrics
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.{ Client, Producer, ProducerSettings }
 import zio._
-import zio.console.putStrLn
-import zio.logging.slf4j.Slf4jLogger
+import zio.clock.Clock
+import zio.console.{ putStrLn, Console }
+import zio.logging.Logging
 
 object ProducerWithMetricsExample extends zio.App {
   val streamName      = "my_stream"
   val applicationName = "my_awesome_zio_application"
 
-  val loggingLayer = Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
-  val env          = client.defaultAwsLayer >+> Client.live ++ loggingLayer
+  val loggingLayer: ZLayer[Any, Nothing, Logging] =
+    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
+
+  val env = client.defaultAwsLayer >+> Client.live ++ loggingLayer
 
   val program = (for {
     totalMetrics <- Ref.make(ProducerMetrics.empty).toManaged_
@@ -356,7 +364,7 @@ object ProducerWithMetricsExample extends zio.App {
 
       for {
         _ <- producer.produceChunk(Chunk.fromIterable(records))
-        r <- putStrLn(s"All records in the chunk were produced")
+        _ <- putStrLn(s"All records in the chunk were produced")
         m <- totalMetrics.get
         _ <- putStrLn(s"Metrics after producing: ${m}")
       } yield ()
@@ -393,15 +401,17 @@ import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.DynamicConsumer
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio._
-import zio.console.putStrLn
+import zio.clock.Clock
+import zio.console.{ putStrLn, Console }
 import zio.duration._
-import zio.logging.slf4j.Slf4jLogger
+import zio.logging.Logging
 
 /**
  * Basic usage example for `DynamicConsumer.consumeWith` convenience method
  */
 object DynamicConsumerConsumeWithExample extends zio.App {
-  private val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val loggingLayer: ZLayer[Any, Nothing, Logging] =
+    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     DynamicConsumer
@@ -412,9 +422,7 @@ object DynamicConsumerConsumeWithExample extends zio.App {
         workerIdentifier = "worker1",
         checkpointBatchSize = 1000L,
         checkpointDuration = 5.minutes
-      ){ record => // Effectfully process your record here
-        putStrLn(s"Processing record $record")
-      }
+      )(record => putStrLn(s"Processing record $record"))
       .provideCustomLayer(loggingLayer ++ defaultAwsLayer >>> DynamicConsumer.live ++ loggingLayer)
       .exitCode
 }
@@ -429,15 +437,17 @@ import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio._
 import zio.blocking.Blocking
+import zio.clock.Clock
 import zio.console.{ putStrLn, Console }
 import zio.duration._
-import zio.logging.slf4j.Slf4jLogger
+import zio.logging.Logging
 
 /**
  * Basic usage example for DynamicConsumer
  */
 object DynamicConsumerBasicUsageExample extends zio.App {
-  private val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val loggingLayer: ZLayer[Any, Nothing, Logging] =
+    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     DynamicConsumer
