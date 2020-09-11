@@ -18,9 +18,12 @@ final case class ProducerMetrics(
   attempts: IntCountsHistogram,
   nrFailures: Long,
   latency: AbstractHistogram,
-  shardPredictionErrors: Long
+  shardPredictionErrors: Long,
+  payloadSize: IntCountsHistogram,
+  recordSize: IntCountsHistogram
 ) {
   val nrRecordsPublished: Long = attempts.getTotalCount
+  val nrPutRecordCalls: Long   = payloadSize.getTotalCount
 
   /**
    * Of all publish attempts, how many were successful
@@ -34,20 +37,29 @@ final case class ProducerMetrics(
   val throughput: Option[Double] =
     if (interval.toMillis > 0) Some(nrRecordsPublished * 1000.0 / interval.toMillis) else None
 
-  override def toString: String =
-    s"{" +
-      s"interval=${interval.getSeconds}s, " +
-      s"total records published=${nrRecordsPublished}, " +
-      s"throughput=${throughput.map(_ + "/s").getOrElse("unknown")}, " +
-      s"success rate=${successRate * 100}%, " +
-      s"failed attempts=${nrFailures}, " +
-      s"shard prediction errors=${shardPredictionErrors}, " +
-      s"mean latency=${latency.getMean.toInt}ms, " +
-      s"95% latency=${latency.getValueAtPercentile(95).toInt}.ms, " +
-      s"min latency=${latency.getMinValue.toInt}ms, " +
-      s"2nd attempts=${attempts.getCountAtValue(2)}, " +
-      s"max attempts=${attempts.getMaxValue}" +
-      s"}"
+  override def toString: String                 =
+    Seq(
+      ("interval", interval.getSeconds, "s"),
+      ("total records published", nrRecordsPublished, ""),
+      ("throughput", throughput.getOrElse(0), "records/s"),
+      ("success rate", "%.02f".format(successRate * 100), "%"),
+      ("failed attempts", nrFailures, ""),
+      ("shard prediction errors", shardPredictionErrors, ""),
+      ("mean latency", latency.getMean.toInt, "ms"),
+      ("95% latency", latency.getValueAtPercentile(95).toInt, "ms"),
+      ("min latency", latency.getMinValue.toInt, "ms"),
+      ("2nd attempts", attempts.getCountAtValue(2), ""),
+      ("max attempts", attempts.getMaxValue, ""),
+      ("mean latency", latency.getMean.toInt, "ms"),
+      ("mean payload size", payloadSize.getMean.toInt, "bytes"),
+      ("mean record size", recordSize.getMean.toInt, "bytes"),
+      ("nr PutRecords calls", nrPutRecordCalls, ""),
+      (
+        "mean nr PutRecords calls",
+        if (interval > Duration.Zero) nrPutRecordCalls * 1000.0 / interval.toMillis else 0,
+        "calls/s"
+      )
+    ).map { case (name, value, unit) => s"${name}=${value}${if (unit.isEmpty) "" else " " + unit}" }.mkString(", ")
 
   /**
    * Combine with other metrics to get a statically sound combined metrics
@@ -55,22 +67,34 @@ final case class ProducerMetrics(
   def +(that: ProducerMetrics): ProducerMetrics =
     ProducerMetrics(
       interval = interval + that.interval,
-      attempts = { val newAttempts = attempts.copy(); newAttempts.add(that.attempts); newAttempts },
+      attempts = mergeHistograms(attempts, that.attempts),
       nrFailures = nrFailures + that.nrFailures,
-      latency = { val newLatency = latency.copy(); newLatency.add(that.latency); newLatency },
-      shardPredictionErrors = shardPredictionErrors + that.shardPredictionErrors
+      latency = mergeHistograms(latency, that.latency),
+      shardPredictionErrors = shardPredictionErrors + that.shardPredictionErrors,
+      payloadSize = mergeHistograms(payloadSize, that.payloadSize),
+      recordSize = mergeHistograms(recordSize, that.recordSize)
     )
+
+  private def mergeHistograms[T <: AbstractHistogram](h1: T, h2: T): T = {
+    val newHist = h1.copy();
+    newHist.add(h2)
+    newHist.asInstanceOf[T]
+  }
 }
 
 object ProducerMetrics {
-  private[client] val emptyAttempts = new IntCountsHistogram(1, 20, 2)
-  private[client] val emptyLatency  = new Histogram(1, 120000, 3)
+  private[client] val emptyAttempts     = new IntCountsHistogram(1, 20, 2)
+  private[client] val emptyLatency      = new Histogram(1, 120000, 3)
+  private[client] val emptyPayloadSizes = new IntCountsHistogram(1, ProducerLive.maxPayloadSizePerRequest.toLong, 5)
+  private[client] val emptyRecordSizes  = new IntCountsHistogram(1, ProducerLive.maxPayloadSizePerRecord.toLong, 4)
 
   val empty = ProducerMetrics(
     interval = 0.millis,
     attempts = emptyAttempts,
     nrFailures = 0,
     latency = emptyLatency,
-    shardPredictionErrors = 0
+    shardPredictionErrors = 0,
+    payloadSize = emptyPayloadSizes,
+    recordSize = emptyRecordSizes
   )
 }

@@ -311,6 +311,19 @@ This feature is fully compatible with the KPL and KCL.
 
 `ProducerMetrics` objects can be combined with other `ProducerMetrics` to get (statistically sound!) total metrics, allowing you to do your own filtering, aggregation or other processing if desired.
 
+The list of available metrics is:
+* Throughput (records/s)
+* Success rate
+* Latency distribution
+* Nr of records published
+* Nr of failures
+* Nr of attempts distribution
+* Nr of PutRecords calls
+* Record payload size distribution 
+* Batch payload size distribution 
+
+
+Example usage:
 ```scala
 import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord

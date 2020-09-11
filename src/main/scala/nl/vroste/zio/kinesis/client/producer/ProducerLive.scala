@@ -99,6 +99,7 @@ private[client] final class ProducerLive[R, R1, T](
       hasShardPredictionErrors <- checkShardPredictionErrors(responseAndRequests)
       _                        <- handleFailures(newFailed, repredict = hasShardPredictionErrors)
       now                      <- instant
+      _                        <- currentMetrics.update(_.addPayloadSize(totalPayload).addRecordSizes(batch.map(_.payloadSize)))
       _                        <- ZIO.foreach_(succeeded) {
              case (response, request) =>
                request.done.completeWith(
@@ -195,7 +196,9 @@ private[client] final class ProducerLive[R, R1, T](
                 m.published,
                 m.nrFailed,
                 m.latency,
-                m.shardPredictionErrors
+                m.shardPredictionErrors,
+                m.payloadSize,
+                m.recordSize
               )
     _      <- metricsCollector(metrics)
   } yield ()
