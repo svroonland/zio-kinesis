@@ -284,7 +284,7 @@ object DynamicConsumer {
             case Some(record) =>
               logger.info(s"about to checkpoint: shardId=${record.shardId} partitionKey=${record.partitionKey}") *>
                 zio.blocking.blocking {
-                  Task(kclCheckpointer.checkpoint(record.sequenceNumber, record.subSequenceNumber))
+                  Task(kclCheckpointer.checkpoint(record.sequenceNumber, record.subSequenceNumber.getOrElse(0L)))
                 } *> latestStaged.update {
                 case Some(r) if r == record => None
                 case r                      => r // A newer record may have been staged by now

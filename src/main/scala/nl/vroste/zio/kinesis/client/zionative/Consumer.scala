@@ -5,6 +5,7 @@ import java.time.Instant
 import nl.vroste.zio.kinesis.client.AdminClient.StreamDescription
 import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
 import nl.vroste.zio.kinesis.client.Util.processWithSkipOnError
+import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.{ EnhancedFanOut, Polling }
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
@@ -12,7 +13,6 @@ import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative.fetcher.{ EnhancedFanOutFetcher, PollingFetcher }
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.{ DefaultLeaseCoordinator, LeaseCoordinationSettings }
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
-import nl.vroste.zio.kinesis.client._
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.kinesis.model.{
   ChildShard,
@@ -71,7 +71,9 @@ object FetchMode {
      * @param interval Fixed interval for polling when no more records are currently available
      */
     def dynamicSchedule(interval: Duration): Schedule[Clock, GetRecordsResponse, Any] =
-      (Schedule.recurWhile[Boolean](_ == true) || Schedule.fixed(interval))
+      (Schedule.recurWhile[Boolean](_ == true) || Schedule.spaced(
+        interval
+      )) // TODO replace with fixed when ZIO 1.0.2 is out
         .contramap((_: GetRecordsResponse).millisBehindLatest() != 0)
   }
 
@@ -173,20 +175,55 @@ object Consumer {
       Checkpointer
     )
   ] = {
-    def toRecord(shardId: String, r: KinesisRecord): ZIO[R, Throwable, Record[T]] =
-      deserializer.deserialize(r.data.asByteBuffer()).map { data =>
-        Record(
-          shardId,
-          r.sequenceNumber,
-          r.approximateArrivalTimestamp,
-          data,
-          r.partitionKey,
-          r.encryptionType,
-          0,    // r.subSequenceNumber,
-          "",   // r.explicitHashKey,
-          false //r.aggregated,
-        )
-      }
+    def toRecords(shardId: String, r: KinesisRecord): ZIO[Logging with R, Throwable, Chunk[Record[T]]] = {
+      val data      = r.data().asByteBuffer()
+      val dataChunk = Chunk.fromByteBuffer(data)
+
+      if (ProtobufAggregation.isAggregatedRecord(dataChunk))
+        for {
+          aggregatedRecord <- ZIO.fromTry(ProtobufAggregation.decodeAggregatedRecord(dataChunk))
+          _                 = log.debug(s"Found aggregated record with ${aggregatedRecord.getRecordsCount} sub records")
+          records          <- ZIO.foreach(aggregatedRecord.getRecordsList.asScala.zipWithIndex.toSeq) {
+                       case (subRecord, subSequenceNr) =>
+                         val data = subRecord.getData.asReadOnlyByteBuffer()
+
+                         deserializer
+                           .deserialize(data)
+                           .map { data =>
+                             Record(
+                               shardId,
+                               r.sequenceNumber,
+                               r.approximateArrivalTimestamp,
+                               data,
+                               aggregatedRecord.getPartitionKeyTable(subRecord.getPartitionKeyIndex.toInt),
+                               r.encryptionType,
+                               Some(subSequenceNr.toLong),
+                               if (subRecord.hasExplicitHashKeyIndex)
+                                 Some(aggregatedRecord.getExplicitHashKeyTable(subRecord.getExplicitHashKeyIndex.toInt))
+                               else None,
+                               aggregated = true
+                             )
+                           }
+                     }
+        } yield Chunk.fromIterable(records)
+      else
+        deserializer
+          .deserialize(r.data.asByteBuffer())
+          .map { data =>
+            Record(
+              shardId,
+              r.sequenceNumber,
+              r.approximateArrivalTimestamp,
+              data,
+              r.partitionKey,
+              r.encryptionType,
+              subSequenceNumber = None,
+              explicitHashKey = None,
+              aggregated = false
+            )
+          }
+          .map(Chunk.single)
+    }
 
     def makeFetcher(
       streamDescription: StreamDescription
@@ -282,15 +319,20 @@ object Consumer {
                                   }
                                   .mapChunksM { chunk => // mapM is slow
                                     chunk
-                                      .mapM(record => toRecord(shardId, record))
+                                      .mapM(record => toRecords(shardId, record))
+                                      .map(_.flatten)
                                       .tap { records =>
                                         records.lastOption.fold(ZIO.unit) { r =>
                                           val extendedSequenceNumber =
-                                            ExtendedSequenceNumber(r.sequenceNumber, r.subSequenceNumber)
+                                            ExtendedSequenceNumber(
+                                              r.sequenceNumber,
+                                              r.subSequenceNumber.getOrElse(0L)
+                                            )
                                           checkpointer.setMaxSequenceNumber(extendedSequenceNumber)
                                         }
                                       }
                                   }
+                                  .dropWhile(r => !checkpointOpt.forall(aggregatedRecordIsAfterCheckpoint(r, _)))
                                   .map(Exit.succeed(_))).collectWhileSuccess
               } yield (
                 shardId,
@@ -427,8 +469,21 @@ object Consumer {
     case (Left(SpecialCheckpoint.AtTimestamp), InitialPosition.AtTimestamp(timestamp)) =>
       ShardIteratorType.AtTimestamp(timestamp)
     case (Right(s), _)                                                                 =>
-      ShardIteratorType.AfterSequenceNumber(s.sequenceNumber)
+      ShardIteratorType.AtSequenceNumber(s.sequenceNumber)
     case s @ _                                                                         =>
       throw new IllegalArgumentException(s"${s} is not a valid starting checkpoint")
   }
+
+  private[zionative] def aggregatedRecordIsAfterCheckpoint(
+    record: Record[_],
+    checkpoint: Either[SpecialCheckpoint, ExtendedSequenceNumber]
+  ): Boolean =
+    (checkpoint, record.subSequenceNumber) match {
+      case (Left(_), _)                                                                                      => true
+      case (Right(ExtendedSequenceNumber(sequenceNumber, subSequenceNumber)), Some(recordSubSequenceNumber)) =>
+        (BigInt(record.sequenceNumber) > BigInt(sequenceNumber)) ||
+          (BigInt(record.sequenceNumber) == BigInt(sequenceNumber) && recordSubSequenceNumber > subSequenceNumber)
+      case (Right(ExtendedSequenceNumber(sequenceNumber, _)), None)                                          =>
+        BigInt(record.sequenceNumber) > BigInt(sequenceNumber)
+    }
 }

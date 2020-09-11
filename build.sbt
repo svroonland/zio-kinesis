@@ -12,6 +12,8 @@ lazy val silencer = {
   )
 }
 
+enablePlugins(ProtobufPlugin)
+
 inThisBuild(
   List(
     organization := "nl.vroste",
@@ -50,13 +52,14 @@ libraryDependencies ++= Seq(
   "dev.zio"                %% "zio-test"                    % "1.0.1" % "test",
   "dev.zio"                %% "zio-test-sbt"                % "1.0.1" % "test",
   "dev.zio"                %% "zio-interop-reactivestreams" % "1.0.3.5",
-  "dev.zio"                %% "zio-logging"                 % "0.5.1",
-  "dev.zio"                %% "zio-logging-slf4j"           % "0.5.1",
-  "software.amazon.awssdk"  % "kinesis"                     % "2.14.13",
+  "dev.zio"                %% "zio-logging"                 % "0.4.0",
+  "dev.zio"                %% "zio-logging-slf4j"           % "0.4.0",
+  "software.amazon.awssdk"  % "kinesis"                     % "2.14.15",
   "ch.qos.logback"          % "logback-classic"             % "1.2.3",
   "software.amazon.kinesis" % "amazon-kinesis-client"       % "2.2.11",
-  "org.scala-lang.modules" %% "scala-collection-compat"     % "2.1.6",
-  "org.hdrhistogram"        % "HdrHistogram"                % "2.1.12"
+  "org.scala-lang.modules" %% "scala-collection-compat"     % "2.2.0",
+  "org.hdrhistogram"        % "HdrHistogram"                % "2.1.12",
+  "javax.xml.bind"          % "jaxb-api"                    % "2.3.1"
 ) ++ {
   if (scalaBinaryVersion.value == "2.13") silencer else Seq.empty
 }

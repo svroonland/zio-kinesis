@@ -10,7 +10,7 @@ final case class Record[T](
   data: T,
   partitionKey: String,
   encryptionType: EncryptionType,
-  subSequenceNumber: Long,
-  explicitHashKey: String,
+  subSequenceNumber: Option[Long],
+  explicitHashKey: Option[String],
   aggregated: Boolean
 )
