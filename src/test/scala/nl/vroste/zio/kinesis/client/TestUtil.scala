@@ -125,7 +125,7 @@ object TestUtil {
           None
       )
       .throttleShape(produceRate.toLong / 10, 100.millis, produceRate.toLong / 10)(_.size.toLong)
-      .map(i => ProducerRecord(s"${UUID.randomUUID()}", Random.nextString(recordSize)))
+      .as(ProducerRecord(s"${UUID.randomUUID()}", Random.nextString(recordSize)))
       .buffer(produceRate * 10)
       .mapChunks(Chunk.single)
       .mapMParUnordered(20) { chunk =>

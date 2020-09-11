@@ -13,12 +13,11 @@ import zio.clock.Clock
 import zio.console.{ putStrLn, Console }
 import zio.duration._
 import zio.logging.{ Logger, Logging }
-import zio.logging.slf4j.Slf4jLogger
 import zio.stream.{ ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test._
-import zio.{ system, Chunk, Has, Queue, Ref, Runtime, ZIO, ZManaged }
+import zio.{ system, Chunk, Queue, Ref, Runtime, ZIO, ZManaged }
 
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
@@ -284,8 +283,6 @@ object ProducerTest extends DefaultRunnableSpec {
         } yield assert(endMetrics.successRate)(isGreaterThan(0.75))).untraced
       } @@ timeout(5.minute) @@ TestAspect.ifEnvSet("ENABLE_AWS"),
       testM("updates the shard map after a reshard is detected") {
-        import zio.ZManaged
-        import zio.console.Console
         val nrRecords = 1000
         val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))
 
