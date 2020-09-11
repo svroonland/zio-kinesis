@@ -132,30 +132,8 @@ object ProducerTest extends DefaultRunnableSpec {
                                       )
                                     )
                               )
-              } yield producer).use {
-                producer =>
-                  for {
-                    _                <- ZIO.sleep(5.second).when(false)
-                    // Parallelism, but not infinitely (not sure if it matters)
-                    nrChunks          = 100
-                    nrRecordsPerChunk = 8000
-                    time             <- ZIO
-                              .collectAllParN_(3)((1 to nrChunks).map { i =>
-                                val records = (1 to nrRecordsPerChunk).map(j =>
-                                  // Random UUID to get an even distribution over the shards
-                                  ProducerRecord(s"key$i" + UUID.randomUUID(), s"message$i-$j")
-                                )
-
-                                for {
-                                  //                            _      <- putStrLn(s"Starting chunk $i")
-                                  _ <- producer.produceChunk(Chunk.fromIterable(records))
-                                  _ <- putStrLn(s"Chunk $i completed")
-                                } yield ()
-                              })
-                              .timed
-                              .map(_._1)
-                    _                <- putStrLn(s"Produced ${nrChunks * nrRecordsPerChunk * 1000.0 / time.toMillis}")
-                  } yield ()
+              } yield producer).use { producer =>
+                TestUtil.massProduceRecords(producer, 800000, 8000, 14)
               } *> totalMetrics.get.flatMap(m => putStrLn(m.toString)).as(assertCompletes)
           }
           .untraced
@@ -258,6 +236,30 @@ object ProducerTest extends DefaultRunnableSpec {
             }
         }
       },
+      testM("dynamically throttle when two or more producers are active") {
+        val nrRecords = 1000
+        val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))
+
+        val streamName = "test-stream-4"
+        TestUtil.withStream(streamName, 20) {
+
+          Ref
+            .make(ProducerMetrics.empty)
+            .flatMap { totalMetrics =>
+              for {
+                _          <- Producer
+                       .make(
+                         streamName,
+                         Serde.asciiString,
+                         ProducerSettings(aggregate = true),
+                         metricsCollector = m => totalMetrics.update(_ + m)
+                       )
+                       .use(_.produceChunk(Chunk.fromIterable(records)))
+                endMetrics <- totalMetrics.get
+              } yield assert(endMetrics.nrRecordsPublished)(equalTo(nrRecords.toLong))
+            }
+        }
+      } @@ TestAspect.ifEnvSet("ENABLE_AWS"),
       testM("updates the shard map after a reshard is detected") {
         val nrRecords = 1000
         val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))
