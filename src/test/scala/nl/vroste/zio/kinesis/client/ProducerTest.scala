@@ -10,15 +10,15 @@ import nl.vroste.zio.kinesis.client.producer.{ ProducerLive, ProducerMetrics, Sh
 import nl.vroste.zio.kinesis.client.serde.{ Serde, Serializer }
 import software.amazon.awssdk.services.kinesis.model.KinesisException
 import zio.clock.Clock
-import zio.console.putStrLn
+import zio.console.{ putStrLn, Console }
 import zio.duration._
-import zio.logging.Logging
+import zio.logging.{ Logger, Logging }
 import zio.logging.slf4j.Slf4jLogger
 import zio.stream.{ ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test._
-import zio.{ system, Chunk, Queue, Ref, Runtime, ZIO }
+import zio.{ system, Chunk, Has, Queue, Ref, Runtime, ZIO, ZManaged }
 
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
@@ -236,31 +236,53 @@ object ProducerTest extends DefaultRunnableSpec {
             }
         }
       },
-      testM("dynamically throttle when two or more producers are active") {
-        val nrRecords = 1000
-        val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))
+      testM("dynamically throttle with more than one producer") {
+        val streamName = "zio-test-stream-producer3"
 
-        val streamName = "test-stream-4"
-        TestUtil.withStream(streamName, 20) {
+        def makeProducer(
+          workerId: String
+        ): ZManaged[Any with Console with Clock with Client with Logging, Throwable, Producer[String]] =
+          Ref.make(ProducerMetrics.empty).toManaged_.flatMap {
+            totalMetrics =>
+              Producer
+                .make(
+                  streamName,
+                  Serde.asciiString,
+                  ProducerSettings(
+                    bufferSize = 16384 * 4,
+                    maxParallelRequests = 12,
+                    metricsInterval = 5.seconds
+                  ),
+                  metrics =>
+                    totalMetrics
+                      .updateAndGet(_ + metrics)
+                      .flatMap(m =>
+                        putStrLn(
+                          s"""${workerId}: ${metrics.toString}
+                             |${workerId}: ${m.toString}""".stripMargin
+                        )
+                      )
+                )
+                .updateService[Logger[String]](l => l.named(workerId))
+          }
 
-          Ref
-            .make(ProducerMetrics.empty)
-            .flatMap { totalMetrics =>
-              for {
-                _          <- Producer
-                       .make(
-                         streamName,
-                         Serde.asciiString,
-                         ProducerSettings(aggregate = true),
-                         metricsCollector = m => totalMetrics.update(_ + m)
-                       )
-                       .use(_.produceChunk(Chunk.fromIterable(records)))
-                endMetrics <- totalMetrics.get
-              } yield assert(endMetrics.nrRecordsPublished)(equalTo(nrRecords.toLong))
-            }
-        }
-      } @@ TestAspect.ifEnvSet("ENABLE_AWS"),
+        (for {
+          _ <- putStrLn("creating stream")
+          _ <- createStreamUnmanaged(streamName, 1)
+          _ <- putStrLn("creating producer")
+          _ <- (makeProducer("producer1") zip makeProducer("producer2")).use {
+                 case (p1, p2) =>
+                   for {
+                     run1 <- TestUtil.massProduceRecords(p1, 400000, 8000, 14).fork
+                     run2 <- TestUtil.massProduceRecords(p2, 400000, 8000, 14).fork
+                     _    <- run1.join <&> run2.join
+                   } yield ()
+               }
+        } yield assertCompletes).untraced
+      } @@ timeout(5.minute) @@ TestAspect.ifEnvSet("ENABLE_AWS"),
       testM("updates the shard map after a reshard is detected") {
+        import zio.ZManaged
+        import zio.console.Console
         val nrRecords = 1000
         val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))
 
