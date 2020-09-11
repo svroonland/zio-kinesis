@@ -35,7 +35,7 @@ private[client] final class ProducerLive[R, R1, T](
   aggregate: Boolean = false,
   inFlightCalls: Ref[Int],
   triggerUpdateShards: UIO[Unit],
-  throttler: ShardedThrottler
+  throttler: ShardThrottler
 ) extends Producer[T] {
   import ProducerLive._
   import Util.ZStreamExtensions

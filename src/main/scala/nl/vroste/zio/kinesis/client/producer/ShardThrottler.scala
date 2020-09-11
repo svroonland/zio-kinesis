@@ -3,22 +3,22 @@ import zio.{ UIO, _ }
 import zio.clock.Clock
 import zio.duration._
 
-private[client] trait ShardedThrottler {
+private[client] trait ShardThrottler {
   def throughputFactor(shard: String): UIO[Double]
   def addSuccess(shard: String): UIO[Unit]
   def addFailure(shard: String): UIO[Unit]
 }
 
-private[client] object ShardedThrottler {
+private[client] object ShardThrottler {
   def make(
     updatePeriod: Duration = 5.seconds,
     allowedError: Double = 0.02
-  ): ZManaged[Clock, Nothing, ShardedThrottler] =
+  ): ZManaged[Clock, Nothing, ShardThrottler] =
     for {
       scope  <- ZManaged.scope
       clock  <- ZManaged.environment[Clock]
       shards <- Ref.make(Map.empty[String, DynamicThrottler]).toManaged_
-    } yield new ShardedThrottler {
+    } yield new ShardThrottler {
       override def throughputFactor(shard: String): UIO[Double] = withShard(shard, _.throughputFactor)
       override def addSuccess(shard: String): UIO[Unit]         = withShard(shard, _.addSuccess)
       override def addFailure(shard: String): UIO[Unit]         = withShard(shard, _.addFailure)

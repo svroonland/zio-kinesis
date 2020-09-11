@@ -5,13 +5,7 @@ import java.time.Instant
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.producer.ProducerLive.ProduceRequest
-import nl.vroste.zio.kinesis.client.producer.{
-  CurrentMetrics,
-  ProducerLive,
-  ProducerMetrics,
-  ShardMap,
-  ShardedThrottler
-}
+import nl.vroste.zio.kinesis.client.producer.{ CurrentMetrics, ProducerLive, ProducerMetrics, ShardMap, ShardThrottler }
 import nl.vroste.zio.kinesis.client.serde.Serializer
 import software.amazon.awssdk.services.kinesis.model.{ ShardFilter, ShardFilterType }
 import zio._
@@ -127,7 +121,7 @@ object Producer {
                                  log.info("Shard map was refreshed")).orDie,
                                settings.updateShardInterval
                              )
-      throttler           <- ShardedThrottler.make(allowedError = settings.allowedErrorRate)
+      throttler           <- ShardThrottler.make(allowedError = settings.allowedErrorRate)
 
       producer = new ProducerLive[R, R1, T](
                    client,

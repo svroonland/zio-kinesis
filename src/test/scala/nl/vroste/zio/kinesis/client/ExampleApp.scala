@@ -25,7 +25,7 @@ object ExampleApp extends zio.App {
   val nrRecords                       = 3000000
   val produceRate                     = 20000               // Nr records to produce per second
   val recordSize                      = 50
-  val nrShards                        = 5
+  val nrShards                        = 10
   val reshardFactor                   = 2
   val reshardAfter: Option[Duration]  = None                // Some(10.seconds)
   val enhancedFanout                  = false
@@ -39,7 +39,7 @@ object ExampleApp extends zio.App {
     aggregate = true,
     metricsInterval = 5.seconds,
     bufferSize = 8192 * 8,
-    maxParallelRequests = 3
+    maxParallelRequests = 10
   )
 
   override def run(
