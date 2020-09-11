@@ -34,15 +34,14 @@ private[client] final class ProducerLive[R, R1, T](
   metricsCollector: ProducerMetrics => ZIO[R1, Nothing, Unit],
   aggregate: Boolean = false,
   inFlightCalls: Ref[Int],
-  triggerUpdateShards: UIO[Unit]
+  triggerUpdateShards: UIO[Unit],
+  throttler: ShardThrottler
 ) extends Producer[T] {
   import ProducerLive._
   import Util.ZStreamExtensions
 
   var runloop: ZIO[Logging with Clock, Nothing, Unit] = {
-    val retries = ZStream
-      .tick(100.millis)
-      .mapConcatChunkM(_ => failedQueue.takeBetween(1, Int.MaxValue).map(Chunk.fromIterable))
+    val retries = zStreamFromQueueWithMaxChunkSize(failedQueue, maxChunkSize)
 
     // Failed records get precedence
     (retries merge zStreamFromQueueWithMaxChunkSize(queue, maxChunkSize)
@@ -54,14 +53,7 @@ private[client] final class ProducerLive[R, R1, T](
           requests.aggregateAsync(if (aggregate) aggregator else ZTransducer.identity)
       })
       .groupByKey2(_.predictedShard) // TODO can we avoid this second group by?
-      .flatMapPar(Int.MaxValue, 1) {
-        // Do shard rate limiting here
-        case (shardId @ _, requests) =>
-          requests
-            .throttleShape(maxRecordsPerShardPerSecond.toLong, 1.second)(_.size.toLong)
-            .throttleShape(maxIngestionPerShardPerSecond.toLong, 1.second)(_.map(_.payloadSize).sum.toLong)
-        // TODO can we put 'Tap' like functionality here? Add backoff?
-      }
+      .flatMapPar(Int.MaxValue, 1)(Function.tupled(throttleShardRequests))
       // Batch records up to the Kinesis PutRecords request limits as long as downstream is busy
       .aggregateAsync(batcher)
       .filter(_.nonEmpty)            // TODO why would this be necessary?
@@ -69,6 +61,23 @@ private[client] final class ProducerLive[R, R1, T](
       .mapMParUnordered(settings.maxParallelRequests)(b => countInFlight(processBatch(b)))
       .runDrain
   }
+
+  private def throttleShardRequests(shardId: ShardId, requests: ZStream[Any, Nothing, ProduceRequest]) =
+    requests
+      .mapChunks(
+        _.map { request =>
+          request
+            .copy(complete =
+              result => request.complete(result) *> result.tap(_ => throttler.addSuccess(shardId)).ignore
+            )
+        }
+      )
+      .throttleShapeM(maxRecordsPerShardPerSecond.toLong, 1.second)(chunk =>
+        throttler.throughputFactor(shardId).map(c => (chunk.size * 1.0 / c).toLong)
+      )
+      .throttleShapeM(maxIngestionPerShardPerSecond.toLong, 1.second)(chunk =>
+        throttler.throughputFactor(shardId).map(c => (chunk.map(_.payloadSize).sum * 1.0 / c).toLong)
+      )
 
   private def processBatch(batch: Seq[ProduceRequest]): ZIO[Clock with Logging, Nothing, Unit] = {
     val totalPayload = batch.map(_.r.data().asByteArrayUnsafe().length).sum
@@ -102,7 +111,7 @@ private[client] final class ProducerLive[R, R1, T](
       _                        <- currentMetrics.update(_.addPayloadSize(totalPayload).addRecordSizes(batch.map(_.payloadSize)))
       _                        <- ZIO.foreach_(succeeded) {
              case (response, request) =>
-               request.done.completeWith(
+               request.complete(
                  ZIO.succeed(
                    ProduceResponse(
                      response.shardId(),
@@ -117,7 +126,7 @@ private[client] final class ProducerLive[R, R1, T](
     } yield ()).catchAll {
       case NonFatal(e) =>
         log.warn("Failed to process batch") *>
-          ZIO.foreach_(batch.map(_.done))(_.fail(e))
+          ZIO.foreach_(batch)(_.complete(ZIO.fail(e)))
     }
   }
 
@@ -128,6 +137,7 @@ private[client] final class ProducerLive[R, R1, T](
 
     for {
       _ <- currentMetrics.update(_.addFailures(failedCount))
+      _ <- ZIO.foreach(requests)(r => throttler.addFailure(r.predictedShard))
       _ <- log.warn(s"Failed to produce ${failedCount} records").when(newFailed.nonEmpty)
       _ <- log.warn(responses.take(10).map(_.errorCode()).mkString(", ")).when(newFailed.nonEmpty)
 
@@ -210,13 +220,14 @@ private[client] final class ProducerLive[R, R1, T](
 
   override def produce(r: ProducerRecord[T]): Task[ProduceResponse] =
     (for {
-      shardMap <- shards.get
-      now      <- instant
-      request  <- makeProduceRequest(r, serializer, now, shardMap)
-      _        <- queue.offer(request)
-      response <- request.done.await
-      latency   = java.time.Duration.between(now, response.completed)
-      _        <- currentMetrics.getAndUpdate(_.addSuccess(response.attempts, latency))
+      shardMap        <- shards.get
+      now             <- instant
+      ar              <- makeProduceRequest(r, serializer, now, shardMap)
+      (await, request) = ar
+      _               <- queue.offer(request)
+      response        <- await
+      latency          = java.time.Duration.between(now, response.completed)
+      _               <- currentMetrics.getAndUpdate(_.addSuccess(response.attempts, latency))
     } yield response).provide(env)
 
   override def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[Seq[ProduceResponse]] =
@@ -224,8 +235,8 @@ private[client] final class ProducerLive[R, R1, T](
       shardMap <- shards.get
       now      <- instant
       requests <- ZIO.foreach(chunk)(makeProduceRequest(_, serializer, now, shardMap))
-      _        <- queue.offerAll(requests)
-      results  <- ZIO.foreach(requests)(_.done.await)
+      _        <- queue.offerAll(requests.map(_._2))
+      results  <- ZIO.foreach(requests)(_._1)
       latencies = results.map(r => java.time.Duration.between(now, r.completed))
       _        <- currentMetrics.getAndUpdate(_.addSuccesses(results.map(_.attempts), latencies))
     } yield results)
@@ -247,7 +258,7 @@ private[client] object ProducerLive {
 
   final case class ProduceRequest(
     r: PutRecordsRequestEntry,
-    done: Promise[Throwable, ProduceResponse],
+    complete: ZIO[Any, Throwable, ProduceResponse] => UIO[Unit],
     timestamp: Instant,
     predictedShard: ShardId,
     attemptNumber: Int = 1,
@@ -255,6 +266,8 @@ private[client] object ProducerLive {
     aggregateCount: Int = 1
   ) {
     def newAttempt = copy(attemptNumber = attemptNumber + 1)
+
+    def isRetry: Boolean = attemptNumber > 1
 
     def payloadSize: Int = r.data().asByteArrayUnsafe().length + r.partitionKey().length
   }
@@ -264,7 +277,7 @@ private[client] object ProducerLive {
     serializer: Serializer[R, T],
     now: Instant,
     shardMap: ShardMap
-  ): ZIO[R, Throwable, ProduceRequest] =
+  ): ZIO[R, Throwable, (ZIO[Any, Throwable, ProduceResponse], ProduceRequest)] =
     for {
       done          <- Promise.make[Throwable, ProduceResponse]
       data          <- serializer.serialize(r.data)
@@ -274,7 +287,7 @@ private[client] object ProducerLive {
                 .data(SdkBytes.fromByteBuffer(data))
                 .build()
       predictedShard = shardMap.shardForPartitionKey(Option(entry.explicitHashKey()).getOrElse(entry.partitionKey()))
-    } yield ProduceRequest(entry, done, now, predictedShard)
+    } yield (done.await, ProduceRequest(entry, done.completeWith(_).unit, now, predictedShard))
 
   final def scheduleCatchRecoverable: Schedule[Any, Throwable, Throwable] =
     Schedule.recurWhile {
