@@ -39,8 +39,6 @@ import zio.stream.ZSink
  *
  * Individual records which cannot be produced due to Kinesis shard rate limits are retried.
  *
- * Individual shard rate limiting is not yet implemented by this library.
- *
  * Inspired by https://docs.aws.amazon.com/streams/latest/dev/developing-producers-with-kpl.html and
  * https://aws.amazon.com/blogs/big-data/implementing-efficient-and-reliable-producers-with-the-amazon-kinesis-producer-library/
  *
