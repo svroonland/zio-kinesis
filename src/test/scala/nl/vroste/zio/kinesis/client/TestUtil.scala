@@ -119,8 +119,8 @@ object TestUtil {
   ): ZIO[Logging with Clock, Throwable, Unit] =
     ZStream
       .unfoldChunk(0)(i =>
-        if ((i + 1) * chunkSize < nrRecords)
-          Some((Chunk.fromIterable((i * chunkSize) to ((i + 1) * chunkSize)), i + 1))
+        if ((i + 1) * chunkSize <= nrRecords)
+          Some((Chunk.fromIterable((i * chunkSize) until ((i + 1) * chunkSize)), i + 1))
         else
           None
       )

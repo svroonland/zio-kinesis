@@ -266,6 +266,8 @@ object ProducerTest extends DefaultRunnableSpec {
                 .updateService[Logger[String]](l => l.named(workerId))
           }
 
+        val nrRecords = 200000
+
         (for {
           _ <- putStrLn("creating stream")
           _ <- createStreamUnmanaged(streamName, 1)
@@ -273,8 +275,8 @@ object ProducerTest extends DefaultRunnableSpec {
           _ <- (makeProducer("producer1") zip makeProducer("producer2")).use {
                  case (p1, p2) =>
                    for {
-                     run1 <- TestUtil.massProduceRecords(p1, 400000, 8000, 14).fork
-                     run2 <- TestUtil.massProduceRecords(p2, 400000, 8000, 14).fork
+                     run1 <- TestUtil.massProduceRecords(p1, nrRecords / 2, nrRecords / 100, 14).fork
+                     run2 <- TestUtil.massProduceRecords(p2, nrRecords / 2, nrRecords / 100, 14).fork
                      _    <- run1.join <&> run2.join
                    } yield ()
                }

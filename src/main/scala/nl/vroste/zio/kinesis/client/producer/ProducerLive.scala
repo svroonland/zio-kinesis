@@ -34,7 +34,8 @@ private[client] final class ProducerLive[R, R1, T](
   metricsCollector: ProducerMetrics => ZIO[R1, Nothing, Unit],
   aggregate: Boolean = false,
   inFlightCalls: Ref[Int],
-  triggerUpdateShards: UIO[Unit]
+  triggerUpdateShards: UIO[Unit],
+  throttler: ShardedThrottler
 ) extends Producer[T] {
   import ProducerLive._
   import Util.ZStreamExtensions
@@ -52,10 +53,7 @@ private[client] final class ProducerLive[R, R1, T](
           requests.aggregateAsync(if (aggregate) aggregator else ZTransducer.identity)
       })
       .groupByKey2(_.predictedShard) // TODO can we avoid this second group by?
-      .flatMapPar(Int.MaxValue, 1) {
-        case (shardId @ _, requests) =>
-          throttleShardRequests(requests)
-      }
+      .flatMapPar(Int.MaxValue, 1)(Function.tupled(throttleShardRequests))
       // Batch records up to the Kinesis PutRecords request limits as long as downstream is busy
       .aggregateAsync(batcher)
       .filter(_.nonEmpty)            // TODO why would this be necessary?
@@ -64,28 +62,23 @@ private[client] final class ProducerLive[R, R1, T](
       .runDrain
   }
 
-  private def throttleShardRequests(requests: ZStream[Any, Nothing, ProduceRequest]) =
-    ZStream.unwrapManaged {
-      for {
-        throttler <- DynamicThrottler.make()
-      } yield requests
-        .mapChunksM(
-          _.mapM { request =>
-            throttler.addFailure
-              .when(request.isRetry)
-              .as(
-                request
-                  .copy(complete = result => request.complete(result) *> result.tap(_ => throttler.addSuccess).ignore)
-              )
-          }
-        )
-        .throttleShapeM(maxRecordsPerShardPerSecond.toLong, 1.second)(chunk =>
-          throttler.throughputFactor.map(c => (chunk.size * 1.0 / c).toLong)
-        )
-        .throttleShapeM(maxIngestionPerShardPerSecond.toLong, 1.second)(chunk =>
-          throttler.throughputFactor.map(c => (chunk.map(_.payloadSize).sum * 1.0 / c).toLong)
-        )
-    }
+  private def throttleShardRequests(shardId: ShardId, requests: ZStream[Any, Nothing, ProduceRequest]) =
+    requests
+      .mapChunks(
+        _.map { request =>
+          request
+            .copy(complete =
+              result => request.complete(result) *> result.tap(_ => throttler.addSuccess(shardId)).ignore
+            )
+        }
+      )
+      .throttleShapeM(maxRecordsPerShardPerSecond.toLong, 1.second)(chunk =>
+        throttler.throughputFactor(shardId).map(c => (chunk.size * 1.0 / c).toLong)
+      )
+      .throttleShapeM(maxIngestionPerShardPerSecond.toLong, 1.second)(chunk =>
+        throttler.throughputFactor(shardId).map(c => (chunk.map(_.payloadSize).sum * 1.0 / c).toLong)
+      )
+
   private def processBatch(batch: Seq[ProduceRequest]): ZIO[Clock with Logging, Nothing, Unit] = {
     val totalPayload = batch.map(_.r.data().asByteArrayUnsafe().length).sum
     (for {
@@ -144,6 +137,7 @@ private[client] final class ProducerLive[R, R1, T](
 
     for {
       _ <- currentMetrics.update(_.addFailures(failedCount))
+      _ <- ZIO.foreach(requests)(r => throttler.addFailure(r.predictedShard))
       _ <- log.warn(s"Failed to produce ${failedCount} records").when(newFailed.nonEmpty)
       _ <- log.warn(responses.take(10).map(_.errorCode()).mkString(", ")).when(newFailed.nonEmpty)
 
