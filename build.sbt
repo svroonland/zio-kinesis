@@ -17,7 +17,7 @@ enablePlugins(ProtobufPlugin)
 inThisBuild(
   List(
     organization := "nl.vroste",
-    version := "0.13.0",
+    version := "0.12.1",
     homepage := Some(url("https://github.com/svroonland/zio-kinesis")),
     licenses := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
     scalaVersion := mainScala,
