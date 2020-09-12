@@ -19,7 +19,6 @@ import zio.clock.Clock
 import zio.console._
 import zio.duration._
 import zio.logging.log
-import zio.logging.slf4j.Slf4jLogger
 import zio.stream.{ ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test._
@@ -766,7 +765,8 @@ object NativeConsumerTest extends DefaultRunnableSpec {
       TestAspect.timeoutWarning(60.seconds) @@
       TestAspect.timeout(300.seconds)
 
-  val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val loggingLayer: ZLayer[Any, Nothing, Logging] =
+    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   val useAws = Runtime.default.unsafeRun(system.envOrElse("ENABLE_AWS", "0")).toInt == 1
 
@@ -830,12 +830,10 @@ object NativeConsumerTest extends DefaultRunnableSpec {
         .map(Chunk.fromIterable)
     }
 
-  def onDiagnostic(worker: String) =
-    (ev: DiagnosticEvent) =>
-      ev match {
-        case _: PollComplete => UIO.unit
-        case _               => log.info(s"${worker}: ${ev}").provideLayer(loggingLayer)
-      }
+  def onDiagnostic(worker: String): DiagnosticEvent => UIO[Unit] = {
+    case _: PollComplete => UIO.unit
+    case ev              => log.info(s"${worker}: ${ev}").provideLayer(loggingLayer)
+  }
 
   def assertAllLeasesReleased(applicationName: String) =
     for {

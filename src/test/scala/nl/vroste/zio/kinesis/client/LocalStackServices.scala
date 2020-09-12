@@ -80,6 +80,8 @@ object LocalStackServices {
         .build
     )
 
-  val localStackAwsLayer = localHttpClient >>> (cloudWatchClientLayer ++ kinesisAsyncClientLayer ++ dynamoDbClientLayer)
+  val localStackAwsLayer
+    : ZLayer[Any, Throwable, Has[CloudWatchAsyncClient] with Has[KinesisAsyncClient] with Has[DynamoDbAsyncClient]] =
+    localHttpClient >>> (cloudWatchClientLayer ++ kinesisAsyncClientLayer ++ dynamoDbClientLayer)
 
 }

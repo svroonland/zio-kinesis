@@ -15,7 +15,6 @@ import software.amazon.awssdk.services.kinesis.model.{
 }
 import zio._
 import zio.logging.Logging
-import zio.logging.slf4j.Slf4jLogger
 import zio.test.Assertion._
 import zio.test._
 import zio.test.environment.TestClock
@@ -26,7 +25,7 @@ import scala.jdk.CollectionConverters._
 
 object PollingFetcherTest extends DefaultRunnableSpec {
 
-  val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some("PollingFetcherTest"))
+  val loggingLayer = Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   /**
    * PollingFetcher must:

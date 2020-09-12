@@ -18,11 +18,8 @@ import zio.test._
 object DynamicConsumerTest extends DefaultRunnableSpec {
   import TestUtil._
 
-  private val loggingLayer: ZLayer[Any, Nothing, Logging] =
-    Console.live ++ Clock.live >>> Logging.console(
-      format = (_, logEntry) => logEntry,
-      rootLoggerName = Some("default-logger")
-    )
+  val loggingLayer: ZLayer[Any, Nothing, Logging] =
+    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   private val env: ZLayer[Any, Throwable, Client with AdminClient with DynamicConsumer with Clock] =
     (LocalStackServices.localHttpClient >>> LocalStackServices.kinesisAsyncClientLayer >>> (Client.live ++ AdminClient.live ++ (loggingLayer ++ LocalStackServices.localStackAwsLayer >>> DynamicConsumer.live))) ++ Clock.live

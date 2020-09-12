@@ -22,11 +22,7 @@ import zio.{ system, Chunk, Queue, Ref, Runtime, ZIO, ZManaged }
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
 
-  val loggingLayer =
-    Logging.console(
-      format = (_, logEntry) => logEntry,
-      Some(getClass.getName)
-    )
+  val loggingLayer = Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   val useAws = Runtime.default.unsafeRun(system.envOrElse("ENABLE_AWS", "0")).toInt == 1
   val env    = ((if (useAws) client.defaultAwsLayer
