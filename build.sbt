@@ -17,7 +17,7 @@ enablePlugins(ProtobufPlugin)
 inThisBuild(
   List(
     organization := "nl.vroste",
-    version := "0.12.0",
+    version := "0.13.0",
     homepage := Some(url("https://github.com/svroonland/zio-kinesis")),
     licenses := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
     scalaVersion := mainScala,
@@ -53,7 +53,7 @@ libraryDependencies ++= Seq(
   "dev.zio"                %% "zio-test-sbt"                % "1.0.1" % "test",
   "dev.zio"                %% "zio-interop-reactivestreams" % "1.0.3.5",
   "dev.zio"                %% "zio-logging"                 % "0.5.1",
-  "software.amazon.awssdk"  % "kinesis"                     % "2.14.15",
+  "software.amazon.awssdk"  % "kinesis"                     % "2.14.16",
   "ch.qos.logback"          % "logback-classic"             % "1.2.3",
   "software.amazon.kinesis" % "amazon-kinesis-client"       % "2.2.11",
   "org.scala-lang.modules" %% "scala-collection-compat"     % "2.2.0",
