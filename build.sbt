@@ -38,7 +38,6 @@ inThisBuild(
       case _                                   => MergeStrategy.first
     },
     bintrayOrganization := Some("vroste"),
-    bintrayReleaseOnPublish in ThisBuild := false,
     bintrayPackageLabels := Seq("zio", "kinesis", "aws"),
     bintrayVcsUrl := Some("https://github.com/svroonland/zio-kinesis"),
     resolvers += "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots"
