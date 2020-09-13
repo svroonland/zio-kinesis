@@ -40,7 +40,7 @@ private[client] final class ProducerLive[R, R1, T](
   import ProducerLive._
   import Util.ZStreamExtensions
 
-  var runloop: ZIO[Logging with Clock, Nothing, Unit] = {
+  val runloop: ZIO[Logging with Clock, Nothing, Unit] = {
     val retries = zStreamFromQueueWithMaxChunkSize(failedQueue, maxChunkSize)
 
     // Failed records get precedence
@@ -137,7 +137,7 @@ private[client] final class ProducerLive[R, R1, T](
 
     for {
       _ <- currentMetrics.update(_.addFailures(failedCount))
-      _ <- ZIO.foreach(requests)(r => throttler.addFailure(r.predictedShard))
+      _ <- ZIO.foreach_(requests)(r => throttler.addFailure(r.predictedShard))
       _ <- log.warn(s"Failed to produce ${failedCount} records").when(newFailed.nonEmpty)
       _ <- log.warn(responses.take(10).map(_.errorCode()).mkString(", ")).when(newFailed.nonEmpty)
 
@@ -214,7 +214,7 @@ private[client] final class ProducerLive[R, R1, T](
   } yield ()
 
 // Repeatedly produce metrics
-  var metricsCollection: ZIO[R1 with Clock, Nothing, Long] = collectMetrics
+  val metricsCollection: ZIO[R1 with Clock, Nothing, Long] = collectMetrics
     .delay(settings.metricsInterval)
     .repeat(Schedule.spaced(settings.metricsInterval)) // TODO replace with fixed when ZIO 1.0.2 is out
 
@@ -254,7 +254,7 @@ private[client] object ProducerLive {
   val maxIngestionPerShardPerSecond = 1 * 1024 * 1024 // 1 MB
   val maxRecordsPerShardPerSecond   = 1000
 
-  val recoverableErrorCodes = Set("ProvisionedThroughputExceededException", "InternalFailure", "ServiceUnavailable");
+  val recoverableErrorCodes = Set("ProvisionedThroughputExceededException", "InternalFailure", "ServiceUnavailable")
 
   final case class ProduceRequest(
     r: PutRecordsRequestEntry,

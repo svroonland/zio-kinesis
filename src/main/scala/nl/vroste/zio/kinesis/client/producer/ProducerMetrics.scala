@@ -31,7 +31,7 @@ final case class ProducerMetrics(
    * Between 0 and 1
    */
   val successRate: Double =
-    if (nrRecordsPublished + nrFailures > 0) (nrRecordsPublished * 1.0 / (nrRecordsPublished + nrFailures))
+    if (nrRecordsPublished + nrFailures > 0) nrRecordsPublished * 1.0 / (nrRecordsPublished + nrFailures)
     else 1
 
   val throughput: Option[Double] =
@@ -76,7 +76,7 @@ final case class ProducerMetrics(
     )
 
   private def mergeHistograms[T <: AbstractHistogram](h1: T, h2: T): T = {
-    val newHist = h1.copy();
+    val newHist = h1.copy()
     newHist.add(h2)
     newHist.asInstanceOf[T]
   }

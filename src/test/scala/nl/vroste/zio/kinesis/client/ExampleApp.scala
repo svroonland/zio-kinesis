@@ -78,13 +78,13 @@ object ExampleApp extends zio.App {
       _          <- ZIO.sleep(runtime) raceFirst ZIO.foreachPar_(kclWorkers ++ workers)(_.join) raceFirst producer.join
       _           = println("Interrupting app")
       _          <- producer.interruptFork
-      _          <- ZIO.foreachPar(kclWorkers)(_.interrupt)
-      _          <- ZIO.foreachPar(workers)(_.interrupt.map { exit =>
+      _          <- ZIO.foreachPar_(kclWorkers)(_.interrupt)
+      _          <- ZIO.foreachPar_(workers)(_.interrupt.map { exit =>
              exit.fold(_ => (), nrRecordsProcessed => println(s"Worker processed ${nrRecordsProcessed}"))
 
            })
     } yield ExitCode.success
-  }.foldCauseM(e => log.error(s"Program failed: ${e.prettyPrint}", e).as(ExitCode.failure), ZIO.succeed(_))
+  }.foldCauseM(e => log.error(s"Program failed: ${e.prettyPrint}", e).exitCode, ZIO.succeed(_))
     .provideCustomLayer(
       awsEnv // TODO switch back!!
       // localStackEnv

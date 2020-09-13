@@ -124,7 +124,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                                       )
                               }.as((workerIdentifier, shardId))
                                 // Background and a bit delayed so we get a chance to actually emit some records
-                                .tap(_ => (ZIO.sleep(1.second) *> activeConsumers.update(_ + workerIdentifier)).fork)
+                                .tap(_ => activeConsumers.update(_ + workerIdentifier).delay(1.second).fork)
                                 .ensuring(putStrLn(s"Shard $shardId completed for consumer $workerIdentifier"))
                                 .catchSome {
                                   case _: ShutdownException => // This will be thrown when the shard lease has been stolen

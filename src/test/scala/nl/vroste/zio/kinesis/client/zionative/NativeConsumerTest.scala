@@ -125,7 +125,6 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                            }
                            .take(nrRecords.toLong)
                            .runCollect
-              lastSeqNrByShard    = records.groupBy(_.shardId).view.mapValues(_.last)
               checkpoints        <- getCheckpoints(applicationName)
               expectedCheckpoints =
                 producedShardsAndSequence.groupBy(_.shardId).view.mapValues(_.last.sequenceNumber).toMap

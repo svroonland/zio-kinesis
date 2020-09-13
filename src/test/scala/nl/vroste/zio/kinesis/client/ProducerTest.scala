@@ -90,7 +90,7 @@ object ProducerTest extends DefaultRunnableSpec {
                        }
                        .runDrain
                 results <- timing.get
-                _       <- ZIO.foreach(results)(r => putStrLn(r.map(_.toMillis).mkString(" ")))
+                _       <- ZIO.foreach_(results)(r => putStrLn(r.map(_.toMillis).mkString(" ")))
               } yield assertCompletes
           }
         }

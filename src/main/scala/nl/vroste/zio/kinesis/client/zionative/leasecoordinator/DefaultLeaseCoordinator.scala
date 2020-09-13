@@ -98,8 +98,8 @@ private class DefaultLeaseCoordinator(
            )
       newShards                 = (stateAfter.shards.keySet -- stateBefore.shards.keySet).filter(_ => stateBefore.shards.nonEmpty)
       removedShards             = stateBefore.shards.keySet -- stateAfter.shards.keySet
-      _                        <- ZIO.foreach(newShards)(shardId => emitDiagnostic(DiagnosticEvent.NewShardDetected(shardId)))
-      _                        <- ZIO.foreach(removedShards)(shardId => emitDiagnostic(DiagnosticEvent.ShardEnded(shardId)))
+      _                        <- ZIO.foreach_(newShards)(shardId => emitDiagnostic(DiagnosticEvent.NewShardDetected(shardId)))
+      _                        <- ZIO.foreach_(removedShards)(shardId => emitDiagnostic(DiagnosticEvent.ShardEnded(shardId)))
     } yield ()
 
   // Emits WorkerJoined and WorkerLeft after each lease operation
