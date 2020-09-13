@@ -13,11 +13,11 @@ lazy val silencer = {
 }
 
 enablePlugins(ProtobufPlugin)
+enablePlugins(GitVersioning)
 
 inThisBuild(
   List(
     organization := "nl.vroste",
-    version := "0.13.0",
     homepage := Some(url("https://github.com/svroonland/zio-kinesis")),
     licenses := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
     scalaVersion := mainScala,
@@ -38,8 +38,8 @@ inThisBuild(
       case _                                   => MergeStrategy.first
     },
     bintrayOrganization := Some("vroste"),
-    bintrayReleaseOnPublish in ThisBuild := false,
     bintrayPackageLabels := Seq("zio", "kinesis", "aws"),
+    bintrayVcsUrl := Some("https://github.com/svroonland/zio-kinesis"),
     resolvers += "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots"
   )
 )
