@@ -126,8 +126,8 @@ jobs:
       - restore_cache:
           key: sbt-cache
       - run: apt install -y protobuf-compiler
-      - run: sbt ++2.13.1! bintrayPublish
-      - run: sbt ++2.12.11! bintrayPublish
+      - run: sbt ++2.13.1! publish
+      - run: sbt ++2.12.11! publish
       - run: sbt bintrayRelease
 
 workflows:
