@@ -83,3 +83,12 @@ testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework")
 
 addCommandAlias("fmt", "all scalafmtSbt scalafmt test:scalafmt")
 addCommandAlias("check", "all scalafmtSbtCheck scalafmtCheck test:scalafmtCheck")
+
+lazy val interopFutures = (project in file("interop-futures"))
+  .settings(
+    resolvers += Resolver.jcenterRepo,
+    libraryDependencies ++= Seq(
+      "nl.vroste" %% "zio-kinesis"                 % "0.13.0",
+      "dev.zio"   %% "zio-interop-reactivestreams" % "1.0.3.5"
+    )
+  )
