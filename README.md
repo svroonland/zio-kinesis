@@ -2,7 +2,7 @@
 
 # ZIO Kinesis
 
-ZIO Kinesis is a ZIO-based interface to Amazon Kinesis Data Streams for consuming and producing.
+ZIO Kinesis is a ZIO-based interface to Amazon Kinesis Data Streams for consuming and producing. A Future-based version of some of the functionality is also available.
 
 The project is in beta stage. Although already being used in production by a small number of organisations, expect some issues to pop up and some changes to the interface.
 More beta users and feedback are of course welcome.
@@ -58,7 +58,7 @@ resolvers += Resolver.jcenterRepo
 libraryDependencies += "nl.vroste" %% "zio-kinesis" % "<version>"
 ```
 
-The latest version is built against ZIO 1.0.0-RC21-2.
+The latest version is built against ZIO 1.0.1.
 
 ## Consumer
 
@@ -374,6 +374,21 @@ object ProducerWithMetricsExample extends zio.App {
     program.provideCustomLayer(env).exitCode
 }
 ```
+
+## Future-based interface
+
+For cases when you need to integrate with existing `Future`-based application code, `Consumer` and `Producer` are available with a scala Future-based interface as well. 
+
+`Producer` offers full functionality while Consumer offers only `consumeWith`, the easiest way of consuming records from Kinesis.
+
+To use, add the following to your `build.sbt`:
+
+```scala
+resolvers += Resolver.jcenterRepo
+libraryDependencies += "nl.vroste" %% "zio-kinesis-future" % "<version>"
+```
+
+`Consumer` and `Producer` are now available in the `nl.vroste.zio.kinesis.interop.futures` package.
 
 ## DynamicConsumer
 `DynamicConsumer` is an alternative to `Consumer`, backed by the 
