@@ -22,7 +22,7 @@ import scala.concurrent.{ ExecutionContext, Future }
  * A scala-native Future based interface to the zio-kinesis Consumer
  */
 class Consumer private (
-  runtime: zio.Runtime[Clock with Random with Client with AdminClient with LeaseRepository with Logging]
+  runtime: zio.Runtime.Managed[Clock with Random with Client with AdminClient with LeaseRepository with Logging]
 ) {
 
   /**
@@ -69,6 +69,8 @@ class Consumer private (
         zio.duration.Duration.fromScala(checkpointDuration)
       )(record => ZIO.fromFuture(recordProcessor(record)))
     }
+
+  def close(): Unit = runtime.shutdown()
 }
 
 object Consumer {

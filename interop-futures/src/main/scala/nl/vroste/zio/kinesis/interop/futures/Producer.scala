@@ -13,14 +13,14 @@ import software.amazon.awssdk.services.cloudwatch.{ CloudWatchAsyncClient, Cloud
 import software.amazon.awssdk.services.dynamodb.{ DynamoDbAsyncClient, DynamoDbAsyncClientBuilder }
 import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyncClientBuilder }
 import zio.clock.Clock
-import zio.logging.Logging
+import zio.logging.{ LogLevel, Logging }
 import zio.{ CancelableFuture, Chunk, ZIO }
 
 /**
  * A scala-native Future based interface to the zio-kinesis Producer
  */
 class Producer[T] private (
-  runtime: zio.Runtime[Any],
+  runtime: zio.Runtime.Managed[Any],
   producer: client.Producer[T]
 ) {
 
@@ -42,6 +42,11 @@ class Producer[T] private (
    */
   def produceMany(records: Iterable[ProducerRecord[T]]): CancelableFuture[Seq[ProduceResponse]] =
     runtime.unsafeRunToFuture(producer.produceChunk(Chunk.fromIterable(records)))
+
+  /**
+   * Shutdown the Producer
+   */
+  def close(): Unit = runtime.shutdown()
 }
 
 object Producer {
