@@ -47,7 +47,7 @@ class Consumer private (
     fetchMode: FetchMode = FetchMode.Polling(),
     leaseCoordinationSettings: LeaseCoordinationSettings = LeaseCoordinationSettings(),
     initialPosition: InitialPosition = InitialPosition.TrimHorizon,
-    emitDiagnostic: DiagnosticEvent => Unit,
+    emitDiagnostic: DiagnosticEvent => Unit = (_: DiagnosticEvent) => (),
     shardAssignmentStrategy: ShardAssignmentStrategy = ShardAssignmentStrategy.balanced(),
     checkpointBatchSize: Long = 200,
     checkpointDuration: Duration = 5.second
