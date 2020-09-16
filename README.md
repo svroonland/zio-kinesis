@@ -24,6 +24,7 @@ More beta users and feedback are of course welcome.
 - [Producer](#producer)
   * [Aggregation](#aggregation)
   * [Metrics](#metrics)
+- [Future-based interface](#future-based-interface)
 - [DynamicConsumer](#dynamicconsumer)
   * [Basic usage using `consumeWith`](#basic-usage-using--consumewith--1)
   * [Advanced usage](#advanced-usage)
