@@ -363,7 +363,7 @@ object Consumer {
    * @param recordProcessor A function for processing a `Record[T]`
    * @tparam R ZIO environment type required by the `deserializer` and the `recordProcessor`
    * @tparam T Type of record values
-   * @return A ZIO that completes with Unit when record processing is stopped via requestShutdown or fails when the consumer stream fails
+   * @return A ZIO that completes with Unit when record processing is stopped or fails when the consumer stream fails
    */
   def consumeWith[R, RC, T](
     streamName: String,
