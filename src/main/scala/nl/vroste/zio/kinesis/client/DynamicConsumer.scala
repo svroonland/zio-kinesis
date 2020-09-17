@@ -232,8 +232,10 @@ object DynamicConsumer {
      */
     def stageOnSuccess[R, E, A](effect: ZIO[R, E, A])(r: Record[_]): ZIO[R, E, A] =
       effect.onExit {
-        case Exit.Success(_) => stage(r)
-        case _               => UIO.unit
+        case Exit.Success(_) =>
+          ZIO.succeed(println(s"XXXX Staging $r")) *> stage(r)
+        case _               =>
+          UIO.unit
       }
 
     /**
@@ -271,6 +273,7 @@ object DynamicConsumer {
       interval: Duration
     ): ZStream[R, Throwable, Any] => ZStream[R with Clock with Blocking, Throwable, Unit] =
       _.aggregateAsyncWithin(ZTransducer.foldUntil((), nr)((_, _) => ()), Schedule.fixed(interval))
+        .tap(_ => ZIO.succeed(println("XXXXX aggregateAsyncWithin tap\n")))
         .tap(_ => checkpoint)
         .catchAll {
           case _: ShutdownException =>

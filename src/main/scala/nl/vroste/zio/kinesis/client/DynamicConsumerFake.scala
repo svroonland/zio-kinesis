@@ -40,8 +40,8 @@ private[client] class DynamicConsumerFake(
         data = recData,
         partitionKey = s"${shardName}_$i",
         encryptionType = EncryptionType.NONE,
-        subSequenceNumber = i,
-        explicitHashKey = "",
+        subSequenceNumber = Some(i),
+        explicitHashKey = None,
         aggregated = false,
         shardId = shardName
       )).orDie
@@ -54,7 +54,8 @@ private[client] class DynamicConsumerFake(
               (
                 shardName,
                 stream.zipWithIndex.mapM {
-                  case (bb, i) => deserializer.deserialize(bb).flatMap(record(shardName, i, _)).provide(env)
+                  case (byteBuffer, i) =>
+                    deserializer.deserialize(byteBuffer).flatMap(record(shardName, i, _)).provide(env)
                 },
                 checkpointer
               )
@@ -67,7 +68,6 @@ private[client] class DynamicConsumerFake(
 }
 
 object CheckpointerFake {
-  // TODO: see if we can get rid of `Any` to regain type safety
   def make(refCheckpointedList: Ref[Seq[_]]): Task[Checkpointer] =
     for {
       latestStaged <- Ref.make[Option[Record[_]]](None)
@@ -77,15 +77,17 @@ object CheckpointerFake {
       override def stage(r: Record[_]): UIO[Unit] = latestStaged.set(Some(r))
 
       override def checkpoint: ZIO[Blocking, Throwable, Unit] =
-        latestStaged.get.flatMap {
-          case Some(record) =>
-            refCheckpointedList.update(seq => seq :+ record) *>
-              latestStaged.update {
-                case Some(r) if r == record => None
-                case r                      => r // A newer record may have been staged by now
-              }
-          case None         => UIO.unit
-        }
+        ZIO.succeed(println(s">>>>>>>>> 1 about to checkpoint $latestStaged")) *>
+          latestStaged.get.flatMap {
+            case Some(record) =>
+              ZIO.succeed(println(s">>>>>>>>> 2 about to checkpoint $record")) *>
+                refCheckpointedList.update(seq => seq :+ record) *>
+                latestStaged.update {
+                  case Some(r) if r == record => None
+                  case r                      => r // A newer record may have been staged by now
+                }
+            case None         => UIO.unit
+          }
     }
 }
 
