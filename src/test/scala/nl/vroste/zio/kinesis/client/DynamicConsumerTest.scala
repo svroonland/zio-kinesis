@@ -10,6 +10,7 @@ import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.console._
 import zio.duration._
+import zio.logging.Logging
 import zio.stream.{ ZStream, ZTransducer }
 import zio.test.TestAspect._
 import zio.test._
@@ -17,8 +18,11 @@ import zio.test._
 object DynamicConsumerTest extends DefaultRunnableSpec {
   import TestUtil._
 
+  val loggingLayer: ZLayer[Any, Nothing, Logging] =
+    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
+
   private val env: ZLayer[Any, Throwable, Client with AdminClient with DynamicConsumer with Clock] =
-    (LocalStackServices.localHttpClient >>> LocalStackServices.kinesisAsyncClientLayer >>> (Client.live ++ AdminClient.live ++ LocalStackServices.dynamicConsumerLayer)) ++ Clock.live
+    (LocalStackServices.localHttpClient >>> LocalStackServices.kinesisAsyncClientLayer >>> (Client.live ++ AdminClient.live ++ (loggingLayer ++ LocalStackServices.localStackAwsLayer >>> DynamicConsumer.live))) ++ Clock.live
 
   def testConsume1: ZSpec[Clock with Blocking with Console with DynamicConsumer with Client, Throwable] =
     testM("consume records produced on all shards produced on the stream") {
@@ -120,7 +124,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                                       )
                               }.as((workerIdentifier, shardId))
                                 // Background and a bit delayed so we get a chance to actually emit some records
-                                .tap(_ => (ZIO.sleep(1.second) *> activeConsumers.update(_ + workerIdentifier)).fork)
+                                .tap(_ => activeConsumers.update(_ + workerIdentifier).delay(1.second).fork)
                                 .ensuring(putStrLn(s"Shard $shardId completed for consumer $workerIdentifier"))
                                 .catchSome {
                                   case _: ShutdownException => // This will be thrown when the shard lease has been stolen

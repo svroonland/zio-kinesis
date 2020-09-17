@@ -10,22 +10,26 @@ More beta users and feedback are of course welcome.
 - [Features](#features)
 - [Installation](#installation)
 - [Consumer](#consumer)
-  * [Basic usage](#basic-usage)
+  * [Basic usage using `consumeWith`](#basic-usage-using--consumewith-)
+  * [More advanced usage](#more-advanced-usage)
   * [Checkpointing](#checkpointing)
   * [Lease coordination](#lease-coordination)
+  * [Resharding](#resharding)
+  * [Consuming multiple Kinesis streams](#consuming-multiple-kinesis-streams)
   * [Customization](#customization)
   * [Diagnostic event & metrics](#diagnostic-event---metrics)
   * [KCL compatibility](#kcl-compatibility)
   * [Unsupported features](#unsupported-features)
 - [Configuration](#configuration)
 - [Producer](#producer)
+  * [Aggregation](#aggregation)
+  * [Metrics](#metrics)
 - [DynamicConsumer](#dynamicconsumer)
-  * [Basic usage using `consumeWith`](#basic-usage-using--consumewith-)
-  * [Advanced usage](#advanced-usage-example-)
+  * [Basic usage using `consumeWith`](#basic-usage-using--consumewith--1)
+  * [Advanced usage](#advanced-usage)
 - [Client and AdminClient](#client-and-adminclient)
-- [Running tests and more usage examples](#running-tests-and-usage-examples)
+- [Running tests and more usage examples](#running-tests-and-more-usage-examples)
 - [Credits](#credits)
-
 
 ## Features
 
@@ -67,28 +71,64 @@ Features:
 * Deserialization of records to any data type
 * Checkpointing of records according to user-defined Schedules
 * Automatic checkpointing at shard stream shutdown due to error or interruption
-* Handling of Kinesis resource limits (throttling and backoff)
+* Handling changes in the number of shards (resharding) while running
+* Support for protobuf-aggregated records (KPL / KCL compatible)
+* Correct handling of Kinesis resource limits (throttling and backoff)
 * KCL compatible metrics publishing to CloudWatch
 * Compatibility for running alongside KCL consumers
 * Emission of diagnostic events for custom logging / metrics / testing
 * Manual or otherwise user-defined shard assignment strategy
 * Pluggable lease/checkpoint storage backend
+* Optimized startup + shutdown sequence
 
-### Basic usage
 
-The following example shows a simple ZIO App that consumes from a stream, prints a record and periodically checkpoints.
+### Basic usage using `consumeWith`
+For a lot of use cases where you just want to do something with all messages on a Kinesis stream, `zio-kinesis` provides the 
+convenience method `Consumer.consumeWith`. This method lets you execute a ZIO effect for each message, while retaining all features like parallel shard processing, checkpointing and resharding. 
 
 ```scala
-import nl.vroste.zio.kinesis.client._
-import nl.vroste.zio.kinesis.client.zionative._
 import nl.vroste.zio.kinesis.client.serde.Serde
+import zio._
+import zio.clock.Clock
+import zio.console.{ putStrLn, Console }
+import zio.duration._
+import zio.logging.Logging
+
+/**
+ * Basic usage example for `Consumer.consumeWith` convenience method
+ */
+object ConsumeWithExample extends zio.App {
+  val loggingLayer: ZLayer[Any, Nothing, Logging] =
+    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
+
+  override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
+    Consumer
+      .consumeWith(
+        streamName = "my-stream",
+        applicationName = "my-application",
+        deserializer = Serde.asciiString,
+        workerIdentifier = "worker1",
+        checkpointBatchSize = 1000L,
+        checkpointDuration = 5.minutes
+      )(record => putStrLn(s"Processing record $record"))
+      .provideCustomLayer(loggingLayer ++ Consumer.defaultEnvironment ++ loggingLayer)
+      .exitCode
+}
+``` 
+
+### More advanced usage
+
+If you want more fine-grained control over the processing stream, error handling or checkpointing, use `Consumer.shardedStream` to get a stream of shard-streams, like in the following example:
+
+```scala
+import nl.vroste.zio.kinesis.client.serde.Serde
+import nl.vroste.zio.kinesis.client.zionative.Consumer
 import zio._
 import zio.console.{ putStrLn, Console }
 import zio.duration._
 import zio.logging.Logging
-import zio.logging.slf4j.Slf4jLogger
 
-object BasicUsage extends zio.App {
+object NativeConsumerBasicUsageExample extends zio.App {
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     Consumer
       .shardedStream(
@@ -105,11 +145,11 @@ object BasicUsage extends zio.App {
             .via(checkpointer.checkpointBatched[Console](nr = 1000, interval = 5.second))
       }
       .runDrain
-      .provideCustomLayer(Consumer.defaultEnvironment ++ Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName)))
+      .provideCustomLayer(Consumer.defaultEnvironment ++ loggingLayer)
       .exitCode
 
-  }
-
+  val loggingLayer = Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
+}
 ```
 
 Let's go over some particulars of this example:
@@ -157,6 +197,20 @@ When one worker fails or loses connectivity, the other workers will detect that 
 
 When a worker is stopped, its leases are released so that other workers may pick them up.
 
+### Resharding
+
+Changing the stream's shard count, or _resharding_, is fully supported while the consumer is active. When a shard is split or two shards are merged, before processing of the new shard starts, the parent shard(s) are processed until the end. When a worker detects the end of a shard it is processing, Kinesis will tell it the new (child) shards and their processing will start immediately after both parent shards have been completely processed. 
+
+When another worker is processing one of the parent shards, it may take a while for this to be detected.
+
+To ensure that no shard is left behind, the list of shards is refreshed periodically.
+
+### Consuming multiple Kinesis streams
+
+If you want to process more than one Kinesis stream, simply create more than one instance and ensure that the application name is unique per stream. The application name is used to create a lease table. Unique application names will create a lease table per stream, to ensure that shard IDs do not conflict. Unlike the KCL, which heavily uses threads, there should be no performance need to have multi-stream support built into `Consumer`.
+
+For example, if your application name is `"order_processing"` and you want to consume the streams `"orders"` and `"payments`", create one `Consumer` with the application name `"order_processing_orders"` and one `"order_processing_payments"`.
+
 ### Customization
 
 The following parameters can be customized:
@@ -193,15 +247,10 @@ Lease coordination and metrics are fully compatible for running along other KCL 
 ### Unsupported features
 
 Features that are supported by `DynamicConsumer` but not by `Consumer`:
-* Handling resharding (split and merged shards)  
-  As a workaround the workers will have to be restarted to start processing the new shards.
-* KPL record aggregation via Protobuf + subsequence number checkpointing  
-  Users can manually deserialize records via Protobuf if desired. Kinesis streams has a at-least once model anyway, so the lack of subsequence number checkpointing does not break that.
 * DynamoDB lease table billing mode configuration  
-  This can be adjusted in AWS Console if desired.
+  This can be adjusted in AWS Console if desired or manually using the AWS DynamoDB SDK.
 * Some metrics  
   Not all metrics published by the KCL are implemented yet. Some of them are not applicable because of different implementations.
-
 
 ## Configuration
 The default environments for `Client`, `AdminClient`, `Consumer`, `DynamicConsumer` and `Producer` will use the [Default Credential/Region Provider](https://docs.aws.amazon.com/sdk-for-java/v1/developer-guide/credentials.html).
@@ -221,26 +270,108 @@ All of this of course with the robust failure handling you can expect from a ZIO
 Usage example:
 
 ```scala
+import nl.vroste.zio.kinesis.client
+import nl.vroste.zio.kinesis.client.Client.ProducerRecord
+import nl.vroste.zio.kinesis.client.serde.Serde
+import nl.vroste.zio.kinesis.client.{ Client, Producer }
 import zio._
-import nl.vroste.zio.kinesis.client._
-import serde._
-import Client.ProducerRecord
 import zio.clock.Clock
+import zio.console.{ putStrLn, Console }
+import zio.logging.Logging
 
-val streamName  = "my_stream"
-val applicationName ="my_awesome_zio_application"
-val clientLayer = HTTPClient.make() >>> kinesisAsyncClientLayer() >>> Client.live
+object ProducerExample extends zio.App {
+  val streamName      = "my_stream"
+  val applicationName = "my_awesome_zio_application"
 
-(for {
-  producer <- Producer
-    .make(streamName, Serde.asciiString)
-} yield producer)
-  .provideLayer(Clock.live ++ clientLayer)
-  .use { producer =>
-  val records = (1 to 100).map(j => ProducerRecord(s"key${j}", s"message${j}"))
-  producer
-    .produceChunk(Chunk.fromIterable(records)) *>
-    ZIO(println(s"All records in the chunk were produced"))
+  val loggingLayer: ZLayer[Any, Nothing, Logging] =
+    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
+
+  val env = client.defaultAwsLayer >+> Client.live ++ loggingLayer
+
+  val program = Producer.make(streamName, Serde.asciiString).use { producer =>
+    val record = ProducerRecord("key1", "message1")
+
+    for {
+      _ <- producer.produce(record)
+      _ <- putStrLn(s"All records in the chunk were produced")
+    } yield ()
+  }
+
+  override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
+    program.provideCustomLayer(env).exitCode
+}
+```
+
+### Aggregation
+Each shard has an ingestion limit of 1 MB/s and 1000 records/s. When your records are small, you may not reach the 1MB/s but you will be limited by the 1000 records/s. 
+
+`Producer` can aggregate multiple user records into one Kinesis record to optimize usage of the shard capacity. `Consumer` and `DynamicConsumer` can automatically deaggregate these records transparently to the user. Checkpointing within an aggregate is supported as well.
+
+Aggregation is off by default but can be enabled by setting `ProducerSettings.aggregate` to `true`.
+
+This feature is fully compatible with the KPL and KCL.
+
+### Metrics
+`Producer` periodically collects metrics like success rate and throughput and makes them available as `ProducerMetrics` values. Statistical values are collected in a `HdrHistogram`.  Metrics are collected every 30 seconds by default, but the interval can be customized. 
+
+`ProducerMetrics` objects can be combined with other `ProducerMetrics` to get (statistically sound!) total metrics, allowing you to do your own filtering, aggregation or other processing if desired.
+
+The list of available metrics is:
+* Throughput (records/s)
+* Success rate
+* Latency distribution
+* Nr of records published
+* Nr of failures
+* Nr of attempts distribution
+* Nr of PutRecords calls
+* Record payload size distribution 
+* Batch payload size distribution 
+
+
+Example usage:
+```scala
+import nl.vroste.zio.kinesis.client
+import nl.vroste.zio.kinesis.client.Client.ProducerRecord
+import nl.vroste.zio.kinesis.client.producer.ProducerMetrics
+import nl.vroste.zio.kinesis.client.serde.Serde
+import nl.vroste.zio.kinesis.client.{ Client, Producer, ProducerSettings }
+import zio._
+import zio.clock.Clock
+import zio.console.{ putStrLn, Console }
+import zio.logging.Logging
+
+object ProducerWithMetricsExample extends zio.App {
+  val streamName      = "my_stream"
+  val applicationName = "my_awesome_zio_application"
+
+  val loggingLayer: ZLayer[Any, Nothing, Logging] =
+    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
+
+  val env = client.defaultAwsLayer >+> Client.live ++ loggingLayer
+
+  val program = (for {
+    totalMetrics <- Ref.make(ProducerMetrics.empty).toManaged_
+    producer     <- Producer
+                  .make(
+                    streamName,
+                    Serde.asciiString,
+                    ProducerSettings(),
+                    metrics => totalMetrics.updateAndGet(_ + metrics).flatMap(m => putStrLn(m.toString))
+                  )
+  } yield (producer, totalMetrics)).use {
+    case (producer, totalMetrics) =>
+      val records = (1 to 100).map(j => ProducerRecord(s"key${j}", s"message${j}"))
+
+      for {
+        _ <- producer.produceChunk(Chunk.fromIterable(records))
+        _ <- putStrLn(s"All records in the chunk were produced")
+        m <- totalMetrics.get
+        _ <- putStrLn(s"Metrics after producing: ${m}")
+      } yield ()
+  }
+
+  override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
+    program.provideCustomLayer(env).exitCode
 }
 ```
 
@@ -248,7 +379,7 @@ val clientLayer = HTTPClient.make() >>> kinesisAsyncClientLayer() >>> Client.liv
 `DynamicConsumer` is an alternative to `Consumer`, backed by the 
 [Kinesis Client Library (KCL)](https://docs.aws.amazon.com/streams/latest/dev/shared-throughput-kcl-consumers.html). 
 
-_NOTE: Although `DynamicConsumer` will be included in this library for some time to come for backwards compatility, it will eventually be deprecated and removed in favour of the ZIO native `Consumer`. Users are recommended to upgrade._
+_NOTE: Although `DynamicConsumer` will be included in this library for some time to come for backwards compatibility, it will eventually be deprecated and removed in favour of the ZIO native `Consumer`. Users are recommended to upgrade._
   
 The interface is largely the same as `Consumer`, except for:
  * Some parameters for configuration 
@@ -257,7 +388,6 @@ The interface is largely the same as `Consumer`, except for:
  * Retrying is not done automatically by DynamicConsumer's Checkpointer.
 
 Unlike `Consumer`, `DynamicConsumer` also supports:
-* Resharding
 * KPL record aggregation via Protobuf + subsequence number checkpointing
 * Full CloudWatch metrics publishing
 
@@ -267,17 +397,21 @@ convenience method `DynamicConsumer.consumeWith`. This method lets you execute a
 care of checkpointing which you can configure through `checkpointBatchSize` and `checkpointDuration` parameters.   
 
 ```scala
-package nl.vroste.zio.kinesis.client.examples
-
+import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.DynamicConsumer
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio._
-import zio.console.putStrLn
+import zio.clock.Clock
+import zio.console.{ putStrLn, Console }
 import zio.duration._
-import zio.logging.slf4j.Slf4jLogger
+import zio.logging.Logging
 
+/**
+ * Basic usage example for `DynamicConsumer.consumeWith` convenience method
+ */
 object DynamicConsumerConsumeWithExample extends zio.App {
-  private val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val loggingLayer: ZLayer[Any, Nothing, Logging] =
+    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     DynamicConsumer
@@ -287,12 +421,9 @@ object DynamicConsumerConsumeWithExample extends zio.App {
         deserializer = Serde.asciiString,
         workerIdentifier = "worker1",
         checkpointBatchSize = 1000L,
-        checkpointDuration = 5.seconds
-      ){ record => 
-        // Effectfully process your record here
-        putStrLn(s"Processing record $record")
-      }
-      .provideCustomLayer(DynamicConsumer.defaultEnvironment ++ loggingEnv)
+        checkpointDuration = 5.minutes
+      )(record => putStrLn(s"Processing record $record"))
+      .provideCustomLayer(loggingLayer ++ defaultAwsLayer >>> DynamicConsumer.live ++ loggingLayer)
       .exitCode
 }
 ``` 
@@ -302,17 +433,22 @@ If you want more control over your stream, `DynamicConsumer.shardedStream` can b
 
 
 ```scala
-import nl.vroste.zio.kinesis.client.DynamicConsumer
+import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio._
 import zio.blocking.Blocking
-import zio.console.{Console, putStrLn}
+import zio.clock.Clock
+import zio.console.{ putStrLn, Console }
 import zio.duration._
+import zio.logging.Logging
 
 /**
  * Basic usage example for DynamicConsumer
  */
 object DynamicConsumerBasicUsageExample extends zio.App {
+  val loggingLayer: ZLayer[Any, Nothing, Logging] =
+    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
+
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     DynamicConsumer
       .shardedStream(
@@ -329,7 +465,7 @@ object DynamicConsumerBasicUsageExample extends zio.App {
             .via(checkpointer.checkpointBatched[Blocking with Console](nr = 1000, interval = 5.second))
       }
       .runDrain
-      .provideCustomLayer(DynamicConsumer.defaultEnvironment)
+      .provideCustomLayer(loggingLayer ++ defaultAwsLayer >>> DynamicConsumer.live)
       .exitCode
 }
 ```
@@ -367,4 +503,3 @@ The Serde construct in this library is inspired by [zio-kafka](https://github.co
  [this AWS blog post](https://aws.amazon.com/blogs/big-data/implementing-efficient-and-reliable-producers-with-the-amazon-kinesis-producer-library/)
  
 Table of contents generated with [markdown-toc](http://ecotrust-canada.github.io/markdown-toc/).
-

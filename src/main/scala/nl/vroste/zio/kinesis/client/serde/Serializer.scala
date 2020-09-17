@@ -32,8 +32,5 @@ object Serializer extends Serdes {
    * Create a serializer from a function
    */
   def apply[R, T](ser: T => RIO[R, ByteBuffer]): Serializer[R, T] =
-    new Serializer[R, T] {
-      override def serialize(value: T): RIO[R, ByteBuffer] =
-        ser(value)
-    }
+    (value: T) => ser(value)
 }

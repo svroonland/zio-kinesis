@@ -20,6 +20,7 @@ import zio.clock.Clock
  * @param releaseLeaseTimeout Time after which releasing a lease is silently aborted.
  * @param renewRetrySchedule Schedule that controls retries when exceptions occur when renewing a
  *                           lease. The lease is released (internally only) when the schedule fails.
+ * @param shardRefreshInterval Interval at which the stream's shards are refreshed
  */
 final case class LeaseCoordinationSettings(
   renewInterval: Duration = 3.seconds,
@@ -28,5 +29,6 @@ final case class LeaseCoordinationSettings(
   maxParallelLeaseRenewals: Int = 10,
   releaseLeaseTimeout: Duration = 10.seconds,
   renewRetrySchedule: Schedule[Clock, Throwable, Any] =
-    Util.exponentialBackoff(3.second, 30.seconds, maxRecurs = Some(3))
+    Util.exponentialBackoff(3.second, 30.seconds, maxRecurs = Some(3)),
+  shardRefreshInterval: Duration = 30.seconds
 )

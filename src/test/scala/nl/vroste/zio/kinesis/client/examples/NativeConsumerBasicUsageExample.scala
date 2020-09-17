@@ -5,7 +5,7 @@ import nl.vroste.zio.kinesis.client.zionative.Consumer
 import zio._
 import zio.console.{ putStrLn, Console }
 import zio.duration._
-import zio.logging.slf4j.Slf4jLogger
+import zio.logging.Logging
 
 object NativeConsumerBasicUsageExample extends zio.App {
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
@@ -24,8 +24,8 @@ object NativeConsumerBasicUsageExample extends zio.App {
             .via(checkpointer.checkpointBatched[Console](nr = 1000, interval = 5.second))
       }
       .runDrain
-      .provideCustomLayer(Consumer.defaultEnvironment ++ loggingEnv)
+      .provideCustomLayer(Consumer.defaultEnvironment ++ loggingLayer)
       .exitCode
 
-  val loggingEnv = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val loggingLayer = Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 }

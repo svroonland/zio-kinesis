@@ -48,8 +48,5 @@ object Deserializer extends Serdes {
    * Create a deserializer from a function
    */
   def apply[R, T](deser: ByteBuffer => RIO[R, T]): Deserializer[R, T] =
-    new Deserializer[R, T] {
-      override def deserialize(data: ByteBuffer): RIO[R, T] =
-        deser(data)
-    }
+    (data: ByteBuffer) => deser(data)
 }

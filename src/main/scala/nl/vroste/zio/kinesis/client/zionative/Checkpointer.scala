@@ -1,7 +1,6 @@
 package nl.vroste.zio.kinesis.client.zionative
 
 import zio.{ Exit, Schedule, UIO, ZIO }
-import zio.blocking.Blocking
 import nl.vroste.zio.kinesis.client.{ Record, Util }
 import zio.clock.Clock
 import zio.duration._
@@ -11,6 +10,11 @@ import zio.stream.{ ZStream, ZTransducer }
  * Error indicating that while checkpointing it was discovered that the lease for a shard was stolen
  */
 case object ShardLeaseLost
+
+private[zionative] trait CheckpointerInternal {
+  def setMaxSequenceNumber(lastSequenceNumber: ExtendedSequenceNumber): UIO[Unit]
+  def markEndOfShard(): UIO[Unit]
+}
 
 /**
  * Staging area for checkpoints
@@ -67,7 +71,7 @@ trait Checkpointer {
       Util.exponentialBackoff(1.second, 1.minute, maxRecurs = Some(5))
   ): ZIO[Clock with R, Either[Throwable, ShardLeaseLost.type], Unit]
 
-  private[client] def checkpointAndRelease: ZIO[Blocking, Either[Throwable, ShardLeaseLost.type], Unit]
+  private[client] def checkpointAndRelease: ZIO[Any, Either[Throwable, ShardLeaseLost.type], Unit]
 
   /**
    * Immediately checkpoint this record

@@ -56,7 +56,8 @@ object Client {
     def listShards(
       streamName: String,
       streamCreationTimestamp: Option[Instant] = None,
-      chunkSize: Int = 10000
+      chunkSize: Int = 10000,
+      filter: Option[ShardFilter] = None
     ): ZStream[Clock, Throwable, Shard]
 
     def getShardIterator(
@@ -119,10 +120,11 @@ object Client {
   def listShards(
     streamName: String,
     streamCreationTimestamp: Option[Instant] = None,
-    chunkSize: Int = 10000
+    chunkSize: Int = 10000,
+    filter: Option[ShardFilter] = None
   ): ZStream[Clock with Client, Throwable, Shard] =
     ZStream.unwrap {
-      ZIO.service[Service].map(_.listShards(streamName, streamCreationTimestamp, chunkSize))
+      ZIO.service[Service].map(_.listShards(streamName, streamCreationTimestamp, chunkSize, filter))
     }
 
   def getShardIterator(streamName: String, shardId: String, iteratorType: ShardIteratorType): ClientTask[String] =

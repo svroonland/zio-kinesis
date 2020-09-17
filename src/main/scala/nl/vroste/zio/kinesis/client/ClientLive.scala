@@ -46,7 +46,8 @@ private[client] class ClientLive(kinesisClient: KinesisAsyncClient) extends Clie
   def listShards(
     streamName: String,
     streamCreationTimestamp: Option[Instant] = None,
-    chunkSize: Int = 10000
+    chunkSize: Int = 10000,
+    filter: Option[ShardFilter] = None
   ): ZStream[Clock, Throwable, Shard] =
     paginatedRequest { (token: Option[String]) =>
       val request = ListShardsRequest
@@ -56,7 +57,9 @@ private[client] class ClientLive(kinesisClient: KinesisAsyncClient) extends Clie
         .streamCreationTimestamp(streamCreationTimestamp.orNull)
         .nextToken(token.orNull)
 
-      asZIO(kinesisClient.listShards(request.build()))
+      val request1 = filter.fold(request)(request.shardFilter)
+
+      asZIO(kinesisClient.listShards(request1.build()))
         .map(response => (response.shards().asScala, Option(response.nextToken())))
     }(Schedule.fixed(10.millis)).mapConcatChunk(Chunk.fromIterable)
 
@@ -125,7 +128,7 @@ private[client] class ClientLive(kinesisClient: KinesisAsyncClient) extends Clie
         // It does not contain information of value when succeeding
         _                <- subscribeResponse.unit raceFirst streamP.await raceFirst streamExceptionOccurred.await
         stream           <- (streamExceptionOccurred.await.map(Left(_)) raceFirst streamP.await.either).absolve
-      } yield (stream merge ZStream.unwrap(streamExceptionOccurred.await.map(ZStream.fail(_))))
+      } yield stream merge ZStream.unwrap(streamExceptionOccurred.await.map(ZStream.fail(_)))
     }.catchSome {
       case e: CompletionException =>
         ZStream.fail(Option(e.getCause).getOrElse(e))

@@ -44,7 +44,8 @@ object ShardAssignmentStrategy {
    * Note that users must make sure that other workers in the pool also use a manual shard assignment
    * strategy, otherwise stealing back of leases by other workers may occur.
    *
-   * You also need to make sure that all shards are covered by the shard assignment of all workers
+   * You also need to make sure that all shards are covered by the shard assignment of all workers.
+   * After resharding, the list of shards must be reconfigured.
    *
    * @param shardAssignment IDs of shards to assign to this worker
    */
@@ -85,9 +86,10 @@ object ShardAssignmentStrategy {
           now          <- zio.clock.currentDateTime.map(_.toInstant()).orDie
           expiredLeases = leases.collect {
                             case (lease, lastUpdated)
-                                if lastUpdated.isBefore(now.minusMillis(expirationTime.toMillis)) =>
+                                if lastUpdated.isBefore(now.minusMillis(expirationTime.toMillis)) &&
+                                  !lease.checkpoint.contains(Left(SpecialCheckpoint.ShardEnd)) =>
                               lease
-                          }.toSet
+                          }
           _            <- log.info(s"Found expired leases: ${expiredLeases.map(_.key).mkString(",")}").when(expiredLeases.nonEmpty)
 
           shardsWithoutLease = shards.filterNot(shard => leases.map(_._1.key).toList.contains(shard))
@@ -166,7 +168,7 @@ object ShardAssignmentStrategy {
     nrLeasesToSteal: Int
   ): ZIO[Random with Logging, Nothing, List[Lease]] = {
     val leasesByWorker =
-      allLeases.groupBy(_.owner).collect { case (Some(owner), leases) => owner -> leases }.toMap
+      allLeases.groupBy(_.owner).collect { case (Some(owner), leases) => owner -> leases }
     val allWorkers     = allLeases.map(_.owner).collect { case Some(owner) => owner }.toSet ++ Set(workerId)
     // println(s"Planning to steal ${nrLeasesToSteal} leases")
 
