@@ -113,18 +113,18 @@ object NativeConsumerTest extends DefaultRunnableSpec {
             for {
               producedShardsAndSequence <-
                 produceSampleRecords(streamName, nrRecords, chunkSize = 500) // Deterministic order
-              records            <- Consumer
-                           .shardedStream(
-                             streamName,
-                             applicationName,
-                             Serde.asciiString,
-                             emitDiagnostic = onDiagnostic("worker1")
-                           )
-                           .flatMapPar(Int.MaxValue) {
-                             case (shard @ _, shardStream, checkpointer) => shardStream.tap(checkpointer.stage)
-                           }
-                           .take(nrRecords.toLong)
-                           .runCollect
+              _                  <- Consumer
+                     .shardedStream(
+                       streamName,
+                       applicationName,
+                       Serde.asciiString,
+                       emitDiagnostic = onDiagnostic("worker1")
+                     )
+                     .flatMapPar(Int.MaxValue) {
+                       case (shard @ _, shardStream, checkpointer) => shardStream.tap(checkpointer.stage)
+                     }
+                     .take(nrRecords.toLong)
+                     .runCollect
               checkpoints        <- getCheckpoints(applicationName)
               expectedCheckpoints =
                 producedShardsAndSequence.groupBy(_.shardId).view.mapValues(_.last.sequenceNumber).toMap

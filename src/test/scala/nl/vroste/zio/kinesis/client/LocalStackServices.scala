@@ -23,9 +23,9 @@ import zio.{ Has, ZIO, ZLayer, ZManaged }
 object LocalStackServices {
 
   private val region: Region          = Region.of("us-east-1")
-  private val kinesisUri: URI         = URI.create("http://localhost:4568")
-  private val cloudwatchUri: URI      = URI.create("http://localhost:4582")
-  private val dynamoDbUri: URI        = URI.create("http://localhost:4569")
+  private val kinesisUri: URI         = URI.create("http://localhost:4566")
+  private val cloudwatchUri: URI      = URI.create("http://localhost:4566")
+  private val dynamoDbUri: URI        = URI.create("http://localhost:4566")
   private val accessKey: String       = "dummy-key"
   private val secretAccessKey: String = "dummy-key"
 
