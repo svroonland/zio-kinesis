@@ -17,7 +17,7 @@ jobs:
   test213_jdk8:
     docker:
       - image: hseeberger/scala-sbt:8u265_1.3.13_2.13.3
-      - image: localstack/localstack
+      - image: localstack/localstack:0.11.4
         environment:
           LOCALSTACK_HOST: localstack
           SERVICES: 'kinesis,cloudwatch,dynamodb'
@@ -43,7 +43,7 @@ jobs:
   test213_jdk11:
     docker:
       - image: hseeberger/scala-sbt:11.0.8_1.3.13_2.13.3
-      - image: localstack/localstack
+      - image: localstack/localstack:0.11.4
         environment:
           LOCALSTACK_HOST: localstack
           SERVICES: 'kinesis,cloudwatch,dynamodb'
@@ -70,7 +70,7 @@ jobs:
   test212_jdk8:
     docker:
       - image: hseeberger/scala-sbt:8u265_1.3.13_2.12.12
-      - image: localstack/localstack
+      - image: localstack/localstack:0.11.4
         environment:
           LOCALSTACK_HOST: localstack
           SERVICES: 'kinesis,cloudwatch,dynamodb'
@@ -95,7 +95,7 @@ jobs:
   test212_jdk11:
     docker:
       - image: hseeberger/scala-sbt:11.0.7_1.3.13_2.12.12
-      - image: localstack/localstack
+      - image: localstack/localstack:0.11.4
         environment:
           LOCALSTACK_HOST: localstack
           SERVICES: 'kinesis,cloudwatch,dynamodb'
