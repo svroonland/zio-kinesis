@@ -112,7 +112,7 @@ private class DefaultLeaseCoordinator(
       updateStateWithDiagnosticEvents((s, now) => s.releaseLease(lease, now).updateLease(lease.release, now)) *>
       emitDiagnostic(DiagnosticEvent.ShardLeaseLost(lease.key))
 
-  def doReleaseLease(shard: String) =
+  def releaseLease(shard: String) =
     state.get.flatMap(
       _.getHeldLease(shard)
         .map(releaseHeldLease(_))
@@ -139,14 +139,6 @@ private class DefaultLeaseCoordinator(
         emitDiagnostic(DiagnosticEvent.LeaseReleased(lease.key))
   }
 
-  def doRegisterNewAcquiredLease(lease: Lease): ZIO[Clock, Nothing, Unit] =
-    for {
-      completed <- Promise.make[Nothing, Unit]
-      _         <- updateStateWithDiagnosticEvents((s, now) => s.updateLease(lease, now).holdLease(lease, completed, now)).orDie
-      _         <- emitDiagnostic(DiagnosticEvent.LeaseAcquired(lease.key, lease.checkpoint))
-      _         <- acquiredLeasesQueue.offer(lease -> completed)
-    } yield ()
-
   /**
    * Increases the lease counter of held leases. Other workers can observe this and know that this worker
    * is still active.
@@ -168,7 +160,7 @@ private class DefaultLeaseCoordinator(
              .tapError(e => log.error(s"Error renewing lease: ${e}"))
              .retry(settings.renewRetrySchedule) orElse (
              log.warn(s"Failed to renew lease for shard ${shardId}, releasing") *>
-               serialExecutionByShard(shardId)(doReleaseLease(shardId))
+               serialExecutionByShard(shardId)(releaseLease(shardId))
            )
          }
     // _             <- log.debug(s"Renewing ${leasesToRenew.size} leases done")
@@ -240,11 +232,19 @@ private class DefaultLeaseCoordinator(
                  ZIO.unit
              // Lease that is still owned by us but is not actively held
              case (_, None) if lease.owner.contains(workerId)                              =>
-               updateStateWithDiagnosticEvents(_.updateLease(lease, _)) *> doRegisterNewAcquiredLease(lease)
+               updateStateWithDiagnosticEvents(_.updateLease(lease, _)) *> registerNewAcquiredLease(lease)
              // Update of a lease that we do not hold or have not yet seen
              case _                                                                        =>
                updateStateWithDiagnosticEvents(_.updateLease(lease, _))
            }
+    } yield ()
+
+  private def registerNewAcquiredLease(lease: Lease): ZIO[Clock, Nothing, Unit] =
+    for {
+      completed <- Promise.make[Nothing, Unit]
+      _         <- updateStateWithDiagnosticEvents((s, now) => s.updateLease(lease, now).holdLease(lease, completed, now)).orDie
+      _         <- emitDiagnostic(DiagnosticEvent.LeaseAcquired(lease.key, lease.checkpoint))
+      _         <- acquiredLeasesQueue.offer(lease -> completed)
     } yield ()
 
   /**
@@ -274,7 +274,9 @@ private class DefaultLeaseCoordinator(
                  parentShardIds = shard.parentShardIds
                )
 
-               (table.createLease(applicationName, lease) <* registerNewAcquiredLease(lease)).catchAll {
+               (table.createLease(applicationName, lease) <* serialExecutionByShard(lease.key)(
+                 registerNewAcquiredLease(lease)
+               )).catchAll {
                  case Right(LeaseAlreadyExists) =>
                    log.info(s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?")
                  case Left(e)                   =>
@@ -309,7 +311,8 @@ private class DefaultLeaseCoordinator(
              .when(toTake.nonEmpty)
       _               <- foreachParNUninterrupted_(settings.maxParallelLeaseAcquisitions)(toTake) { lease =>
              val updatedLease = lease.claim(workerId)
-             (table.claimLease(applicationName, updatedLease) *> registerNewAcquiredLease(updatedLease)).catchAll {
+             (table.claimLease(applicationName, updatedLease) *>
+               serialExecutionByShard(updatedLease.key)(registerNewAcquiredLease(updatedLease))).catchAll {
                case Right(UnableToClaimLease) =>
                  log
                    .info(
@@ -321,10 +324,6 @@ private class DefaultLeaseCoordinator(
            }
     } yield ()
   }
-
-  // Puts it in the state and the queue
-  private def registerNewAcquiredLease(lease: Lease): ZIO[Clock, Nothing, Unit] =
-    serialExecutionByShard(lease.key)(doRegisterNewAcquiredLease(lease))
 
   override def acquiredLeases: ZStream[zio.clock.Clock, Throwable, AcquiredLease]                                     =
     ZStream
@@ -408,7 +407,7 @@ private class DefaultLeaseCoordinator(
                        updateCheckpoint(shardId, checkpoint, release, shardEnded = true).provide(env)
                      )
                    case None if release  =>
-                     serialExecutionByShard(shardId)(doReleaseLease(shardId).provide(env)).mapError(Left(_))
+                     serialExecutionByShard(shardId)(releaseLease(shardId).provide(env)).mapError(Left(_))
                    case None             =>
                      ZIO.unit
                  }
@@ -466,7 +465,7 @@ private class DefaultLeaseCoordinator(
         .map(_.heldLeases.values)
         .flatMap(ZIO.foreachParN_(settings.maxParallelLeaseRenewals)(_) {
           case (lease, _) =>
-            serialExecutionByShard(lease.key)(doReleaseLease(lease.key)).ignore // We do our best to release the lease
+            serialExecutionByShard(lease.key)(releaseLease(lease.key)).ignore // We do our best to release the lease
         }) *> log.debug("releaseLeases done")
 }
 
