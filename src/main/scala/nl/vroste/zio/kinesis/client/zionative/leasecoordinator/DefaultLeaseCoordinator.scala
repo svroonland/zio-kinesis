@@ -6,7 +6,6 @@ import nl.vroste.zio.kinesis.client.Record
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative._
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator.LeaseCommand.{
-  RefreshLease,
   ReleaseLease,
   RenewLease
 }
@@ -249,8 +248,6 @@ private class DefaultLeaseCoordinator(
           command.mapM {
             case RenewLease(shard, done)   =>
               doRenewLease(shard).foldM(done.fail, done.succeed).unit
-            case RefreshLease(lease, done) =>
-              doRefreshLease(lease).tap(done.succeed).unit.orDie // Cannot fail
             case ReleaseLease(shard, done) =>
               doReleaseLease(shard).foldM(done.fail, done.succeed).unit
           }
@@ -297,7 +294,7 @@ private class DefaultLeaseCoordinator(
                       ZIO
                         .foreachPar_(_) { lease =>
                           log.info(s"RefreshLeases: ${lease}") *>
-                            processCommand(LeaseCommand.RefreshLease(lease, _))
+                            serialExecutionByShard(lease.key)(doRefreshLease(lease))
                         }
                         .as(Chunk.unit)
                     )
@@ -514,10 +511,6 @@ private[zionative] object DefaultLeaseCoordinator {
   }
 
   object LeaseCommand {
-    final case class RefreshLease(lease: Lease, done: Promise[Nothing, Unit]) extends LeaseCommand {
-      val shard = lease.key
-    }
-
     final case class RenewLease(shard: String, done: Promise[Throwable, Unit]) extends LeaseCommand
 
     final case class ReleaseLease(shard: String, done: Promise[Throwable, Unit]) extends LeaseCommand
