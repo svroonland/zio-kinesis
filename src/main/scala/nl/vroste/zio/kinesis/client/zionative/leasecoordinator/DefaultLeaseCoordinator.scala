@@ -147,31 +147,6 @@ private class DefaultLeaseCoordinator(
            }
     } yield ()
 
-  // Lease renewal increases the counter only. May detect that lease was stolen
-  def doRenewLease(shard: String): ZIO[Logging with Clock, Throwable, Unit] =
-    state.get.map(_.getHeldLease(shard)).flatMap {
-      case Some((lease, leaseCompleted)) =>
-        val updatedLease = lease.increaseCounter
-        (for {
-          duration <- table
-                        .renewLease(applicationName, updatedLease)
-                        .timed
-                        .map(_._1)
-          _        <- updateStateWithDiagnosticEvents(_.updateLease(updatedLease, _)).mapError(Left(_))
-          _        <- emitDiagnostic(DiagnosticEvent.LeaseRenewed(updatedLease.key, duration))
-        } yield ()).catchAll {
-          // This means the lease was updated by another worker
-          case Right(LeaseObsolete) =>
-            leaseLost(lease, leaseCompleted) *>
-              log.info(s"Unable to renew lease for shard, lease counter was obsolete")
-          case Left(e)              =>
-            ZIO.fail(e)
-        }
-      case None                          =>
-        // Possible race condition between releasing the lease and the renewLeases cycle
-        ZIO.fail(new Exception(s"Unknown lease for shard ${shard}! Perhaps the lease was released simultaneously"))
-    }
-
   def doRefreshLease(lease: Lease): ZIO[Clock, Throwable, Unit] =
     for {
       currentState <- state.get
@@ -257,6 +232,31 @@ private class DefaultLeaseCoordinator(
          }
     // _             <- log.debug(s"Renewing ${leasesToRenew.size} leases done")
   } yield ()
+
+  // Lease renewal increases the counter only. May detect that lease was stolen
+  def doRenewLease(shard: String): ZIO[Logging with Clock, Throwable, Unit] =
+    state.get.map(_.getHeldLease(shard)).flatMap {
+      case Some((lease, leaseCompleted)) =>
+        val updatedLease = lease.increaseCounter
+        (for {
+          duration <- table
+                        .renewLease(applicationName, updatedLease)
+                        .timed
+                        .map(_._1)
+          _        <- updateStateWithDiagnosticEvents(_.updateLease(updatedLease, _)).mapError(Left(_))
+          _        <- emitDiagnostic(DiagnosticEvent.LeaseRenewed(updatedLease.key, duration))
+        } yield ()).catchAll {
+          // This means the lease was updated by another worker
+          case Right(LeaseObsolete) =>
+            leaseLost(lease, leaseCompleted) *>
+              log.info(s"Unable to renew lease for shard, lease counter was obsolete")
+          case Left(e)              =>
+            ZIO.fail(e)
+        }
+      case None                          =>
+        // Possible race condition between releasing the lease and the renewLeases cycle
+        ZIO.fail(new Exception(s"Unknown lease for shard ${shard}! Perhaps the lease was released simultaneously"))
+    }
 
   /**
    * For lease taking to work properly, we need to have the latest state of leases
