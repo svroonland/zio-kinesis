@@ -40,7 +40,7 @@ private[client] class DynamicConsumerFake(
         data = recData,
         partitionKey = s"${shardName}_$i",
         encryptionType = EncryptionType.NONE,
-        subSequenceNumber = Some(i),
+        subSequenceNumber = None,
         explicitHashKey = None,
         aggregated = false,
         shardId = shardName

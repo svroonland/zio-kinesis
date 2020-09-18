@@ -33,7 +33,7 @@ object DynamicConsumerFakeTest extends DefaultRunnableSpec {
       data = data,
       partitionKey = s"${shardName}_$sequenceNumber",
       encryptionType = EncryptionType.NONE,
-      subSequenceNumber = Some(sequenceNumber),
+      subSequenceNumber = None,
       explicitHashKey = None,
       aggregated = false,
       shardId = shardName
