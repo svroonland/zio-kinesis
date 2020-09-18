@@ -5,8 +5,6 @@ import java.time.{ DateTimeException, Instant }
 import nl.vroste.zio.kinesis.client.Record
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative._
-import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator.LeaseCommand.RenewLease
-import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator.LeaseCommand
 import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.{
   Lease,
   LeaseAlreadyExists,
@@ -55,7 +53,6 @@ private class DefaultLeaseCoordinator(
   state: Ref[State],
   acquiredLeasesQueue: Queue[(Lease, Promise[Nothing, Unit])],
   emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit,
-  commandQueue: Queue[LeaseCommand],
   serialExecutionByShard: SerialExecution[String],
   settings: LeaseCoordinationSettings,
   strategy: ShardAssignmentStrategy,
@@ -235,20 +232,6 @@ private class DefaultLeaseCoordinator(
     } yield ()
 
   /**
-   * Operations that update a held lease will interfere unless we run them sequentially for each shard
-   */
-  val runloop: ZStream[Logging with Clock with Random, Nothing, Unit] =
-    ZStream
-      .fromQueue(commandQueue)
-      .groupByKey(_.shard) {
-        case (shardId @ _, command) =>
-          command.mapM {
-            case RenewLease(shard, done) =>
-              doRenewLease(shard).foldM(done.fail, done.succeed).unit
-          }
-      }
-
-  /**
    * Increases the lease counter of held leases. Other workers can observe this and know that this worker
    * is still active.
    *
@@ -265,7 +248,7 @@ private class DefaultLeaseCoordinator(
                     }
     _             <- log.debug(s"Renewing ${leasesToRenew.size} leases")
     _             <- foreachParNUninterrupted_(settings.maxParallelLeaseRenewals)(leasesToRenew) { shardId =>
-           processCommand[Throwable, Unit](LeaseCommand.RenewLease(shardId, _))
+           serialExecutionByShard(shardId)(doRenewLease(shardId))
              .tapError(e => log.error(s"Error renewing lease: ${e}"))
              .retry(settings.renewRetrySchedule) orElse (
              log.warn(s"Failed to renew lease for shard ${shardId}, releasing") *>
@@ -388,14 +371,6 @@ private class DefaultLeaseCoordinator(
       leaseOpt <- state.get.map(_.currentLeases.get(shardId))
     } yield leaseOpt.flatMap(_.lease.checkpoint)
 
-  private def processCommand[E, A](makeCommand: Promise[E, A] => LeaseCommand): IO[E, A] =
-    for {
-      promise <- Promise.make[E, A]
-      command  = makeCommand(promise)
-      _       <- commandQueue.offer(command)
-      result  <- promise.await
-    } yield result
-
   override def makeCheckpointer(shardId: String) =
     for {
       staged            <- Ref.make(Option.empty[ExtendedSequenceNumber])
@@ -496,19 +471,6 @@ private class DefaultLeaseCoordinator(
 }
 
 private[zionative] object DefaultLeaseCoordinator {
-
-  /**
-   * Commands relating to leases that need to be executed non-concurrently per lease, because
-   * they may interfere with eachother
-   **/
-  sealed trait LeaseCommand {
-    val shard: String
-  }
-
-  object LeaseCommand {
-    final case class RenewLease(shard: String, done: Promise[Throwable, Unit]) extends LeaseCommand
-  }
-
   def make(
     applicationName: String,
     workerId: String,
@@ -523,17 +485,13 @@ private[zionative] object DefaultLeaseCoordinator {
     LeaseCoordinator
   ] =
     (for {
-      commandQueue    <- Queue
-                        .bounded[LeaseCommand](128)
-                        .toManaged(_.shutdown)
-                        .ensuring(log.debug("Command queue shutdown"))
       acquiredLeases  <- Queue
                           .bounded[(Lease, Promise[Nothing, Unit])](128)
                           .toManaged(_.shutdown)
                           .ensuring(log.debug("Acquired leases queue shutdown"))
       table           <- ZIO.service[LeaseRepository.Service].toManaged_
       state           <- Ref.make(State.empty).toManaged_
-      serialExecution <- SerialExecution.keyed[String]()
+      serialExecution <- SerialExecution.keyed[String]().ensuringFirst(log.debug("Shutting down runloop"))
       c                = new DefaultLeaseCoordinator(
             table,
             applicationName,
@@ -541,13 +499,11 @@ private[zionative] object DefaultLeaseCoordinator {
             state,
             acquiredLeases,
             emitDiagnostic,
-            commandQueue,
             serialExecution,
             settings,
             strategy,
             initialPosition
           )
-      _               <- c.runloop.runDrain.forkManaged.ensuringFirst(log.debug("Shutting down runloop"))
       _               <- ZManaged.finalizer(
              c.releaseLeases.tap(_ => log.debug("releaseLeases done"))
            ) // We need the runloop to be alive for this operation
