@@ -8,8 +8,7 @@ import nl.vroste.zio.kinesis.client.zionative._
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator.LeaseCommand.{
   RefreshLease,
   ReleaseLease,
-  RenewLease,
-  UpdateCheckpoint
+  RenewLease
 }
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator.LeaseCommand
 import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.{
@@ -248,13 +247,11 @@ private class DefaultLeaseCoordinator(
       .groupByKey(_.shard) {
         case (shardId @ _, command) =>
           command.mapM {
-            case UpdateCheckpoint(shard, checkpoint, done, release, shardEnded) =>
-              doUpdateCheckpoint(shard, checkpoint, release, shardEnded).foldM(done.fail, done.succeed).unit
-            case RenewLease(shard, done)                                        =>
+            case RenewLease(shard, done)   =>
               doRenewLease(shard).foldM(done.fail, done.succeed).unit
-            case RefreshLease(lease, done)                                      =>
+            case RefreshLease(lease, done) =>
               doRefreshLease(lease).tap(done.succeed).unit.orDie // Cannot fail
-            case ReleaseLease(shard, done)                                      =>
+            case ReleaseLease(shard, done) =>
               doReleaseLease(shard).foldM(done.fail, done.succeed).unit
           }
       }
@@ -414,7 +411,7 @@ private class DefaultLeaseCoordinator(
       maxSequenceNumber <- Ref.make(Option.empty[ExtendedSequenceNumber])
       shardEnded        <- Ref.make(false)
       permit            <- Semaphore.make(1)
-      env               <- ZIO.environment[Logging]
+      env               <- ZIO.environment[Logging with Clock with Random]
     } yield new Checkpointer with CheckpointerInternal {
       def checkpoint[R](
         retrySchedule: Schedule[Clock with R, Throwable, Any]
@@ -463,9 +460,8 @@ private class DefaultLeaseCoordinator(
                          .map(_ => Left(SpecialCheckpoint.ShardEnd))
                          .getOrElse(Right(sequenceNr))
 
-                     (processCommand(
-                       LeaseCommand
-                         .UpdateCheckpoint(shardId, checkpoint, _, release = release, shardEnded = checkpoint.isLeft)
+                     (serialExecutionByShard(shardId)(
+                       doUpdateCheckpoint(shardId, checkpoint, release, checkpoint.isLeft).provide(env)
                      ) *>
                        lastCheckpoint.set(checkpoint.toOption) *>
                        // only update when the staged record has not changed while checkpointing
@@ -476,8 +472,8 @@ private class DefaultLeaseCoordinator(
                        if release && endOfShardSeen && ((maxSequenceNumber.isEmpty && lastCheckpointValue.isEmpty) || lastCheckpointValue
                          .exists(maxSequenceNumber.contains)) =>
                      val checkpoint = Left(SpecialCheckpoint.ShardEnd)
-                     processCommand(
-                       LeaseCommand.UpdateCheckpoint(shardId, checkpoint, _, release = release, shardEnded = true)
+                     serialExecutionByShard(shardId)(
+                       doUpdateCheckpoint(shardId, checkpoint, release, true).provide(env)
                      )
                    case None if release  =>
                      processCommand(LeaseCommand.ReleaseLease(shardId, _)).mapError(Left(_))
@@ -523,13 +519,6 @@ private[zionative] object DefaultLeaseCoordinator {
     }
 
     final case class RenewLease(shard: String, done: Promise[Throwable, Unit]) extends LeaseCommand
-    final case class UpdateCheckpoint(
-      shard: String,
-      checkpoint: Either[SpecialCheckpoint, ExtendedSequenceNumber],
-      done: Promise[Either[Throwable, ShardLeaseLost.type], Unit],
-      release: Boolean,
-      shardEnded: Boolean
-    ) extends LeaseCommand
 
     final case class ReleaseLease(shard: String, done: Promise[Throwable, Unit]) extends LeaseCommand
   }
