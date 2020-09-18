@@ -112,7 +112,7 @@ private class DefaultLeaseCoordinator(
       updateStateWithDiagnosticEvents((s, now) => s.releaseLease(lease, now).updateLease(lease.release, now)) *>
       emitDiagnostic(DiagnosticEvent.ShardLeaseLost(lease.key))
 
-  def doUpdateCheckpoint(
+  def updateCheckpoint(
     shard: String,
     checkpoint: Either[SpecialCheckpoint, ExtendedSequenceNumber],
     release: Boolean,
@@ -428,7 +428,7 @@ private class DefaultLeaseCoordinator(
                          .getOrElse(Right(sequenceNr))
 
                      (serialExecutionByShard(shardId)(
-                       doUpdateCheckpoint(shardId, checkpoint, release, checkpoint.isLeft).provide(env)
+                       updateCheckpoint(shardId, checkpoint, release, shardEnded = checkpoint.isLeft).provide(env)
                      ) *>
                        lastCheckpoint.set(checkpoint.toOption) *>
                        // only update when the staged record has not changed while checkpointing
@@ -440,7 +440,7 @@ private class DefaultLeaseCoordinator(
                          .exists(maxSequenceNumber.contains)) =>
                      val checkpoint = Left(SpecialCheckpoint.ShardEnd)
                      serialExecutionByShard(shardId)(
-                       doUpdateCheckpoint(shardId, checkpoint, release, true).provide(env)
+                       updateCheckpoint(shardId, checkpoint, release, shardEnded = true).provide(env)
                      )
                    case None if release  =>
                      serialExecutionByShard(shardId)(doReleaseLease(shardId).provide(env)).mapError(Left(_))
