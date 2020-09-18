@@ -112,41 +112,6 @@ private class DefaultLeaseCoordinator(
       updateStateWithDiagnosticEvents((s, now) => s.releaseLease(lease, now).updateLease(lease.release, now)) *>
       emitDiagnostic(DiagnosticEvent.ShardLeaseLost(lease.key))
 
-  def updateCheckpoint(
-    shard: String,
-    checkpoint: Either[SpecialCheckpoint, ExtendedSequenceNumber],
-    release: Boolean,
-    shardEnded: Boolean
-  ): ZIO[Logging with Clock with Random, Either[Throwable, ShardLeaseLost.type], Unit] =
-    for {
-      heldleaseWithComplete  <- state.get
-                                 .map(_.heldLeases.get(shard))
-                                 .someOrFail(Right(ShardLeaseLost): Either[Throwable, ShardLeaseLost.type])
-      (lease, leaseCompleted) = heldleaseWithComplete
-      updatedLease            = lease.copy(
-                       counter = lease.counter + 1,
-                       checkpoint = Some(checkpoint),
-                       owner = lease.owner.filterNot(_ => release)
-                     )
-      _                      <- (table.updateCheckpoint(applicationName, updatedLease) <*
-               emitDiagnostic(DiagnosticEvent.Checkpoint(shard, checkpoint))).catchAll {
-             case Right(LeaseObsolete) =>
-               leaseLost(updatedLease, leaseCompleted).orDie *>
-                 ZIO.fail(Right(ShardLeaseLost))
-             case Left(e)              =>
-               log.warn(s"Error updating checkpoint: $e") *> ZIO.fail(Left(e))
-           }.onSuccess { _ =>
-             (updateStateWithDiagnosticEvents(_.updateLease(updatedLease, _)) *>
-               (
-                 leaseCompleted.succeed(()) *>
-                   updateStateWithDiagnosticEvents(_.releaseLease(updatedLease, _)) *>
-                   emitDiagnostic(DiagnosticEvent.LeaseReleased(shard)) *>
-                   emitDiagnostic(DiagnosticEvent.ShardEnded(shard)).when(shardEnded) <*
-                   takeLeases.fork.when(shardEnded)
-               ).when(release)).orDie
-           }
-    } yield ()
-
   def doReleaseLease(shard: String) =
     state.get.flatMap(
       _.getHeldLease(shard)
@@ -459,6 +424,41 @@ private class DefaultLeaseCoordinator(
       override def markEndOfShard(): UIO[Unit] =
         shardEnded.set(true)
     }
+
+  private def updateCheckpoint(
+    shard: String,
+    checkpoint: Either[SpecialCheckpoint, ExtendedSequenceNumber],
+    release: Boolean,
+    shardEnded: Boolean
+  ): ZIO[Logging with Clock with Random, Either[Throwable, ShardLeaseLost.type], Unit] =
+    for {
+      heldleaseWithComplete  <- state.get
+                                 .map(_.heldLeases.get(shard))
+                                 .someOrFail(Right(ShardLeaseLost): Either[Throwable, ShardLeaseLost.type])
+      (lease, leaseCompleted) = heldleaseWithComplete
+      updatedLease            = lease.copy(
+                       counter = lease.counter + 1,
+                       checkpoint = Some(checkpoint),
+                       owner = lease.owner.filterNot(_ => release)
+                     )
+      _                      <- (table.updateCheckpoint(applicationName, updatedLease) <*
+               emitDiagnostic(DiagnosticEvent.Checkpoint(shard, checkpoint))).catchAll {
+             case Right(LeaseObsolete) =>
+               leaseLost(updatedLease, leaseCompleted).orDie *>
+                 ZIO.fail(Right(ShardLeaseLost))
+             case Left(e)              =>
+               log.warn(s"Error updating checkpoint: $e") *> ZIO.fail(Left(e))
+           }.onSuccess { _ =>
+             (updateStateWithDiagnosticEvents(_.updateLease(updatedLease, _)) *>
+               (
+                 leaseCompleted.succeed(()) *>
+                   updateStateWithDiagnosticEvents(_.releaseLease(updatedLease, _)) *>
+                   emitDiagnostic(DiagnosticEvent.LeaseReleased(shard)) *>
+                   emitDiagnostic(DiagnosticEvent.ShardEnded(shard)).when(shardEnded) <*
+                   takeLeases.fork.when(shardEnded)
+               ).when(release)).orDie
+           }
+    } yield ()
 
   def releaseLeases: ZIO[Logging with Clock, Nothing, Unit] =
     log.debug("Starting releaseLeases") *>
