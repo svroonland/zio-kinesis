@@ -147,30 +147,6 @@ private class DefaultLeaseCoordinator(
            }
     } yield ()
 
-  def doRefreshLease(lease: Lease): ZIO[Clock, Throwable, Unit] =
-    for {
-      currentState <- state.get
-      shardId       = lease.key
-      _            <- (currentState.getLease(shardId), currentState.getHeldLease(shardId)) match {
-             // This is one of our held leases, we expect it to be unchanged
-             case (Some(previousLease), Some(_)) if previousLease.counter == lease.counter =>
-               ZIO.unit
-             // This is our held lease that was stolen by another worker
-             case (Some(previousLease), Some((_, leaseCompleted)))                         =>
-               if (previousLease.counter != lease.counter && previousLease.owner != lease.owner)
-                 leaseLost(lease, leaseCompleted)
-               else
-                 // We have ourselves updated this lease by eg checkpointing or renewing
-                 ZIO.unit
-             // Lease that is still owned by us but is not actively held
-             case (_, None) if lease.owner.contains(workerId)                              =>
-               updateStateWithDiagnosticEvents(_.updateLease(lease, _)) *> doRegisterNewAcquiredLease(lease)
-             // Update of a lease that we do not hold or have not yet seen
-             case _                                                                        =>
-               updateStateWithDiagnosticEvents(_.updateLease(lease, _))
-           }
-    } yield ()
-
   def doReleaseLease(shard: String) =
     state.get.flatMap(
       _.getHeldLease(shard)
@@ -223,7 +199,7 @@ private class DefaultLeaseCoordinator(
                     }
     _             <- log.debug(s"Renewing ${leasesToRenew.size} leases")
     _             <- foreachParNUninterrupted_(settings.maxParallelLeaseRenewals)(leasesToRenew) { shardId =>
-           serialExecutionByShard(shardId)(doRenewLease(shardId))
+           serialExecutionByShard(shardId)(renewLease(shardId))
              .tapError(e => log.error(s"Error renewing lease: ${e}"))
              .retry(settings.renewRetrySchedule) orElse (
              log.warn(s"Failed to renew lease for shard ${shardId}, releasing") *>
@@ -234,7 +210,7 @@ private class DefaultLeaseCoordinator(
   } yield ()
 
   // Lease renewal increases the counter only. May detect that lease was stolen
-  def doRenewLease(shard: String): ZIO[Logging with Clock, Throwable, Unit] =
+  private def renewLease(shard: String): ZIO[Logging with Clock, Throwable, Unit] =
     state.get.map(_.getHeldLease(shard)).flatMap {
       case Some((lease, leaseCompleted)) =>
         val updatedLease = lease.increaseCounter
@@ -272,7 +248,7 @@ private class DefaultLeaseCoordinator(
                       ZIO
                         .foreachPar_(_) { lease =>
                           log.info(s"RefreshLeases: ${lease}") *>
-                            serialExecutionByShard(lease.key)(doRefreshLease(lease))
+                            serialExecutionByShard(lease.key)(refreshLease(lease))
                         }
                         .as(Chunk.unit)
                     )
@@ -280,6 +256,30 @@ private class DefaultLeaseCoordinator(
                     .timed
                     .map(_._1)
       _        <- log.debug(s"Refreshing leases took ${duration.toMillis}")
+    } yield ()
+
+  private def refreshLease(lease: Lease): ZIO[Clock, Throwable, Unit] =
+    for {
+      currentState <- state.get
+      shardId       = lease.key
+      _            <- (currentState.getLease(shardId), currentState.getHeldLease(shardId)) match {
+             // This is one of our held leases, we expect it to be unchanged
+             case (Some(previousLease), Some(_)) if previousLease.counter == lease.counter =>
+               ZIO.unit
+             // This is our held lease that was stolen by another worker
+             case (Some(previousLease), Some((_, leaseCompleted)))                         =>
+               if (previousLease.counter != lease.counter && previousLease.owner != lease.owner)
+                 leaseLost(lease, leaseCompleted)
+               else
+                 // We have ourselves updated this lease by eg checkpointing or renewing
+                 ZIO.unit
+             // Lease that is still owned by us but is not actively held
+             case (_, None) if lease.owner.contains(workerId)                              =>
+               updateStateWithDiagnosticEvents(_.updateLease(lease, _)) *> doRegisterNewAcquiredLease(lease)
+             // Update of a lease that we do not hold or have not yet seen
+             case _                                                                        =>
+               updateStateWithDiagnosticEvents(_.updateLease(lease, _))
+           }
     } yield ()
 
   /**
