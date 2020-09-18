@@ -2,7 +2,6 @@ package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
 
 import java.time.{ DateTimeException, Instant }
 
-import nl.vroste.zio.kinesis.client.Record
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative._
 import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.{
@@ -337,20 +336,14 @@ private class DefaultLeaseCoordinator(
 
   override def makeCheckpointer(shardId: String) =
     for {
-      staged            <- Ref.make(Option.empty[ExtendedSequenceNumber])
-      lastCheckpoint    <- Ref.make(Option.empty[ExtendedSequenceNumber])
-      maxSequenceNumber <- Ref.make(Option.empty[ExtendedSequenceNumber])
-      shardEnded        <- Ref.make(false)
-      permit            <- Semaphore.make(1)
-      env               <- ZIO.environment[Logging with Clock with Random]
-    } yield new CheckpointerImpl(
+      state  <- Ref.make(DefaultCheckpointer.State.empty)
+      permit <- Semaphore.make(1)
+      env    <- ZIO.environment[Logging with Clock with Random]
+    } yield new DefaultCheckpointer(
       shardId,
       env,
-      maxSequenceNumber,
-      lastCheckpoint,
-      shardEnded,
+      state,
       permit,
-      staged,
       (checkpoint, release, shardEnded) =>
         serialExecutionByShard(shardId)(updateCheckpoint(shardId, checkpoint, release, shardEnded).provide(env)),
       releaseLease(shardId).provide(env)

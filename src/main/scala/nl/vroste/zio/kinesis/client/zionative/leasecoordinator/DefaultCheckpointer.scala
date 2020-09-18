@@ -1,21 +1,17 @@
 package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
 import nl.vroste.zio.kinesis.client.Record
 import nl.vroste.zio.kinesis.client.zionative._
+import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultCheckpointer.State
 import zio.clock.Clock
 import zio.logging.{ log, Logging }
 import zio.random.Random
 import zio._
 
-sealed trait CheckpointAction
-
-private[zionative] class CheckpointerImpl(
+private[zionative] class DefaultCheckpointer(
   shardId: String,
   env: Clock with Logging with Random,
-  maxSequenceNumber: Ref[Option[ExtendedSequenceNumber]],
-  lastCheckpoint: Ref[Option[ExtendedSequenceNumber]],
-  shardEnded: Ref[Boolean],
+  state: Ref[State],
   permit: Semaphore,
-  staged: Ref[Option[ExtendedSequenceNumber]],
   updateCheckpoint: (
     Either[SpecialCheckpoint, ExtendedSequenceNumber],
     Boolean, // release
@@ -31,8 +27,8 @@ private[zionative] class CheckpointerImpl(
       .retry(retrySchedule +++ Schedule.stop) // Only retry Left[Throwable]
 
   override def checkpointAndRelease: ZIO[Any, Either[Throwable, ShardLeaseLost.type], Unit] =
-    (maxSequenceNumber.get zip lastCheckpoint.get zip shardEnded.get).flatMap {
-      case ((maxSeqNr, lastCheckpoint), shardEnded) =>
+    state.get.flatMap {
+      case State(_, lastCheckpoint, maxSeqNr, shardEnded) =>
         log
           .debug(
             s"Checkpoint and release for shard ${shardId}, maxSeqNr=${maxSeqNr}, " +
@@ -59,11 +55,12 @@ private[zionative] class CheckpointerImpl(
      */
     permit.withPermit {
       for {
-        lastStaged          <- staged.get
-        maxSequenceNumber   <- maxSequenceNumber.get
-        endOfShardSeen      <- shardEnded.get
-        lastCheckpointValue <- lastCheckpoint.get
-        _                   <- lastStaged match {
+        s                <- state.get
+        lastStaged        = s.staged
+        maxSequenceNumber = s.maxSequenceNumber
+        endOfShardSeen    = s.shardEnded
+        lastCheckpoint    = s.lastCheckpoint
+        _                <- lastStaged match {
                case Some(sequenceNr) =>
                  val checkpoint: Either[SpecialCheckpoint, ExtendedSequenceNumber] =
                    maxSequenceNumber
@@ -72,13 +69,15 @@ private[zionative] class CheckpointerImpl(
                      .getOrElse(Right(sequenceNr))
 
                  (updateCheckpoint(checkpoint, release, checkpoint.isLeft) *>
-                   lastCheckpoint.set(checkpoint.toOption) *>
+                   state.update(_.copy(lastCheckpoint = checkpoint.toOption)) *>
                    // only update when the staged record has not changed while checkpointing
-                   staged.updateSome { case Some(s) if s == sequenceNr => None }).uninterruptible
+                   state.updateSome {
+                     case s @ State(Some(staged), _, _, _) if staged == sequenceNr => s.copy(staged = None)
+                   }).uninterruptible
                // Either the last checkpoint is the current max checkpoint (i.e. an empty poll at shard end)
                // or we only get that empty poll (when having resumed the shard after the last sequence nr)
                case None
-                   if release && endOfShardSeen && ((maxSequenceNumber.isEmpty && lastCheckpointValue.isEmpty) || lastCheckpointValue
+                   if release && endOfShardSeen && ((maxSequenceNumber.isEmpty && lastCheckpoint.isEmpty) || lastCheckpoint
                      .exists(maxSequenceNumber.contains)) =>
                  val checkpoint = Left(SpecialCheckpoint.ShardEnd)
 
@@ -93,11 +92,24 @@ private[zionative] class CheckpointerImpl(
     }
 
   override def stage(r: Record[_]): zio.UIO[Unit] =
-    staged.set(Some(ExtendedSequenceNumber(r.sequenceNumber, r.subSequenceNumber.getOrElse(0L))))
+    state.update(_.copy(staged = Some(ExtendedSequenceNumber(r.sequenceNumber, r.subSequenceNumber.getOrElse(0L)))))
 
   override def setMaxSequenceNumber(lastSequenceNumber: ExtendedSequenceNumber): UIO[Unit] =
-    maxSequenceNumber.set(Some(lastSequenceNumber))
+    state.update(_.copy(maxSequenceNumber = Some(lastSequenceNumber)))
 
   override def markEndOfShard(): UIO[Unit] =
-    shardEnded.set(true)
+    state.update(_.copy(shardEnded = true))
+}
+
+object DefaultCheckpointer {
+  case class State(
+    staged: Option[ExtendedSequenceNumber],
+    lastCheckpoint: Option[ExtendedSequenceNumber],
+    maxSequenceNumber: Option[ExtendedSequenceNumber],
+    shardEnded: Boolean
+  )
+
+  object State {
+    val empty = State(None, None, None, false)
+  }
 }
