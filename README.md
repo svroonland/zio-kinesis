@@ -26,6 +26,7 @@ More beta users and feedback are of course welcome.
   * [Metrics](#metrics)
 - [DynamicConsumer](#dynamicconsumer)
   * [Basic usage using `consumeWith`](#basic-usage-using--consumewith--1)
+  * [DynamicConsumerFake](#dynamicconsumerfake)
   * [Advanced usage](#advanced-usage)
 - [Client and AdminClient](#client-and-adminclient)
 - [Running tests and more usage examples](#running-tests-and-more-usage-examples)
@@ -427,6 +428,57 @@ object DynamicConsumerConsumeWithExample extends zio.App {
       .exitCode
 }
 ``` 
+
+### DynamicConsumerFake
+
+Often it's extremely useful to test your consumer logic without the overhead of a full stack or localstack Kinesis. To
+this end we provide a fake ZLayer instance of the `DynamicConsumer` accessed via `DynamicConsumer.fake`.
+
+Note this also provides full checkpointing functionality which can be tracked via a `Ref` passed into the `refCheckpointedList` parameter.  
+
+```scala
+package nl.vroste.zio.kinesis.client.examples
+
+import java.nio.ByteBuffer
+
+import nl.vroste.zio.kinesis.client.serde.Serde
+import nl.vroste.zio.kinesis.client.{ DynamicConsumer, _ }
+import zio._
+import zio.clock.Clock
+import zio.console.{ putStrLn, Console }
+import zio.duration._
+import zio.logging.Logging
+import zio.stream.ZStream
+
+/**
+ * Basic usage example for `DynamicConsumerFake`
+ */
+object DynamicConsumerFakeExample extends zio.App {
+  val loggingLayer: ZLayer[Any, Nothing, Logging] =
+    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
+
+  private val shards: ZStream[Any, Nothing, (String, ZStream[Any, Throwable, ByteBuffer])] =
+    DynamicConsumerFake.shardsFromStreams(Serde.asciiString, ZStream("msg1", "msg2"), ZStream("msg3", "msg4"))
+
+  override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
+    for {
+      refCheckpointedList <- Ref.make[Seq[Any]](Seq.empty[String])
+      exitCode            <- DynamicConsumer
+                    .consumeWith(
+                      streamName = "my-stream",
+                      applicationName = "my-application",
+                      deserializer = Serde.asciiString,
+                      workerIdentifier = "worker1",
+                      checkpointBatchSize = 1000L,
+                      checkpointDuration = 5.minutes
+                    )(record => putStrLn(s"Processing record $record"))
+                    .provideCustomLayer(DynamicConsumer.fake(shards, refCheckpointedList) ++ loggingLayer)
+                    .exitCode
+      _                   <- putStrLn(s"refCheckpointedList=$refCheckpointedList")
+    } yield exitCode
+
+}
+```
   
 ### Advanced usage
 If you want more control over your stream, `DynamicConsumer.shardedStream` can be used:

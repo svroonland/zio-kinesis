@@ -40,8 +40,8 @@ private[client] class DynamicConsumerFake(
         data = recData,
         partitionKey = s"${shardName}_$i",
         encryptionType = EncryptionType.NONE,
-        subSequenceNumber = i,
-        explicitHashKey = "",
+        subSequenceNumber = Some(i),
+        explicitHashKey = None,
         aggregated = false,
         shardId = shardName
       )).orDie
@@ -54,7 +54,8 @@ private[client] class DynamicConsumerFake(
               (
                 shardName,
                 stream.zipWithIndex.mapM {
-                  case (bb, i) => deserializer.deserialize(bb).flatMap(record(shardName, i, _)).provide(env)
+                  case (byteBuffer, i) =>
+                    deserializer.deserialize(byteBuffer).flatMap(record(shardName, i, _)).provide(env)
                 },
                 checkpointer
               )
@@ -67,7 +68,7 @@ private[client] class DynamicConsumerFake(
 }
 
 object CheckpointerFake {
-  // TODO: see if we can get rid of `Any` to regain type safety
+
   def make(refCheckpointedList: Ref[Seq[_]]): Task[Checkpointer] =
     for {
       latestStaged <- Ref.make[Option[Record[_]]](None)
@@ -91,6 +92,16 @@ object CheckpointerFake {
 
 object DynamicConsumerFake {
 
+  /**
+   * A constructor for a fake shard, for use with the `DynamicConsumer.fake` ZLayer function. It takes a list of `List[T]` and produces
+   * a ZStream of fake shards from it.
+   * @param serializer A `Serializer` used to convert elements to the ByteBuffer type expected by `DynamicConsumer`
+   * @param lists list of shards - each shard is represented by a List of `T`
+   * @tparam R Environment for `Serializer`
+   * @tparam T Type of the list element
+   * @return A ZStream of fake shard with a generated shard name of the form `shardN`, where `N` is a zero based index
+   * @see `DynamicConsumer.fake`
+   */
   def shardsFromIterables[R, T](
     serializer: Serializer[R, T],
     lists: List[T]*
@@ -101,6 +112,16 @@ object DynamicConsumerFake {
     ZStream.fromIterable(listOfShards)
   }
 
+  /**
+   * A constructor for a fake shard, for use with the `DynamicConsumer.fake` ZLayer function. It takes a list ZStream of type `T` and produces
+   * a ZStream of fake shards from it.
+   * @param serializer A `Serializer` used to convert elements to the ByteBuffer type expected by `DynamicConsumer`
+   * @param streams list of shards - each shard is represented by a ZStream of `T`
+   * @tparam R Environment for `Serializer`
+   * @tparam T Type of the ZStream element
+   * @return A ZStream of fake shard with a generated shard name of the form `shardN`, where `N` is a zero based index
+   * @see `DynamicConsumer.fake`
+   */
   def shardsFromStreams[R, T](
     serializer: Serializer[R, T],
     streams: ZStream[R, Throwable, T]*

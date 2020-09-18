@@ -36,6 +36,14 @@ object DynamicConsumer {
       new DynamicConsumerLive(_, _, _, _)
     }
 
+  /**
+   * Implements a fake `DynamicConsumer` that also offer full checkpointing functionality that can be tracked using the
+   * `refCheckpointedList` parameter.
+   * @param shards A ZStream that is a fake representation of a Kinesis shard. There are helper constructors to create
+   *               these - see [[DynamicConsumerFake.shardsFromIterables]] and [[DynamicConsumerFake.shardsFromStreams]]
+   * @param refCheckpointedList A Ref that will be used to store the checkpointed records
+   * @return A ZLayer of the fake `DynamicConsumer` implementation
+   */
   def fake(
     shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, ByteBuffer])],
     refCheckpointedList: Ref[Seq[Any]]

@@ -5,17 +5,19 @@ import java.time.OffsetDateTime
 
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
-import zio.{ Ref, ZIO }
+import zio.clock.Clock
 import zio.console.{ putStrLn, Console }
 import zio.duration._
-import zio.logging.slf4j.Slf4jLogger
+import zio.logging.Logging
 import zio.stream.ZStream
 import zio.test._
+import zio.{ Ref, ZLayer }
 
 object DynamicConsumerFakeTest extends DefaultRunnableSpec {
   private type Shard = ZStream[Any, Nothing, (String, ZStream[Any, Throwable, ByteBuffer])]
 
-  private val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
+  val loggingLayer: ZLayer[Any, Nothing, Logging] =
+    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   private val shardsFromIterables: Shard =
     DynamicConsumerFake.shardsFromIterables(Serde.asciiString, List("msg1", "msg2"), List("msg3", "msg4"))
@@ -31,8 +33,8 @@ object DynamicConsumerFakeTest extends DefaultRunnableSpec {
       data = data,
       partitionKey = s"${shardName}_$sequenceNumber",
       encryptionType = EncryptionType.NONE,
-      subSequenceNumber = sequenceNumber,
-      explicitHashKey = "",
+      subSequenceNumber = Some(sequenceNumber),
+      explicitHashKey = None,
       aggregated = false,
       shardId = shardName
     )
@@ -68,7 +70,7 @@ object DynamicConsumerFakeTest extends DefaultRunnableSpec {
           )
         )
       },
-      testM("read from streams when using shardsFromIterables") {
+      testM("read from streams when using shardsFromStreams") {
         for {
           checkpointedList <- program(shardsFromStreams)
         } yield assert(checkpointedList)(
