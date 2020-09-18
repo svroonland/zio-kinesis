@@ -1,22 +1,17 @@
 package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
 import nl.vroste.zio.kinesis.client.Record
 import nl.vroste.zio.kinesis.client.zionative._
-import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultCheckpointer.State
+import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultCheckpointer.{ State, UpdateCheckpoint }
 import zio.clock.Clock
 import zio.logging.{ log, Logging }
-import zio.random.Random
 import zio._
 
 private[zionative] class DefaultCheckpointer(
   shardId: String,
-  env: Clock with Logging with Random,
+  env: Logging,
   state: Ref[State],
   permit: Semaphore,
-  updateCheckpoint: (
-    Either[SpecialCheckpoint, ExtendedSequenceNumber],
-    Boolean, // release
-    Boolean  // shard ended
-  ) => ZIO[Any, Either[Throwable, ShardLeaseLost.type], Unit],
+  updateCheckpoint: UpdateCheckpoint,
   releaseLease: ZIO[Any, Throwable, Unit]
 ) extends Checkpointer
     with CheckpointerInternal {
@@ -50,8 +45,6 @@ private[zionative] class DefaultCheckpointer(
      *
    * If checkpointing fails, the last staged sequence number is left unchanged, even it has already been
      * updated.
-     *
-   * TODO make a test for that: staging while checkpointing should not lose the staged checkpoint.
      */
     permit.withPermit {
       for {
@@ -101,7 +94,13 @@ private[zionative] class DefaultCheckpointer(
     state.update(_.copy(shardEnded = true))
 }
 
-object DefaultCheckpointer {
+private[zionative] object DefaultCheckpointer {
+  type UpdateCheckpoint = (
+    Either[SpecialCheckpoint, ExtendedSequenceNumber],
+    Boolean, // release
+    Boolean  // shard ended
+  ) => ZIO[Any, Either[Throwable, ShardLeaseLost.type], Unit]
+
   case class State(
     staged: Option[ExtendedSequenceNumber],
     lastCheckpoint: Option[ExtendedSequenceNumber],
