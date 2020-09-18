@@ -5,10 +5,7 @@ import java.time.{ DateTimeException, Instant }
 import nl.vroste.zio.kinesis.client.Record
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative._
-import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator.LeaseCommand.{
-  ReleaseLease,
-  RenewLease
-}
+import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator.LeaseCommand.RenewLease
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator.LeaseCommand
 import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.{
   Lease,
@@ -246,10 +243,8 @@ private class DefaultLeaseCoordinator(
       .groupByKey(_.shard) {
         case (shardId @ _, command) =>
           command.mapM {
-            case RenewLease(shard, done)   =>
+            case RenewLease(shard, done) =>
               doRenewLease(shard).foldM(done.fail, done.succeed).unit
-            case ReleaseLease(shard, done) =>
-              doReleaseLease(shard).foldM(done.fail, done.succeed).unit
           }
       }
 
@@ -274,7 +269,7 @@ private class DefaultLeaseCoordinator(
              .tapError(e => log.error(s"Error renewing lease: ${e}"))
              .retry(settings.renewRetrySchedule) orElse (
              log.warn(s"Failed to renew lease for shard ${shardId}, releasing") *>
-               processCommand[Throwable, Unit](LeaseCommand.ReleaseLease(shardId, _))
+               serialExecutionByShard(shardId)(doReleaseLease(shardId))
            )
          }
     // _             <- log.debug(s"Renewing ${leasesToRenew.size} leases done")
@@ -473,7 +468,7 @@ private class DefaultLeaseCoordinator(
                        doUpdateCheckpoint(shardId, checkpoint, release, true).provide(env)
                      )
                    case None if release  =>
-                     processCommand(LeaseCommand.ReleaseLease(shardId, _)).mapError(Left(_))
+                     serialExecutionByShard(shardId)(doReleaseLease(shardId).provide(env)).mapError(Left(_))
                    case None             =>
                      ZIO.unit
                  }
@@ -496,7 +491,7 @@ private class DefaultLeaseCoordinator(
         .map(_.heldLeases.values)
         .flatMap(ZIO.foreachParN_(settings.maxParallelLeaseRenewals)(_) {
           case (lease, _) =>
-            processCommand(LeaseCommand.ReleaseLease(lease.key, _)).ignore // We do our best to release the lease
+            serialExecutionByShard(lease.key)(doReleaseLease(lease.key)).ignore // We do our best to release the lease
         }) *> log.debug("releaseLeases done")
 }
 
@@ -512,8 +507,6 @@ private[zionative] object DefaultLeaseCoordinator {
 
   object LeaseCommand {
     final case class RenewLease(shard: String, done: Promise[Throwable, Unit]) extends LeaseCommand
-
-    final case class ReleaseLease(shard: String, done: Promise[Throwable, Unit]) extends LeaseCommand
   }
 
   def make(
