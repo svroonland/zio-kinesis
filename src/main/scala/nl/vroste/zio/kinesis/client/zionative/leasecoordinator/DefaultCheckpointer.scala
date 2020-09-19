@@ -61,7 +61,7 @@ private[zionative] class DefaultCheckpointer(
                      .map(_ => Left(SpecialCheckpoint.ShardEnd))
                      .getOrElse(Right(sequenceNr))
 
-                 (updateCheckpoint(checkpoint, release, checkpoint.isLeft) *>
+                 (updateCheckpoint(checkpoint, release) *>
                    state.update(_.copy(lastCheckpoint = checkpoint.toOption)) *>
                    // only update when the staged record has not changed while checkpointing
                    state.updateSome {
@@ -74,7 +74,7 @@ private[zionative] class DefaultCheckpointer(
                      .exists(maxSequenceNumber.contains)) =>
                  val checkpoint = Left(SpecialCheckpoint.ShardEnd)
 
-                 updateCheckpoint(checkpoint, release, true)
+                 updateCheckpoint(checkpoint, release)
 
                case None if release  =>
                  releaseLease.mapError(Left(_))
@@ -97,8 +97,7 @@ private[zionative] class DefaultCheckpointer(
 private[zionative] object DefaultCheckpointer {
   type UpdateCheckpoint = (
     Either[SpecialCheckpoint, ExtendedSequenceNumber],
-    Boolean, // release
-    Boolean  // shard ended
+    Boolean // release
   ) => ZIO[Any, Either[Throwable, ShardLeaseLost.type], Unit]
 
   case class State(

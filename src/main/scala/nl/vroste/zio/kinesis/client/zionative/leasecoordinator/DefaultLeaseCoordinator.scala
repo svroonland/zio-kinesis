@@ -344,16 +344,15 @@ private class DefaultLeaseCoordinator(
       env,
       state,
       permit,
-      (checkpoint, release, shardEnded) =>
-        serialExecutionByShard(shardId)(updateCheckpoint(shardId, checkpoint, release, shardEnded).provide(env)),
+      (checkpoint, release) =>
+        serialExecutionByShard(shardId)(updateCheckpoint(shardId, checkpoint, release).provide(env)),
       releaseLease(shardId).provide(env)
     )
 
   private def updateCheckpoint(
     shard: String,
     checkpoint: Either[SpecialCheckpoint, ExtendedSequenceNumber],
-    release: Boolean,
-    shardEnded: Boolean
+    release: Boolean
   ): ZIO[Logging with Clock with Random, Either[Throwable, ShardLeaseLost.type], Unit] =
     for {
       heldleaseWithComplete  <- state.get
@@ -365,6 +364,7 @@ private class DefaultLeaseCoordinator(
                        checkpoint = Some(checkpoint),
                        owner = lease.owner.filterNot(_ => release)
                      )
+      shardEnded              = checkpoint == Left(SpecialCheckpoint.ShardEnd)
       _                      <- (table.updateCheckpoint(applicationName, updatedLease) <*
                emitDiagnostic(DiagnosticEvent.Checkpoint(shard, checkpoint))).catchAll {
              case Right(LeaseObsolete) =>
