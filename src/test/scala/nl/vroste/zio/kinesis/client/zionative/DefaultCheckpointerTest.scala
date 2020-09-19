@@ -11,6 +11,7 @@ import zio.test._
 import zio.test.Assertion._
 
 object DefaultCheckpointerTest extends DefaultRunnableSpec {
+  type Checkpoint = Either[SpecialCheckpoint, ExtendedSequenceNumber]
   val record1 = Record("shard1", "0", Instant.now, "bla", "bla", EncryptionType.NONE, None, None, false)
   val record2 = Record("shard1", "1", Instant.now, "bla", "bla", EncryptionType.NONE, None, None, false)
 
@@ -18,10 +19,10 @@ object DefaultCheckpointerTest extends DefaultRunnableSpec {
     suite("DefaultCheckpointer")(
       testM("checkpoints the last staged record") {
         for {
-          checkpoints  <- Ref.make(List.empty[Either[SpecialCheckpoint, ExtendedSequenceNumber]])
+          checkpoints  <- Ref.make(List.empty[Checkpoint])
           checkpointer <- {
             val updateCheckpoint: UpdateCheckpoint = {
-              case (seqNr, _, _) => checkpoints.update(_ :+ seqNr)
+              case (seqNr, _) => checkpoints.update(_ :+ seqNr)
             }
             makeCheckpointer(updateCheckpoint)
           }
@@ -33,10 +34,10 @@ object DefaultCheckpointerTest extends DefaultRunnableSpec {
       },
       testM("does not checkpoint the same staged checkpoint twice") {
         for {
-          checkpoints  <- Ref.make(List.empty[Either[SpecialCheckpoint, ExtendedSequenceNumber]])
+          checkpoints  <- Ref.make(List.empty[Checkpoint])
           checkpointer <- {
             val updateCheckpoint: UpdateCheckpoint = {
-              case (seqNr, _, _) => checkpoints.update(_ :+ seqNr)
+              case (seqNr, _) => checkpoints.update(_ :+ seqNr)
             }
             makeCheckpointer(updateCheckpoint)
           }
@@ -48,12 +49,12 @@ object DefaultCheckpointerTest extends DefaultRunnableSpec {
       },
       testM("preserves the last staged checkpoint while checkpointing") {
         for {
-          checkpoints  <- Ref.make(List.empty[Either[SpecialCheckpoint, ExtendedSequenceNumber]])
+          checkpoints  <- Ref.make(List.empty[Checkpoint])
           latch1       <- Promise.make[Nothing, Unit]
           latch2       <- Promise.make[Nothing, Unit]
           checkpointer <- {
             val updateCheckpoint: UpdateCheckpoint = {
-              case (seqNr, _, _) => latch1.succeed(()) *> latch2.await *> checkpoints.update(_ :+ seqNr)
+              case (seqNr, _) => latch1.succeed(()) *> latch2.await *> checkpoints.update(_ :+ seqNr)
             }
             makeCheckpointer(updateCheckpoint)
           }
@@ -63,16 +64,93 @@ object DefaultCheckpointerTest extends DefaultRunnableSpec {
           _            <- checkpointer.checkpoint()
           values       <- checkpoints.get
         } yield assert(values.map(_.toOption.get.sequenceNumber))(equalTo(List("0", "1")))
+      },
+      testM("checkpoints ShardEnd when the last sequence number is checkpointed after seeing the shard's end") {
+        for {
+          checkpoints  <- Ref.make(List.empty[Checkpoint])
+          checkpointer <- {
+            val updateCheckpoint: UpdateCheckpoint = {
+              case (seqNr, _) => checkpoints.update(_ :+ seqNr)
+            }
+            makeCheckpointer(updateCheckpoint)
+          }
+          _            <- checkpointer.setMaxSequenceNumber(ExtendedSequenceNumber(record2.sequenceNumber, 0))
+          _            <- checkpointer.markEndOfShard()
+          _            <- checkpointer.stage(record1)
+          _            <- checkpointer.stage(record2)
+          _            <- checkpointer.checkpoint()
+          values       <- checkpoints.get
+        } yield assert(values)(equalTo(List(Left(SpecialCheckpoint.ShardEnd))))
+      },
+      testM("checkpoints ShardEnd after the last sequence number is checkpointed when seeing the shard's end") {
+        for {
+          checkpoints  <- Ref.make(List.empty[Checkpoint])
+          checkpointer <- {
+            val updateCheckpoint: UpdateCheckpoint = {
+              case (seqNr, _) => checkpoints.update(_ :+ seqNr)
+            }
+            makeCheckpointer(updateCheckpoint)
+          }
+          _            <- checkpointer.setMaxSequenceNumber(ExtendedSequenceNumber(record2.sequenceNumber, 0))
+          _            <- checkpointer.stage(record1)
+          _            <- checkpointer.stage(record2)
+          _            <- checkpointer.checkpoint()
+          _            <- checkpointer.markEndOfShard()
+          _            <- checkpointer.checkpointAndRelease
+          values       <- checkpoints.get
+        } yield assert(values)(
+          equalTo(List(Right(ExtendedSequenceNumber(record2.sequenceNumber, 0)), Left(SpecialCheckpoint.ShardEnd)))
+        )
+      },
+      testM("does not checkpoint ShardEnd when the last record has not yet been staged after seeing the shard's end") {
+        for {
+          checkpoints  <- Ref.make(List.empty[Checkpoint])
+          checkpointer <- {
+            val updateCheckpoint: UpdateCheckpoint = {
+              case (seqNr, _) => checkpoints.update(_ :+ seqNr)
+            }
+            makeCheckpointer(updateCheckpoint)
+          }
+          _            <- checkpointer.setMaxSequenceNumber(ExtendedSequenceNumber(record2.sequenceNumber, 0))
+          _            <- checkpointer.markEndOfShard()
+          _            <- checkpointer.stage(record1)
+          _            <- checkpointer.checkpoint()
+          values       <- checkpoints.get
+        } yield assert(values)(equalTo(List(Right(ExtendedSequenceNumber(record1.sequenceNumber, 0)))))
+      },
+      testM("checkpoints ShardEnd on releasing when the last record is staged after seeing the shard's end") {
+        for {
+          checkpoints  <- Ref.make(List.empty[Checkpoint])
+          checkpointer <- {
+            val updateCheckpoint: UpdateCheckpoint = {
+              case (seqNr, _) => checkpoints.update(_ :+ seqNr)
+            }
+            makeCheckpointer(updateCheckpoint)
+          }
+          _            <- checkpointer.setMaxSequenceNumber(ExtendedSequenceNumber(record2.sequenceNumber, 0))
+          _            <- checkpointer.markEndOfShard()
+          _            <- checkpointer.stage(record1)
+          _            <- checkpointer.stage(record2)
+          _            <- checkpointer.checkpointAndRelease
+          values       <- checkpoints.get
+        } yield assert(values)(equalTo(List(Left(SpecialCheckpoint.ShardEnd))))
+      },
+      testM("checkpoints ShardEnd on releasing after an empty poll") {
+        for {
+          checkpoints  <- Ref.make(List.empty[Checkpoint])
+          checkpointer <- {
+            val updateCheckpoint: UpdateCheckpoint = {
+              case (seqNr, _) => checkpoints.update(_ :+ seqNr)
+            }
+            makeCheckpointer(updateCheckpoint)
+          }
+          // No max sequence number
+          _            <- checkpointer.markEndOfShard()
+          _            <- checkpointer.checkpointAndRelease
+          values       <- checkpoints.get
+        } yield assert(values)(equalTo(List(Left(SpecialCheckpoint.ShardEnd))))
       }
     ).provideCustomLayerShared(Logging.ignore)
-
-  /*
-  TODO:
-  - retries according to schedule
-  - releases
-  - not beyond max seq nr (also implement this)
-  - handles shard end correctly (TBD)
-   */
 
   private def makeCheckpointer(updateCheckpoint: UpdateCheckpoint): ZIO[Logging, Nothing, DefaultCheckpointer] =
     for {
