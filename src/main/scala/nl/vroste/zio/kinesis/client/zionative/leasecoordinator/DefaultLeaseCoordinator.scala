@@ -346,7 +346,7 @@ private class DefaultLeaseCoordinator(
       permit,
       (checkpoint, release) =>
         serialExecutionByShard(shardId)(updateCheckpoint(shardId, checkpoint, release).provide(env)),
-      releaseLease(shardId).provide(env)
+      serialExecutionByShard(shardId)(releaseLease(shardId).provide(env))
     )
 
   private def updateCheckpoint(
