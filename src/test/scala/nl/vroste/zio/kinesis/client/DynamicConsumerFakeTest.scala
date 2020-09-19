@@ -6,7 +6,7 @@ import java.time.OffsetDateTime
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import zio.clock.Clock
-import zio.console.{ putStrLn, Console }
+import zio.console.Console
 import zio.duration._
 import zio.logging.Logging
 import zio.stream.ZStream
@@ -30,7 +30,7 @@ object DynamicConsumerFakeTest extends DefaultRunnableSpec {
     def recordsForShard(shardName: String, xs: String*) =
       xs.zipWithIndex.map {
         case (s, i) =>
-          record(i, shardName, s)
+          record(i.toLong, shardName, s)
       }
     recordsForShard("shard0", "msg1", "msg2") ++ recordsForShard("shard1", "msg3", "msg4")
   }
