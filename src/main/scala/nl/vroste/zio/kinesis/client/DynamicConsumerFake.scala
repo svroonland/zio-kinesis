@@ -13,7 +13,7 @@ import zio.stream.ZStream
 
 private[client] class DynamicConsumerFake(
   shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, ByteBuffer])],
-  refCheckpointedList: Ref[Seq[Any]],
+  refCheckpointedList: Ref[Seq[_]],
   clock: Clock.Service
 ) extends DynamicConsumer.Service {
   override def shardedStream[R, T](

@@ -23,7 +23,7 @@ object DynamicConsumerFakeExample extends zio.App {
 
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     for {
-      refCheckpointedList <- Ref.make[Seq[Any]](Seq.empty[String])
+      refCheckpointedList <- Ref.make[Seq[_]](Seq.empty[String])
       exitCode            <- DynamicConsumer
                     .consumeWith(
                       streamName = "my-stream",
