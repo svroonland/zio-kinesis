@@ -6,9 +6,11 @@ import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultCheckpoint
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultCheckpointer.UpdateCheckpoint
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import zio.logging.Logging
-import zio.{ Promise, Ref, Semaphore, Task, ZIO }
+import zio.{ Promise, Ref, Schedule, Semaphore, Task, ZIO }
 import zio.test._
 import zio.test.Assertion._
+
+import scala.concurrent.TimeoutException
 
 object DefaultCheckpointerTest extends DefaultRunnableSpec {
   type Checkpoint = Either[SpecialCheckpoint, ExtendedSequenceNumber]
@@ -45,6 +47,28 @@ object DefaultCheckpointerTest extends DefaultRunnableSpec {
           _            <- checkpointer.checkpoint()
           _            <- checkpointer.checkpoint()
           values       <- checkpoints.get
+        } yield assert(values.map(_.toOption.get.sequenceNumber))(equalTo(List("0")))
+      },
+      testM("does not reset the last staged checkpoitn when checkpointing fails") {
+        for {
+          checkpoints       <- Ref.make(List.empty[Checkpoint])
+          checkpointAttempt <- Ref.make(0)
+          checkpointer      <- {
+            val updateCheckpoint: UpdateCheckpoint = {
+              case (seqNr, _) =>
+                checkpointAttempt.getAndUpdate(_ + 1).flatMap { attempt =>
+                  if (attempt == 0)
+                    ZIO.fail(Left(new TimeoutException("Checkpoint failed")))
+                  else
+                    checkpoints.update(_ :+ seqNr)
+                }
+            }
+            makeCheckpointer(updateCheckpoint)
+          }
+          _                 <- checkpointer.stage(record1)
+          _                 <- checkpointer.checkpoint(Schedule.stop).flip
+          _                 <- checkpointer.checkpoint()
+          values            <- checkpoints.get
         } yield assert(values.map(_.toOption.get.sequenceNumber))(equalTo(List("0")))
       },
       testM("preserves the last staged checkpoint while checkpointing") {
