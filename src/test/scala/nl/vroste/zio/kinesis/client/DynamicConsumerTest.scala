@@ -23,9 +23,8 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
     (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   private val env: ZLayer[Any, Throwable, Client with AdminClient with DynamicConsumer with Clock] =
-    (LocalStackServices
-      .localStackAwsLayer() >>> (Client.live ++ AdminClient.live ++ (loggingLayer ++ LocalStackServices
-      .localStackAwsLayer() >>> DynamicConsumer.live))) ++ Clock.live
+    (loggingLayer ++ LocalStackServices
+      .localStackAwsLayer() >>> (Client.live ++ AdminClient.live ++ DynamicConsumer.live)) ++ Clock.live
 
   def testConsume1: ZSpec[Clock with Blocking with Console with DynamicConsumer with Client, Throwable] =
     testM("consume records produced on all shards produced on the stream") {
