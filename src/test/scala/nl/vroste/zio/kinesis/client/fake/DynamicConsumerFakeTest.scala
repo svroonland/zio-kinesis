@@ -19,7 +19,7 @@ object DynamicConsumerFakeTest extends DefaultRunnableSpec {
 
   private val now = OffsetDateTime.parse("1970-01-01T00:00:00Z")
 
-  val loggingLayer: ZLayer[Any, Nothing, Logging] =
+  private val loggingLayer: ZLayer[Any, Nothing, Logging] =
     (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   private val shardsFromIterables: Shard =
