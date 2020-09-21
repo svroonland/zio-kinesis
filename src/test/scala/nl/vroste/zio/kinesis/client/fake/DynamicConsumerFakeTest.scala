@@ -1,9 +1,10 @@
-package nl.vroste.zio.kinesis.client
+package nl.vroste.zio.kinesis.client.fake
 
 import java.nio.ByteBuffer
 import java.time.OffsetDateTime
 
 import nl.vroste.zio.kinesis.client.serde.Serde
+import nl.vroste.zio.kinesis.client.{ DynamicConsumer, Record }
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import zio.clock.Clock
 import zio.console.Console

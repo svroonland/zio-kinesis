@@ -2,6 +2,7 @@ package nl.vroste.zio.kinesis.client.examples
 
 import java.nio.ByteBuffer
 
+import nl.vroste.zio.kinesis.client.fake.DynamicConsumerFake
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.{ DynamicConsumer, _ }
 import zio._
