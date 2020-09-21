@@ -1,7 +1,8 @@
-package nl.vroste.zio.kinesis.client
+package nl.vroste.zio.kinesis.client.localstack
 
 import java.net.URI
 
+import nl.vroste.zio.kinesis.client.HttpClient
 import software.amazon.awssdk.auth.credentials.{
   AwsBasicCredentials,
   AwsCredentialsProvider,

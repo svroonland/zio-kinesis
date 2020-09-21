@@ -1,9 +1,10 @@
-package nl.vroste.zio.kinesis.client
+package nl.vroste.zio.kinesis.client.fake
 
 import java.nio.ByteBuffer
 import java.time.OffsetDateTime
 
 import nl.vroste.zio.kinesis.client.serde.Serde
+import nl.vroste.zio.kinesis.client.{ DynamicConsumer, Record }
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import zio.clock.Clock
 import zio.console.Console
@@ -18,7 +19,7 @@ object DynamicConsumerFakeTest extends DefaultRunnableSpec {
 
   private val now = OffsetDateTime.parse("1970-01-01T00:00:00Z")
 
-  val loggingLayer: ZLayer[Any, Nothing, Logging] =
+  private val loggingLayer: ZLayer[Any, Nothing, Logging] =
     (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   private val shardsFromIterables: Shard =
