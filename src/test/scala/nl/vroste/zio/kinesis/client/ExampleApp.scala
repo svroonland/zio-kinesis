@@ -185,7 +185,7 @@ object ExampleApp extends zio.App {
     (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   val localStackEnv =
-    LocalStackServices.localStackAwsLayer >+>
+    LocalStackServices.localStackAwsLayer() >+>
       (AdminClient.live ++ Client.live ++ DynamoDbLeaseRepository.live).orDie ++
         loggingLayer
 

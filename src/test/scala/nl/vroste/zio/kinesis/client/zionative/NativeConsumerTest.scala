@@ -770,7 +770,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
   val useAws = Runtime.default.unsafeRun(system.envOrElse("ENABLE_AWS", "0")).toInt == 1
 
-  val env = (((if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer).orDie >+>
+  val env = (((if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()).orDie >+>
     (AdminClient.live ++ Client.live ++ DynamoDbLeaseRepository.live)).orDie ++
     zio.test.environment.testEnvironment ++
     Clock.live) >>>
