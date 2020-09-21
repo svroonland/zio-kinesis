@@ -20,6 +20,4 @@ services:
       AWS_SECRET_ACCESS_KEY: dummy-key
       DEBUG: "1"
     ports:
-      - "4566:4566"   # cloudwatch
-      - "4566:4566"   # kinesis
-      - "4566:4566"   # dynamodb
+      - "4566:4566"
