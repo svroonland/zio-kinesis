@@ -26,7 +26,7 @@ object LocalStackServices {
   /**
    * A ZLayer containing implementations for CloudWatchAsyncClient, KinesisAsyncClient, DynamoDbAsyncClient configured
    * for localstack usage. Note localstack > 11.5 has introduced simplification of ports -
-   * see https://github.com/localstack/localstack#user-content-announcements. These ports can be overriden using the url
+   * see https://github.com/localstack/localstack#user-content-announcements. These ports can be overridden using the url
    * parameters below for earlier versions of localstack.
    * @param kinesisUri Defaults to `http://localhost:4566`
    * @param cloudwatchUri Defaults to `http://localhost:4566`
