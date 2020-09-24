@@ -392,6 +392,30 @@ libraryDependencies += "nl.vroste" %% "zio-kinesis-future" % "<version>"
 
 `Consumer` and `Producer` are now available in the `nl.vroste.zio.kinesis.interop.futures` package.
 
+`Producer` can be used as follows:
+
+```scala
+import nl.vroste.zio.kinesis.client.Client.ProducerRecord
+import nl.vroste.zio.kinesis.client.serde.Serde
+import nl.vroste.zio.kinesis.interop.futures.Producer
+
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.{ Await, Future }
+import scala.concurrent.duration._
+
+object ProducerExample extends App {
+  val producer = Producer.make[String]("my-stream", Serde.asciiString, metricsCollector = m => println(m))
+
+  val done = Future.traverse(List(1 to 10)) { i =>
+    producer.produce(ProducerRecord("key1", s"msg${i}"))
+  }
+
+  Await.result(done, 30.seconds)
+
+  producer.close()
+}
+```
+
 ## DynamicConsumer
 `DynamicConsumer` is an alternative to `Consumer`, backed by the 
 [Kinesis Client Library (KCL)](https://docs.aws.amazon.com/streams/latest/dev/shared-throughput-kcl-consumers.html). 
