@@ -2,7 +2,7 @@
 
 # ZIO Kinesis
 
-ZIO Kinesis is a ZIO-based interface to Amazon Kinesis Data Streams for consuming and producing.
+ZIO Kinesis is a ZIO-based interface to Amazon Kinesis Data Streams for consuming and producing. A Future-based version of some of the functionality is also available.
 
 The project is in beta stage. Although already being used in production by a small number of organisations, expect some issues to pop up and some changes to the interface.
 More beta users and feedback are of course welcome.
@@ -24,6 +24,7 @@ More beta users and feedback are of course welcome.
 - [Producer](#producer)
   * [Aggregation](#aggregation)
   * [Metrics](#metrics)
+- [Future-based interface](#future-based-interface)
 - [DynamicConsumer](#dynamicconsumer)
   * [Basic usage using `consumeWith`](#basic-usage-using--consumewith--1)
   * [DynamicConsumerFake](#dynamicconsumerfake)
@@ -59,7 +60,7 @@ resolvers += Resolver.jcenterRepo
 libraryDependencies += "nl.vroste" %% "zio-kinesis" % "<version>"
 ```
 
-The latest version is built against ZIO 1.0.0-RC21-2.
+The latest version is built against ZIO 1.0.1.
 
 ## Consumer
 
@@ -373,6 +374,45 @@ object ProducerWithMetricsExample extends zio.App {
 
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     program.provideCustomLayer(env).exitCode
+}
+```
+
+## Future-based interface
+
+For cases when you need to integrate with existing `Future`-based application code, `Consumer` and `Producer` are available with a scala Future-based interface as well. 
+
+`Producer` offers full functionality while Consumer offers only `consumeWith`, the easiest way of consuming records from Kinesis.
+
+To use, add the following to your `build.sbt`:
+
+```scala
+resolvers += Resolver.jcenterRepo
+libraryDependencies += "nl.vroste" %% "zio-kinesis-future" % "<version>"
+```
+
+`Consumer` and `Producer` are now available in the `nl.vroste.zio.kinesis.interop.futures` package.
+
+`Producer` can be used as follows:
+
+```scala
+import nl.vroste.zio.kinesis.client.Client.ProducerRecord
+import nl.vroste.zio.kinesis.client.serde.Serde
+import nl.vroste.zio.kinesis.interop.futures.Producer
+
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.{ Await, Future }
+import scala.concurrent.duration._
+
+object ProducerExample extends App {
+  val producer = Producer.make[String]("my-stream", Serde.asciiString, metricsCollector = m => println(m))
+
+  val done = Future.traverse(List(1 to 10)) { i =>
+    producer.produce(ProducerRecord("key1", s"msg${i}"))
+  }
+
+  Await.result(done, 30.seconds)
+
+  producer.close()
 }
 ```
 
