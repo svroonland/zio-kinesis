@@ -3,6 +3,7 @@ package nl.vroste.zio.kinesis.client
 import java.util.UUID
 
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
+import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio._
@@ -22,7 +23,8 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
     (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   private val env: ZLayer[Any, Throwable, Client with AdminClient with DynamicConsumer with Clock] =
-    (LocalStackServices.localHttpClient >>> LocalStackServices.kinesisAsyncClientLayer >>> (Client.live ++ AdminClient.live ++ (loggingLayer ++ LocalStackServices.localStackAwsLayer >>> DynamicConsumer.live))) ++ Clock.live
+    (loggingLayer ++ LocalStackServices
+      .localStackAwsLayer() >>> (Client.live ++ AdminClient.live ++ DynamicConsumer.live)) ++ Clock.live
 
   def testConsume1: ZSpec[Clock with Blocking with Console with DynamicConsumer with Client, Throwable] =
     testM("consume records produced on all shards produced on the stream") {

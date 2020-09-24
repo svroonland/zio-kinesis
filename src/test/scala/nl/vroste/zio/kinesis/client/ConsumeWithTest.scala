@@ -4,6 +4,7 @@ import java.util.UUID
 
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.DynamicConsumer.consumeWith
+import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
@@ -28,7 +29,8 @@ object ConsumeWithTest extends DefaultRunnableSpec {
     : ZLayer[Any, Throwable, Console with Clock with Logging with Blocking with Has[CloudWatchAsyncClient] with Has[
       KinesisAsyncClient
     ] with Has[DynamoDbAsyncClient] with Has[DynamicConsumer.Service] with Client with AdminClient] =
-    (Console.live ++ Clock.live ++ Blocking.live) >+> loggingLayer >+> LocalStackServices.localStackAwsLayer >+> (DynamicConsumer.live ++ Client.live ++ AdminClient.live)
+    (Console.live ++ Clock.live ++ Blocking.live) >+> loggingLayer >+> LocalStackServices
+      .localStackAwsLayer() >+> (DynamicConsumer.live ++ Client.live ++ AdminClient.live)
 
   def testConsume1 =
     testM("consumeWith should consume records produced on all shards") {
