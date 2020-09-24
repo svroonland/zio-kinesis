@@ -1,12 +1,14 @@
 package nl.vroste.zio.kinesis.client
 
 import java.time.Instant
+import java.nio.ByteBuffer
 import java.util.UUID
 
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.dynamodb.DynamoDb
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import nl.vroste.zio.kinesis.client.Util.processWithSkipOnError
+import nl.vroste.zio.kinesis.client.fake.DynamicConsumerFake
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import software.amazon.kinesis.common.{ InitialPositionInStream, InitialPositionInStreamExtended }
@@ -32,8 +34,8 @@ object DynamicConsumer {
     data: T,
     partitionKey: String,
     encryptionType: EncryptionType,
-    subSequenceNumber: Long,
-    explicitHashKey: String,
+    subSequenceNumber: Option[Long],
+    explicitHashKey: Option[String],
     aggregated: Boolean
   )
 
@@ -43,6 +45,37 @@ object DynamicConsumer {
         case (logger, kinesis, cloudwatch, dynamodb) =>
           new DynamicConsumerLive(logger, kinesis.api, cloudwatch.api, dynamodb.api)
       }
+
+  /**
+   * Implements a fake `DynamicConsumer` that also offers fake checkpointing functionality that can be tracked using the
+   * `refCheckpointedList` parameter.
+   * @param shards A ZStream that is a fake representation of a Kinesis shard. There are helper constructors to create
+   *               these - see [[DynamicConsumerFake.shardsFromIterables]] and [[DynamicConsumerFake.shardsFromStreams]]
+   * @param refCheckpointedList A Ref that will be used to store the checkpointed records
+   * @return A ZLayer of the fake `DynamicConsumer` implementation
+   */
+  def fake(
+    shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, ByteBuffer])],
+    refCheckpointedList: Ref[Seq[Any]]
+  ): ZLayer[Clock, Nothing, Has[Service]] =
+    ZLayer.fromService[Clock.Service, DynamicConsumer.Service] { clock =>
+      new DynamicConsumerFake(shards, refCheckpointedList, clock)
+    }
+
+  /**
+   * Overloaded version of above but without fake checkpointing functionality
+   * @param shards A ZStream that is a fake representation of a Kinesis shard. There are helper constructors to create
+   *               these - see [[DynamicConsumerFake.shardsFromIterables]] and [[DynamicConsumerFake.shardsFromStreams]]
+   * @return A ZLayer of the fake `DynamicConsumer` implementation
+   */
+  def fake(
+    shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, ByteBuffer])]
+  ): ZLayer[Clock, Nothing, Has[Service]] =
+    ZLayer.fromServiceM[Clock.Service, Any, Nothing, DynamicConsumer.Service] { clock =>
+      Ref.make[Seq[Any]](Seq.empty[String]).map { refCheckpointedList =>
+        new DynamicConsumerFake(shards, refCheckpointedList, clock)
+      }
+    }
 
   trait Service {
 
@@ -180,21 +213,20 @@ object DynamicConsumer {
              )
              .flatMapPar(Int.MaxValue) {
                case (_, shardStream, checkpointer) =>
-                 ZStream.fromEffect(Ref.make(false) zip ZIO.environment[RC]).flatMap {
-                   case (refSkip, env) =>
-                     shardStream
-                       .tap(record =>
-                         processWithSkipOnError(refSkip)(
-                           recordProcessor(record).provide(env) *> checkpointer.stage(record)
+                 ZStream.fromEffect(Ref.make(false)).flatMap { refSkip =>
+                   shardStream
+                     .tap(record =>
+                       processWithSkipOnError(refSkip)(
+                         recordProcessor(record) *> checkpointer.stage(record)
+                       )
+                     )
+                     .via(
+                       checkpointer
+                         .checkpointBatched[Blocking with Logging with RC](
+                           nr = checkpointBatchSize,
+                           interval = checkpointDuration
                          )
-                       )
-                       .via(
-                         checkpointer
-                           .checkpointBatched[Blocking with Logging](
-                             nr = checkpointBatchSize,
-                             interval = checkpointDuration
-                           )
-                       )
+                     )
                  }
              }
              .runDrain
@@ -294,7 +326,7 @@ object DynamicConsumer {
             case Some(record) =>
               logger.info(s"about to checkpoint: shardId=${record.shardId} partitionKey=${record.partitionKey}") *>
                 zio.blocking.blocking {
-                  Task(kclCheckpointer.checkpoint(record.sequenceNumber, record.subSequenceNumber))
+                  Task(kclCheckpointer.checkpoint(record.sequenceNumber, record.subSequenceNumber.getOrElse(0L)))
                 } *> latestStaged.update {
                 case Some(r) if r == record => None
                 case r                      => r // A newer record may have been staged by now

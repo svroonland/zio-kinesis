@@ -1,18 +1,22 @@
 package nl.vroste.zio.kinesis.client.examples
 
 import nl.vroste.zio.kinesis.client
+import nl.vroste.zio.kinesis.client.producer.ProducerMetrics
 import nl.vroste.zio.kinesis.client.serde.Serde
-import nl.vroste.zio.kinesis.client.{ Producer, ProducerMetrics, ProducerRecord, ProducerSettings }
+import nl.vroste.zio.kinesis.client.{ Producer, ProducerRecord, ProducerSettings }
 import zio._
-import zio.console.putStrLn
-import zio.logging.slf4j.Slf4jLogger
+import zio.clock.Clock
+import zio.console.{ putStrLn, Console }
+import zio.logging.Logging
 
 object ProducerWithMetricsExample extends zio.App {
   val streamName      = "my_stream"
   val applicationName = "my_awesome_zio_application"
 
-  val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
-  val env          = client.defaultEnvironment ++ loggingLayer
+  val loggingLayer: ZLayer[Any, Nothing, Logging] =
+    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
+
+  val env = client.defaultEnvironment ++ loggingLayer
 
   val program = (for {
     totalMetrics <- Ref.make(ProducerMetrics.empty).toManaged_

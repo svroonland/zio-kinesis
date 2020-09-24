@@ -5,6 +5,7 @@ import java.util.UUID
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.dynamodb.DynamoDb
 import io.github.vigoo.zioaws.kinesis.Kinesis
+import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio._
@@ -20,11 +21,8 @@ import zio.test._
 object DynamicConsumerTest extends DefaultRunnableSpec {
   import TestUtil._
 
-  private val loggingLayer: ZLayer[Any, Nothing, Logging] =
-    Console.live ++ Clock.live >>> Logging.console(
-      format = (_, logEntry) => logEntry,
-      rootLoggerName = Some("default-logger")
-    )
+  val loggingLayer: ZLayer[Any, Nothing, Logging] =
+    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   private val env: ZLayer[
     Any,
@@ -130,7 +128,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                                       )
                               }.as((workerIdentifier, shardId))
                                 // Background and a bit delayed so we get a chance to actually emit some records
-                                .tap(_ => (ZIO.sleep(1.second) *> activeConsumers.update(_ + workerIdentifier)).fork)
+                                .tap(_ => activeConsumers.update(_ + workerIdentifier).delay(1.second).fork)
                                 .ensuring(putStrLn(s"Shard $shardId completed for consumer $workerIdentifier"))
                                 .catchSome {
                                   case _: ShutdownException => // This will be thrown when the shard lease has been stolen

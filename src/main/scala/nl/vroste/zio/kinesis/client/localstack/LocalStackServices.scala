@@ -1,4 +1,4 @@
-package nl.vroste.zio.kinesis.client
+package nl.vroste.zio.kinesis.client.localstack
 
 import java.net.URI
 
@@ -9,6 +9,7 @@ import io.github.vigoo.zioaws.core.httpclient.HttpClient
 import io.github.vigoo.zioaws.dynamodb.DynamoDb
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.{ cloudwatch, dynamodb, kinesis }
+import nl.vroste.zio.kinesis.client.HttpClientBuilder
 import software.amazon.awssdk.auth.credentials.{
   AwsBasicCredentials,
   AwsCredentialsProvider,
@@ -27,9 +28,9 @@ import zio.duration._
 object LocalStackServices {
 
   private val region: Region          = Region.of("us-east-1")
-  private val kinesisUri: URI         = URI.create("http://localhost:4568")
-  private val cloudwatchUri: URI      = URI.create("http://localhost:4582")
-  private val dynamoDbUri: URI        = URI.create("http://localhost:4569")
+  private val kinesisUri: URI         = URI.create("http://localhost:4566")
+  private val cloudwatchUri: URI      = URI.create("http://localhost:4566")
+  private val dynamoDbUri: URI        = URI.create("http://localhost:4566")
   private val accessKey: String       = "dummy-key"
   private val secretAccessKey: String = "dummy-key"
 

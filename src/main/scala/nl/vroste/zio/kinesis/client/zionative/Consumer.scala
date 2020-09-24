@@ -1,6 +1,7 @@
 package nl.vroste.zio.kinesis.client.zionative
 
 import java.nio.ByteBuffer
+import java.time.Instant
 
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.core.config
@@ -8,8 +9,7 @@ import io.github.vigoo.zioaws.core.config.AwsConfig
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model._
 import io.github.vigoo.zioaws.{ cloudwatch, dynamodb, kinesis }
-import java.time.Instant
-
+import nl.vroste.zio.kinesis.client.Util.processWithSkipOnError
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.{ EnhancedFanOut, Polling }
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
@@ -17,19 +17,20 @@ import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative.fetcher.{ EnhancedFanOutFetcher, PollingFetcher }
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.{ DefaultLeaseCoordinator, LeaseCoordinationSettings }
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
-import nl.vroste.zio.kinesis.client.{ HttpClientBuilder, Record, Util }
+import nl.vroste.zio.kinesis.client.{ HttpClientBuilder, Record, Util, _ }
 import software.amazon.awssdk.services.kinesis.model.{
   KmsThrottlingException,
   LimitExceededException,
   ProvisionedThroughputExceededException
 }
 import zio._
-import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.duration._
 import zio.logging.{ log, Logging }
 import zio.random.Random
 import zio.stream.ZStream
+
+import scala.jdk.CollectionConverters._
 
 final case class ExtendedSequenceNumber(sequenceNumber: String, subSequenceNumber: Long)
 
@@ -70,8 +71,10 @@ object FetchMode {
      * @param interval Fixed interval for polling when no more records are currently available
      */
     def dynamicSchedule(interval: Duration): Schedule[Clock, GetRecordsResponse.ReadOnly, Any] =
-      (Schedule.recurWhile[Boolean](_ == true) || Schedule.fixed(interval))
-        .contramap((_: GetRecordsResponse.ReadOnly).millisBehindLatestValue.get != 0)
+      (Schedule.recurWhile[Boolean](_ == true) || Schedule.spaced(
+        interval
+      )) // TODO replace with fixed when ZIO 1.0.2 is out
+        .contramap((_: GetRecordsResponse.ReadOnly).millisBehindLatestValue.getOrElse(0) != 0)
   }
 
   /**
@@ -160,7 +163,7 @@ object Consumer {
     emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit,
     shardAssignmentStrategy: ShardAssignmentStrategy = ShardAssignmentStrategy.balanced()
   ): ZStream[
-    Blocking with Clock with Random with Kinesis with LeaseRepository with Logging with R,
+    Clock with Random with Kinesis with LeaseRepository with Logging with R,
     Throwable,
     (
       String,
@@ -172,20 +175,74 @@ object Consumer {
       Checkpointer
     )
   ] = {
-    def toRecord(shardId: String, r: io.github.vigoo.zioaws.kinesis.model.Record): ZIO[R, Throwable, Record[T]] =
-      deserializer.deserialize(ByteBuffer.wrap(r.data.toArray)).map { data =>
-        Record(
-          shardId,
-          r.sequenceNumber,
-          r.approximateArrivalTimestamp.get, // TODO make optional
-          data,
-          r.partitionKey,
-          r.encryptionType,                  // TODO make optional
-          0,                                 // r.subSequenceNumber,
-          "",                                // r.explicitHashKey,
-          false                              //r.aggregated,
-        )
-      }
+//<<<<<<< HEAD
+//    def toRecord(shardId: String, r: io.github.vigoo.zioaws.kinesis.model.Record): ZIO[R, Throwable, Record[T]] =
+//      deserializer.deserialize(ByteBuffer.wrap(r.data.toArray)).map { data =>
+//        Record(
+//          shardId,
+//          r.sequenceNumber,
+//          r.approximateArrivalTimestamp.get, // TODO make optional
+//          data,
+//          r.partitionKey,
+//          r.encryptionType,                  // TODO make optional
+//          0,                                 // r.subSequenceNumber,
+//          "",                                // r.explicitHashKey,
+//          false                              //r.aggregated,
+//        )
+//      }
+//=======
+    def toRecords(
+      shardId: String,
+      r: io.github.vigoo.zioaws.kinesis.model.Record.ReadOnly
+    ): ZIO[Logging with R, Throwable, Chunk[Record[T]]] = {
+//      val data      = r.data().asByteBuffer()
+      val dataChunk = r.dataValue
+
+      if (ProtobufAggregation.isAggregatedRecord(dataChunk))
+        for {
+          aggregatedRecord <- ZIO.fromTry(ProtobufAggregation.decodeAggregatedRecord(dataChunk))
+          _                 = log.debug(s"Found aggregated record with ${aggregatedRecord.getRecordsCount} sub records")
+          records          <- ZIO.foreach(aggregatedRecord.getRecordsList.asScala.zipWithIndex.toSeq) {
+                       case (subRecord, subSequenceNr) =>
+                         val data = subRecord.getData.asReadOnlyByteBuffer()
+
+                         deserializer
+                           .deserialize(data)
+                           .map { data =>
+                             Record(
+                               shardId,
+                               r.sequenceNumberValue,
+                               r.approximateArrivalTimestampValue.get,
+                               data,
+                               aggregatedRecord.getPartitionKeyTable(subRecord.getPartitionKeyIndex.toInt),
+                               r.encryptionTypeValue,
+                               Some(subSequenceNr.toLong),
+                               if (subRecord.hasExplicitHashKeyIndex)
+                                 Some(aggregatedRecord.getExplicitHashKeyTable(subRecord.getExplicitHashKeyIndex.toInt))
+                               else None,
+                               aggregated = true
+                             )
+                           }
+                     }
+        } yield Chunk.fromIterable(records)
+      else
+        deserializer
+          .deserialize(ByteBuffer.wrap(r.dataValue.toArray))
+          .map { data =>
+            Record(
+              shardId,
+              r.sequenceNumberValue,
+              r.approximateArrivalTimestampValue.get,
+              data,
+              r.partitionKeyValue,
+              r.encryptionTypeValue,
+              subSequenceNumber = None,
+              explicitHashKey = None,
+              aggregated = false
+            )
+          }
+          .map(Chunk.single)
+    }
 
     def makeFetcher(
       streamDescription: StreamDescription.ReadOnly
@@ -266,7 +323,7 @@ object Consumer {
             case (shardId, leaseLost) =>
               for {
                 checkpointer    <- leaseCoordinator.makeCheckpointer(shardId)
-                env             <- ZIO.environment[Blocking with Logging with Clock with Random with R]
+                env             <- ZIO.environment[Logging with Clock with Random with R]
                 checkpointOpt   <- leaseCoordinator.getCheckpointForShard(shardId)
                 startingPosition = checkpointOpt
                                      .map(checkpointToStartingPosition(_, initialPosition))
@@ -290,15 +347,20 @@ object Consumer {
                                   }
                                   .mapChunksM { chunk => // mapM is slow
                                     chunk
-                                      .mapM(record => toRecord(shardId, record))
+                                      .mapM(record => toRecords(shardId, record))
+                                      .map(_.flatten)
                                       .tap { records =>
                                         records.lastOption.fold(ZIO.unit) { r =>
                                           val extendedSequenceNumber =
-                                            ExtendedSequenceNumber(r.sequenceNumber, r.subSequenceNumber)
+                                            ExtendedSequenceNumber(
+                                              r.sequenceNumber,
+                                              r.subSequenceNumber.getOrElse(0L)
+                                            )
                                           checkpointer.setMaxSequenceNumber(extendedSequenceNumber)
                                         }
                                       }
                                   }
+                                  .dropWhile(r => !checkpointOpt.forall(aggregatedRecordIsAfterCheckpoint(r, _)))
                                   .map(Exit.succeed(_))).collectWhileSuccess
               } yield (
                 shardId,
@@ -317,6 +379,65 @@ object Consumer {
     }
   }
 
+  /**
+   * Apply an effectful function to each record in a stream
+   *
+   * This is the easiest way to consume Kinesis records from a stream, while benefiting from all of
+   * Consumer's features like parallel streaming, checkpointing and resharding.
+   *
+   * Simply provide an effectful function that is applied to each record and the rest is taken care of.
+   * @param checkpointBatchSize Maximum number of records before checkpointing
+   * @param checkpointDuration Maximum interval before checkpointing
+   * @param recordProcessor A function for processing a `Record[T]`
+   * @tparam R ZIO environment type required by the `deserializer` and the `recordProcessor`
+   * @tparam T Type of record values
+   * @return A ZIO that completes with Unit when record processing is stopped via requestShutdown or fails when the consumer stream fails
+   */
+  def consumeWith[R, RC, T](
+    streamName: String,
+    applicationName: String,
+    deserializer: Deserializer[R, T],
+    workerIdentifier: String = "worker1",
+    fetchMode: FetchMode = FetchMode.Polling(),
+    leaseCoordinationSettings: LeaseCoordinationSettings = LeaseCoordinationSettings(),
+    initialPosition: InitialPosition = InitialPosition.TrimHorizon,
+    emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit,
+    shardAssignmentStrategy: ShardAssignmentStrategy = ShardAssignmentStrategy.balanced(),
+    checkpointBatchSize: Long = 200,
+    checkpointDuration: Duration = 5.second
+  )(
+    recordProcessor: Record[T] => RIO[RC, Unit]
+  ): ZIO[
+    R with RC with Clock with Random with Kinesis with LeaseRepository with Logging,
+    Throwable,
+    Unit
+  ] =
+    for {
+      _ <- shardedStream(
+             streamName,
+             applicationName,
+             deserializer,
+             workerIdentifier,
+             fetchMode,
+             leaseCoordinationSettings,
+             initialPosition,
+             emitDiagnostic,
+             shardAssignmentStrategy
+           ).flatMapPar(Int.MaxValue) {
+               case (_, shardStream, checkpointer) =>
+                 ZStream.fromEffect(Ref.make(false)).flatMap { refSkip =>
+                   shardStream
+                     .tap(record =>
+                       processWithSkipOnError(refSkip)(
+                         recordProcessor(record) *> checkpointer.stage(record)
+                       )
+                     )
+                     .via(checkpointer.checkpointBatched[RC](nr = checkpointBatchSize, interval = checkpointDuration))
+                 }
+             }
+             .runDrain
+    } yield ()
+
   private[zionative] val isThrottlingException: PartialFunction[Throwable, Unit] = {
     case _: KmsThrottlingException                 => ()
     case _: ProvisionedThroughputExceededException => ()
@@ -328,7 +449,7 @@ object Consumer {
   ): Schedule[R, Throwable, (Throwable, A)] =
     Schedule.recurWhile[Throwable](e => isThrottlingException.lift(e).isDefined) && schedule
 
-  val defaultEnvironment: ZLayer[AwsConfig, Throwable, Kinesis with LeaseRepository with CloudWatch] =
+  val defaultEnvironment: ZLayer[Any, Throwable, Kinesis with LeaseRepository with CloudWatch] =
     HttpClientBuilder.make() >>>
       config.default >>>
       (kinesis.live ++ (dynamodb.live >>> DynamoDbLeaseRepository.live) ++ cloudwatch.live)
@@ -382,4 +503,17 @@ object Consumer {
     case s @ _                                                                         =>
       throw new IllegalArgumentException(s"${s} is not a valid checkpoint as starting position")
   }
+
+  private[zionative] def aggregatedRecordIsAfterCheckpoint(
+    record: Record[_],
+    checkpoint: Either[SpecialCheckpoint, ExtendedSequenceNumber]
+  ): Boolean =
+    (checkpoint, record.subSequenceNumber) match {
+      case (Left(_), _)                                                                                      => true
+      case (Right(ExtendedSequenceNumber(sequenceNumber, subSequenceNumber)), Some(recordSubSequenceNumber)) =>
+        (BigInt(record.sequenceNumber) > BigInt(sequenceNumber)) ||
+          (BigInt(record.sequenceNumber) == BigInt(sequenceNumber) && recordSubSequenceNumber > subSequenceNumber)
+      case (Right(ExtendedSequenceNumber(sequenceNumber, _)), None)                                          =>
+        BigInt(record.sequenceNumber) > BigInt(sequenceNumber)
+    }
 }

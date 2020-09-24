@@ -114,7 +114,7 @@ object PollingFetcher {
                             else
                               ZStream.succeed(response)
                           }
-                          .mapConcatChunk(response => Chunk.fromIterable(response.recordsValue.map(_.editable)))
+                          .mapConcat(_.recordsValue)
         } yield shardStream
       }.ensuring(log.debug(s"PollingFetcher for shard ${shardId} closed"))
         .provide(env)

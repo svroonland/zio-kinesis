@@ -18,7 +18,7 @@ private[zionative] trait Fetcher {
   def shardRecordStream(
     shardId: String,
     startingPosition: StartingPosition
-  ): ZStream[Clock, Either[Throwable, EndOfShard], Record]
+  ): ZStream[Clock, Either[Throwable, EndOfShard], Record.ReadOnly]
 }
 
 private[zionative] object Fetcher {
@@ -28,7 +28,7 @@ private[zionative] object Fetcher {
     f: (
       String,
       StartingPosition
-    ) => ZStream[Clock, Either[Throwable, EndOfShard], Record]
+    ) => ZStream[Clock, Either[Throwable, EndOfShard], Record.ReadOnly]
   ): Fetcher =
     (shard, startingPosition) => f(shard, startingPosition)
 }

@@ -4,15 +4,18 @@ import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.{ Producer, ProducerRecord }
 import zio._
-import zio.console.putStrLn
-import zio.logging.slf4j.Slf4jLogger
+import zio.clock.Clock
+import zio.console.{ putStrLn, Console }
+import zio.logging.Logging
 
 object ProducerExample extends zio.App {
   val streamName      = "my_stream"
   val applicationName = "my_awesome_zio_application"
 
-  val loggingLayer = Slf4jLogger.make((_, logEntry) => logEntry, Some(getClass.getName))
-  val env          = client.defaultEnvironment ++ loggingLayer
+  val loggingLayer: ZLayer[Any, Nothing, Logging] =
+    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
+
+  val env = client.defaultEnvironment ++ loggingLayer
 
   val program = Producer.make(streamName, Serde.asciiString).use { producer =>
     val record = ProducerRecord("key1", "message1")

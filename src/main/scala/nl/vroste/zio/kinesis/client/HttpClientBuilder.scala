@@ -29,6 +29,7 @@ object HttpClientBuilder {
     healthCheckPingPeriod: Duration = 10.seconds,
     maxPendingConnectionAcquires: Int = 10000,
     connectionAcquisitionTimeout: Duration = 30.seconds,
+    writeTimeout: Duration = 30.seconds,
     readTimeout: Duration = 30.seconds,
     allowHttp2: Boolean = true,
     build: NettyNioAsyncHttpClient.Builder => SdkAsyncHttpClient = _.build()
@@ -41,6 +42,7 @@ object HttpClientBuilder {
       .connectionAcquisitionTimeout(connectionAcquisitionTimeout.asJava)
       .maxPendingConnectionAcquires(maxPendingConnectionAcquires)
       .readTimeout(readTimeout.asJava)
+      .writeTimeout(writeTimeout)
       .http2Configuration(
         Http2Configuration
           .builder()

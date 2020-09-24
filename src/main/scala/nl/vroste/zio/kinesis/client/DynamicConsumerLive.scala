@@ -63,7 +63,7 @@ private[client] class DynamicConsumerLive(
             q.offerAll(r.asScala.map(Exit.succeed(_))).unit.catchSomeCause {
               case c if c.interrupted => ZIO.unit
             } *> // TODO what behavior do we want if the queue + substream are already shutdown for some reason..?
-            logger.trace((s"offerRecords for ${shardId} COMPLETE"))
+            logger.trace(s"offerRecords for ${shardId} COMPLETE")
         }
 
       def shutdownQueue: UIO[Unit] =
@@ -167,8 +167,8 @@ private[client] class DynamicConsumerLive(
           data,
           r.partitionKey(),
           r.encryptionType(),
-          r.subSequenceNumber(),
-          r.explicitHashKey(),
+          Option(r.subSequenceNumber()).filterNot(_ == 0L),
+          Option(r.explicitHashKey()).filterNot(_.isEmpty),
           r.aggregated()
         )
       }

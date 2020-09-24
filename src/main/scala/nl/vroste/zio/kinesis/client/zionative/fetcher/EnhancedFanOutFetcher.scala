@@ -79,7 +79,7 @@ object EnhancedFanOutFetcher {
             else
               ZStream.succeed(response)
           }
-          .mapConcat(_.recordsValue.map(_.editable))
+          .mapConcat(_.recordsValue)
       }.provide(env)
     }
 

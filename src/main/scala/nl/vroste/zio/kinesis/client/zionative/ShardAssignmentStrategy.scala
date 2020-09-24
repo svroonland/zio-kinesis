@@ -168,7 +168,7 @@ object ShardAssignmentStrategy {
     nrLeasesToSteal: Int
   ): ZIO[Random with Logging, Nothing, List[Lease]] = {
     val leasesByWorker =
-      allLeases.groupBy(_.owner).collect { case (Some(owner), leases) => owner -> leases }.toMap
+      allLeases.groupBy(_.owner).collect { case (Some(owner), leases) => owner -> leases }
     val allWorkers     = allLeases.map(_.owner).collect { case Some(owner) => owner }.toSet ++ Set(workerId)
     // println(s"Planning to steal ${nrLeasesToSteal} leases")
 

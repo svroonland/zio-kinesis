@@ -6,6 +6,7 @@ import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.dynamodb.DynamoDb
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import nl.vroste.zio.kinesis.client.DynamicConsumer.consumeWith
+import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio._
 import zio.blocking.Blocking
@@ -20,18 +21,17 @@ import zio.test._
 object ConsumeWithTest extends DefaultRunnableSpec {
   import TestUtil._
 
-  private val loggingLayer: ZLayer[Any, Nothing, Logging] =
-    Console.live ++ Clock.live >>> Logging.console(
-      format = (_, logEntry) => logEntry,
-      rootLoggerName = Some("default-logger")
-    )
+  val loggingLayer: ZLayer[Console with Clock, Nothing, Logging] =
+    Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   private val env: ZLayer[
     Any,
     Throwable,
-    CloudWatch with Kinesis with DynamoDb with DynamicConsumer with Clock with Blocking with Logging
+    Console with Clock with Logging with Blocking with Kinesis with CloudWatch with DynamoDb with Has[
+      DynamicConsumer.Service
+    ]
   ] =
-    (loggingLayer ++ LocalStackServices.env) >+> DynamicConsumer.live ++ Clock.live ++ Blocking.live
+    (Console.live ++ Clock.live ++ Blocking.live) >+> loggingLayer >+> LocalStackServices.env >+> DynamicConsumer.live
 
   def testConsume1 =
     testM("consumeWith should consume records produced on all shards") {
@@ -137,6 +137,6 @@ object ConsumeWithTest extends DefaultRunnableSpec {
     suite("ConsumeWithTest")(
       testConsume1,
       testConsume2
-    ).provideCustomLayer(env.orDie) @@ timeout(2.minutes) @@ sequential
+    ).provideLayer(env.orDie) @@ timeout(2.minutes) @@ sequential
 
 }
