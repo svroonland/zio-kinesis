@@ -13,7 +13,7 @@ import software.amazon.awssdk.services.cloudwatch.{ CloudWatchAsyncClient, Cloud
 import software.amazon.awssdk.services.dynamodb.{ DynamoDbAsyncClient, DynamoDbAsyncClientBuilder }
 import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyncClientBuilder }
 import zio.clock.Clock
-import zio.logging.{ LogLevel, Logging }
+import zio.logging.Logging
 import zio.{ CancelableFuture, Chunk, ZIO }
 
 /**
