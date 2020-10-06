@@ -2,12 +2,12 @@ version: 2.1
 jobs:
   lint:
     docker:
-      - image: hseeberger/scala-sbt:8u242_1.3.10_2.13.1
+      - image: hseeberger/scala-sbt:11.0.8_1.3.13_2.13.3
     steps:
       - checkout
       - restore_cache:
           key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
-      - run: sbt ++2.13.1! check
+      - run: sbt ++2.13.3! check
       - save_cache:
           key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
           paths:
@@ -34,7 +34,7 @@ jobs:
       - restore_cache:
           key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
       - run: apt install -y protobuf-compiler
-      - run: sbt ++2.13.1! test
+      - run: sbt ++2.13.3! test
       - save_cache:
           key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
           paths:
@@ -59,7 +59,7 @@ jobs:
       - restore_cache:
           key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
       - run: apt install -y protobuf-compiler
-      - run: sbt ++2.13.1! test
+      - run: sbt ++2.13.3! test
       - store_test_results:
           path: target/test-reports
       - save_cache:
