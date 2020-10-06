@@ -48,6 +48,7 @@ name := "zio-kinesis"
 scalafmtOnCompile := true
 
 libraryDependencies ++= Seq(
+  "dev.zio"                %% "zio"                         % "1.0.2",
   "dev.zio"                %% "zio-streams"                 % "1.0.2",
   "dev.zio"                %% "zio-test"                    % "1.0.2" % "test",
   "dev.zio"                %% "zio-test-sbt"                % "1.0.2" % "test",
