@@ -38,6 +38,7 @@ private[client] final class ProducerLive[R, R1, T](
   throttler: ShardThrottler
 ) extends Producer[T] {
   import ProducerLive._
+  import Util.ZStreamExtensions
 
   val runloop: ZIO[Logging with Clock, Nothing, Unit] = {
     val retries = ZStream.fromQueue(failedQueue, maxChunkSize)
