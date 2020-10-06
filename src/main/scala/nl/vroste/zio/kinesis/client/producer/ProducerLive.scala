@@ -38,13 +38,13 @@ private[client] final class ProducerLive[R, R1, T](
   throttler: ShardThrottler
 ) extends Producer[T] {
   import ProducerLive._
-  import Util.ZStreamExtensions
 
   val runloop: ZIO[Logging with Clock, Nothing, Unit] = {
-    val retries = zStreamFromQueueWithMaxChunkSize(failedQueue, maxChunkSize)
+    val retries = ZStream.fromQueue(failedQueue, maxChunkSize)
 
     // Failed records get precedence
-    (retries merge zStreamFromQueueWithMaxChunkSize(queue, maxChunkSize)
+    (retries merge ZStream
+      .fromQueue(queue, maxChunkSize)
       .mapChunksM(chunk => log.trace(s"Dequeued chunk of size ${chunk.size}").as(chunk))
       // Aggregate records per shard
       .groupByKey2(_.predictedShard)
@@ -305,23 +305,6 @@ private[client] object ProducerLive {
       3 +                                                                // Data
       3 + 2 +                                                            // Partition key
       Option(entry.explicitHashKey()).map(_.length + 2).getOrElse(1) + 3 // Explicit hash key
-
-  def zStreamFromQueueWithMaxChunkSize[R, E, O](
-    queue: ZQueue[Nothing, R, Any, E, Nothing, O],
-    chunkSize: Int = Int.MaxValue
-  ): ZStream[R, E, O] =
-    ZStream.repeatEffectChunkOption {
-      queue
-      // This is important for batching to work properly. Too large chunks means suboptimal usage of the max parallel requests
-        .takeBetween(1, chunkSize)
-        .map(Chunk.fromIterable)
-        .catchAllCause(c =>
-          queue.isShutdown.flatMap { down =>
-            if (down && c.interrupted) IO.fail(None)
-            else IO.halt(c).asSomeError
-          }
-        )
-    }
 
   /**
    * Like ZTransducer.foldM, but with 'while' instead of 'until' semantics regarding `contFn`
