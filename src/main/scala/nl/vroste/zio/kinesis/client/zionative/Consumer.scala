@@ -330,7 +330,7 @@ object Consumer {
                                       }
                                   }
                                   .dropWhile(r => !checkpointOpt.forall(aggregatedRecordIsAfterCheckpoint(r, _)))
-                                  .map(Exit.succeed(_))).collectWhileSuccess
+                                  .map(Exit.succeed(_))).flattenExitOption
               } yield (
                 shardId,
                 shardStream.ensuringFirst {

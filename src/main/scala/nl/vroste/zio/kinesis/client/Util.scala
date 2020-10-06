@@ -86,11 +86,11 @@ object Util {
                 substreamsQueue.offer(Exit.fail(Some(e)))
             }.forkManaged
           }
-        } yield ZStream.fromQueueWithShutdown(substreamsQueue).collectWhileSuccess.map {
+        } yield ZStream.fromQueueWithShutdown(substreamsQueue).flattenExitOption.map {
           case (key, substreamQueue) =>
             val substream = ZStream
               .fromQueueWithShutdown(substreamQueue)
-              .collectWhileSuccess
+              .flattenExitOption
               .flattenChunks
             (key, substream)
         }
