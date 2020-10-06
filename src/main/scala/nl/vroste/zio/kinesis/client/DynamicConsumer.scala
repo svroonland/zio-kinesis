@@ -3,7 +3,6 @@ package nl.vroste.zio.kinesis.client
 import java.nio.ByteBuffer
 import java.util.UUID
 
-import nl.vroste.zio.kinesis.client.Util.processWithSkipOnError
 import nl.vroste.zio.kinesis.client.fake.DynamicConsumerFake
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
@@ -204,21 +203,15 @@ object DynamicConsumer {
              )
              .flatMapPar(Int.MaxValue) {
                case (_, shardStream, checkpointer) =>
-                 ZStream.fromEffect(Ref.make(false)).flatMap { refSkip =>
-                   shardStream
-                     .tap(record =>
-                       processWithSkipOnError(refSkip)(
-                         recordProcessor(record) *> checkpointer.stage(record)
+                 shardStream
+                   .tap(record => recordProcessor(record) *> checkpointer.stage(record))
+                   .via(
+                     checkpointer
+                       .checkpointBatched[Blocking with Logging with RC](
+                         nr = checkpointBatchSize,
+                         interval = checkpointDuration
                        )
-                     )
-                     .via(
-                       checkpointer
-                         .checkpointBatched[Blocking with Logging with RC](
-                           nr = checkpointBatchSize,
-                           interval = checkpointDuration
-                         )
-                     )
-                 }
+                   )
              }
              .runDrain
     } yield ()

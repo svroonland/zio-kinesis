@@ -4,7 +4,6 @@ import java.time.Instant
 
 import nl.vroste.zio.kinesis.client.AdminClient.StreamDescription
 import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
-import nl.vroste.zio.kinesis.client.Util.processWithSkipOnError
 import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.{ EnhancedFanOut, Polling }
@@ -395,15 +394,9 @@ object Consumer {
              shardAssignmentStrategy
            ).flatMapPar(Int.MaxValue) {
                case (_, shardStream, checkpointer) =>
-                 ZStream.fromEffect(Ref.make(false)).flatMap { refSkip =>
-                   shardStream
-                     .tap(record =>
-                       processWithSkipOnError(refSkip)(
-                         recordProcessor(record) *> checkpointer.stage(record)
-                       )
-                     )
-                     .via(checkpointer.checkpointBatched[RC](nr = checkpointBatchSize, interval = checkpointDuration))
-                 }
+                 shardStream
+                   .tap(record => recordProcessor(record) *> checkpointer.stage(record))
+                   .via(checkpointer.checkpointBatched[RC](nr = checkpointBatchSize, interval = checkpointDuration))
              }
              .runDrain
     } yield ()
