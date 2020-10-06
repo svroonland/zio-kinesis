@@ -1,4 +1,4 @@
-val mainScala = "2.13.1"
+val mainScala = "2.13.3"
 val allScala  = Seq("2.12.11", mainScala)
 
 // Allows to silence scalac compilation warnings selectively by code block or file path
