@@ -60,7 +60,7 @@ resolvers += Resolver.jcenterRepo
 libraryDependencies += "nl.vroste" %% "zio-kinesis" % "<version>"
 ```
 
-The latest version is built against ZIO 1.0.1.
+The latest version is built against and requires ZIO v1.0.2.
 
 ## Consumer
 
