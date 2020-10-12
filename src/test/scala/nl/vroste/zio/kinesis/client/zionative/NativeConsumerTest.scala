@@ -7,9 +7,10 @@ import nl.vroste.zio.kinesis.client
 
 import scala.collection.compat._
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
-import nl.vroste.zio.kinesis.client.{ AdminClient, Client, LocalStackServices, Producer, ProducerSettings, TestUtil }
+import nl.vroste.zio.kinesis.client.{ AdminClient, Client, Producer, ProducerSettings, TestUtil }
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.TestUtil.{ retryOnResourceNotFound, withStream }
+import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.LeaseCoordinationSettings
@@ -113,18 +114,18 @@ object NativeConsumerTest extends DefaultRunnableSpec {
             for {
               producedShardsAndSequence <-
                 produceSampleRecords(streamName, nrRecords, chunkSize = 500) // Deterministic order
-              records            <- Consumer
-                           .shardedStream(
-                             streamName,
-                             applicationName,
-                             Serde.asciiString,
-                             emitDiagnostic = onDiagnostic("worker1")
-                           )
-                           .flatMapPar(Int.MaxValue) {
-                             case (shard @ _, shardStream, checkpointer) => shardStream.tap(checkpointer.stage)
-                           }
-                           .take(nrRecords.toLong)
-                           .runCollect
+              _                  <- Consumer
+                     .shardedStream(
+                       streamName,
+                       applicationName,
+                       Serde.asciiString,
+                       emitDiagnostic = onDiagnostic("worker1")
+                     )
+                     .flatMapPar(Int.MaxValue) {
+                       case (shard @ _, shardStream, checkpointer) => shardStream.tap(checkpointer.stage)
+                     }
+                     .take(nrRecords.toLong)
+                     .runCollect
               checkpoints        <- getCheckpoints(applicationName)
               expectedCheckpoints =
                 producedShardsAndSequence.groupBy(_.shardId).view.mapValues(_.last.sequenceNumber).toMap
@@ -769,7 +770,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
   val useAws = Runtime.default.unsafeRun(system.envOrElse("ENABLE_AWS", "0")).toInt == 1
 
-  val env = (((if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer).orDie >+>
+  val env = (((if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()).orDie >+>
     (AdminClient.live ++ Client.live ++ DynamoDbLeaseRepository.live)).orDie ++
     zio.test.environment.testEnvironment ++
     Clock.live) >>>
