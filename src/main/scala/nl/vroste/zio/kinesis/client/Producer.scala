@@ -99,6 +99,18 @@ final case class ProducerSettings(
 object Producer {
   final case class ProduceResponse(shardId: String, sequenceNumber: String, attempts: Int, completed: Instant)
 
+  /**
+   * Create a Producer of `T` values to stream `streamName`
+   *
+   * @param streamName Stream to produce to
+   * @param serializer Serializer for values of type T
+   * @param settings
+   * @param metricsCollector Periodically called with producer metrics
+   * @tparam R Environment required by the serializer, usually Any
+   * @tparam R1
+   * @tparam T Type of values to produce
+   * @return A Managed Producer
+   */
   def make[R, R1, T](
     streamName: String,
     serializer: Serializer[R, T],

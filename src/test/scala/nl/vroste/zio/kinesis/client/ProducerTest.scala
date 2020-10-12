@@ -5,6 +5,7 @@ import java.util.UUID
 
 import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.Client.ProducerRecord
+import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.producer.ProducerLive.ProduceRequest
 import nl.vroste.zio.kinesis.client.producer.{ ProducerLive, ProducerMetrics, ShardMap }
 import nl.vroste.zio.kinesis.client.serde.{ Serde, Serializer }
@@ -26,7 +27,7 @@ object ProducerTest extends DefaultRunnableSpec {
 
   val useAws = Runtime.default.unsafeRun(system.envOrElse("ENABLE_AWS", "0")).toInt == 1
   val env    = ((if (useAws) client.defaultAwsLayer
-              else LocalStackServices.localStackAwsLayer).orDie >>> (AdminClient.live ++ Client.live)).orDie >+>
+              else LocalStackServices.localStackAwsLayer()).orDie >>> (AdminClient.live ++ Client.live)).orDie >+>
     (Clock.live ++ zio.console.Console.live >+> loggingLayer)
 
   def spec =

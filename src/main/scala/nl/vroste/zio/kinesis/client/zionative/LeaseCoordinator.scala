@@ -8,7 +8,9 @@ import zio.stream.ZStream
 import zio.{ Promise, UIO, ZIO }
 
 private[zionative] trait LeaseCoordinator {
-  def makeCheckpointer(shardId: String): ZIO[Clock with Logging, Throwable, Checkpointer with CheckpointerInternal]
+  def makeCheckpointer(
+    shardId: String
+  ): ZIO[Clock with Logging with Random, Throwable, Checkpointer with CheckpointerInternal]
 
   def getCheckpointForShard(shardId: String): UIO[Option[Either[SpecialCheckpoint, ExtendedSequenceNumber]]]
 
