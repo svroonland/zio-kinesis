@@ -33,7 +33,7 @@ jobs:
       - checkout
       - restore_cache:
           key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
-      - run: apt install -y protobuf-compiler
+      - run: apt update && apt install -y protobuf-compiler
       - run: sbt ++2.13.3! test
       - save_cache:
           key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
@@ -58,7 +58,7 @@ jobs:
       - checkout
       - restore_cache:
           key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
-      - run: apt install -y protobuf-compiler
+      - run: apt update && apt install -y protobuf-compiler
       - run: sbt ++2.13.3! test
       - store_test_results:
           path: target/test-reports
@@ -85,7 +85,7 @@ jobs:
       - checkout
       - restore_cache:
           key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
-      - run: apt install -y protobuf-compiler
+      - run: apt update && apt install -y protobuf-compiler
       - run: sbt ++2.12.11! test
       - save_cache:
           key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
@@ -110,7 +110,7 @@ jobs:
       - checkout
       - restore_cache:
           key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
-      - run: apt install -y protobuf-compiler
+      - run: apt update && apt install -y protobuf-compiler
       - run: sbt ++2.12.11! test
       - save_cache:
           key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
@@ -126,7 +126,7 @@ jobs:
       - run: git fetch --tags
       - restore_cache:
           key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
-      - run: apt install -y protobuf-compiler
+      - run: apt update && apt install -y protobuf-compiler
       - run: sbt ciReleaseBintray
 
 workflows:
