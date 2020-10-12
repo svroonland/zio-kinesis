@@ -1,4 +1,9 @@
 pull_request_rules:
+  - name: Update with master
+    conditions:
+      - base=master
+    actions:
+      update: {}
   - name: merge Scala Steward's PRs
     conditions:
       - base=master
