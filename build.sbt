@@ -48,13 +48,13 @@ name := "zio-kinesis"
 scalafmtOnCompile := true
 
 libraryDependencies ++= Seq(
-  "dev.zio"                %% "zio"                         % "1.0.2",
-  "dev.zio"                %% "zio-streams"                 % "1.0.2",
-  "dev.zio"                %% "zio-test"                    % "1.0.2" % "test",
-  "dev.zio"                %% "zio-test-sbt"                % "1.0.2" % "test",
+  "dev.zio"                %% "zio"                         % "1.0.3",
+  "dev.zio"                %% "zio-streams"                 % "1.0.3",
+  "dev.zio"                %% "zio-test"                    % "1.0.3" % "test",
+  "dev.zio"                %% "zio-test-sbt"                % "1.0.3" % "test",
   "dev.zio"                %% "zio-interop-reactivestreams" % "1.0.3.5",
-  "dev.zio"                %% "zio-logging"                 % "0.5.2",
-  "software.amazon.awssdk"  % "kinesis"                     % "2.15.4",
+  "dev.zio"                %% "zio-logging"                 % "0.5.3",
+  "software.amazon.awssdk"  % "kinesis"                     % "2.15.7",
   "ch.qos.logback"          % "logback-classic"             % "1.2.3",
   "software.amazon.kinesis" % "amazon-kinesis-client"       % "2.2.11",
   "org.scala-lang.modules" %% "scala-collection-compat"     % "2.2.0",
