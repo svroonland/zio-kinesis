@@ -91,7 +91,7 @@ lazy val interopFutures = (project in file("interop-futures"))
     resolvers += Resolver.jcenterRepo,
     assemblyJarName in assembly := "zio-kinesis-future" + version.value + ".jar",
     libraryDependencies ++= Seq(
-      "nl.vroste" %% "zio-kinesis"                 % "0.14.0",
+      "nl.vroste" %% "zio-kinesis"                 % "0.15",
       "dev.zio"   %% "zio-interop-reactivestreams" % "1.0.3.5"
     )
   )
