@@ -464,7 +464,7 @@ object DynamicConsumerConsumeWithExample extends zio.App {
         checkpointBatchSize = 1000L,
         checkpointDuration = 5.minutes
       )(record => putStrLn(s"Processing record $record"))
-      .provideCustomLayer(loggingLayer ++ defaultAwsLayer >>> DynamicConsumer.live ++ loggingLayer)
+      .provideCustomLayer(loggingLayer ++ defaultAwsLayer >>> DynamicConsumer.live[String] ++ loggingLayer)
       .exitCode
 }
 ``` 
@@ -477,16 +477,12 @@ this end we provide a fake ZLayer instance of the `DynamicConsumer` accessed via
 Note this also provides full checkpointing functionality which can be tracked via a `Ref` passed into the `refCheckpointedList` parameter.  
 
 ```scala
-package nl.vroste.zio.kinesis.client.examples
-
-import java.nio.ByteBuffer
-
+import nl.vroste.zio.kinesis.client.DynamicConsumer
 import nl.vroste.zio.kinesis.client.fake.DynamicConsumerFake
 import nl.vroste.zio.kinesis.client.serde.Serde
-import nl.vroste.zio.kinesis.client.{DynamicConsumer, _}
 import zio._
 import zio.clock.Clock
-import zio.console.{Console, putStrLn}
+import zio.console.{ putStrLn, Console }
 import zio.duration._
 import zio.logging.Logging
 import zio.stream.ZStream
@@ -498,12 +494,12 @@ object DynamicConsumerFakeExample extends zio.App {
   val loggingLayer: ZLayer[Any, Nothing, Logging] =
     (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
-  private val shards: ZStream[Any, Nothing, (String, ZStream[Any, Throwable, ByteBuffer])] =
-    DynamicConsumerFake.shardsFromStreams(Serde.asciiString, ZStream("msg1", "msg2"), ZStream("msg3", "msg4"))
+  private val shards: ZStream[Any, Nothing, (String, ZStream[Any, Throwable, String])] =
+    DynamicConsumerFake.shardsFromStreams(ZStream("msg1", "msg2"), ZStream("msg3", "msg4"))
 
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     for {
-      refCheckpointedList <- Ref.make[Seq[Any]](Seq.empty[String])
+      refCheckpointedList <- Ref.make(Seq.empty[String])
       exitCode            <- DynamicConsumer
                     .consumeWith(
                       streamName = "my-stream",
@@ -558,7 +554,7 @@ object DynamicConsumerBasicUsageExample extends zio.App {
             .via(checkpointer.checkpointBatched[Blocking with Console](nr = 1000, interval = 5.second))
       }
       .runDrain
-      .provideCustomLayer(loggingLayer ++ defaultAwsLayer >>> DynamicConsumer.live)
+      .provideCustomLayer(loggingLayer ++ defaultAwsLayer >>> DynamicConsumer.live[String])
       .exitCode
 }
 ```

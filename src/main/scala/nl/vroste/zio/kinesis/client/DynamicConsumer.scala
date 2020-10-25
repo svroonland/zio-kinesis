@@ -72,6 +72,9 @@ object DynamicConsumer {
       }
     }
 
+  /**
+   * @tparam T Type of Record data value
+   */
   trait Service[T] {
 
     /**
@@ -226,6 +229,7 @@ object DynamicConsumer {
    * Staging area for checkpoints
    *
    * Guarantees that the last staged record is checkpointed upon stream shutdown / interruption
+   * @tparam T Type of Record data value
    */
   trait Checkpointer[T] {
 
