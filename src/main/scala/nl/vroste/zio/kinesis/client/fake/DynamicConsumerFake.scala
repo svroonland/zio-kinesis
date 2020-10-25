@@ -12,12 +12,12 @@ import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.stream.ZStream
 
-private[client] class DynamicConsumerFake(
+private[client] class DynamicConsumerFake[T](
   shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, ByteBuffer])],
   refCheckpointedList: Ref[Seq[_]],
   clock: Clock.Service
-) extends DynamicConsumer.Service {
-  override def shardedStream[R, T](
+) extends DynamicConsumer.Service[T] {
+  override def shardedStream[R](
     streamName: String,
     applicationName: String,
     deserializer: Deserializer[R, T],

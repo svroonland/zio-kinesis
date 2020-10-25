@@ -27,47 +27,49 @@ object DynamicConsumer {
   // For (some) backwards compatibility
   type Record[T] = nl.vroste.zio.kinesis.client.Record[T]
 
-  val live: ZLayer[Logging with Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[
+  def live[T](implicit
+    tag: Tag[Service[T]]
+  ): ZLayer[Logging with Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[
     DynamoDbAsyncClient
-  ], Nothing, Has[Service]] =
+  ], Nothing, Has[Service[T]]] =
     ZLayer.fromServices[Logger[
       String
-    ], KinesisAsyncClient, CloudWatchAsyncClient, DynamoDbAsyncClient, DynamicConsumer.Service] {
+    ], KinesisAsyncClient, CloudWatchAsyncClient, DynamoDbAsyncClient, DynamicConsumer.Service[T]] {
       new DynamicConsumerLive(_, _, _, _)
     }
 
-  /**
-   * Implements a fake `DynamicConsumer` that also offers fake checkpointing functionality that can be tracked using the
-   * `refCheckpointedList` parameter.
-   * @param shards A ZStream that is a fake representation of a Kinesis shard. There are helper constructors to create
-   *               these - see [[DynamicConsumerFake.shardsFromIterables]] and [[DynamicConsumerFake.shardsFromStreams]]
-   * @param refCheckpointedList A Ref that will be used to store the checkpointed records
-   * @return A ZLayer of the fake `DynamicConsumer` implementation
-   */
-  def fake(
-    shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, ByteBuffer])],
-    refCheckpointedList: Ref[Seq[Any]]
-  ): ZLayer[Clock, Nothing, Has[Service]] =
-    ZLayer.fromService[Clock.Service, DynamicConsumer.Service] { clock =>
-      new DynamicConsumerFake(shards, refCheckpointedList, clock)
-    }
+//  /**
+//   * Implements a fake `DynamicConsumer` that also offers fake checkpointing functionality that can be tracked using the
+//   * `refCheckpointedList` parameter.
+//   * @param shards A ZStream that is a fake representation of a Kinesis shard. There are helper constructors to create
+//   *               these - see [[DynamicConsumerFake.shardsFromIterables]] and [[DynamicConsumerFake.shardsFromStreams]]
+//   * @param refCheckpointedList A Ref that will be used to store the checkpointed records
+//   * @return A ZLayer of the fake `DynamicConsumer` implementation
+//   */
+//  def fake(
+//    shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, ByteBuffer])],
+//    refCheckpointedList: Ref[Seq[Any]]
+//  ): ZLayer[Clock, Nothing, Has[Service]] =
+//    ZLayer.fromService[Clock.Service, DynamicConsumer.Service] { clock =>
+//      new DynamicConsumerFake(shards, refCheckpointedList, clock)
+//    }
+//
+//  /**
+//   * Overloaded version of above but without fake checkpointing functionality
+//   * @param shards A ZStream that is a fake representation of a Kinesis shard. There are helper constructors to create
+//   *               these - see [[DynamicConsumerFake.shardsFromIterables]] and [[DynamicConsumerFake.shardsFromStreams]]
+//   * @return A ZLayer of the fake `DynamicConsumer` implementation
+//   */
+//  def fake(
+//    shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, ByteBuffer])]
+//  ): ZLayer[Clock, Nothing, Has[Service]] =
+//    ZLayer.fromServiceM[Clock.Service, Any, Nothing, DynamicConsumer.Service] { clock =>
+//      Ref.make[Seq[Any]](Seq.empty[String]).map { refCheckpointedList =>
+//        new DynamicConsumerFake(shards, refCheckpointedList, clock)
+//      }
+//    }
 
-  /**
-   * Overloaded version of above but without fake checkpointing functionality
-   * @param shards A ZStream that is a fake representation of a Kinesis shard. There are helper constructors to create
-   *               these - see [[DynamicConsumerFake.shardsFromIterables]] and [[DynamicConsumerFake.shardsFromStreams]]
-   * @return A ZLayer of the fake `DynamicConsumer` implementation
-   */
-  def fake(
-    shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, ByteBuffer])]
-  ): ZLayer[Clock, Nothing, Has[Service]] =
-    ZLayer.fromServiceM[Clock.Service, Any, Nothing, DynamicConsumer.Service] { clock =>
-      Ref.make[Seq[Any]](Seq.empty[String]).map { refCheckpointedList =>
-        new DynamicConsumerFake(shards, refCheckpointedList, clock)
-      }
-    }
-
-  trait Service {
+  trait Service[T] {
 
     /**
      * Create a ZStream of records on a Kinesis stream with substreams per shard
@@ -90,10 +92,9 @@ object DynamicConsumer {
      *   the KCL record processor until records have been dequeued. Note that the stream returned from this
      *   method will have internal chunk buffers as well.
      * @tparam R ZIO environment type required by the `deserializer`
-     * @tparam T Type of record values
      * @return A nested ZStream - the outer ZStream represents the collection of shards, and the inner ZStream represents the individual shard
      */
-    def shardedStream[R, T](
+    def shardedStream[R](
       streamName: String,
       applicationName: String,
       deserializer: Deserializer[R, T],
@@ -123,14 +124,14 @@ object DynamicConsumer {
     leaseTableName: Option[String] = None,
     workerIdentifier: String = UUID.randomUUID().toString,
     maxShardBufferSize: Int = 1024 // Prefer powers of 2
-  ): ZStream[
-    DynamicConsumer with Blocking with R,
+  )(implicit tag: Tag[DynamicConsumer.Service[T]]): ZStream[
+    DynamicConsumer[T] with Blocking with R,
     Throwable,
     (String, ZStream[Blocking, Throwable, Record[T]], Checkpointer)
   ] =
     ZStream.unwrap(
       ZIO
-        .service[DynamicConsumer.Service]
+        .service[DynamicConsumer.Service[T]]
         .map(
           _.shardedStream(
             streamName,
@@ -186,9 +187,11 @@ object DynamicConsumer {
     checkpointDuration: Duration = 5.second
   )(
     recordProcessor: Record[T] => RIO[RC, Unit]
-  ): ZIO[R with RC with Blocking with Logging with Clock with DynamicConsumer, Throwable, Unit] =
+  )(implicit
+    tag: Tag[DynamicConsumer.Service[T]]
+  ): ZIO[R with RC with Blocking with Logging with Clock with DynamicConsumer[T], Throwable, Unit] =
     for {
-      consumer <- ZIO.service[DynamicConsumer.Service]
+      consumer <- ZIO.service[DynamicConsumer.Service[T]]
       _        <- consumer
              .shardedStream(
                streamName,

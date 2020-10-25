@@ -20,13 +20,13 @@ import zio.stream.ZStream
 
 import scala.jdk.CollectionConverters._
 
-private[client] class DynamicConsumerLive(
+private[client] class DynamicConsumerLive[T](
   logger: Logger[String],
   kinesisAsyncClient: KinesisAsyncClient,
   cloudWatchAsyncClient: CloudWatchAsyncClient,
   dynamoDbAsyncClient: DynamoDbAsyncClient
-) extends DynamicConsumer.Service {
-  override def shardedStream[R, T](
+) extends DynamicConsumer.Service[T] {
+  override def shardedStream[R](
     streamName: String,
     applicationName: String,
     deserializer: Deserializer[R, T],

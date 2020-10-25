@@ -191,7 +191,7 @@ object ExampleApp extends zio.App {
 
   val awsEnv: ZLayer[Clock, Nothing, Clock with Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[
     DynamoDbAsyncClient
-  ] with Logging with Client with AdminClient with Has[DynamicConsumer.Service] with LeaseRepository with Has[
+  ] with Logging with Client with AdminClient with Has[DynamicConsumer.Service[String]] with LeaseRepository with Has[
     CloudWatchMetricsPublisherConfig
   ]] = {
     val httpClient    = HttpClient.make(
@@ -207,7 +207,7 @@ object ExampleApp extends zio.App {
     val adminClient = AdminClient.live.orDie
 
     val leaseRepo       = DynamoDbLeaseRepository.live
-    val dynamicConsumer = DynamicConsumer.live
+    val dynamicConsumer = DynamicConsumer.live[String]
     val logging         = loggingLayer
 
     val metricsPublisherConfig = ZLayer.succeed(CloudWatchMetricsPublisherConfig())

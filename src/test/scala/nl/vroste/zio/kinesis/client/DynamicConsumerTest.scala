@@ -22,11 +22,11 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
   val loggingLayer: ZLayer[Any, Nothing, Logging] =
     (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
-  private val env: ZLayer[Any, Throwable, Client with AdminClient with DynamicConsumer with Clock] =
+  private val env: ZLayer[Any, Throwable, Client with AdminClient with DynamicConsumer[String] with Clock] =
     (loggingLayer ++ LocalStackServices
-      .localStackAwsLayer() >>> (Client.live ++ AdminClient.live ++ DynamicConsumer.live)) ++ Clock.live
+      .localStackAwsLayer() >>> (Client.live ++ AdminClient.live ++ DynamicConsumer.live[String])) ++ Clock.live
 
-  def testConsume1: ZSpec[Clock with Blocking with Console with DynamicConsumer with Client, Throwable] =
+  def testConsume1: ZSpec[Clock with Blocking with Console with DynamicConsumer[String] with Client, Throwable] =
     testM("consume records produced on all shards produced on the stream") {
       val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
       val applicationName = "zio-test-" + UUID.randomUUID().toString
@@ -50,7 +50,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
             _ <- putStrLn("Starting dynamic consumer")
             _ <- (for {
-                     service <- ZIO.service[DynamicConsumer.Service]
+                     service <- ZIO.service[DynamicConsumer.Service[String]]
                      _       <- service
                             .shardedStream(
                               streamName,
@@ -86,7 +86,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
       def streamConsumer(
         workerIdentifier: String,
         activeConsumers: Ref[Set[String]]
-      ): ZStream[Console with Blocking with DynamicConsumer with Clock, Throwable, (String, String)] = {
+      ): ZStream[Console with Blocking with DynamicConsumer[String] with Clock, Throwable, (String, String)] = {
         val checkpointDivisor = 1
 
         def handler(shardId: String, r: Record[String]) =
@@ -98,7 +98,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
           } yield ()
 
         (for {
-          service <- ZStream.service[DynamicConsumer.Service]
+          service <- ZStream.service[DynamicConsumer.Service[String]]
           stream  <- ZStream
                       .fromEffect(putStrLn(s"Starting consumer $workerIdentifier"))
                       .flatMap(_ =>
@@ -183,11 +183,11 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
         interrupted: Promise[Nothing, Unit],
         lastProcessedRecords: Ref[Map[String, String]],
         lastCheckpointedRecords: Ref[Map[String, String]]
-      ): ZStream[Console with Blocking with Clock with DynamicConsumer, Throwable, Record[
+      ): ZStream[Console with Blocking with Clock with DynamicConsumer[String], Throwable, Record[
         String
       ]] =
         (for {
-          service <- ZStream.service[DynamicConsumer.Service]
+          service <- ZStream.service[DynamicConsumer.Service[String]]
           stream  <- service
                       .shardedStream(
                         streamName,

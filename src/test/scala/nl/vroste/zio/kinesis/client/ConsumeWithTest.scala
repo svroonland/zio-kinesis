@@ -28,9 +28,9 @@ object ConsumeWithTest extends DefaultRunnableSpec {
   private val env
     : ZLayer[Any, Throwable, Console with Clock with Logging with Blocking with Has[CloudWatchAsyncClient] with Has[
       KinesisAsyncClient
-    ] with Has[DynamoDbAsyncClient] with Has[DynamicConsumer.Service] with Client with AdminClient] =
+    ] with Has[DynamoDbAsyncClient] with Has[DynamicConsumer.Service[String]] with Client with AdminClient] =
     (Console.live ++ Clock.live ++ Blocking.live) >+> loggingLayer >+> LocalStackServices
-      .localStackAwsLayer() >+> (DynamicConsumer.live ++ Client.live ++ AdminClient.live)
+      .localStackAwsLayer() >+> (DynamicConsumer.live[String] ++ Client.live ++ AdminClient.live)
 
   def testConsume1 =
     testM("consumeWith should consume records produced on all shards") {
