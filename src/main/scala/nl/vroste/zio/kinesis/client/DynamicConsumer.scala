@@ -1,9 +1,8 @@
 package nl.vroste.zio.kinesis.client
 
-import java.nio.ByteBuffer
 import java.util.UUID
 
-//import nl.vroste.zio.kinesis.client.fake.DynamicConsumerFake
+import nl.vroste.zio.kinesis.client.fake.DynamicConsumerFake
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
@@ -38,36 +37,40 @@ object DynamicConsumer {
       new DynamicConsumerLive(_, _, _, _)
     }
 
-//  /**
-//   * Implements a fake `DynamicConsumer` that also offers fake checkpointing functionality that can be tracked using the
-//   * `refCheckpointedList` parameter.
-//   * @param shards A ZStream that is a fake representation of a Kinesis shard. There are helper constructors to create
-//   *               these - see [[DynamicConsumerFake.shardsFromIterables]] and [[DynamicConsumerFake.shardsFromStreams]]
-//   * @param refCheckpointedList A Ref that will be used to store the checkpointed records
-//   * @return A ZLayer of the fake `DynamicConsumer` implementation
-//   */
-//  def fake(
-//    shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, ByteBuffer])],
-//    refCheckpointedList: Ref[Seq[Any]]
-//  ): ZLayer[Clock, Nothing, Has[Service]] =
-//    ZLayer.fromService[Clock.Service, DynamicConsumer.Service] { clock =>
-//      new DynamicConsumerFake(shards, refCheckpointedList, clock)
-//    }
-//
-//  /**
-//   * Overloaded version of above but without fake checkpointing functionality
-//   * @param shards A ZStream that is a fake representation of a Kinesis shard. There are helper constructors to create
-//   *               these - see [[DynamicConsumerFake.shardsFromIterables]] and [[DynamicConsumerFake.shardsFromStreams]]
-//   * @return A ZLayer of the fake `DynamicConsumer` implementation
-//   */
-//  def fake(
-//    shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, ByteBuffer])]
-//  ): ZLayer[Clock, Nothing, Has[Service]] =
-//    ZLayer.fromServiceM[Clock.Service, Any, Nothing, DynamicConsumer.Service] { clock =>
-//      Ref.make[Seq[Any]](Seq.empty[String]).map { refCheckpointedList =>
-//        new DynamicConsumerFake(shards, refCheckpointedList, clock)
-//      }
-//    }
+  /**
+   * Implements a fake `DynamicConsumer` that also offers fake checkpointing functionality that can be tracked using the
+   * `refCheckpointedList` parameter.
+   * @param shards A ZStream that is a fake representation of a Kinesis shard. There are helper constructors to create
+   *               these - see [[DynamicConsumerFake.shardsFromIterables]] and [[DynamicConsumerFake.shardsFromStreams]]
+   * @param refCheckpointedList A Ref that will be used to store the checkpointed records
+   * @return A ZLayer of the fake `DynamicConsumer` implementation
+   */
+  def fake[T](
+    shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, T])],
+    refCheckpointedList: Ref[Seq[T]]
+  )(implicit
+    tag: Tag[Service[T]]
+  ): ZLayer[Clock, Nothing, Has[Service[T]]] =
+    ZLayer.fromService[Clock.Service, DynamicConsumer.Service[T]] { clock =>
+      new DynamicConsumerFake[T](shards, refCheckpointedList, clock)
+    }
+
+  /**
+   * Overloaded version of above but without fake checkpointing functionality
+   * @param shards A ZStream that is a fake representation of a Kinesis shard. There are helper constructors to create
+   *               these - see [[DynamicConsumerFake.shardsFromIterables]] and [[DynamicConsumerFake.shardsFromStreams]]
+   * @return A ZLayer of the fake `DynamicConsumer` implementation
+   */
+  def fake[T](
+    shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, T])]
+  )(implicit
+    tag: Tag[Service[T]]
+  ): ZLayer[Clock, Nothing, Has[Service[T]]] =
+    ZLayer.fromServiceM[Clock.Service, Any, Nothing, DynamicConsumer.Service[T]] { clock =>
+      Ref.make[Seq[T]](Seq.empty[T]).map { refCheckpointedList =>
+        new DynamicConsumerFake[T](shards, refCheckpointedList, clock)
+      }
+    }
 
   trait Service[T] {
 

@@ -1,9 +1,7 @@
 package nl.vroste.zio.kinesis.client.fake
 
-import java.nio.ByteBuffer
-
 import nl.vroste.zio.kinesis.client.DynamicConsumer.Checkpointer
-import nl.vroste.zio.kinesis.client.serde.{ Deserializer, Serializer }
+import nl.vroste.zio.kinesis.client.serde.Deserializer
 import nl.vroste.zio.kinesis.client.{ DynamicConsumer, Record }
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import software.amazon.kinesis.common.InitialPositionInStreamExtended
@@ -13,7 +11,7 @@ import zio.clock.Clock
 import zio.stream.ZStream
 
 private[client] class DynamicConsumerFake[T](
-  shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, ByteBuffer])],
+  shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, T])],
   refCheckpointedList: Ref[Seq[T]],
   clock: Clock.Service
 ) extends DynamicConsumer.Service[T] {
@@ -32,7 +30,7 @@ private[client] class DynamicConsumerFake[T](
     Throwable,
     (String, ZStream[Blocking, Throwable, Record[T]], DynamicConsumer.Checkpointer[T])
   ] = {
-    def record(shardName: String, i: Long, recData: T): UIO[Record[T]] =
+    def record(shardName: String, recData: T, i: Long): UIO[Record[T]] =
       (for {
         dateTime <- clock.currentDateTime
       } yield new Record[T](
@@ -50,13 +48,13 @@ private[client] class DynamicConsumerFake[T](
     shards.flatMap {
       case (shardName, stream) =>
         ZStream.fromEffect {
-          ZIO.environment[R with Blocking].flatMap { env =>
+          ZIO.environment[R with Blocking].flatMap { env => //TODO: remove env
             CheckpointerFake.make(refCheckpointedList).map { checkpointer =>
               (
                 shardName,
                 stream.zipWithIndex.mapM {
-                  case (byteBuffer, i) =>
-                    deserializer.deserialize(byteBuffer).flatMap(record(shardName, i, _)).provide(env)
+                  case (data, i) =>
+                    record(shardName, data, i)
                 },
                 checkpointer
               )
@@ -81,11 +79,7 @@ object CheckpointerFake {
       override def checkpoint: ZIO[Blocking, Throwable, Unit] =
         latestStaged.get.flatMap {
           case Some(record) =>
-            refCheckpointedList.update { seq =>
-              val x: Seq[T]    = seq
-              val y: Record[T] = record
-              seq :+ record.data
-            } *>
+            refCheckpointedList.update(seq => seq :+ record.data) *>
               latestStaged.update {
                 case Some(r) if r == record => None
                 case r                      => r // A newer record may have been staged by now
@@ -100,7 +94,6 @@ object DynamicConsumerFake {
   /**
    * A constructor for a fake shard, for use with the `DynamicConsumer.fake` ZLayer function. It takes a list of `List[T]` and produces
    * a ZStream of fake shards from it.
-   * @param serializer A `Serializer` used to convert elements to the ByteBuffer type expected by `DynamicConsumer`
    * @param lists list of shards - each shard is represented by a List of `T`
    * @tparam R Environment for `Serializer`
    * @tparam T Type of the list element
@@ -108,11 +101,10 @@ object DynamicConsumerFake {
    * @see `DynamicConsumer.fake`
    */
   def shardsFromIterables[R, T](
-    serializer: Serializer[R, T],
     lists: List[T]*
-  ): ZStream[Any, Nothing, (String, ZStream[R, Throwable, ByteBuffer])] = {
+  ): ZStream[Any, Nothing, (String, ZStream[R, Throwable, T])] = {
     val listOfShards = lists.zipWithIndex.map {
-      case (xs, i) => (s"shard$i", ZStream.fromIterable(xs).mapM(serializer.serialize))
+      case (xs, i) => (s"shard$i", ZStream.fromIterable(xs))
     }
     ZStream.fromIterable(listOfShards)
   }
@@ -120,7 +112,6 @@ object DynamicConsumerFake {
   /**
    * A constructor for a fake shard, for use with the `DynamicConsumer.fake` ZLayer function. It takes a list ZStream of type `T` and produces
    * a ZStream of fake shards from it.
-   * @param serializer A `Serializer` used to convert elements to the ByteBuffer type expected by `DynamicConsumer`
    * @param streams list of shards - each shard is represented by a ZStream of `T`
    * @tparam R Environment for `Serializer`
    * @tparam T Type of the ZStream element
@@ -128,11 +119,10 @@ object DynamicConsumerFake {
    * @see `DynamicConsumer.fake`
    */
   def shardsFromStreams[R, T](
-    serializer: Serializer[R, T],
     streams: ZStream[R, Throwable, T]*
-  ): ZStream[Any, Nothing, (String, ZStream[R, Throwable, ByteBuffer])] = {
+  ): ZStream[Any, Nothing, (String, ZStream[R, Throwable, T])] = {
     val listOfShards = streams.zipWithIndex.map {
-      case (stream, i) => (s"shard$i", stream.mapM(serializer.serialize))
+      case (stream, i) => (s"shard$i", stream)
     }
     ZStream.fromIterable(listOfShards)
   }
