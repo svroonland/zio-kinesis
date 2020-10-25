@@ -48,17 +48,15 @@ private[client] class DynamicConsumerFake[T](
     shards.flatMap {
       case (shardName, stream) =>
         ZStream.fromEffect {
-          ZIO.environment[R with Blocking].flatMap { env => //TODO: remove env
-            CheckpointerFake.make(refCheckpointedList).map { checkpointer =>
-              (
-                shardName,
-                stream.zipWithIndex.mapM {
-                  case (data, i) =>
-                    record(shardName, data, i)
-                },
-                checkpointer
-              )
-            }
+          CheckpointerFake.make(refCheckpointedList).map { checkpointer =>
+            (
+              shardName,
+              stream.zipWithIndex.mapM {
+                case (data, i) =>
+                  record(shardName, data, i)
+              },
+              checkpointer
+            )
           }
         }
     }
