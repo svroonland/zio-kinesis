@@ -14,7 +14,7 @@ import zio.stream.ZStream
 
 private[client] class DynamicConsumerFake[T](
   shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, ByteBuffer])],
-  refCheckpointedList: Ref[Seq[_]],
+  refCheckpointedList: Ref[Seq[T]],
   clock: Clock.Service
 ) extends DynamicConsumer.Service[T] {
   override def shardedStream[R](
@@ -30,7 +30,7 @@ private[client] class DynamicConsumerFake[T](
   ): ZStream[
     Blocking with R,
     Throwable,
-    (String, ZStream[Blocking, Throwable, Record[T]], DynamicConsumer.Checkpointer)
+    (String, ZStream[Blocking, Throwable, Record[T]], DynamicConsumer.Checkpointer[T])
   ] = {
     def record(shardName: String, i: Long, recData: T): UIO[Record[T]] =
       (for {
@@ -70,18 +70,22 @@ private[client] class DynamicConsumerFake[T](
 
 object CheckpointerFake {
 
-  def make(refCheckpointedList: Ref[Seq[_]]): Task[Checkpointer] =
+  def make[T](refCheckpointedList: Ref[Seq[T]]): Task[Checkpointer[T]] =
     for {
-      latestStaged <- Ref.make[Option[Record[_]]](None)
-    } yield new DynamicConsumer.Checkpointer {
-      override private[client] def peek: UIO[Option[Record[_]]] = latestStaged.get
+      latestStaged <- Ref.make[Option[Record[T]]](None)
+    } yield new DynamicConsumer.Checkpointer[T] {
+      override private[client] def peek: UIO[Option[Record[T]]] = latestStaged.get
 
-      override def stage(r: Record[_]): UIO[Unit] = latestStaged.set(Some(r))
+      override def stage(r: Record[T]): UIO[Unit] = latestStaged.set(Some(r))
 
       override def checkpoint: ZIO[Blocking, Throwable, Unit] =
         latestStaged.get.flatMap {
           case Some(record) =>
-            refCheckpointedList.update(seq => seq :+ record) *>
+            refCheckpointedList.update { seq =>
+              val x: Seq[T]    = seq
+              val y: Record[T] = record
+              seq :+ record.data
+            } *>
               latestStaged.update {
                 case Some(r) if r == record => None
                 case r                      => r // A newer record may have been staged by now

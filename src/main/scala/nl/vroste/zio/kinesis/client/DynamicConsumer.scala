@@ -3,7 +3,7 @@ package nl.vroste.zio.kinesis.client
 import java.nio.ByteBuffer
 import java.util.UUID
 
-import nl.vroste.zio.kinesis.client.fake.DynamicConsumerFake
+//import nl.vroste.zio.kinesis.client.fake.DynamicConsumerFake
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
@@ -108,7 +108,7 @@ object DynamicConsumer {
     ): ZStream[
       Blocking with R,
       Throwable,
-      (String, ZStream[Blocking, Throwable, Record[T]], Checkpointer)
+      (String, ZStream[Blocking, Throwable, Record[T]], Checkpointer[T])
     ]
   }
 
@@ -127,7 +127,7 @@ object DynamicConsumer {
   )(implicit tag: Tag[DynamicConsumer.Service[T]]): ZStream[
     DynamicConsumer[T] with Blocking with R,
     Throwable,
-    (String, ZStream[Blocking, Throwable, Record[T]], Checkpointer)
+    (String, ZStream[Blocking, Throwable, Record[T]], Checkpointer[T])
   ] =
     ZStream.unwrap(
       ZIO
@@ -224,12 +224,12 @@ object DynamicConsumer {
    *
    * Guarantees that the last staged record is checkpointed upon stream shutdown / interruption
    */
-  trait Checkpointer {
+  trait Checkpointer[T] {
 
     /*
      * Helper method that returns current state - useful for debugging
      */
-    private[client] def peek: UIO[Option[Record[_]]]
+    private[client] def peek: UIO[Option[Record[T]]]
 
     /**
      * Stages a record for checkpointing
@@ -239,7 +239,7 @@ object DynamicConsumer {
      * @param r Record to checkpoint
      * @return Effect that completes immediately
      */
-    def stage(r: Record[_]): UIO[Unit]
+    def stage(r: Record[T]): UIO[Unit]
 
     /**
      * Helper method that ensures that a checkpoint is staged when 'effect' completes
@@ -250,7 +250,7 @@ object DynamicConsumer {
      * @param r Record to stage a checkpoint for
      * @return Effect that completes with the result of 'effect'
      */
-    def stageOnSuccess[R, E, A](effect: ZIO[R, E, A])(r: Record[_]): ZIO[R, E, A] =
+    def stageOnSuccess[R, E, A](effect: ZIO[R, E, A])(r: Record[T]): ZIO[R, E, A] =
       effect.onExit {
         case Exit.Success(_) => stage(r)
         case _               => UIO.unit
@@ -271,7 +271,7 @@ object DynamicConsumer {
     /**
      * Immediately checkpoint this record
      */
-    def checkpointNow(r: Record[_]): ZIO[Blocking, Throwable, Unit] =
+    def checkpointNow(r: Record[T]): ZIO[Blocking, Throwable, Unit] =
       stage(r) *> checkpoint
 
     /**
@@ -301,11 +301,14 @@ object DynamicConsumer {
   }
 
   object Checkpointer {
-    private[client] def make(kclCheckpointer: RecordProcessorCheckpointer, logger: Logger[String]): UIO[Checkpointer] =
+    private[client] def make[T](
+      kclCheckpointer: RecordProcessorCheckpointer,
+      logger: Logger[String]
+    ): UIO[Checkpointer[T]] =
       for {
-        latestStaged <- Ref.make[Option[Record[_]]](None)
-      } yield new Checkpointer {
-        override def stage(r: Record[_]): UIO[Unit] =
+        latestStaged <- Ref.make[Option[Record[T]]](None)
+      } yield new Checkpointer[T] {
+        override def stage(r: Record[T]): UIO[Unit] =
           latestStaged.set(Some(r))
 
         override def checkpoint: ZIO[Blocking, Throwable, Unit] =
@@ -321,7 +324,7 @@ object DynamicConsumer {
             case None         => UIO.unit
           }
 
-        override private[client] def peek: UIO[Option[Record[_]]] = latestStaged.get
+        override private[client] def peek: UIO[Option[Record[T]]] = latestStaged.get
       }
   }
 

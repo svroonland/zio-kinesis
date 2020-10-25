@@ -39,7 +39,7 @@ private[client] class DynamicConsumerLive[T](
   ): ZStream[
     Blocking with R,
     Throwable,
-    (String, ZStream[Blocking, Throwable, Record[T]], DynamicConsumer.Checkpointer)
+    (String, ZStream[Blocking, Throwable, Record[T]], DynamicConsumer.Checkpointer[T])
   ] = {
     /*
      * A queue for a single Shard and interface between the KCL threadpool and the ZIO runtime
@@ -120,7 +120,7 @@ private[client] class DynamicConsumerLive[T](
 
     class Queues(
       private val runtime: zio.Runtime[Any],
-      val shards: Queue[Exit[Option[Throwable], (String, ShardQueue, Checkpointer)]]
+      val shards: Queue[Exit[Option[Throwable], (String, ShardQueue, Checkpointer[T])]]
     ) {
       def newShard(shard: String, checkpointer: RecordProcessorCheckpointer): ShardQueue =
         runtime.unsafeRun {
@@ -130,7 +130,7 @@ private[client] class DynamicConsumerLive[T](
                          maxShardBufferSize
                        )
                        .map(new ShardQueue(shard, runtime, _))
-            checkpointer <- Checkpointer.make(checkpointer, logger)
+            checkpointer <- Checkpointer.make[T](checkpointer, logger)
             _            <- shards.offer(Exit.succeed((shard, queue, checkpointer))).unit
           } yield queue
         }
@@ -143,7 +143,7 @@ private[client] class DynamicConsumerLive[T](
       def make: ZManaged[Any, Nothing, Queues] =
         for {
           runtime <- ZIO.runtime[Any].toManaged_
-          q       <- Queue.unbounded[Exit[Option[Throwable], (String, ShardQueue, Checkpointer)]].toManaged(_.shutdown)
+          q       <- Queue.unbounded[Exit[Option[Throwable], (String, ShardQueue, Checkpointer[T])]].toManaged(_.shutdown)
         } yield new Queues(runtime, q)
     }
 
