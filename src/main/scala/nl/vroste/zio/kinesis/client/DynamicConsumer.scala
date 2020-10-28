@@ -26,7 +26,7 @@ import zio.stream.{ ZStream, ZTransducer }
  * Ensures proper resource shutdown and failure handling
  */
 object DynamicConsumer {
-  final case class Record[T](
+  final case class Record[+T](
     shardId: String,
     sequenceNumber: String,
     approximateArrivalTimestamp: Instant,

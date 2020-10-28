@@ -1,29 +1,19 @@
 package nl.vroste.zio.kinesis.client
 
-import io.github.vigoo.zioaws.kinesis.Kinesis
-import io.github.vigoo.zioaws.kinesis.model.{
-  CreateStreamRequest,
-  DeleteStreamRequest,
-  ListShardsRequest,
-  PutRecordsRequest,
-  PutRecordsRequestEntry,
-  PutRecordsResponse,
-  Shard
-}
-import nl.vroste.zio.kinesis.client.serde.Serializer
-import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException }
 import java.util.UUID
 
 import io.github.vigoo.zioaws.kinesis
+import io.github.vigoo.zioaws.kinesis.Kinesis
+import io.github.vigoo.zioaws.kinesis.model._
 import nl.vroste.zio.kinesis.client.producer.ProducerMetrics
-import nl.vroste.zio.kinesis.client.serde.Serde
+import nl.vroste.zio.kinesis.client.serde.{ Serde, Serializer }
 import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException }
 import zio.clock.Clock
 import zio.console.{ putStrLn, Console }
 import zio.duration._
 import zio.logging.{ log, Logging }
 import zio.stream.ZStream
-import zio.{ Chunk, Ref, Schedule, ZIO, ZManaged }
+import zio._
 
 import scala.util.Random
 
