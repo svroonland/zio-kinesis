@@ -46,7 +46,7 @@ object PollingFetcher {
             getShardIterator(
               GetShardIteratorRequest(streamName, shardId, startingPosition.`type`, startingPosition.sequenceNumber)
             ).map(_.shardIteratorValue.get)
-              .mapError(_.toThrowable)
+              .mapError(Util.awsErrorToThrowable)
               .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
               .mapError(Left(_): Either[Throwable, EndOfShard])
               .toManaged_
@@ -63,7 +63,7 @@ object PollingFetcher {
                            currentIterator,
                            Some(config.batchSize)
                          )
-                       ).mapError(_.toThrowable)
+                       ).mapError(Util.awsErrorToThrowable)
                          .tapError(e =>
                            log.warn(
                              s"Error GetRecords for shard ${shardId}: ${e}"

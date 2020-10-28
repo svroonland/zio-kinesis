@@ -90,7 +90,7 @@ private[client] final class ProducerLive[R, R1, T](
 
       response           <- client
                     .putRecords(PutRecordsRequest(batch.map(_.r), streamName))
-                    .mapError(_.toThrowable)
+                    .mapError(Util.awsErrorToThrowable)
                     .tapError(e => log.warn(s"Error producing records, will retry if recoverable: $e"))
                     .retry(scheduleCatchRecoverable && settings.backoffRequests)
 

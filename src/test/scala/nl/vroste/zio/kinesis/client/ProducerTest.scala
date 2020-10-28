@@ -326,7 +326,7 @@ object ProducerTest extends DefaultRunnableSpec {
             _           <- putStrLn("Resharding")
             _           <- kinesis
                    .updateShardCount(UpdateShardCountRequest(streamName, 4, ScalingType.UNIFORM_SCALING))
-                   .mapError(_.toThrowable)
+                   .mapError(Util.awsErrorToThrowable)
             _           <- done.join race producerFib.join
             _            = println("Done!")
             _           <- producerFib.interrupt

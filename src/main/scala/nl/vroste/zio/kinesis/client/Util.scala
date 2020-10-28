@@ -1,5 +1,9 @@
 package nl.vroste.zio.kinesis.client
 
+import java.util.concurrent.CompletionException
+
+import io.github.vigoo.zioaws.core.AwsError
+import software.amazon.awssdk.core.exception.SdkException
 import zio._
 import zio.clock.Clock
 import zio.duration._
@@ -173,4 +177,13 @@ object Util {
       queue <- Queue.dropping[Unit](1).toManaged(_.shutdown)
       _     <- ((queue.take raceFirst ZIO.sleep(period)) *> effect *> queue.takeAll).forever.forkManaged
     } yield queue.offer(()).unit
+
+  def awsErrorToThrowable(e: AwsError): Throwable =
+    e.toThrowable match {
+      case e: CompletionException =>
+        Option(e.getCause).getOrElse(e)
+      case e: SdkException        =>
+        Option(e.getCause).getOrElse(e)
+      case e                      => e
+    }
 }

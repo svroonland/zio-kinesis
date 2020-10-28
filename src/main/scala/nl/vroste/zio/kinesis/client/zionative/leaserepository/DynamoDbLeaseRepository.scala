@@ -5,6 +5,7 @@ import java.util.concurrent.TimeoutException
 import DynamoDbUtil._
 import io.github.vigoo.zioaws.dynamodb.model._
 import io.github.vigoo.zioaws.dynamodb.{ model, DynamoDb }
+import nl.vroste.zio.kinesis.client.Util
 import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.{
   Lease,
   LeaseAlreadyExists,
@@ -46,14 +47,17 @@ private class DynamoDbLeaseRepository(client: DynamoDb.Service, timeout: Duratio
     )
 
     val createTable =
-      log.info(s"Creating lease table ${tableName}") *> client.createTable(request).mapError(_.toThrowable).unit
+      log.info(s"Creating lease table ${tableName}") *> client
+        .createTable(request)
+        .mapError(Util.awsErrorToThrowable)
+        .unit
 
     def describeTable: Task[model.TableStatus] =
       client
         .describeTable(DescribeTableRequest(tableName))
         .flatMap(_.table)
         .flatMap(_.tableStatus)
-        .mapError(_.toThrowable)
+        .mapError(Util.awsErrorToThrowable)
 
     def leaseTableExists: ZIO[Logging, Throwable, Boolean] =
       log.debug(s"Checking if lease table '${tableName}' exists and is active") *>
@@ -91,7 +95,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb.Service, timeout: Duratio
   override def getLeases(tableName: String): ZStream[Any, Throwable, Lease] =
     client
       .scan(ScanRequest(tableName))
-      .mapError(_.toThrowable)
+      .mapError(Util.awsErrorToThrowable)
       .mapM(item => ZIO.fromTry(toLease(item.view.mapValues(_.editable).toMap)))
 
   /**
@@ -112,7 +116,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb.Service, timeout: Duratio
 
     client
       .updateItem(request)
-      .mapError(_.toThrowable)
+      .mapError(Util.awsErrorToThrowable)
       .unit
       .catchAll {
         case e: ConditionalCheckFailedException =>
@@ -141,7 +145,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb.Service, timeout: Duratio
 
     client
       .updateItem(request)
-      .mapError(_.toThrowable)
+      .mapError(Util.awsErrorToThrowable)
       .timeoutFail(new TimeoutException(s"Timeout claiming lease"))(timeout)
       // .tapError(e => log.warn(s"Got error claiming lease: ${e}"))
       .unit
@@ -193,7 +197,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb.Service, timeout: Duratio
 
     client
       .updateItem(request)
-      .mapError(_.toThrowable)
+      .mapError(Util.awsErrorToThrowable)
       .timeoutFail(new TimeoutException(s"Timeout updating checkpoint"))(timeout)
       .unit
       .catchAll {
@@ -214,7 +218,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb.Service, timeout: Duratio
 
     client
       .updateItem(request)
-      .mapError(_.toThrowable)
+      .mapError(Util.awsErrorToThrowable)
       .timeoutFail(new TimeoutException(s"Timeout renewing lease"))(timeout)
       .tapError(e => log.warn(s"Got error updating lease: ${e}"))
       .unit
@@ -235,7 +239,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb.Service, timeout: Duratio
 
     client
       .putItem(request)
-      .mapError(_.toThrowable)
+      .mapError(Util.awsErrorToThrowable)
       .timeoutFail(new TimeoutException(s"Timeout creating lease"))(timeout)
       .unit
       .mapError {
@@ -252,7 +256,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb.Service, timeout: Duratio
     val request = DeleteTableRequest(tableName)
     client
       .deleteTable(request)
-      .mapError(_.toThrowable)
+      .mapError(Util.awsErrorToThrowable)
       .timeoutFail(new TimeoutException(s"Timeout creating lease"))(timeout)
       .unit
   }

@@ -36,7 +36,7 @@ object EnhancedFanOutFetcher {
                                     .subscribeToShard(
                                       SubscribeToShardRequest(consumerARN, shardId, pos)
                                     )
-                                    .mapError(_.toThrowable)
+                                    .mapError(Util.awsErrorToThrowable)
                                 )
                             }
     } yield Fetcher { (shardId, startingPosition) =>
@@ -86,7 +86,7 @@ object EnhancedFanOutFetcher {
   private def registerConsumerIfNotExists(streamARN: String, consumerName: String) =
     kinesis
       .registerStreamConsumer(RegisterStreamConsumerRequest(streamARN, consumerName))
-      .mapError(_.toThrowable)
+      .mapError(Util.awsErrorToThrowable)
       .map(_.consumerValue.consumerARNValue)
       .catchSome {
         case e: ResourceInUseException =>
@@ -95,7 +95,7 @@ object EnhancedFanOutFetcher {
             .describeStreamConsumer(
               DescribeStreamConsumerRequest(streamARN = Some(streamARN), consumerName = Some(consumerName))
             )
-            .mapError(_.toThrowable)
+            .mapError(Util.awsErrorToThrowable)
             .map(_.consumerDescriptionValue)
             .filterOrElse(_.consumerStatusValue != ConsumerStatus.DELETING)(_ => ZIO.fail(e))
             .map(_.consumerARNValue)

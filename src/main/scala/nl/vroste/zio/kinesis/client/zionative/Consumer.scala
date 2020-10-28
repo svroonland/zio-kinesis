@@ -233,7 +233,7 @@ object Consumer {
 
     val listShards: ZIO[Kinesis, Throwable, Map[String, Shard.ReadOnly]] = kinesis
       .listShards(ListShardsRequest(streamName = Some(streamName)))
-      .mapError(_.toThrowable)
+      .mapError(Util.awsErrorToThrowable)
       .runCollect
       .map(_.map(l => (l.shardIdValue, l)).toMap)
       .flatMap { shards =>
@@ -246,7 +246,7 @@ object Consumer {
         .fromEffect(
           kinesis
             .describeStream(DescribeStreamRequest(streamName))
-            .mapError(_.toThrowable)
+            .mapError(Util.awsErrorToThrowable)
             .map(_.streamDescriptionValue)
             .fork
         )

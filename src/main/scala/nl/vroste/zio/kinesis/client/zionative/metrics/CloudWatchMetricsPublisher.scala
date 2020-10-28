@@ -197,7 +197,7 @@ private class CloudWatchMetricsPublisher(
     client
       .putMetricData(request)
       .unit
-      .mapError(_.toThrowable)
+      .mapError(Util.awsErrorToThrowable)
   }
 }
 
