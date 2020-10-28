@@ -470,7 +470,7 @@ object Consumer {
       StartingPosition(ShardIteratorType.AT_TIMESTAMP, timestamp = Some(timestamp))
     case (Right(s), _)                                                                 =>
       StartingPosition(
-        ShardIteratorType.AFTER_SEQUENCE_NUMBER,
+        ShardIteratorType.AT_SEQUENCE_NUMBER,
         sequenceNumber = Some(s.sequenceNumber)
       )
     case s @ _                                                                         =>

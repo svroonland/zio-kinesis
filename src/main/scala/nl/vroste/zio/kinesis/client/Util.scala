@@ -178,6 +178,7 @@ object Util {
       _     <- ((queue.take raceFirst ZIO.sleep(period)) *> effect *> queue.takeAll).forever.forkManaged
     } yield queue.offer(()).unit
 
+  // TODO Obsolete when https://github.com/vigoo/zio-aws/pull/104 is merged and released
   def awsErrorToThrowable(e: AwsError): Throwable =
     e.toThrowable match {
       case e: CompletionException =>
