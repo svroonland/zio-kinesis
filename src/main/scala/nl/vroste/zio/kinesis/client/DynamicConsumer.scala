@@ -55,7 +55,7 @@ object DynamicConsumer {
    */
   def fake(
     shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, ByteBuffer])],
-    refCheckpointedList: Ref[Seq[Any]]
+    refCheckpointedList: Ref[Seq[Record[Any]]]
   ): ZLayer[Clock, Nothing, Has[Service]] =
     ZLayer.fromService[Clock.Service, DynamicConsumer.Service] { clock =>
       new DynamicConsumerFake(shards, refCheckpointedList, clock)
@@ -71,7 +71,7 @@ object DynamicConsumer {
     shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, ByteBuffer])]
   ): ZLayer[Clock, Nothing, Has[Service]] =
     ZLayer.fromServiceM[Clock.Service, Any, Nothing, DynamicConsumer.Service] { clock =>
-      Ref.make[Seq[Any]](Seq.empty[String]).map { refCheckpointedList =>
+      Ref.make[Seq[Record[Any]]](Seq.empty).map { refCheckpointedList =>
         new DynamicConsumerFake(shards, refCheckpointedList, clock)
       }
     }

@@ -14,7 +14,7 @@ import zio.stream.ZStream
 
 private[client] class DynamicConsumerFake(
   shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, ByteBuffer])],
-  refCheckpointedList: Ref[Seq[_]],
+  refCheckpointedList: Ref[Seq[Record[Any]]],
   clock: Clock.Service
 ) extends DynamicConsumer.Service {
   override def shardedStream[R, T](
@@ -70,7 +70,7 @@ private[client] class DynamicConsumerFake(
 
 object CheckpointerFake {
 
-  def make(refCheckpointedList: Ref[Seq[_]]): Task[Checkpointer] =
+  def make(refCheckpointedList: Ref[Seq[Record[Any]]]): Task[Checkpointer] =
     for {
       latestStaged <- Ref.make[Option[Record[_]]](None)
     } yield new DynamicConsumer.Checkpointer {

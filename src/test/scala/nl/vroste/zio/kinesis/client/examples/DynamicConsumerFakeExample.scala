@@ -3,6 +3,7 @@ package nl.vroste.zio.kinesis.client.examples
 import java.nio.ByteBuffer
 
 import nl.vroste.zio.kinesis.client.DynamicConsumer
+import nl.vroste.zio.kinesis.client.Record
 import nl.vroste.zio.kinesis.client.fake.DynamicConsumerFake
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio._
@@ -24,7 +25,7 @@ object DynamicConsumerFakeExample extends zio.App {
 
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     for {
-      refCheckpointedList <- Ref.make[Seq[_]](Seq.empty[String])
+      refCheckpointedList <- Ref.make[Seq[Record[Any]]](Seq.empty)
       exitCode            <- DynamicConsumer
                     .consumeWith(
                       streamName = "my-stream",

@@ -53,7 +53,7 @@ object DynamicConsumerFakeTest extends DefaultRunnableSpec {
   def programCheckpointed(shards: Shard) =
     for {
       q                   <- Queue.unbounded[Record[String]]
-      refCheckpointedList <- Ref.make[Seq[_]](Seq.empty[String])
+      refCheckpointedList <- Ref.make[Seq[Record[_]]](Seq.empty)
       _                   <- DynamicConsumer
              .consumeWith(
                streamName = "my-stream",
