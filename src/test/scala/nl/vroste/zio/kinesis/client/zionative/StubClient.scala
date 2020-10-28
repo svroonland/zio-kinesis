@@ -1,18 +1,9 @@
 package nl.vroste.zio.kinesis.client.zionative
-<<<<<<< HEAD
 import io.github.vigoo.zioaws.core.AwsError
 import io.github.vigoo.zioaws.kinesis.model._
 import io.github.vigoo.zioaws.kinesis.{ model, Kinesis }
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import zio.IO
-=======
-import java.time.Instant
-
-import nl.vroste.zio.kinesis.client.Client
-import nl.vroste.zio.kinesis.client.serde.Serializer
-import software.amazon.awssdk.services.kinesis.model.ShardFilter
-import zio.clock.Clock
->>>>>>> origin/master
 import zio.stream.ZStream
 
 class StubClient extends Kinesis.Service {
@@ -42,7 +33,6 @@ class StubClient extends Kinesis.Service {
   ): IO[AwsError, ListTagsForStreamResponse.ReadOnly]                                                                 = ???
   override def listShards(request: ListShardsRequest): ZStream[Any, AwsError, Shard.ReadOnly]                         = ???
   override def describeStreamConsumer(
-<<<<<<< HEAD
     request: model.DescribeStreamConsumerRequest
   ): IO[AwsError, DescribeStreamConsumerResponse.ReadOnly]                                                            = ???
   override def listStreams(request: model.ListStreamsRequest): IO[AwsError, ListStreamsResponse.ReadOnly]             = ???
@@ -54,19 +44,6 @@ class StubClient extends Kinesis.Service {
   override def deregisterStreamConsumer(request: model.DeregisterStreamConsumerRequest): IO[AwsError, Unit]           = ???
   override def stopStreamEncryption(request: model.StopStreamEncryptionRequest): IO[AwsError, Unit]                   = ???
   override def putRecords(request: model.PutRecordsRequest): IO[AwsError, PutRecordsResponse.ReadOnly]                = ???
-=======
-    streamARN: String,
-    consumerName: String
-  ): ZIO[Any, Throwable, ConsumerDescription] = ???
-
-  override def listShards(
-    streamName: String,
-    streamCreationTimestamp: Option[Instant],
-    chunkSize: Int,
-    filter: Option[ShardFilter] = None
-  ): ZStream[Clock, Throwable, Shard] = ???
-
->>>>>>> origin/master
   override def getShardIterator(
     request: model.GetShardIteratorRequest
   ): IO[AwsError, GetShardIteratorResponse.ReadOnly]                                                                  = ???

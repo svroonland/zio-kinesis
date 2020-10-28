@@ -4,10 +4,6 @@ import java.time.Instant
 import nl.vroste.zio.kinesis.client.Record
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultCheckpointer
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultCheckpointer.UpdateCheckpoint
-<<<<<<< HEAD
-=======
-import software.amazon.awssdk.services.kinesis.model.EncryptionType
->>>>>>> origin/master
 import zio.logging.Logging
 import zio.{ Promise, Ref, Schedule, Semaphore, Task, ZIO }
 import zio.test._
@@ -17,13 +13,8 @@ import scala.concurrent.TimeoutException
 
 object DefaultCheckpointerTest extends DefaultRunnableSpec {
   type Checkpoint = Either[SpecialCheckpoint, ExtendedSequenceNumber]
-<<<<<<< HEAD
   val record1 = Record("shard1", "0", Instant.now, "bla", "bla", None, None, None, false)
   val record2 = Record("shard1", "1", Instant.now, "bla", "bla", None, None, None, false)
-=======
-  val record1 = Record("shard1", "0", Instant.now, "bla", "bla", EncryptionType.NONE, None, None, false)
-  val record2 = Record("shard1", "1", Instant.now, "bla", "bla", EncryptionType.NONE, None, None, false)
->>>>>>> origin/master
 
   override def spec =
     suite("DefaultCheckpointer")(

@@ -1,25 +1,16 @@
 package nl.vroste.zio.kinesis.client
 
-<<<<<<< HEAD
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.core.config
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model.{ ScalingType, UpdateShardCountRequest }
 import io.github.vigoo.zioaws.{ cloudwatch, dynamodb, kinesis }
-=======
->>>>>>> origin/master
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.Consumer.InitialPosition
 import nl.vroste.zio.kinesis.client.zionative._
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
 import nl.vroste.zio.kinesis.client.zionative.metrics.{ CloudWatchMetricsPublisher, CloudWatchMetricsPublisherConfig }
-<<<<<<< HEAD
-=======
-import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
-import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
-import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
->>>>>>> origin/master
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio._
 import zio.blocking.Blocking
@@ -49,26 +40,16 @@ object ExampleApp extends zio.App {
   val maxRandomWorkerStartDelayMillis = 1 + 0 * 60 * 1000
   val recordProcessingTime: Duration  = 1.millisecond
 
-<<<<<<< HEAD
   val producerSettings                = ProducerSettings(
-=======
-  val producerSettings = ProducerSettings(
->>>>>>> origin/master
     aggregate = true,
     metricsInterval = 5.seconds,
     bufferSize = 8192 * 8,
     maxParallelRequests = 10
   )
 
-<<<<<<< HEAD
   val program: ZIO[Logging with Clock with Blocking with Random with Console with Kinesis with CloudWatch with Has[
     CloudWatchMetricsPublisherConfig
   ] with DynamicConsumer with LeaseRepository, Throwable, ExitCode] = {
-=======
-  override def run(
-    args: List[String]
-  ): ZIO[zio.ZEnv, Nothing, ExitCode] = {
->>>>>>> origin/master
     for {
       _          <- TestUtil.createStreamUnmanaged(streamName, nrShards)
       _          <- TestUtil.getShards(streamName)
@@ -92,7 +73,6 @@ object ExampleApp extends zio.App {
       _          <- reshardAfter
              .map(delay =>
                (log.info("Resharding") *>
-<<<<<<< HEAD
                  kinesis.updateShardCount(
                    UpdateShardCountRequest(
                      streamName,
@@ -100,11 +80,6 @@ object ExampleApp extends zio.App {
                      ScalingType.UNIFORM_SCALING
                    )
                  ))
-=======
-                 ZIO
-                   .service[AdminClient.Service]
-                   .flatMap(_.updateShardCount(streamName, Math.ceil(nrShards.toDouble * reshardFactor).toInt)))
->>>>>>> origin/master
                  .delay(delay)
              )
              .getOrElse(ZIO.unit)
@@ -118,7 +93,6 @@ object ExampleApp extends zio.App {
 
            })
     } yield ExitCode.success
-<<<<<<< HEAD
   }
   override def run(
     args: List[String]
@@ -189,71 +163,6 @@ object ExampleApp extends zio.App {
   ): ZStream[DynamicConsumer with Blocking with Logging with Clock with Random, Throwable, DynamicConsumer.Record[
     String
   ]] =
-=======
-  }.foldCauseM(e => log.error(s"Program failed: ${e.prettyPrint}", e).exitCode, ZIO.succeed(_))
-    .provideCustomLayer(
-      awsEnv // TODO switch back!!
-      // localStackEnv
-    )
-
-  def worker(id: String) =
-    ZStream.unwrapManaged {
-      for {
-        metrics <- CloudWatchMetricsPublisher.make(applicationName, id)
-        //          delay   <- zio.random.nextIntBetween(0, maxRandomWorkerStartDelayMillis).map(_.millis).toManaged_
-        delay    = 2230.seconds
-        _       <- log.info(s"Waiting ${delay.toMillis} ms to start worker ${id}").toManaged_
-      } yield ZStream.fromEffect(ZIO.sleep(delay)) *> Consumer
-        .shardedStream(
-          streamName,
-          applicationName = applicationName,
-          deserializer = Serde.asciiString,
-          workerIdentifier = id,
-          fetchMode = if (enhancedFanout) FetchMode.EnhancedFanOut() else FetchMode.Polling(batchSize = 1000),
-          initialPosition = InitialPosition.TrimHorizon,
-          emitDiagnostic = ev =>
-            (ev match {
-              case ev: DiagnosticEvent.PollComplete =>
-                log
-                  .info(
-                    id + s": PollComplete for ${ev.nrRecords} records of ${ev.shardId}, behind latest: ${ev.behindLatest.toMillis} ms (took ${ev.duration.toMillis} ms)"
-                  )
-                  .provideLayer(loggingLayer)
-              case ev                               => log.info(id + ": " + ev.toString).provideLayer(loggingLayer)
-            }) *> metrics.processEvent(ev)
-        )
-        .flatMapPar(Int.MaxValue) {
-          case (shardID, shardStream, checkpointer) =>
-            shardStream
-              .tap(r =>
-                checkpointer
-                  .stageOnSuccess(
-                    (log.info(s"${id} Processing record $r") *> ZIO
-                      .sleep(recordProcessingTime)
-                      .when(recordProcessingTime >= 1.millis)).when(false)
-                  )(r)
-              )
-              .aggregateAsyncWithin(ZTransducer.collectAllN(5000), Schedule.fixed(10.second))
-              .tap(rs => log.info(s"${id} processed ${rs.size} records on shard ${shardID}").when(true))
-              .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-              .tap(_ => checkpointer.checkpoint())
-              .catchAll {
-                case Right(ShardLeaseLost) =>
-                  ZStream.fromEffect(log.info(s"${id} Doing checkpoint for ${shardID}: shard lease lost")) *>
-                    ZStream.empty
-
-                case Left(e)               =>
-                  ZStream.fromEffect(
-                    log.error(s"${id} shard ${shardID} stream failed with " + e + ": " + e.getStackTrace)
-                  ) *> ZStream.fail(e)
-              }
-        }
-        .mapConcatChunk(identity)
-        .ensuring(log.info(s"Worker ${id} stream completed"))
-    }
-
-  def kclWorker(id: String, requestShutdown: Promise[Nothing, Unit]) =
->>>>>>> origin/master
     ZStream.fromEffect(
       zio.random.nextIntBetween(0, 1000).flatMap(d => ZIO.sleep(d.millis))
     ) *> DynamicConsumer
@@ -291,13 +200,7 @@ object ExampleApp extends zio.App {
     (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   val localStackEnv =
-<<<<<<< HEAD
     LocalStackServices.env.orDie >+> (DynamoDbLeaseRepository.live) ++ loggingLayer
-=======
-    LocalStackServices.localStackAwsLayer() >+>
-      (AdminClient.live ++ Client.live ++ DynamoDbLeaseRepository.live).orDie ++
-        loggingLayer
->>>>>>> origin/master
 
   val awsEnv: ZLayer[
     Any,
