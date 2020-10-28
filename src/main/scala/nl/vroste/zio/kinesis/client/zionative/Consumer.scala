@@ -69,9 +69,7 @@ object FetchMode {
      * @param interval Fixed interval for polling when no more records are currently available
      */
     def dynamicSchedule(interval: Duration): Schedule[Clock, GetRecordsResponse.ReadOnly, Any] =
-      (Schedule.recurWhile[Boolean](_ == true) || Schedule.spaced(
-        interval
-      )) // TODO replace with fixed when ZIO 1.0.2 is out
+      (Schedule.recurWhile[Boolean](_ == true) || Schedule.fixed(interval))
         .contramap((_: GetRecordsResponse.ReadOnly).millisBehindLatestValue.getOrElse(0) != 0)
   }
 
@@ -177,7 +175,6 @@ object Consumer {
       shardId: String,
       r: io.github.vigoo.zioaws.kinesis.model.Record.ReadOnly
     ): ZIO[Logging with R, Throwable, Chunk[Record[T]]] = {
-//      val data      = r.data().asByteBuffer()
       val dataChunk = r.dataValue
 
       if (ProtobufAggregation.isAggregatedRecord(dataChunk))
