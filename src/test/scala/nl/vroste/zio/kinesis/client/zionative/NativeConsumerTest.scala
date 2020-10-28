@@ -9,7 +9,7 @@ import io.github.vigoo.zioaws.kinesis
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model.{ DescribeStreamRequest, ScalingType, UpdateShardCountRequest }
 import nl.vroste.zio.kinesis.client
-import nl.vroste.zio.kinesis.client.{ Client, Producer, ProducerSettings, TestUtil }
+import nl.vroste.zio.kinesis.client.{ Producer, ProducerSettings, TestUtil }
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.TestUtil.{ retryOnResourceNotFound, withStream }
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices

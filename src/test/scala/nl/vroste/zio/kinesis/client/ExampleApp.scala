@@ -47,9 +47,9 @@ object ExampleApp extends zio.App {
     maxParallelRequests = 10
   )
 
-  val program: ZIO[ZEnv with Kinesis with Logging with CloudWatch with Has[
+  val program: ZIO[Logging with Clock with Blocking with Random with Console with Kinesis with CloudWatch with Has[
     CloudWatchMetricsPublisherConfig
-  ] with LeaseRepository, Throwable, ExitCode] = {
+  ] with DynamicConsumer with LeaseRepository, Throwable, ExitCode] = {
     for {
       _          <- TestUtil.createStreamUnmanaged(streamName, nrShards)
       _          <- TestUtil.getShards(streamName)
@@ -157,7 +157,12 @@ object ExampleApp extends zio.App {
         .ensuring(log.info(s"Worker ${id} stream completed"))
     }
 
-  def kclWorker(id: String, requestShutdown: Promise[Nothing, Unit]) =
+  def kclWorker(
+    id: String,
+    requestShutdown: Promise[Nothing, Unit]
+  ): ZStream[DynamicConsumer with Blocking with Logging with Clock with Random, Throwable, DynamicConsumer.Record[
+    String
+  ]] =
     ZStream.fromEffect(
       zio.random.nextIntBetween(0, 1000).flatMap(d => ZIO.sleep(d.millis))
     ) *> DynamicConsumer
@@ -197,9 +202,13 @@ object ExampleApp extends zio.App {
   val localStackEnv =
     LocalStackServices.env.orDie >+> (DynamoDbLeaseRepository.live) ++ loggingLayer
 
-  val awsEnv: ZLayer[Any, Nothing, Kinesis with CloudWatch with dynamodb.DynamoDb with Logging with Has[
-    DynamicConsumer.Service
-  ] with LeaseRepository with Has[CloudWatchMetricsPublisherConfig]] = {
+  val awsEnv: ZLayer[
+    Any,
+    Nothing,
+    Kinesis with CloudWatch with dynamodb.DynamoDb with Logging with DynamicConsumer with LeaseRepository with Has[
+      CloudWatchMetricsPublisherConfig
+    ]
+  ] = {
     val httpClient    = HttpClientBuilder.make(
       maxConcurrency = 100,
       allowHttp2 = false
