@@ -218,13 +218,13 @@ private[client] class DynamicConsumerLive(
         _         <- (requestShutdown *> doShutdown).forkManaged
       } yield ZStream
         .fromQueue(queues.shards)
-        .collectWhileSuccess
+        .flattenExitOption
         .map {
           case (shardId, shardQueue, checkpointer) =>
             val stream = ZStream
               .fromQueue(shardQueue.q)
               .ensuringFirst(shardQueue.shutdownQueue)
-              .collectWhileSuccess
+              .flattenExitOption
               .mapChunksM(_.mapM(toRecord(shardId, _)))
               .provide(env)
               .ensuringFirst(checkpointer.checkpoint.catchSome { case _: ShutdownException => UIO.unit }.orDie)

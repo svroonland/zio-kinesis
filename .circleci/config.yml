@@ -2,18 +2,19 @@ version: 2.1
 jobs:
   lint:
     docker:
-      - image: hseeberger/scala-sbt:8u242_1.3.10_2.13.1
+      - image: hseeberger/scala-sbt:11.0.8_1.3.13_2.13.3
     steps:
       - checkout
       - restore_cache:
-          key: sbt-cache
-      - run: sbt ++2.13.1! check
+          key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
+      - run: sbt ++2.13.3! check
       - save_cache:
-          key: sbt-cache
+          key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
           paths:
             - "~/.ivy2/cache"
             - "~/.sbt"
             - "~/.m2"
+            - "~/.cache/coursier/v1"
   test213_jdk8:
     docker:
       - image: hseeberger/scala-sbt:8u265_1.3.13_2.13.3
@@ -31,11 +32,11 @@ jobs:
     steps:
       - checkout
       - restore_cache:
-          key: sbt-cache
-      - run: apt install -y protobuf-compiler
-      - run: sbt ++2.13.1! test
+          key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
+      - run: apt update && apt install -y protobuf-compiler
+      - run: sbt ++2.13.3! test
       - save_cache:
-          key: sbt-cache
+          key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
           paths:
             - "~/.ivy2/cache"
             - "~/.sbt"
@@ -56,13 +57,13 @@ jobs:
     steps:
       - checkout
       - restore_cache:
-          key: sbt-cache
-      - run: apt install -y protobuf-compiler
-      - run: sbt ++2.13.1! test
+          key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
+      - run: apt update && apt install -y protobuf-compiler
+      - run: sbt ++2.13.3! test
       - store_test_results:
           path: target/test-reports
       - save_cache:
-          key: sbt-cache
+          key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
           paths:
             - "~/.ivy2/cache"
             - "~/.sbt"
@@ -83,11 +84,11 @@ jobs:
     steps:
       - checkout
       - restore_cache:
-          key: sbt-cache
-      - run: apt install -y protobuf-compiler
+          key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
+      - run: apt update && apt install -y protobuf-compiler
       - run: sbt ++2.12.11! test
       - save_cache:
-          key: sbt-cache
+          key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
           paths:
             - "~/.ivy2/cache"
             - "~/.sbt"
@@ -108,11 +109,11 @@ jobs:
     steps:
       - checkout
       - restore_cache:
-          key: sbt-cache
-      - run: apt install -y protobuf-compiler
+          key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
+      - run: apt update && apt install -y protobuf-compiler
       - run: sbt ++2.12.11! test
       - save_cache:
-          key: sbt-cache
+          key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
           paths:
             - "~/.ivy2/cache"
             - "~/.sbt"
@@ -124,8 +125,8 @@ jobs:
       - checkout
       - run: git fetch --tags
       - restore_cache:
-          key: sbt-cache
-      - run: apt install -y protobuf-compiler
+          key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
+      - run: apt update && apt install -y protobuf-compiler
       - run: sbt ciReleaseBintray
 
 workflows:

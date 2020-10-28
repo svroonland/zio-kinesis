@@ -1,13 +1,12 @@
 package nl.vroste.zio.kinesis.client
 
-import java.time.Instant
 import java.nio.ByteBuffer
+import java.time.Instant
 import java.util.UUID
 
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.dynamodb.DynamoDb
 import io.github.vigoo.zioaws.kinesis.Kinesis
-import nl.vroste.zio.kinesis.client.Util.processWithSkipOnError
 import nl.vroste.zio.kinesis.client.fake.DynamicConsumerFake
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
@@ -213,21 +212,15 @@ object DynamicConsumer {
              )
              .flatMapPar(Int.MaxValue) {
                case (_, shardStream, checkpointer) =>
-                 ZStream.fromEffect(Ref.make(false)).flatMap { refSkip =>
-                   shardStream
-                     .tap(record =>
-                       processWithSkipOnError(refSkip)(
-                         recordProcessor(record) *> checkpointer.stage(record)
+                 shardStream
+                   .tap(record => recordProcessor(record) *> checkpointer.stage(record))
+                   .via(
+                     checkpointer
+                       .checkpointBatched[Blocking with Logging with RC](
+                         nr = checkpointBatchSize,
+                         interval = checkpointDuration
                        )
-                     )
-                     .via(
-                       checkpointer
-                         .checkpointBatched[Blocking with Logging with RC](
-                           nr = checkpointBatchSize,
-                           interval = checkpointDuration
-                         )
-                     )
-                 }
+                   )
              }
              .runDrain
     } yield ()

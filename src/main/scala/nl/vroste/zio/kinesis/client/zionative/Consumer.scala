@@ -8,7 +8,6 @@ import io.github.vigoo.zioaws.core.config
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model._
 import io.github.vigoo.zioaws.{ cloudwatch, dynamodb, kinesis }
-import nl.vroste.zio.kinesis.client.Util.processWithSkipOnError
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.{ EnhancedFanOut, Polling }
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
@@ -174,22 +173,6 @@ object Consumer {
       Checkpointer
     )
   ] = {
-//<<<<<<< HEAD
-//    def toRecord(shardId: String, r: io.github.vigoo.zioaws.kinesis.model.Record): ZIO[R, Throwable, Record[T]] =
-//      deserializer.deserialize(ByteBuffer.wrap(r.data.toArray)).map { data =>
-//        Record(
-//          shardId,
-//          r.sequenceNumber,
-//          r.approximateArrivalTimestamp.get, // TODO make optional
-//          data,
-//          r.partitionKey,
-//          r.encryptionType,                  // TODO make optional
-//          0,                                 // r.subSequenceNumber,
-//          "",                                // r.explicitHashKey,
-//          false                              //r.aggregated,
-//        )
-//      }
-//=======
     def toRecords(
       shardId: String,
       r: io.github.vigoo.zioaws.kinesis.model.Record.ReadOnly
@@ -360,7 +343,7 @@ object Consumer {
                                       }
                                   }
                                   .dropWhile(r => !checkpointOpt.forall(aggregatedRecordIsAfterCheckpoint(r, _)))
-                                  .map(Exit.succeed(_))).collectWhileSuccess
+                                  .map(Exit.succeed(_))).flattenExitOption
               } yield (
                 shardId,
                 shardStream.ensuringFirst {
@@ -390,7 +373,11 @@ object Consumer {
    * @param recordProcessor A function for processing a `Record[T]`
    * @tparam R ZIO environment type required by the `deserializer` and the `recordProcessor`
    * @tparam T Type of record values
+<<<<<<< HEAD
    * @return A ZIO that completes with Unit when record processing is stopped via requestShutdown or fails when the consumer stream fails
+=======
+   * @return A ZIO that completes with Unit when record processing is stopped or fails when the consumer stream fails
+>>>>>>> origin/master
    */
   def consumeWith[R, RC, T](
     streamName: String,
@@ -424,15 +411,9 @@ object Consumer {
              shardAssignmentStrategy
            ).flatMapPar(Int.MaxValue) {
                case (_, shardStream, checkpointer) =>
-                 ZStream.fromEffect(Ref.make(false)).flatMap { refSkip =>
-                   shardStream
-                     .tap(record =>
-                       processWithSkipOnError(refSkip)(
-                         recordProcessor(record) *> checkpointer.stage(record)
-                       )
-                     )
-                     .via(checkpointer.checkpointBatched[RC](nr = checkpointBatchSize, interval = checkpointDuration))
-                 }
+                 shardStream
+                   .tap(record => recordProcessor(record) *> checkpointer.stage(record))
+                   .via(checkpointer.checkpointBatched[RC](nr = checkpointBatchSize, interval = checkpointDuration))
              }
              .runDrain
     } yield ()

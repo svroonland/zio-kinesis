@@ -1,0 +1,24 @@
+pull_request_rules:
+  - name: Update with master
+    conditions:
+      - base=master
+    actions:
+      update: {}
+  - name: merge Scala Steward's PRs
+    conditions:
+      - base=master
+      - author=scala-steward
+      - "status-success=ci/circleci: test213_jdk11"
+      - "status-success=ci/circleci: test213_jdk8"
+      - "status-success=ci/circleci: test212_jdk11"
+      - "status-success=ci/circleci: test212_jdk8"
+    actions:
+      merge:
+        method: squash
+  - name: Automatic merge on approval
+    conditions:
+      - "#approved-reviews-by>=1"
+    actions:
+      merge:
+        method: merge
+

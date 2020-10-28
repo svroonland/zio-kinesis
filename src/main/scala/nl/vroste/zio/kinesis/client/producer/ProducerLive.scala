@@ -40,10 +40,11 @@ private[client] final class ProducerLive[R, R1, T](
   import Util.ZStreamExtensions
 
   val runloop: ZIO[Logging with Clock, Nothing, Unit] = {
-    val retries = zStreamFromQueueWithMaxChunkSize(failedQueue, maxChunkSize)
+    val retries = ZStream.fromQueue(failedQueue, maxChunkSize)
 
     // Failed records get precedence
-    (retries merge zStreamFromQueueWithMaxChunkSize(queue, maxChunkSize)
+    (retries merge ZStream
+      .fromQueue(queue, maxChunkSize)
       .mapChunksM(chunk => log.trace(s"Dequeued chunk of size ${chunk.size}").as(chunk))
       // Aggregate records per shard
       .groupByKey2(_.predictedShard)
@@ -219,7 +220,7 @@ private[client] final class ProducerLive[R, R1, T](
 // Repeatedly produce metrics
   val metricsCollection: ZIO[R1 with Clock, Nothing, Long] = collectMetrics
     .delay(settings.metricsInterval)
-    .repeat(Schedule.spaced(settings.metricsInterval)) // TODO replace with fixed when ZIO 1.0.2 is out
+    .repeat(Schedule.fixed(settings.metricsInterval))
 
   override def produce(r: ProducerRecord[T]): Task[ProduceResponse] =
     (for {

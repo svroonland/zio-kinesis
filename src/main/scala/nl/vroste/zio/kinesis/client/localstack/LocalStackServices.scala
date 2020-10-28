@@ -26,7 +26,6 @@ import zio.duration._
  * Layers for connecting to a LocalStack (https://localstack.cloud/) environment on a local docker host
  */
 object LocalStackServices {
-
   private val region: Region          = Region.of("us-east-1")
   private val kinesisUri: URI         = URI.create("http://localhost:4566")
   private val cloudwatchUri: URI      = URI.create("http://localhost:4566")

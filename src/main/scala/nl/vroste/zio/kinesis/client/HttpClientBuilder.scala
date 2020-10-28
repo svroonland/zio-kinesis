@@ -41,8 +41,8 @@ object HttpClientBuilder {
       .maxConcurrency(maxConcurrency)
       .connectionAcquisitionTimeout(connectionAcquisitionTimeout.asJava)
       .maxPendingConnectionAcquires(maxPendingConnectionAcquires)
-      .readTimeout(readTimeout.asJava)
       .writeTimeout(writeTimeout)
+      .readTimeout(readTimeout)
       .http2Configuration(
         Http2Configuration
           .builder()

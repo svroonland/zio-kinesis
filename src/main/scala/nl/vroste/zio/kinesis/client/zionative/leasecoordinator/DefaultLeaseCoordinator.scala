@@ -6,6 +6,8 @@ import DefaultLeaseCoordinator.State
 import io.github.vigoo.zioaws.kinesis.model.Shard
 import nl.vroste.zio.kinesis.client.zionative.Consumer.InitialPosition
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
+import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
+import nl.vroste.zio.kinesis.client.zionative._
 import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.{
   Lease,
   LeaseAlreadyExists,

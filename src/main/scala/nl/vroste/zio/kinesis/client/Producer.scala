@@ -1,12 +1,12 @@
 package nl.vroste.zio.kinesis.client
-import io.github.vigoo.zioaws.kinesis.Kinesis
 import java.time.Instant
 
 import io.github.vigoo.zioaws.kinesis
-import io.github.vigoo.zioaws.kinesis.model.{ ListShardsRequest, ShardFilter, ShardFilterType }
+import io.github.vigoo.zioaws.kinesis.model.{ ListShardsRequest, ShardFilterType }
+import io.github.vigoo.zioaws.kinesis.{ model, Kinesis }
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.producer.ProducerLive.ProduceRequest
-import nl.vroste.zio.kinesis.client.producer.{ CurrentMetrics, ProducerLive, ProducerMetrics, ShardMap, ShardThrottler }
+import nl.vroste.zio.kinesis.client.producer._
 import nl.vroste.zio.kinesis.client.serde.Serializer
 import zio._
 import zio.clock.{ instant, Clock }
@@ -99,6 +99,18 @@ final case class ProducerSettings(
 object Producer {
   final case class ProduceResponse(shardId: String, sequenceNumber: String, attempts: Int, completed: Instant)
 
+  /**
+   * Create a Producer of `T` values to stream `streamName`
+   *
+   * @param streamName Stream to produce to
+   * @param serializer Serializer for values of type T
+   * @param settings
+   * @param metricsCollector Periodically called with producer metrics
+   * @tparam R Environment required by the serializer, usually Any
+   * @tparam R1
+   * @tparam T Type of values to produce
+   * @return A Managed Producer
+   */
   def make[R, R1, T](
     streamName: String,
     serializer: Serializer[R, T],
@@ -144,7 +156,7 @@ object Producer {
     } yield producer
 
   private def getShardMap(streamName: String): ZIO[Clock with Kinesis, Throwable, ShardMap] = {
-    val shardFilter = ShardFilter(ShardFilterType.AT_LATEST) // Currently open shards
+    val shardFilter = model.ShardFilter(ShardFilterType.AT_LATEST) // Currently open shards
     kinesis
       .listShards(ListShardsRequest(Some(streamName), shardFilter = Some(shardFilter)))
       .mapError(_.toThrowable)

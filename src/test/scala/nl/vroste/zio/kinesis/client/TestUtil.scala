@@ -1,5 +1,6 @@
 package nl.vroste.zio.kinesis.client
 
+<<<<<<< HEAD
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model.{
   CreateStreamRequest,
@@ -18,6 +19,14 @@ import io.github.vigoo.zioaws.kinesis
 import nl.vroste.zio.kinesis.client.producer.ProducerMetrics
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException }
+=======
+import java.util.UUID
+
+import nl.vroste.zio.kinesis.client.Client.ProducerRecord
+import nl.vroste.zio.kinesis.client.producer.ProducerMetrics
+import nl.vroste.zio.kinesis.client.serde.Serde
+import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException, Shard }
+>>>>>>> origin/master
 import zio.clock.Clock
 import zio.console.{ putStrLn, Console }
 import zio.duration._
@@ -44,6 +53,7 @@ object TestUtil {
       .filterOrElse(_.nonEmpty)(_ => getShards(name).delay(1.second))
       .catchSome { case _: ResourceInUseException => getShards(name).delay(1.second) }
 
+<<<<<<< HEAD
   def createStream(streamName: String, nrShards: Int): ZManaged[Console with Clock with Kinesis, Throwable, Unit] =
     createStreamUnmanaged(streamName, nrShards).toManaged(_ =>
       kinesis
@@ -54,6 +64,19 @@ object TestUtil {
         }
         .orDie
     )
+=======
+  def createStream(streamName: String, nrShards: Int): ZManaged[Console with AdminClient with Clock, Throwable, Unit] =
+    createStreamUnmanaged(streamName, nrShards)
+      .toManaged(_ =>
+        ZIO
+          .service[AdminClient.Service]
+          .flatMap(_.deleteStream(streamName, enforceConsumerDeletion = true))
+          .catchSome {
+            case _: ResourceNotFoundException => ZIO.unit
+          }
+          .orDie
+      )
+>>>>>>> origin/master
 
   def createStreamUnmanaged(
     streamName: String,
@@ -88,7 +111,11 @@ object TestUtil {
     produceRate: Int,
     size: Int,
     producerSettings: ProducerSettings = ProducerSettings()
+<<<<<<< HEAD
   ): ZIO[Any with Console with Clock with Kinesis with Logging, Throwable, Unit] =
+=======
+  ): ZIO[Any with Console with Clock with Client with Logging, Throwable, Unit] =
+>>>>>>> origin/master
     Ref
       .make(ProducerMetrics.empty)
       .toManaged_
@@ -108,6 +135,7 @@ object TestUtil {
       .use(massProduceRecords(_, nrRecords, produceRate, size))
 
   val chunkSize = 1000
+<<<<<<< HEAD
 
   def putRecords[R, T](
     streamName: String,
@@ -124,6 +152,8 @@ object TestUtil {
                     .putRecords(PutRecordsRequest(entries.toList, streamName))
                     .mapError(_.toThrowable)
     } yield response
+=======
+>>>>>>> origin/master
 
   /**
    * Produces a lot of random records at some rate

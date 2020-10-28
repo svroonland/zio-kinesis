@@ -83,11 +83,11 @@ object Util {
                 substreamsQueue.offer(Exit.fail(Some(e)))
             }.forkManaged
           }
-        } yield ZStream.fromQueueWithShutdown(substreamsQueue).collectWhileSuccess.map {
+        } yield ZStream.fromQueueWithShutdown(substreamsQueue).flattenExitOption.map {
           case (key, substreamQueue) =>
             val substream = ZStream
               .fromQueueWithShutdown(substreamQueue)
-              .collectWhileSuccess
+              .flattenExitOption
               .flattenChunks
             (key, substream)
         }
@@ -156,22 +156,6 @@ object Util {
         case (i0, i1, i2) => f(i0, i1, i2)
       }.map(Function.untupled(_))
   }
-
-  /**
-   * this is a workaround to a bug in `aggregateAsyncWithin` whereby after an error the next element is still processed before failing
-   * (see ZIO issue/bug https://github.com/zio/zio/issues/4039) and should be used to wrap the effect used upstream of `aggregateAsyncWithin`
-   * If `refSkip` contains Boolean true due to a previous error the effect is skipped.
-   * @param refSkip a Ref of Boolean - it must be initialised to false
-   * @param effect
-   * @return the result of the effect or the result of the NOP skip - both are Task[Unit]
-   */
-  def processWithSkipOnError[R](refSkip: Ref[Boolean])(effect: ZIO[R, Throwable, Unit]): ZIO[R, Throwable, Unit] =
-    for {
-      skip <- refSkip.get
-      _    <- ZIO
-             .when(!skip)(effect)
-             .onError(_ => refSkip.update(_ => true))
-    } yield ()
 
   /**
    * Creates a resource that executes `effect`` with intervals of `period` or via manual invocation

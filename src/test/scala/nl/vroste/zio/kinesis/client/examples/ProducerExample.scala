@@ -15,7 +15,11 @@ object ProducerExample extends zio.App {
   val loggingLayer: ZLayer[Any, Nothing, Logging] =
     (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
+<<<<<<< HEAD
   val env = client.defaultEnvironment ++ loggingLayer
+=======
+  val env = client.defaultAwsLayer >+> Client.live ++ loggingLayer
+>>>>>>> origin/master
 
   val program = Producer.make(streamName, Serde.asciiString).use { producer =>
     val record = ProducerRecord("key1", "message1")

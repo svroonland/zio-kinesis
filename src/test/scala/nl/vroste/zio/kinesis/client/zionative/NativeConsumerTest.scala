@@ -4,12 +4,17 @@ import java.time.Instant
 import java.{ util => ju }
 
 import scala.collection.compat._
+<<<<<<< HEAD
 
 import io.github.vigoo.zioaws.kinesis
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model.{ DescribeStreamRequest, ScalingType, UpdateShardCountRequest }
 import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.{ Producer, ProducerSettings, TestUtil }
+=======
+import nl.vroste.zio.kinesis.client.Client.ProducerRecord
+import nl.vroste.zio.kinesis.client.{ AdminClient, Client, Producer, ProducerSettings, TestUtil }
+>>>>>>> origin/master
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.TestUtil.{ retryOnResourceNotFound, withStream }
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
@@ -778,10 +783,17 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
   val useAws = Runtime.default.unsafeRun(system.envOrElse("ENABLE_AWS", "0")).toInt == 1
 
+<<<<<<< HEAD
   val env = (((if (useAws) client.defaultEnvironment else LocalStackServices.env).orDie) >+>
     DynamoDbLeaseRepository.live ++
       zio.test.environment.testEnvironment ++
       Clock.live) >>>
+=======
+  val env = (((if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()).orDie >+>
+    (AdminClient.live ++ Client.live ++ DynamoDbLeaseRepository.live)).orDie ++
+    zio.test.environment.testEnvironment ++
+    Clock.live) >>>
+>>>>>>> origin/master
     (ZLayer.identity ++ loggingLayer)
 
   def produceSampleRecords(
@@ -791,7 +803,11 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     throttle: Option[Duration] = None,
     indexStart: Int = 1,
     aggregated: Boolean = false
+<<<<<<< HEAD
   ): ZIO[Kinesis with Clock with Logging, Throwable, Chunk[ProduceResponse]] =
+=======
+  ): ZIO[Client with Clock with Logging, Throwable, Chunk[ProduceResponse]] =
+>>>>>>> origin/master
     Producer
       .make(streamName, Serde.asciiString, ProducerSettings(maxParallelRequests = 1, aggregate = aggregated))
       .use { producer =>
