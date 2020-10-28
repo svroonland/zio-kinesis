@@ -7,46 +7,6 @@ ZIO Kinesis is a ZIO-based interface to Amazon Kinesis Data Streams for consumin
 The project is in beta stage. Although already being used in production by a small number of organisations, expect some issues to pop up and some changes to the interface.
 More beta users and feedback are of course welcome.
 
-- [Features](#features)
-- [Installation](#installation)
-- [Consumer](#consumer)
-  * [Basic usage using `consumeWith`](#basic-usage-using--consumewith-)
-  * [More advanced usage](#more-advanced-usage)
-  * [Checkpointing](#checkpointing)
-  * [Lease coordination](#lease-coordination)
-  * [Resharding](#resharding)
-  * [Consuming multiple Kinesis streams](#consuming-multiple-kinesis-streams)
-  * [Customization](#customization)
-  * [Diagnostic event & metrics](#diagnostic-event---metrics)
-  * [KCL compatibility](#kcl-compatibility)
-  * [Unsupported features](#unsupported-features)
-- [Configuration](#configuration)
-- [Producer](#producer)
-  * [Aggregation](#aggregation)
-  * [Metrics](#metrics)
-- [Future-based interface](#future-based-interface)
-- [DynamicConsumer](#dynamicconsumer)
-<<<<<<< HEAD
-<<<<<<< HEAD
-  * [Basic usage using `consumeWith`](#basic-usage-using--consumewith-)
-<<<<<<< HEAD
-  * [Advanced usage](#advanced-usage-example-)
-- [Running tests and more usage examples](#running-tests-and-usage-examples)
-=======
-=======
-  * [Basic usage using `consumeWith`](#basic-usage-using--consumewith--1)
-  * [DynamicConsumerFake](#dynamicconsumerfake)
->>>>>>> origin/master
-=======
-  * [Basic usage using `consumeWith`](#basic-usage-using--consumewith--1)
-  * [DynamicConsumerFake](#dynamicconsumerfake)
->>>>>>> origin/master
-  * [Advanced usage](#advanced-usage)
-- [Client and AdminClient](#client-and-adminclient)
-- [Running tests and more usage examples](#running-tests-and-more-usage-examples)
->>>>>>> origin/master
-- [Credits](#credits)
-
 ## Features
 
 The library consists of:
@@ -98,7 +58,6 @@ Features:
 ### Basic usage using `consumeWith`
 For a lot of use cases where you just want to do something with all messages on a Kinesis stream, `zio-kinesis` provides the 
 convenience method `Consumer.consumeWith`. This method lets you execute a ZIO effect for each message, while retaining all features like parallel shard processing, checkpointing and resharding. 
-<<<<<<< HEAD
 
 ```scala
 import nl.vroste.zio.kinesis.client.serde.Serde
@@ -108,9 +67,6 @@ import zio.console.{ putStrLn, Console }
 import zio.duration._
 import zio.logging.Logging
 
-/**
- * Basic usage example for `Consumer.consumeWith` convenience method
- */
 object ConsumeWithExample extends zio.App {
   val loggingLayer: ZLayer[Any, Nothing, Logging] =
     (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
@@ -125,51 +81,17 @@ object ConsumeWithExample extends zio.App {
         checkpointBatchSize = 1000L,
         checkpointDuration = 5.minutes
       )(record => putStrLn(s"Processing record $record"))
-      .provideCustomLayer(loggingLayer ++ Consumer.defaultEnvironment ++ loggingLayer)
+      .provideCustomLayer(Consumer.defaultEnvironment ++ loggingLayer)
       .exitCode
 }
 ``` 
 
 ### More advanced usage
-
-=======
-
-```scala
-import nl.vroste.zio.kinesis.client.serde.Serde
-import zio._
-import zio.clock.Clock
-import zio.console.{ putStrLn, Console }
-import zio.duration._
-import zio.logging.Logging
-
-/**
- * Basic usage example for `Consumer.consumeWith` convenience method
- */
-object ConsumeWithExample extends zio.App {
-  val loggingLayer: ZLayer[Any, Nothing, Logging] =
-    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
-
-  override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
-    Consumer
-      .consumeWith(
-        streamName = "my-stream",
-        applicationName = "my-application",
-        deserializer = Serde.asciiString,
-        workerIdentifier = "worker1",
-        checkpointBatchSize = 1000L,
-        checkpointDuration = 5.minutes
-      )(record => putStrLn(s"Processing record $record"))
-      .provideCustomLayer(loggingLayer ++ Consumer.defaultEnvironment ++ loggingLayer)
-      .exitCode
-}
-``` 
-
-### More advanced usage
-
->>>>>>> origin/master
 If you want more fine-grained control over the processing stream, error handling or checkpointing, use `Consumer.shardedStream` to get a stream of shard-streams, like in the following example:
 
 ```scala
+import io.github.vigoo.zioaws.core.config
+import nl.vroste.zio.kinesis.client.HttpClientBuilder
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.Consumer
 import zio._
@@ -194,7 +116,7 @@ object NativeConsumerBasicUsageExample extends zio.App {
             .via(checkpointer.checkpointBatched[Console](nr = 1000, interval = 5.second))
       }
       .runDrain
-      .provideCustomLayer(Consumer.defaultEnvironment ++ loggingLayer)
+      .provideCustomLayer((HttpClientBuilder.make() >>> config.default >>> Consumer.defaultEnvironment) ++ loggingLayer)
       .exitCode
 
   val loggingLayer = Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
@@ -320,9 +242,8 @@ Usage example:
 
 ```scala
 import nl.vroste.zio.kinesis.client
-import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.serde.Serde
-import nl.vroste.zio.kinesis.client.{ Client, Producer }
+import nl.vroste.zio.kinesis.client.{ Producer, ProducerRecord }
 import zio._
 import zio.clock.Clock
 import zio.console.{ putStrLn, Console }
@@ -335,7 +256,7 @@ object ProducerExample extends zio.App {
   val loggingLayer: ZLayer[Any, Nothing, Logging] =
     (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
-  val env = client.defaultAwsLayer >+> Client.live ++ loggingLayer
+  val env = client.defaultEnvironment ++ loggingLayer
 
   val program = Producer.make(streamName, Serde.asciiString).use { producer =>
     val record = ProducerRecord("key1", "message1")
@@ -380,10 +301,9 @@ The list of available metrics is:
 Example usage:
 ```scala
 import nl.vroste.zio.kinesis.client
-import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.producer.ProducerMetrics
 import nl.vroste.zio.kinesis.client.serde.Serde
-import nl.vroste.zio.kinesis.client.{ Client, Producer, ProducerSettings }
+import nl.vroste.zio.kinesis.client.{ Producer, ProducerRecord, ProducerSettings }
 import zio._
 import zio.clock.Clock
 import zio.console.{ putStrLn, Console }
@@ -396,7 +316,7 @@ object ProducerWithMetricsExample extends zio.App {
   val loggingLayer: ZLayer[Any, Nothing, Logging] =
     (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
-  val env = client.defaultAwsLayer >+> Client.live ++ loggingLayer
+  val env = client.defaultEnvironment ++ loggingLayer
 
   val program = (for {
     totalMetrics <- Ref.make(ProducerMetrics.empty).toManaged_
@@ -422,8 +342,6 @@ object ProducerWithMetricsExample extends zio.App {
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     program.provideCustomLayer(env).exitCode
 }
-<<<<<<< HEAD
-=======
 ```
 
 ## Future-based interface
@@ -463,7 +381,6 @@ object ProducerExample extends App {
 
   producer.close()
 }
->>>>>>> origin/master
 ```
 
 ## DynamicConsumer
@@ -514,7 +431,7 @@ object DynamicConsumerConsumeWithExample extends zio.App {
         checkpointBatchSize = 1000L,
         checkpointDuration = 5.minutes
       )(record => putStrLn(s"Processing record $record"))
-      .provideCustomLayer(loggingLayer ++ defaultAwsLayer >>> DynamicConsumer.live ++ loggingLayer)
+      .provideCustomLayer((loggingLayer ++ defaultEnvironment) >+> DynamicConsumer.live)
       .exitCode
 }
 ``` 
@@ -527,16 +444,13 @@ this end we provide a fake ZLayer instance of the `DynamicConsumer` accessed via
 Note this also provides full checkpointing functionality which can be tracked via a `Ref` passed into the `refCheckpointedList` parameter.  
 
 ```scala
-package nl.vroste.zio.kinesis.client.examples
-
-import java.nio.ByteBuffer
-
+import nl.vroste.zio.kinesis.client.DynamicConsumer
+import nl.vroste.zio.kinesis.client.DynamicConsumer.Record
 import nl.vroste.zio.kinesis.client.fake.DynamicConsumerFake
 import nl.vroste.zio.kinesis.client.serde.Serde
-import nl.vroste.zio.kinesis.client.{DynamicConsumer, _}
 import zio._
 import zio.clock.Clock
-import zio.console.{Console, putStrLn}
+import zio.console.{ putStrLn, Console }
 import zio.duration._
 import zio.logging.Logging
 import zio.stream.ZStream
@@ -553,7 +467,7 @@ object DynamicConsumerFakeExample extends zio.App {
 
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     for {
-      refCheckpointedList <- Ref.make[Seq[Any]](Seq.empty[String])
+      refCheckpointedList <- Ref.make[Seq[Record[Any]]](Seq.empty)
       exitCode            <- DynamicConsumer
                     .consumeWith(
                       streamName = "my-stream",
@@ -608,7 +522,7 @@ object DynamicConsumerBasicUsageExample extends zio.App {
             .via(checkpointer.checkpointBatched[Blocking with Console](nr = 1000, interval = 5.second))
       }
       .runDrain
-      .provideCustomLayer(loggingLayer ++ defaultAwsLayer >>> DynamicConsumer.live)
+      .provideCustomLayer((loggingLayer ++ defaultEnvironment) >>> DynamicConsumer.live)
       .exitCode
 }
 ```
