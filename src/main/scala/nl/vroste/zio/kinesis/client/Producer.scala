@@ -2,8 +2,8 @@ package nl.vroste.zio.kinesis.client
 import java.time.Instant
 
 import io.github.vigoo.zioaws.kinesis
-import io.github.vigoo.zioaws.kinesis.model.{ ListShardsRequest, ShardFilterType }
-import io.github.vigoo.zioaws.kinesis.{ model, Kinesis }
+import io.github.vigoo.zioaws.kinesis.model.{ ListShardsRequest, ShardFilter, ShardFilterType }
+import io.github.vigoo.zioaws.kinesis.Kinesis
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.producer.ProducerLive.ProduceRequest
 import nl.vroste.zio.kinesis.client.producer._
@@ -156,7 +156,7 @@ object Producer {
     } yield producer
 
   private def getShardMap(streamName: String): ZIO[Clock with Kinesis, Throwable, ShardMap] = {
-    val shardFilter = model.ShardFilter(ShardFilterType.AT_LATEST) // Currently open shards
+    val shardFilter = ShardFilter(ShardFilterType.AT_LATEST) // Currently open shards
     kinesis
       .listShards(ListShardsRequest(Some(streamName), shardFilter = Some(shardFilter)))
       .mapError(_.toThrowable)

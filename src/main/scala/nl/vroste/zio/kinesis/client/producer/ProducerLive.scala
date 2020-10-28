@@ -166,7 +166,7 @@ private[client] final class ProducerLive[R, R1, T](
       case (result, request) => result.shardIdValue.exists(_ != request.predictedShard)
     }
 
-    val (succeeded, failed) = shardPredictionErrors.partition(_._1.errorCodeValue.isDefined)
+    val (succeeded, failed) = shardPredictionErrors.partition(_._1.errorCodeValue.isEmpty)
 
     ZIO
       .when(shardPredictionErrors.nonEmpty) {
@@ -305,23 +305,6 @@ private[client] object ProducerLive {
       3 +                                                      // Data
       3 + 2 +                                                  // Partition key
       entry.explicitHashKey.map(_.length + 2).getOrElse(1) + 3 // Explicit hash key
-
-  def zStreamFromQueueWithMaxChunkSize[R, E, O](
-    queue: ZQueue[Nothing, R, Any, E, Nothing, O],
-    chunkSize: Int = Int.MaxValue
-  ): ZStream[R, E, O] =
-    ZStream.repeatEffectChunkOption {
-      queue
-      // This is important for batching to work properly. Too large chunks means suboptimal usage of the max parallel requests
-        .takeBetween(1, chunkSize)
-        .map(Chunk.fromIterable)
-        .catchAllCause(c =>
-          queue.isShutdown.flatMap { down =>
-            if (down && c.interrupted) IO.fail(None)
-            else IO.halt(c).asSomeError
-          }
-        )
-    }
 
   /**
    * Like ZTransducer.foldM, but with 'while' instead of 'until' semantics regarding `contFn`
