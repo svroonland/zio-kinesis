@@ -370,11 +370,7 @@ object Consumer {
    * @param recordProcessor A function for processing a `Record[T]`
    * @tparam R ZIO environment type required by the `deserializer` and the `recordProcessor`
    * @tparam T Type of record values
-<<<<<<< HEAD
-   * @return A ZIO that completes with Unit when record processing is stopped via requestShutdown or fails when the consumer stream fails
-=======
    * @return A ZIO that completes with Unit when record processing is stopped or fails when the consumer stream fails
->>>>>>> origin/master
    */
   def consumeWith[R, RC, T](
     streamName: String,
@@ -426,11 +422,6 @@ object Consumer {
   ): Schedule[R, Throwable, (Throwable, A)] =
     Schedule.recurWhile[Throwable](e => isThrottlingException.lift(e).isDefined) && schedule
 
-  val defaultEnvironment: ZLayer[Any, Throwable, Kinesis with LeaseRepository with CloudWatch] =
-    HttpClientBuilder.make() >>>
-      config.default >>>
-      (kinesis.live ++ (dynamodb.live >>> DynamoDbLeaseRepository.live) ++ cloudwatch.live)
-
   private[client] def childShardToShard(s: ChildShard.ReadOnly): Shard.ReadOnly = {
     val parentShards = s.parentShardsValue
 
@@ -450,6 +441,11 @@ object Consumer {
 
     Shard.wrap(shardWithParents.buildAwsValue())
   }
+
+  val defaultEnvironment: ZLayer[Any, Throwable, Kinesis with LeaseRepository with CloudWatch] =
+    HttpClientBuilder.make() >>>
+      config.default >>>
+      (kinesis.live ++ (dynamodb.live >>> DynamoDbLeaseRepository.live) ++ cloudwatch.live)
 
   sealed trait InitialPosition
   object InitialPosition {
