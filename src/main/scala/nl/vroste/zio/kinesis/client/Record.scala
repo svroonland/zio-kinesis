@@ -3,7 +3,7 @@ import java.time.Instant
 
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
 
-final case class Record[T](
+final case class Record[+T](
   shardId: String,
   sequenceNumber: String,
   approximateArrivalTimestamp: Instant,
