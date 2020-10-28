@@ -231,14 +231,12 @@ object CloudWatchMetricsPublisher {
     timestamp: Instant,
     dimensions: Seq[(String, String)],
     unit: StandardUnit
-  ) =
+  ): MetricDatum =
     MetricDatum(
       name,
-      Some(dimensions.map(Function.tupled(dimension)).toList),
+      Some(dimensions.map(Function.tupled(Dimension.apply)).toList),
       Some(timestamp),
       Some(value),
       unit = Some(unit)
     )
-
-  private def dimension(name: String, value: String) = Dimension(name, value)
 }
