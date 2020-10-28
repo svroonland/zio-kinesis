@@ -121,7 +121,7 @@ object ConsumeWithTest extends DefaultRunnableSpec {
                                .makeFailing(
                                  refProcessed,
                                  finishedConsuming,
-                                 failFunction = _ == "msg31"
+                                 failFunction = (_: Any) == "msg31"
                                )
                            }.ignore
                       _                <- putStrLn("Starting dynamic consumer - about to succeed")
