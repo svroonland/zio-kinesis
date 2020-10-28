@@ -5,7 +5,6 @@ import java.time.Instant
 
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.core.config
-import io.github.vigoo.zioaws.core.config.AwsConfig
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model._
 import io.github.vigoo.zioaws.{ cloudwatch, dynamodb, kinesis }
