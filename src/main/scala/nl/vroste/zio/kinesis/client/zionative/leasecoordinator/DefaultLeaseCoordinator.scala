@@ -262,7 +262,7 @@ private class DefaultLeaseCoordinator(
       _                 <- log
              .info(
                s"No leases exist yet for these shards, creating and claiming: " +
-                 s"${shardsWithoutLease.map(_.shardId).mkString(",")}"
+                 s"${shardsWithoutLease.map(_.shardIdValue).mkString(",")}"
              )
              .when(shardsWithoutLease.nonEmpty)
       _                 <- ZIO

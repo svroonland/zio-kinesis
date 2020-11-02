@@ -22,7 +22,7 @@ import zio.stream.{ ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test._
-import zio.{ system, Chunk, Queue, Ref, Runtime, ZIO, ZLayer, ZManaged }
+import zio.{ system, Chunk, Queue, Ref, Runtime, Schedule, ZIO, ZLayer, ZManaged }
 
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
@@ -104,7 +104,7 @@ object ProducerTest extends DefaultRunnableSpec {
       testM("produce records to Kinesis successfully and efficiently") {
         // This test demonstrates production of about 5000-6000 records per second on my Mid 2015 Macbook Pro
 
-        val streamName = "zio-test-stream-producer3"
+        val streamName = "zio-test-stream-producer4"
 
         Ref
           .make(ProducerMetrics.empty)
@@ -112,7 +112,7 @@ object ProducerTest extends DefaultRunnableSpec {
             totalMetrics =>
               (for {
                 _        <- putStrLn("creating stream").toManaged_
-                _        <- createStreamUnmanaged(streamName, 5).toManaged_
+                _        <- createStreamUnmanaged(streamName, 24).toManaged_
                 _        <- putStrLn("creating producer").toManaged_
                 producer <- Producer
                               .make(

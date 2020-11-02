@@ -4,10 +4,9 @@ import java.nio.ByteBuffer
 import java.time.Instant
 
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
-import io.github.vigoo.zioaws.core.config
+import io.github.vigoo.zioaws.kinesis
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model._
-import io.github.vigoo.zioaws.{ cloudwatch, dynamodb, kinesis }
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.{ EnhancedFanOut, Polling }
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
@@ -444,8 +443,7 @@ object Consumer {
 
   val defaultEnvironment: ZLayer[Any, Throwable, Kinesis with LeaseRepository with CloudWatch] =
     HttpClientBuilder.make() >>>
-      config.default >>>
-      (kinesis.live ++ (dynamodb.live >>> DynamoDbLeaseRepository.live) ++ cloudwatch.live)
+      (kinesisAsyncClientLayer() ++ (dynamoDbAsyncClientLayer() >>> DynamoDbLeaseRepository.live) ++ cloudWatchAsyncClientLayer())
 
   sealed trait InitialPosition
   object InitialPosition {

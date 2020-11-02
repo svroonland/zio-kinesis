@@ -1,6 +1,5 @@
 package nl.vroste.zio.kinesis.client.examples
 
-import io.github.vigoo.zioaws.core.config
 import nl.vroste.zio.kinesis.client.HttpClientBuilder
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.Consumer
@@ -39,7 +38,7 @@ object NativeConsumerWithMetricsExample extends zio.App {
           .runDrain
       }
       .provideCustomLayer(
-        (HttpClientBuilder.make() >>> config.default >>> Consumer.defaultEnvironment) ++ loggingLayer ++ ZLayer
+        (HttpClientBuilder.make() >>> Consumer.defaultEnvironment) ++ loggingLayer ++ ZLayer
           .succeed(metricsConfig)
       )
       .exitCode

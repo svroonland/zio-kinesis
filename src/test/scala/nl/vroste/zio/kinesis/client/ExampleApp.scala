@@ -33,7 +33,7 @@ object ExampleApp extends zio.App {
   val nrShards                        = 10
   val reshardFactor                   = 2
   val reshardAfter: Option[Duration]  = None                // Some(10.seconds)
-  val enhancedFanout                  = false
+  val enhancedFanout                  = true
   val nrNativeWorkers                 = 1
   val nrKclWorkers                    = 0
   val runtime                         = 10.minute
@@ -105,8 +105,7 @@ object ExampleApp extends zio.App {
     ZStream.unwrapManaged {
       for {
         metrics <- CloudWatchMetricsPublisher.make(applicationName, id)
-        //          delay   <- zio.random.nextIntBetween(0, maxRandomWorkerStartDelayMillis).map(_.millis).toManaged_
-        delay    = 2230.seconds
+        delay   <- zio.random.nextIntBetween(0, maxRandomWorkerStartDelayMillis).map(_.millis).toManaged_
         _       <- log.info(s"Waiting ${delay.toMillis} ms to start worker ${id}").toManaged_
       } yield ZStream.fromEffect(ZIO.sleep(delay)) *> Consumer
         .shardedStream(
@@ -213,10 +212,10 @@ object ExampleApp extends zio.App {
       maxConcurrency = 100,
       allowHttp2 = false
     )
-    val kinesisClient = kinesis.live
-    val cloudWatch    = cloudwatch.live
-    val dynamo        = dynamodb.live
-    val awsClients    = (httpClient >>> config.default >>> (kinesisClient ++ cloudWatch ++ dynamo)).orDie
+    val kinesisClient = kinesisAsyncClientLayer()
+    val cloudWatch    = cloudWatchAsyncClientLayer()
+    val dynamo        = dynamoDbAsyncClientLayer()
+    val awsClients    = (httpClient >>> (kinesisClient ++ cloudWatch ++ dynamo)).orDie
 
     val leaseRepo       = DynamoDbLeaseRepository.live
     val dynamicConsumer = DynamicConsumer.live
