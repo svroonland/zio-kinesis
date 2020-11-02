@@ -2,7 +2,7 @@ package nl.vroste.zio.kinesis.client.zionative
 import java.nio.charset.Charset
 
 import io.github.vigoo.zioaws.core.AwsError
-import io.github.vigoo.zioaws.kinesis.{ model, Kinesis }
+import io.github.vigoo.zioaws.core.aspects.AwsCallAspect
 import io.github.vigoo.zioaws.kinesis.model.{
   GetRecordsResponse,
   GetShardIteratorResponse,
@@ -10,20 +10,23 @@ import io.github.vigoo.zioaws.kinesis.model.{
   ShardIteratorType,
   StartingPosition
 }
+import io.github.vigoo.zioaws.kinesis.{ model, Kinesis }
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.Polling
 import nl.vroste.zio.kinesis.client.zionative.fetcher.PollingFetcher
+import software.amazon.awssdk.services.kinesis.model.{
+  ChildShard,
+  HashKeyRange,
+  ProvisionedThroughputExceededException
+}
 import software.amazon.awssdk.services.kinesis.{ model => aws }
-import aws.ChildShard
-import aws.HashKeyRange
-import software.amazon.awssdk.services.kinesis.model.ProvisionedThroughputExceededException
 import zio._
+import zio.duration._
 import zio.logging.Logging
+import zio.stream.ZStream
 import zio.test.Assertion._
 import zio.test._
 import zio.test.environment.TestClock
-import zio.duration._
-import zio.stream.ZStream
 
 import scala.jdk.CollectionConverters._
 
@@ -262,7 +265,9 @@ object PollingFetcherTest extends DefaultRunnableSpec {
     endAfterRecords: Boolean = false,
     doThrottle: (String, Int) => UIO[Boolean] = (_, _) => UIO(false)
   ): Kinesis.Service =
-    new StubClient {
+    new StubClient { self =>
+      override def withAspect[R](newAspect: AwsCallAspect[R], r: R): Kinesis.Service = self
+
       override def getShardIterator(
         request: model.GetShardIteratorRequest
       ): IO[AwsError, GetShardIteratorResponse.ReadOnly] =

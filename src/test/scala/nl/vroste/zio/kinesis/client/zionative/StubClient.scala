@@ -1,12 +1,14 @@
 package nl.vroste.zio.kinesis.client.zionative
-import io.github.vigoo.zioaws.core.AwsError
+import io.github.vigoo.zioaws.core.aspects.AwsCallAspect
+import io.github.vigoo.zioaws.core.{ aspects, AwsError }
 import io.github.vigoo.zioaws.kinesis.model._
 import io.github.vigoo.zioaws.kinesis.{ model, Kinesis }
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import zio.IO
 import zio.stream.ZStream
 
-class StubClient extends Kinesis.Service {
+class StubClient extends Kinesis.Service { self =>
+  override def withAspect[R](newAspect: AwsCallAspect[R], r: R): Kinesis.Service                                      = self
   override val api: KinesisAsyncClient                                                                                = null
   override def splitShard(request: model.SplitShardRequest): IO[AwsError, Unit]                                       = ???
   override def disableEnhancedMonitoring(
