@@ -1,6 +1,6 @@
 package nl.vroste.zio.kinesis.client.zionative
+import io.github.vigoo.zioaws.core.AwsError
 import io.github.vigoo.zioaws.core.aspects.AwsCallAspect
-import io.github.vigoo.zioaws.core.{ aspects, AwsError }
 import io.github.vigoo.zioaws.kinesis.model._
 import io.github.vigoo.zioaws.kinesis.{ model, Kinesis }
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient

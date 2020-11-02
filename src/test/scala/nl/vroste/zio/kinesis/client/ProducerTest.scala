@@ -22,7 +22,7 @@ import zio.stream.{ ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test._
-import zio.{ system, Chunk, Queue, Ref, Runtime, Schedule, ZIO, ZLayer, ZManaged }
+import zio.{ system, Chunk, Queue, Ref, Runtime, ZIO, ZLayer, ZManaged }
 
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._

@@ -1,10 +1,9 @@
 package nl.vroste.zio.kinesis.client
 
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
-import io.github.vigoo.zioaws.core.config
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model.{ ScalingType, UpdateShardCountRequest }
-import io.github.vigoo.zioaws.{ cloudwatch, dynamodb, kinesis }
+import io.github.vigoo.zioaws.{ dynamodb, kinesis }
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.Consumer.InitialPosition
