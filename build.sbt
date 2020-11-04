@@ -52,7 +52,7 @@ libraryDependencies ++= Seq(
   "dev.zio"                %% "zio-streams"                 % "1.0.3",
   "dev.zio"                %% "zio-test"                    % "1.0.3" % "test",
   "dev.zio"                %% "zio-test-sbt"                % "1.0.3" % "test",
-  "dev.zio"                %% "zio-interop-reactivestreams" % "1.0.3.5",
+  "dev.zio"                %% "zio-interop-reactivestreams" % "1.3.0.7-2",
   "dev.zio"                %% "zio-logging"                 % "0.5.3",
   "software.amazon.awssdk"  % "kinesis"                     % "2.15.20",
   "ch.qos.logback"          % "logback-classic"             % "1.2.3",
@@ -92,6 +92,6 @@ lazy val interopFutures = (project in file("interop-futures"))
     assemblyJarName in assembly := "zio-kinesis-future" + version.value + ".jar",
     libraryDependencies ++= Seq(
       "nl.vroste" %% "zio-kinesis"                 % "0.16.0",
-      "dev.zio"   %% "zio-interop-reactivestreams" % "1.0.3.5"
+      "dev.zio"   %% "zio-interop-reactivestreams" % "1.3.0.7-2"
     )
   )
