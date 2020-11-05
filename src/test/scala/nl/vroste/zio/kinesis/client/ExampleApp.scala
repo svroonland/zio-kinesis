@@ -25,7 +25,7 @@ import zio.stream.{ ZStream, ZTransducer }
  */
 object ExampleApp extends zio.App {
   val streamName                      = "zio-test-stream-3" // + java.util.UUID.randomUUID().toString
-  val applicationName                 = "testApp-4"         // + java.util.UUID.randomUUID().toString(),
+  val applicationName                 = "testApp-5"         // + java.util.UUID.randomUUID().toString(),
   val nrRecords                       = 300000
   val produceRate                     = 200                 // Nr records to produce per second
   val recordSize                      = 50
