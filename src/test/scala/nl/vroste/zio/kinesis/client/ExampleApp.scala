@@ -25,11 +25,11 @@ import zio.stream.{ ZStream, ZTransducer }
  */
 object ExampleApp extends zio.App {
   val streamName                      = "zio-test-stream-3" // + java.util.UUID.randomUUID().toString
-  val applicationName                 = "testApp-3"         // + java.util.UUID.randomUUID().toString(),
-  val nrRecords                       = 3000000
-  val produceRate                     = 20000               // Nr records to produce per second
+  val applicationName                 = "testApp-4"         // + java.util.UUID.randomUUID().toString(),
+  val nrRecords                       = 300000
+  val produceRate                     = 200                 // Nr records to produce per second
   val recordSize                      = 50
-  val nrShards                        = 10
+  val nrShards                        = 2
   val reshardFactor                   = 2
   val reshardAfter: Option[Duration]  = None                // Some(10.seconds)
   val enhancedFanout                  = true
@@ -209,7 +209,7 @@ object ExampleApp extends zio.App {
   ] = {
     val httpClient    = HttpClientBuilder.make(
       maxConcurrency = 100,
-      allowHttp2 = false
+      allowHttp2 = true
     )
     val kinesisClient = kinesisAsyncClientLayer()
     val cloudWatch    = cloudWatchAsyncClientLayer()

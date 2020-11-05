@@ -43,6 +43,7 @@ object HttpClientBuilder {
     ZLayer.succeed { httpSupported =>
       val protocol = if (allowHttp2 & httpSupported) Protocol.HTTP2 else Protocol.HTTP1_1
 
+      println(s"Building http client with protocol ${protocol}")
       val builder = NettyNioAsyncHttpClient
         .builder()
         .maxConcurrency(maxConcurrency)
