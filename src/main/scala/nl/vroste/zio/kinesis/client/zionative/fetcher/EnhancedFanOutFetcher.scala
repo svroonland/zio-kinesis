@@ -72,7 +72,7 @@ object EnhancedFanOutFetcher {
             .retry(config.retrySchedule)
         }.mapError(Left(_): Either[Throwable, EndOfShard])
           .flatMap { response =>
-            if (response.childShardsValue.isDefined)
+            if (response.childShardsValue.toList.flatten.nonEmpty)
               ZStream.succeed(response) ++ ZStream.fail(
                 Right(EndOfShard(response.childShardsValue.toList.flatten.map(childShardToShard)))
               )

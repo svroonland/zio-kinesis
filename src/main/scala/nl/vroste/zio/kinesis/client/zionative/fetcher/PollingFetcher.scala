@@ -102,7 +102,9 @@ object PollingFetcher {
                           .buffer(config.bufferNrBatches)
                           .mapError(Left(_): Either[Throwable, EndOfShard])
                           .flatMap { response =>
-                            if (response.childShardsValue.isDefined && response.nextShardIteratorValue.isEmpty)
+                            if (
+                              response.childShardsValue.toList.flatten.nonEmpty && response.nextShardIteratorValue.isEmpty
+                            )
                               ZStream.succeed(response) ++ (ZStream.fromEffect(
                                 log.debug(s"PollingFetcher found end of shard for ${shardId}")
                               ) *>
