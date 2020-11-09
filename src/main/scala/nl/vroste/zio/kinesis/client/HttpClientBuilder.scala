@@ -39,11 +39,10 @@ object HttpClientBuilder {
     readTimeout: Duration = 30.seconds,
     allowHttp2: Boolean = true,
     build: NettyNioAsyncHttpClient.Builder => SdkAsyncHttpClient = _.build()
-  ): ZLayer[Any, Throwable, HttpClientBuilder] =
+  ): ZLayer[Any, Nothing, HttpClientBuilder] =
     ZLayer.succeed { httpSupported =>
       val protocol = if (allowHttp2 & httpSupported) Protocol.HTTP2 else Protocol.HTTP1_1
 
-      println(s"Building http client with protocol ${protocol}")
       val builder = NettyNioAsyncHttpClient
         .builder()
         .maxConcurrency(maxConcurrency)
