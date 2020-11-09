@@ -1,6 +1,8 @@
 package nl.vroste.zio.kinesis.client
 
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
+import io.github.vigoo.zioaws.core.AwsError
+import io.github.vigoo.zioaws.core.aspects.{ AwsCallAspect, Described }
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model.{ ScalingType, UpdateShardCountRequest }
 import io.github.vigoo.zioaws.{ dynamodb, kinesis }
@@ -10,6 +12,8 @@ import nl.vroste.zio.kinesis.client.zionative.Consumer.InitialPosition
 import nl.vroste.zio.kinesis.client.zionative._
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
 import nl.vroste.zio.kinesis.client.zionative.metrics.{ CloudWatchMetricsPublisher, CloudWatchMetricsPublisherConfig }
+import software.amazon.awssdk.http.SdkHttpConfigurationOption
+import software.amazon.awssdk.utils.AttributeMap
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio._
 import zio.blocking.Blocking
@@ -24,8 +28,8 @@ import zio.stream.{ ZStream, ZTransducer }
  * Runnable used for manually testing various features
  */
 object ExampleApp extends zio.App {
-  val streamName                      = "zio-test-stream-3" // + java.util.UUID.randomUUID().toString
-  val applicationName                 = "testApp-5"         // + java.util.UUID.randomUUID().toString(),
+  val streamName                      = "zio-test-stream-6" // + java.util.UUID.randomUUID().toString
+  val applicationName                 = "testApp-9"         // + java.util.UUID.randomUUID().toString(),
   val nrRecords                       = 300000
   val produceRate                     = 200                 // Nr records to produce per second
   val recordSize                      = 50
@@ -207,14 +211,30 @@ object ExampleApp extends zio.App {
       CloudWatchMetricsPublisherConfig
     ]
   ] = {
-    val httpClient    = HttpClientBuilder.make(
+    val httpClient = HttpClientBuilder.make(
       maxConcurrency = 100,
-      allowHttp2 = true
+      allowHttp2 = true,
+      build = _.buildWithDefaults(
+        AttributeMap.builder.put(SdkHttpConfigurationOption.TRUST_ALL_CERTIFICATES, java.lang.Boolean.TRUE).build
+      )
     )
-    val kinesisClient = kinesisAsyncClientLayer()
-    val cloudWatch    = cloudWatchAsyncClientLayer()
-    val dynamo        = dynamoDbAsyncClientLayer()
-    val awsClients    = (httpClient >>> (kinesisClient ++ cloudWatch ++ dynamo)).orDie
+
+    val callLogging: AwsCallAspect[Logging] =
+      new AwsCallAspect[Logging] {
+        override final def apply[R1 <: Logging, A](
+          f: ZIO[R1, AwsError, Described[A]]
+        ): ZIO[R1, AwsError, Described[A]] =
+          f.flatMap {
+            case r @ Described(value, description) =>
+              log.info(s"Finished [${description.service}/${description.operation}]").as(r)
+          }
+      }
+
+    val kinesisClient = kinesisAsyncClientLayer() @@ (callLogging)
+
+    val cloudWatch = cloudWatchAsyncClientLayer()
+    val dynamo     = dynamoDbAsyncClientLayer()
+    val awsClients = ((ZLayer.requires[Logging] ++ httpClient) >>> (kinesisClient ++ cloudWatch ++ dynamo)).orDie
 
     val leaseRepo       = DynamoDbLeaseRepository.live
     val dynamicConsumer = DynamicConsumer.live
@@ -222,7 +242,6 @@ object ExampleApp extends zio.App {
 
     val metricsPublisherConfig = ZLayer.succeed(CloudWatchMetricsPublisherConfig())
 
-    (awsClients ++ loggingLayer >+>
-      (dynamicConsumer ++ leaseRepo ++ logging ++ metricsPublisherConfig))
+    logging >+> awsClients >+> (dynamicConsumer ++ leaseRepo ++ metricsPublisherConfig)
   }
 }

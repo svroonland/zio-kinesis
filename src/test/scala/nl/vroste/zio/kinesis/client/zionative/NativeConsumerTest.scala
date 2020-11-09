@@ -77,7 +77,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                            .runCollect
               shardIds <- kinesis
                             .describeStream(DescribeStreamRequest(streamName))
-                            .mapError(Util.awsErrorToThrowable)
+                            .mapError(_.toThrowable)
                             .map(_.streamDescriptionValue.shardsValue.map(_.shardIdValue))
               _        <- producer.interrupt
 
@@ -637,7 +637,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
               _              = println("Resharding")
               _             <- kinesis
                      .updateShardCount(UpdateShardCountRequest(streamName, 4, ScalingType.UNIFORM_SCALING))
-                     .mapError(Util.awsErrorToThrowable)
+                     .mapError(_.toThrowable)
               finishedShard <- stream.join.map(_.head)
               _             <- producer.interrupt
               checkpoints   <- getCheckpoints(applicationName)
@@ -691,7 +691,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
               _        = println("Resharding")
               _       <- kinesis
                      .updateShardCount(UpdateShardCountRequest(streamName, nrShards * 2, ScalingType.UNIFORM_SCALING))
-                     .mapError(Util.awsErrorToThrowable)
+                     .mapError(_.toThrowable)
               _       <- ZIO.sleep(10.seconds)
               _       <- stream.join
               shards  <- TestUtil.getShards(streamName)

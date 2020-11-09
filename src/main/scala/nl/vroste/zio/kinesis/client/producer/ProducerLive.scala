@@ -67,9 +67,7 @@ private[client] final class ProducerLive[R, R1, T](
       .mapChunks(
         _.map { request =>
           request
-            .copy(complete =
-              result => request.complete(result) *> result.tap(_ => throttler.addSuccess(shardId)).ignore
-            )
+            .copy(complete = result => request.complete(result) *> result.zipLeft(throttler.addSuccess(shardId)).ignore)
         }
       )
       .throttleShapeM(maxRecordsPerShardPerSecond.toLong, 1.second)(chunk =>
@@ -90,7 +88,7 @@ private[client] final class ProducerLive[R, R1, T](
 
       response           <- client
                     .putRecords(PutRecordsRequest(batch.map(_.r), streamName))
-                    .mapError(Util.awsErrorToThrowable)
+                    .mapError(_.toThrowable)
                     .tapError(e => log.warn(s"Error producing records, will retry if recoverable: $e"))
                     .retry(scheduleCatchRecoverable && settings.backoffRequests)
 

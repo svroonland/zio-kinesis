@@ -159,7 +159,7 @@ object Producer {
     val shardFilter = ShardFilter(ShardFilterType.AT_LATEST) // Currently open shards
     kinesis
       .listShards(ListShardsRequest(Some(streamName), shardFilter = Some(shardFilter)))
-      .mapError(Util.awsErrorToThrowable)
+      .mapError(_.toThrowable)
       .runCollect
       .flatMap(shards => instant.map(ShardMap.fromShards(shards, _)))
   }

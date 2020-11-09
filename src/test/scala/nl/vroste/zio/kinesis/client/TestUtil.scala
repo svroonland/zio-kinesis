@@ -29,7 +29,7 @@ object TestUtil {
   def getShards(name: String): ZIO[Kinesis with Clock, Throwable, Chunk[Shard.ReadOnly]]                          =
     kinesis
       .listShards(ListShardsRequest(streamName = Some(name)))
-      .mapError(Util.awsErrorToThrowable)
+      .mapError(_.toThrowable)
       .runCollect
       .filterOrElse(_.nonEmpty)(_ => getShards(name).delay(1.second))
       .catchSome { case _: ResourceInUseException => getShards(name).delay(1.second) }
@@ -38,7 +38,7 @@ object TestUtil {
     createStreamUnmanaged(streamName, nrShards).toManaged(_ =>
       kinesis
         .deleteStream(DeleteStreamRequest(streamName, enforceConsumerDeletion = Some(true)))
-        .mapError(Util.awsErrorToThrowable)
+        .mapError(_.toThrowable)
         .catchSome {
           case _: ResourceNotFoundException => ZIO.unit
         }
@@ -51,7 +51,7 @@ object TestUtil {
   ): ZIO[Console with Clock with Kinesis, Throwable, Unit] =
     kinesis
       .createStream(CreateStreamRequest(streamName, nrShards))
-      .mapError(Util.awsErrorToThrowable)
+      .mapError(_.toThrowable)
       .catchSome {
         case _: ResourceInUseException =>
           putStrLn("Stream already exists")
@@ -112,7 +112,7 @@ object TestUtil {
                 }
       response        <- kinesis
                     .putRecords(PutRecordsRequest(entries.toList, streamName))
-                    .mapError(Util.awsErrorToThrowable)
+                    .mapError(_.toThrowable)
     } yield response
 
   /**
