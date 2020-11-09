@@ -431,8 +431,7 @@ private[zionative] object DefaultLeaseCoordinator {
             initialPosition
           )
       _               <- ZManaged.finalizer(
-             c.releaseLeases
-               .tap(_ => log.debug("releaseLeases done"))
+             c.releaseLeases *> log.debug("releaseLeases done")
            ) // We need the runloop to be alive for this operation
 
       // Wait for shards if the lease table does not exist yet, otherwise we assume there's leases
@@ -460,7 +459,7 @@ private[zionative] object DefaultLeaseCoordinator {
                         .tapCause(e => log.error("Renewing leases failed, will retry", e))
                     }.forkManaged.ensuringFirst(log.debug("Shutting down renew lease loop"))
              } yield ())
-             .tapCause(c => ZManaged.fromEffect(log.error("Oh no", c)))
+             .tapCause(c => ZManaged.fromEffect(log.error("Error in DefaultLeaseCoordinator runloop", c)))
              .fork
 
     } yield c)
