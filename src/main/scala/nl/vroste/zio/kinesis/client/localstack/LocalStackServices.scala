@@ -17,12 +17,9 @@ import software.amazon.awssdk.awscore.client.builder.{ AwsAsyncClientBuilder, Aw
 import software.amazon.awssdk.core.SdkSystemSetting
 import software.amazon.awssdk.http.SdkHttpConfigurationOption
 import software.amazon.awssdk.regions.Region
-import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
-import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
-import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.awssdk.utils.AttributeMap
 import zio.duration._
-import zio.{ Has, Task, ZLayer }
+import zio.{ Task, ZLayer }
 
 /**
  * Layers for connecting to a LocalStack (https://localstack.cloud/) environment on a local docker host
@@ -103,9 +100,6 @@ object LocalStackServices {
     val cloudWatchClientLayer: ZLayer[AwsConfig, Throwable, CloudWatch] =
       cloudwatch.customized(_.endpointOverride(cloudwatchUri))
 
-    val env: ZLayer[Any, Throwable, CloudWatch with Kinesis with DynamoDb] =
-      localHttpClient >>> awsConfig >>> (cloudWatchClientLayer ++ kinesisAsyncClientLayer ++ dynamoDbClientLayer)
-
-    env
+    localHttpClient >>> awsConfig >>> (cloudWatchClientLayer ++ kinesisAsyncClientLayer ++ dynamoDbClientLayer)
   }
 }
