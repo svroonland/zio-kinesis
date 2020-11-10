@@ -158,7 +158,7 @@ object Util {
   }
 
   /**
-   * Creates a resource that executes `effect`` with intervals of `period` or via manual invocation
+   * Creates a resource that executes `effect` with intervals of `period` or via manual invocation
    *
    * After manual invocation, the next effect execution will be after interval. Any triggers during
    * effect execution are ignored.

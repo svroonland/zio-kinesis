@@ -10,6 +10,7 @@ import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.producer.ProducerLive.ProduceRequest
 import nl.vroste.zio.kinesis.client.serde.Serializer
+import software.amazon.awssdk.core.exception.SdkException
 import software.amazon.awssdk.services.kinesis.model.KinesisException
 import zio._
 import zio.clock.{ instant, Clock }
@@ -288,10 +289,14 @@ private[client] object ProducerLive {
     } yield (done.await, ProduceRequest(entry, done.completeWith(_).unit, now, predictedShard))
 
   final def scheduleCatchRecoverable: Schedule[Any, Throwable, Throwable] =
-    Schedule.recurWhile {
+    Schedule.recurWhile(isRecoverableException)
+
+  private def isRecoverableException(e: Throwable): Boolean =
+    e match {
       case e: KinesisException if e.statusCode() / 100 != 4 => true
       case _: ReadTimeoutException                          => true
       case _: IOException                                   => true
+      case e: SdkException if Option(e.getCause).isDefined  => isRecoverableException(e.getCause)
       case _                                                => false
     }
 

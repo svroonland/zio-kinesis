@@ -452,11 +452,11 @@ private[zionative] object DefaultLeaseCoordinator {
                         // Periodic refresh
                         repeatAndRetry(settings.refreshAndTakeInterval) {
                           (c.refreshLeases *> c.takeLeases)
-                            .tapCause(e => log.error("Refresh & take leases failed, will retry", e))
+                            .tapError(e => log.error(s"Refresh & take leases failed, will retry: ${e}"))
                         }).forkManaged.ensuringFirst(log.debug("Shutting down refresh & take lease loop"))
                _ <- repeatAndRetry(settings.renewInterval) {
                       c.renewLeases
-                        .tapCause(e => log.error("Renewing leases failed, will retry", e))
+                        .tapError(e => log.error(s"Renewing leases failed, will retry: ${e}"))
                     }.forkManaged.ensuringFirst(log.debug("Shutting down renew lease loop"))
              } yield ())
              .tapCause(c => ZManaged.fromEffect(log.error("Error in DefaultLeaseCoordinator runloop", c)))

@@ -147,7 +147,7 @@ object TestUtil {
         producer
           .produceChunk(chunk)
           .retry(retryOnResourceNotFound && Schedule.recurs(1))
-          .tapCause(e => log.error("Producing records chunk failed, will retry", e))
+          .tapError(e => log.error(s"Producing records chunk failed, will retry: ${e}"))
           .retry(Schedule.exponential(1.second))
       }
       .runDrain
