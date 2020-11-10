@@ -225,7 +225,7 @@ object ExampleApp extends zio.App {
           f: ZIO[R1, AwsError, Described[A]]
         ): ZIO[R1, AwsError, Described[A]] =
           f.flatMap {
-            case r @ Described(value, description) =>
+            case r @ Described(value @ _, description) =>
               log.info(s"Finished [${description.service}/${description.operation}]").as(r)
           }
       }
