@@ -1,5 +1,11 @@
 [![Bintray](https://img.shields.io/bintray/v/vroste/maven/zio-kinesis?label=latest)](https://bintray.com/vroste/maven/zio-kinesis/_latestVersion)
 
+# ZIO Kinesis
+
+ZIO Kinesis is a ZIO-based interface to Amazon Kinesis Data Streams for consuming and producing. A Future-based version of some of the functionality is also available.
+
+The project is in beta stage. Although already being used in production by a small number of organisations, expect some issues to pop up and some changes to the interface. More beta users and feedback are of course welcome.
+
 - [Features](#features)
 - [Installation](#installation)
 - [Consumer](#consumer)
@@ -24,12 +30,6 @@
   * [Advanced usage](#advanced-usage)
 - [Running tests and more usage examples](#running-tests-and-more-usage-examples)
 - [Credits](#credits)
-
-# ZIO Kinesis
-
-ZIO Kinesis is a ZIO-based interface to Amazon Kinesis Data Streams for consuming and producing. A Future-based version of some of the functionality is also available.
-
-The project is in beta stage. Although already being used in production by a small number of organisations, expect some issues to pop up and some changes to the interface. More beta users and feedback are of course welcome.
 
 ## Features
 
