@@ -1,5 +1,30 @@
 [![Bintray](https://img.shields.io/bintray/v/vroste/maven/zio-kinesis?label=latest)](https://bintray.com/vroste/maven/zio-kinesis/_latestVersion)
 
+- [Features](#features)
+- [Installation](#installation)
+- [Consumer](#consumer)
+  * [Basic usage using `consumeWith`](#basic-usage-using--consumewith-)
+  * [More advanced usage](#more-advanced-usage)
+  * [Checkpointing](#checkpointing)
+  * [Lease coordination](#lease-coordination)
+  * [Resharding](#resharding)
+  * [Consuming multiple Kinesis streams](#consuming-multiple-kinesis-streams)
+  * [Customization](#customization)
+  * [Diagnostic event & metrics](#diagnostic-event---metrics)
+  * [KCL compatibility](#kcl-compatibility)
+  * [Unsupported features](#unsupported-features)
+- [Configuration](#configuration)
+- [Producer](#producer)
+  * [Aggregation](#aggregation)
+  * [Metrics](#metrics)
+- [Future-based interface](#future-based-interface)
+- [DynamicConsumer](#dynamicconsumer)
+  * [Basic usage using `consumeWith`](#basic-usage-using--consumewith--1)
+  * [DynamicConsumerFake](#dynamicconsumerfake)
+  * [Advanced usage](#advanced-usage)
+- [Running tests and more usage examples](#running-tests-and-more-usage-examples)
+- [Credits](#credits)
+
 # ZIO Kinesis
 
 ZIO Kinesis is a ZIO-based interface to Amazon Kinesis Data Streams for consuming and producing. A Future-based version of some of the functionality is also available.
