@@ -1,9 +1,5 @@
 package nl.vroste.zio.kinesis.client
 
-import java.util.concurrent.CompletionException
-
-import io.github.vigoo.zioaws.core.AwsError
-import software.amazon.awssdk.core.exception.SdkException
 import zio._
 import zio.clock.Clock
 import zio.duration._
