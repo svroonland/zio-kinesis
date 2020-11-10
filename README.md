@@ -4,8 +4,7 @@
 
 ZIO Kinesis is a ZIO-based interface to Amazon Kinesis Data Streams for consuming and producing. A Future-based version of some of the functionality is also available.
 
-The project is in beta stage. Although already being used in production by a small number of organisations, expect some issues to pop up and some changes to the interface.
-More beta users and feedback are of course welcome.
+The project is in beta stage. Although already being used in production by a small number of organisations, expect some issues to pop up and some changes to the interface. More beta users and feedback are of course welcome.
 
 ## Features
 
@@ -17,10 +16,11 @@ The library consists of:
 * `Producer`  
   Put records efficiently and reliably on Kinesis while respecting Kinesis throughput limits. Features batching and failure handling.
   
-* `DynamicConsumer`  
-  A ZStream-based wrapper around the Kinesis Client Library; an auto-rebalancing and checkpointing consumer.  
+* `DynamicConsumer`
+  An alternative to `Consumer`, being a wrapper around the AWS Kinesis Client Library (KCL).   
   _NOTE Although `DynamicConsumer` will be included in this library for some time to come, it will eventually be deprecated and removed in favour of the ZIO-native `Consumer`. Users are recommended to upgrade._
-
+  
+`zio-kinesis` is built on top of [zio-aws](https://github.com/vigoo/zio-aws), a library of automatically generated ZIO wrappers around AWS SDK methods.
 
 ## Installation
 
