@@ -31,7 +31,8 @@ object ConsumeWithTest extends DefaultRunnableSpec {
       DynamicConsumer.Service
     ]
   ] =
-    (Console.live ++ Clock.live ++ Blocking.live) >+> loggingLayer >+> LocalStackServices.env >+> DynamicConsumer.live
+    (Console.live ++ Clock.live ++ Blocking.live) >+> loggingLayer >+> LocalStackServices
+      .localStackAwsLayer() >+> DynamicConsumer.live
 
   def testConsume1 =
     testM("consumeWith should consume records produced on all shards") {

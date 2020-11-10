@@ -29,7 +29,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
     Throwable,
     CloudWatch with Kinesis with DynamoDb with DynamicConsumer with Clock with Blocking
   ] =
-    (loggingLayer ++ LocalStackServices.env) >+> DynamicConsumer.live ++ Clock.live ++ Blocking.live
+    (loggingLayer ++ LocalStackServices.localStackAwsLayer()) >+> DynamicConsumer.live ++ Clock.live ++ Blocking.live
 
   def testConsume1: ZSpec[Clock with Blocking with Console with DynamicConsumer with Kinesis, Throwable] =
     testM("consume records produced on all shards produced on the stream") {

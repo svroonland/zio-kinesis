@@ -202,7 +202,7 @@ object ExampleApp extends zio.App {
     (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   val localStackEnv =
-    LocalStackServices.env.orDie >+> (DynamoDbLeaseRepository.live) ++ loggingLayer
+    LocalStackServices.localStackAwsLayer().orDie >+> (DynamoDbLeaseRepository.live) ++ loggingLayer
 
   val awsEnv: ZLayer[
     Any,
