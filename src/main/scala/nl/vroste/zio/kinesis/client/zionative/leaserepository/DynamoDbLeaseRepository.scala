@@ -5,7 +5,6 @@ import java.util.concurrent.TimeoutException
 import DynamoDbUtil._
 import io.github.vigoo.zioaws.dynamodb.model._
 import io.github.vigoo.zioaws.dynamodb.{ model, DynamoDb }
-import nl.vroste.zio.kinesis.client.Util
 import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.{
   Lease,
   LeaseAlreadyExists,
