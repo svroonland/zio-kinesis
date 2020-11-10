@@ -32,7 +32,7 @@ object ProducerTest extends DefaultRunnableSpec {
   val useAws = Runtime.default.unsafeRun(system.envOrElse("ENABLE_AWS", "0")).toInt == 1
 
   val env: ZLayer[Any, Nothing, CloudWatch with Kinesis with DynamoDb with Clock with Console with Logging] =
-    ((if (useAws) client.defaultEnvironment else LocalStackServices.env).orDie) >+>
+    ((if (useAws) client.defaultAwsLayer else LocalStackServices.env).orDie) >+>
       (Clock.live ++ zio.console.Console.live >+> loggingLayer)
 
   def spec =

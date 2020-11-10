@@ -36,7 +36,7 @@ object ExampleApp extends zio.App {
   val nrShards                        = 2
   val reshardFactor                   = 2
   val reshardAfter: Option[Duration]  = None                // Some(10.seconds)
-  val enhancedFanout                  = false
+  val enhancedFanout                  = true
   val nrNativeWorkers                 = 1
   val nrKclWorkers                    = 0
   val runtime                         = 10.minute

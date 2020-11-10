@@ -66,9 +66,9 @@ package object client {
       }
       .toLayer >>> config.default
 
-  val sdkClients: ZLayer[HttpClientBuilder, Throwable, Kinesis with CloudWatch with DynamoDb] =
+  val sdkClientsLayer: ZLayer[HttpClientBuilder, Throwable, Kinesis with CloudWatch with DynamoDb] =
     kinesisAsyncClientLayer() ++ cloudWatchAsyncClientLayer() ++ dynamoDbAsyncClientLayer()
 
-  val defaultEnvironment: ZLayer[Any, Throwable, Kinesis with CloudWatch with DynamoDb] =
-    HttpClientBuilder.make() >>> sdkClients
+  val defaultAwsLayer: ZLayer[Any, Throwable, Kinesis with CloudWatch with DynamoDb] =
+    HttpClientBuilder.make() >>> sdkClientsLayer
 }

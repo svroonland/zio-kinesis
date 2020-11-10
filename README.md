@@ -256,7 +256,7 @@ object ProducerExample extends zio.App {
   val loggingLayer: ZLayer[Any, Nothing, Logging] =
     (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
-  val env = client.defaultEnvironment ++ loggingLayer
+  val env = client.defaultAwsLayer ++ loggingLayer
 
   val program = Producer.make(streamName, Serde.asciiString).use { producer =>
     val record = ProducerRecord("key1", "message1")
@@ -316,7 +316,7 @@ object ProducerWithMetricsExample extends zio.App {
   val loggingLayer: ZLayer[Any, Nothing, Logging] =
     (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
-  val env = client.defaultEnvironment ++ loggingLayer
+  val env = client.defaultAwsLayer ++ loggingLayer
 
   val program = (for {
     totalMetrics <- Ref.make(ProducerMetrics.empty).toManaged_
@@ -431,7 +431,7 @@ object DynamicConsumerConsumeWithExample extends zio.App {
         checkpointBatchSize = 1000L,
         checkpointDuration = 5.minutes
       )(record => putStrLn(s"Processing record $record"))
-      .provideCustomLayer((loggingLayer ++ defaultEnvironment) >+> DynamicConsumer.live)
+      .provideCustomLayer((loggingLayer ++ defaultAwsLayer) >+> DynamicConsumer.live)
       .exitCode
 }
 ``` 
@@ -522,7 +522,7 @@ object DynamicConsumerBasicUsageExample extends zio.App {
             .via(checkpointer.checkpointBatched[Blocking with Console](nr = 1000, interval = 5.second))
       }
       .runDrain
-      .provideCustomLayer((loggingLayer ++ defaultEnvironment) >>> DynamicConsumer.live)
+      .provideCustomLayer((loggingLayer ++ defaultAwsLayer) >>> DynamicConsumer.live)
       .exitCode
 }
 ```
