@@ -6,6 +6,15 @@ import zio.{ UIO, ZIO }
 import scala.util.{ Failure, Success, Try }
 
 case class TestMsg(id: String)
+object TestMsg {
+  def parse(msg: String): Try[TestMsg] =
+    if (msg == """{"id": "1"}""") // hand rolled noddy Json parser - only parses this Json element
+      Success(TestMsg("1"))
+    else {
+      println(s"XXXXXXXXXXXXXXXXXX $msg")
+      Failure(new Exception("Boom!"))
+    }
+}
 
 object TrySerde {
 
@@ -15,28 +24,11 @@ object TrySerde {
   def toModelM(
     s: String
   ): ZIO[Any, Nothing, Try[TestMsg]] =
-    for {
-      a <- UIO(
-             if (s == """{"id": "1"}""")
-               Success(TestMsg("1"))
-             else {
-               println(s"XXXXXXXXXXXXXXXXXX $s")
-               Failure(new Exception("Boom!"))
-             }
-           )
-    } yield a
+    UIO(TestMsg.parse(s))
 
-  def modelAsStringM(a: Try[TestMsg]): ZIO[Any, Nothing, String] =
-    ZIO.effectTotal(a match {
-      case Success(value) => """{"id": "1"}"""
-      case Failure(_)     => "" // TODO - .die ?
-    })
-
-  /*
   def modelAsStringM(a: Try[TestMsg]): ZIO[Any, Throwable, String] =
     ZIO.fromTry(a match {
-      case Success(value) if value == "1" => Success("""{"id": "1"}""")
-      case Failure(_)                     => Failure(new Exception("Boom Boom!"))
+      case Success(value) if value == TestMsg("1") => Success("""{"id": "1"}""")
+      case Failure(_)                              => Failure(new Exception("Boom Boom!"))
     })
-   */
 }
