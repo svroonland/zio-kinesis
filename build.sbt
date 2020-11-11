@@ -52,9 +52,9 @@ libraryDependencies ++= Seq(
   "dev.zio"                %% "zio-streams"                 % "1.0.3",
   "dev.zio"                %% "zio-test"                    % "1.0.3" % "test",
   "dev.zio"                %% "zio-test-sbt"                % "1.0.3" % "test",
-  "dev.zio"                %% "zio-interop-reactivestreams" % "1.0.3.5",
+  "dev.zio"                %% "zio-interop-reactivestreams" % "1.3.0.7-2",
   "dev.zio"                %% "zio-logging"                 % "0.5.3",
-  "software.amazon.awssdk"  % "kinesis"                     % "2.15.19",
+  "software.amazon.awssdk"  % "kinesis"                     % "2.15.25",
   "ch.qos.logback"          % "logback-classic"             % "1.2.3",
   "software.amazon.kinesis" % "amazon-kinesis-client"       % "2.2.11",
   "org.scala-lang.modules" %% "scala-collection-compat"     % "2.2.0",
@@ -91,7 +91,7 @@ lazy val interopFutures = (project in file("interop-futures"))
     resolvers += Resolver.jcenterRepo,
     assemblyJarName in assembly := "zio-kinesis-future" + version.value + ".jar",
     libraryDependencies ++= Seq(
-      "nl.vroste" %% "zio-kinesis"                 % "0.15",
-      "dev.zio"   %% "zio-interop-reactivestreams" % "1.0.3.5"
+      "nl.vroste" %% "zio-kinesis"                 % "0.16.0",
+      "dev.zio"   %% "zio-interop-reactivestreams" % "1.3.0.7-2"
     )
   )
