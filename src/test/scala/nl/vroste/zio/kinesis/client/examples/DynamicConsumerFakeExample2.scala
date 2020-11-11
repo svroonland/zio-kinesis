@@ -2,9 +2,8 @@ package nl.vroste.zio.kinesis.client.examples
 
 import java.nio.ByteBuffer
 
-import nl.vroste.zio.kinesis.client.{ DynamicConsumer, Record }
 import nl.vroste.zio.kinesis.client.fake.DynamicConsumerFake
-import nl.vroste.zio.kinesis.client.serde.Serde
+import nl.vroste.zio.kinesis.client.{ DynamicConsumer, Record }
 import zio._
 import zio.clock.Clock
 import zio.console.{ putStrLn, Console }
@@ -12,7 +11,7 @@ import zio.duration._
 import zio.logging.Logging
 import zio.stream.ZStream
 
-import scala.util.Success
+import scala.util.{ Success, Try }
 
 /**
  * Basic usage example for `DynamicConsumerFake`
@@ -39,7 +38,11 @@ object DynamicConsumerFakeExample2 extends zio.App {
                       workerIdentifier = "worker1",
                       checkpointBatchSize = 1000L,
                       checkpointDuration = 5.minutes
-                    )(record => putStrLn(s"Processing record $record"))
+                    ) { record =>
+                      val r: Record[Try[TestMsg]] = record
+                      val partitionKey            = record.partitionKey
+                      putStrLn(s"Processing record $r, partitionKey=$partitionKey")
+                    }
                     .provideCustomLayer(DynamicConsumer.fake(shards, refCheckpointedList) ++ loggingLayer)
                     .exitCode
       _                   <- putStrLn(s"refCheckpointedList=$refCheckpointedList")
