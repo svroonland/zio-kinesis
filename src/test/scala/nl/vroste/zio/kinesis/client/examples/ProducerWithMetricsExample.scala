@@ -1,10 +1,9 @@
 package nl.vroste.zio.kinesis.client.examples
 
 import nl.vroste.zio.kinesis.client
-import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.producer.ProducerMetrics
 import nl.vroste.zio.kinesis.client.serde.Serde
-import nl.vroste.zio.kinesis.client.{ Client, Producer, ProducerSettings }
+import nl.vroste.zio.kinesis.client.{ Producer, ProducerRecord, ProducerSettings }
 import zio._
 import zio.clock.Clock
 import zio.console.{ putStrLn, Console }
@@ -17,7 +16,7 @@ object ProducerWithMetricsExample extends zio.App {
   val loggingLayer: ZLayer[Any, Nothing, Logging] =
     (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
-  val env = client.defaultAwsLayer >+> Client.live ++ loggingLayer
+  val env = client.defaultAwsLayer ++ loggingLayer
 
   val program = (for {
     totalMetrics <- Ref.make(ProducerMetrics.empty).toManaged_

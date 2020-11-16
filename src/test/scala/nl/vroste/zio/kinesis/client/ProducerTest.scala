@@ -3,8 +3,12 @@ package nl.vroste.zio.kinesis.client
 import java.time.Instant
 import java.util.UUID
 
+import io.github.vigoo.zioaws.cloudwatch.CloudWatch
+import io.github.vigoo.zioaws.dynamodb.DynamoDb
+import io.github.vigoo.zioaws.kinesis
+import io.github.vigoo.zioaws.kinesis.Kinesis
+import io.github.vigoo.zioaws.kinesis.model.{ ScalingType, UpdateShardCountRequest }
 import nl.vroste.zio.kinesis.client
-import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.producer.ProducerLive.ProduceRequest
 import nl.vroste.zio.kinesis.client.producer.{ ProducerLive, ProducerMetrics, ShardMap }
@@ -18,7 +22,7 @@ import zio.stream.{ ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test._
-import zio.{ system, Chunk, Queue, Ref, Runtime, ZIO, ZManaged }
+import zio.{ system, Chunk, Queue, Ref, Runtime, ZIO, ZLayer, ZManaged }
 
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
@@ -26,9 +30,10 @@ object ProducerTest extends DefaultRunnableSpec {
   val loggingLayer = Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   val useAws = Runtime.default.unsafeRun(system.envOrElse("ENABLE_AWS", "0")).toInt == 1
-  val env    = ((if (useAws) client.defaultAwsLayer
-              else LocalStackServices.localStackAwsLayer()).orDie >>> (AdminClient.live ++ Client.live)).orDie >+>
-    (Clock.live ++ zio.console.Console.live >+> loggingLayer)
+
+  val env: ZLayer[Any, Nothing, CloudWatch with Kinesis with DynamoDb with Clock with Console with Logging] =
+    ((if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()).orDie) >+>
+      (Clock.live ++ zio.console.Console.live >+> loggingLayer)
 
   def spec =
     suite("Producer")(
@@ -99,7 +104,7 @@ object ProducerTest extends DefaultRunnableSpec {
       testM("produce records to Kinesis successfully and efficiently") {
         // This test demonstrates production of about 5000-6000 records per second on my Mid 2015 Macbook Pro
 
-        val streamName = "zio-test-stream-producer3"
+        val streamName = "zio-test-stream-producer4"
 
         Ref
           .make(ProducerMetrics.empty)
@@ -107,7 +112,7 @@ object ProducerTest extends DefaultRunnableSpec {
             totalMetrics =>
               (for {
                 _        <- putStrLn("creating stream").toManaged_
-                _        <- createStreamUnmanaged(streamName, 5).toManaged_
+                _        <- createStreamUnmanaged(streamName, 24).toManaged_
                 _        <- putStrLn("creating producer").toManaged_
                 producer <- Producer
                               .make(
@@ -167,7 +172,7 @@ object ProducerTest extends DefaultRunnableSpec {
 
           for {
             batches           <- runTransducer(batcher, records)
-            recordPayloadSizes = batches.flatMap(Chunk.fromIterable).map(_.r.data().asByteArrayUnsafe().length)
+            recordPayloadSizes = batches.flatMap(Chunk.fromIterable).map(_.r.data.length)
           } yield assert(recordPayloadSizes)(forall(isLessThanEqualTo(ProducerLive.maxPayloadSizePerRecord)))
         },
         testM("aggregate records up to the batch size limit") {
@@ -178,7 +183,7 @@ object ProducerTest extends DefaultRunnableSpec {
 
           for {
             batches          <- runTransducer(batcher, records)
-            batchPayloadSizes = batches.map(_.map(_.r.data().asByteArrayUnsafe().length).sum)
+            batchPayloadSizes = batches.map(_.map(_.r.data.length).sum)
           } yield assert(batches.map(_.size))(forall(isLessThanEqualTo(ProducerLive.maxRecordsPerRequest))) &&
             assert(batchPayloadSizes)(forall(isLessThanEqualTo(ProducerLive.maxPayloadSizePerRequest)))
         }
@@ -238,7 +243,7 @@ object ProducerTest extends DefaultRunnableSpec {
         def makeProducer(
           workerId: String,
           totalMetrics: Ref[ProducerMetrics]
-        ): ZManaged[Any with Console with Clock with Client with Logging, Throwable, Producer[String]] =
+        ): ZManaged[Any with Console with Clock with Kinesis with Logging, Throwable, Producer[String]] =
           Producer
             .make(
               streamName,
@@ -319,7 +324,9 @@ object ProducerTest extends DefaultRunnableSpec {
                       .fork
             _           <- ZIO.sleep(10.seconds)
             _           <- putStrLn("Resharding")
-            _           <- ZIO.service[AdminClient.Service].flatMap(_.updateShardCount(streamName, 4))
+            _           <- kinesis
+                   .updateShardCount(UpdateShardCountRequest(streamName, 4, ScalingType.UNIFORM_SCALING))
+                   .mapError(_.toThrowable)
             _           <- done.join race producerFib.join
             _            = println("Done!")
             _           <- producerFib.interrupt

@@ -1,19 +1,19 @@
 package nl.vroste.zio.kinesis.client.zionative.fetcher
 
-import nl.vroste.zio.kinesis.client.AdminClient.StreamDescription
-import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
+import io.github.vigoo.zioaws.kinesis
+import io.github.vigoo.zioaws.kinesis.Kinesis
+import io.github.vigoo.zioaws.kinesis.model._
+import nl.vroste.zio.kinesis.client.Util
 import nl.vroste.zio.kinesis.client.zionative.Consumer.childShardToShard
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
 import nl.vroste.zio.kinesis.client.zionative.{ DiagnosticEvent, FetchMode, Fetcher }
-import nl.vroste.zio.kinesis.client.{ Client, Util }
-import software.amazon.awssdk.services.kinesis.model.{ ConsumerStatus, ResourceInUseException }
+import software.amazon.awssdk.services.kinesis.model.ResourceInUseException
 import zio._
 import zio.clock.Clock
 import zio.duration._
 import zio.logging.{ log, Logging }
 import zio.stream.ZStream
 
-import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
 object EnhancedFanOutFetcher {
@@ -21,35 +21,42 @@ object EnhancedFanOutFetcher {
   import Util.ZStreamExtensions
 
   def make(
-    streamDescription: StreamDescription,
+    streamDescription: StreamDescription.ReadOnly,
     workerId: String,
     config: FetchMode.EnhancedFanOut,
     emitDiagnostic: DiagnosticEvent => UIO[Unit]
-  ): ZManaged[Clock with Client with Logging, Throwable, Fetcher] =
+  ): ZManaged[Clock with Kinesis with Logging, Throwable, Fetcher] =
     for {
-      client             <- ZIO.service[Client.Service].toManaged_
-      env                <- ZIO.environment[Logging with Clock].toManaged_
-      consumerARN        <- registerConsumerIfNotExists(streamDescription.streamARN, workerId).toManaged_
+      env                <- ZIO.environment[Logging with Clock with Kinesis].toManaged_
+      consumerARN        <- registerConsumerIfNotExists(streamDescription.streamARNValue, workerId).toManaged_
       subscribeThrottled <- Util.throttledFunctionN(config.maxSubscriptionsPerSecond, 1.second) {
-                              (pos: ShardIteratorType, shardId: String) =>
-                                ZIO.succeed(client.subscribeToShard(consumerARN, shardId, pos))
+                              (pos: StartingPosition, shardId: String) =>
+                                ZIO.succeed(
+                                  kinesis
+                                    .subscribeToShard(
+                                      SubscribeToShardRequest(consumerARN, shardId, pos)
+                                    )
+                                    .mapError(_.toThrowable)
+                                )
                             }
     } yield Fetcher { (shardId, startingPosition) =>
       ZStream.unwrap {
         for {
-          currentPosition <- Ref.make[Option[ShardIteratorType]](Some(startingPosition)) // None means shard has ended
+          currentPosition <- Ref.make[Option[StartingPosition]](Some(startingPosition)) // None means shard has ended
         } yield repeatWhileNotNone(currentPosition) { pos =>
           ZStream
             .unwrap(subscribeThrottled(pos, shardId))
             .tap { e =>
               currentPosition.set(
-                Option(e.continuationSequenceNumber()).map(ShardIteratorType.AfterSequenceNumber)
+                Option(e.continuationSequenceNumberValue).map(nr =>
+                  StartingPosition(ShardIteratorType.AFTER_SEQUENCE_NUMBER, Some(nr))
+                )
               )
             }
             .tap { e =>
               emitDiagnostic(
                 DiagnosticEvent
-                  .SubscribeToShardEvent(shardId, e.records.size, e.millisBehindLatest().toLong.millis)
+                  .SubscribeToShardEvent(shardId, e.recordsValue.size, e.millisBehindLatestValue.millis)
               )
             }
             .catchSome {
@@ -65,30 +72,33 @@ object EnhancedFanOutFetcher {
             .retry(config.retrySchedule)
         }.mapError(Left(_): Either[Throwable, EndOfShard])
           .flatMap { response =>
-            if (response.hasChildShards)
+            if (response.childShardsValue.toList.flatten.nonEmpty)
               ZStream.succeed(response) ++ ZStream.fail(
-                Right(EndOfShard(response.childShards().asScala.map(childShardToShard).toSeq))
+                Right(EndOfShard(response.childShardsValue.toList.flatten.map(childShardToShard)))
               )
             else
               ZStream.succeed(response)
           }
-          .mapConcat(_.records.asScala)
+          .mapConcat(_.recordsValue)
       }.provide(env)
     }
 
   private def registerConsumerIfNotExists(streamARN: String, consumerName: String) =
-    ZIO
-      .service[Client.Service]
-      .flatMap(_.registerStreamConsumer(streamARN, consumerName))
-      .map(_.consumerARN())
+    kinesis
+      .registerStreamConsumer(RegisterStreamConsumerRequest(streamARN, consumerName))
+      .mapError(_.toThrowable)
+      .map(_.consumerValue.consumerARNValue)
       .catchSome {
         case e: ResourceInUseException =>
           // Consumer already exists, retrieve it
-          ZIO
-            .service[Client.Service]
-            .flatMap(_.describeStreamConsumer(streamARN, consumerName))
-            .filterOrElse(_.consumerStatus() != ConsumerStatus.DELETING)(_ => ZIO.fail(e))
-            .map(_.consumerARN())
+          kinesis
+            .describeStreamConsumer(
+              DescribeStreamConsumerRequest(streamARN = Some(streamARN), consumerName = Some(consumerName))
+            )
+            .mapError(_.toThrowable)
+            .map(_.consumerDescriptionValue)
+            .filterOrElse(_.consumerStatusValue != ConsumerStatus.DELETING)(_ => ZIO.fail(e))
+            .map(_.consumerARNValue)
       }
 }
 

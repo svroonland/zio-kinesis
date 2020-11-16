@@ -1,9 +1,8 @@
 package nl.vroste.zio.kinesis.client
+import io.github.vigoo.zioaws.kinesis.model.PutRecordsRequestEntry
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.protobuf.Messages
-import software.amazon.awssdk.core.SdkBytes
-import software.amazon.awssdk.services.kinesis.model.PutRecordsRequestEntry
-import zio.ZIO
+import zio.{ Chunk, ZIO }
 import zio.test.Assertion._
 import zio.test._
 
@@ -16,7 +15,7 @@ object ProtobufAggregationTest extends DefaultRunnableSpec {
 
         for {
           bytes         <- Serde.asciiString.serialize(payload)
-          entry          = PutRecordsRequestEntry.builder().data(SdkBytes.fromByteBuffer(bytes)).build()
+          entry          = PutRecordsRequestEntry(Chunk.fromByteBuffer(bytes), partitionKey = "123")
           protobufRecord = ProtobufAggregation.putRecordsRequestEntryToRecord(entry, 0)
 
           aggregatedRecord = Messages.AggregatedRecord

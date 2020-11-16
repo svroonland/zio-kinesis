@@ -3,15 +3,16 @@ package nl.vroste.zio.kinesis.client.zionative
 import nl.vroste.zio.kinesis.client.zionative.Consumer.InitialPosition
 import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.Lease
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator
-import software.amazon.awssdk.services.kinesis.model.Shard
+import software.amazon.awssdk.services.kinesis.model.{ Shard => SdkShard }
+import io.github.vigoo.zioaws.kinesis.model.Shard
 import zio.test.Assertion._
 import zio.test._
 
 object LeaseCoordinatorTest extends DefaultRunnableSpec {
 
-  val shard1 = Shard.builder().shardId("001").build()
-  val shard2 = Shard.builder().shardId("002").build()
-  val shard3 = Shard.builder().shardId("003").parentShardId("001").adjacentParentShardId("002").build()
+  val shard1 = Shard.wrap(SdkShard.builder().shardId("001").build())
+  val shard2 = Shard.wrap(SdkShard.builder().shardId("002").build())
+  val shard3 = Shard.wrap(SdkShard.builder().shardId("003").parentShardId("001").adjacentParentShardId("002").build())
 
   override def spec =
     suite("DefaultLeaseCoordinator")(
@@ -58,7 +59,7 @@ object LeaseCoordinatorTest extends DefaultRunnableSpec {
       ),
       suite("shardsReadyToConsume")(
         test("shards without parents and no leases ready to consume") {
-          val shards = Seq(shard1, shard2).map(s => s.shardId() -> s).toMap
+          val shards = Seq(shard1, shard2).map(s => s.shardIdValue -> s).toMap
 
           val leases: Map[String, Lease] = Map.empty
 
@@ -67,7 +68,7 @@ object LeaseCoordinatorTest extends DefaultRunnableSpec {
           assert(readyToConsume)(equalTo(Set("001", "002")))
         },
         test("shards without parents and open leases ready to consume") {
-          val shards = Seq(shard1, shard2).map(s => s.shardId() -> s).toMap
+          val shards = Seq(shard1, shard2).map(s => s.shardIdValue -> s).toMap
 
           val leases = Map(
             "001" -> Lease(
@@ -91,7 +92,7 @@ object LeaseCoordinatorTest extends DefaultRunnableSpec {
           assert(readyToConsume)(equalTo(Set("001", "002")))
         },
         test("shards without parents and ended leases not ready to consume") {
-          val shards = Seq(shard1, shard2).map(s => s.shardId() -> s).toMap
+          val shards = Seq(shard1, shard2).map(s => s.shardIdValue -> s).toMap
 
           val leases = Map(
             "001" -> Lease(
@@ -115,7 +116,7 @@ object LeaseCoordinatorTest extends DefaultRunnableSpec {
           assert(readyToConsume)(equalTo(Set.empty[String]))
         },
         test("shards with open parents but no leases not ready to consume") {
-          val shards = Seq(shard1, shard2, shard3).map(s => s.shardId() -> s).toMap
+          val shards = Seq(shard1, shard2, shard3).map(s => s.shardIdValue -> s).toMap
 
           val leases: Map[String, Lease] = Map.empty
 
@@ -124,7 +125,7 @@ object LeaseCoordinatorTest extends DefaultRunnableSpec {
           assert(readyToConsume)(not(contains("003")))
         },
         test("shards with expired parents ready to consume") {
-          val shards = Seq(shard3).map(s => s.shardId() -> s).toMap
+          val shards = Seq(shard3).map(s => s.shardIdValue -> s).toMap
 
           val leases: Map[String, Lease] = Map.empty
 
@@ -133,7 +134,7 @@ object LeaseCoordinatorTest extends DefaultRunnableSpec {
           assert(readyToConsume)(contains("003"))
         },
         test("shards with open parents and open leases not ready to consume") {
-          val shards = Seq(shard1, shard2, shard3).map(s => s.shardId() -> s).toMap
+          val shards = Seq(shard1, shard2, shard3).map(s => s.shardIdValue -> s).toMap
 
           val leases = Map(
             "001" -> Lease(
@@ -157,7 +158,7 @@ object LeaseCoordinatorTest extends DefaultRunnableSpec {
           assert(readyToConsume)(not(contains("003")))
         },
         test("shards with two parents of which one has expired not ready to consume") {
-          val shards = Seq(shard2, shard3).map(s => s.shardId() -> s).toMap
+          val shards = Seq(shard2, shard3).map(s => s.shardIdValue -> s).toMap
 
           val leases: Map[String, Lease] = Map.empty
 

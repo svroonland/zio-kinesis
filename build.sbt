@@ -45,7 +45,9 @@ inThisBuild(
 )
 
 name := "zio-kinesis"
-scalafmtOnCompile := true
+scalafmtOnCompile := false
+
+val zioAwsVersion = "3.15.19.7"
 
 libraryDependencies ++= Seq(
   "dev.zio"                %% "zio"                         % "1.0.3",
@@ -59,6 +61,11 @@ libraryDependencies ++= Seq(
   "software.amazon.kinesis" % "amazon-kinesis-client"       % "2.2.11",
   "org.scala-lang.modules" %% "scala-collection-compat"     % "2.2.0",
   "org.hdrhistogram"        % "HdrHistogram"                % "2.1.12",
+  "io.github.vigoo"        %% "zio-aws-core"                % zioAwsVersion,
+  "io.github.vigoo"        %% "zio-aws-kinesis"             % zioAwsVersion,
+  "io.github.vigoo"        %% "zio-aws-dynamodb"            % zioAwsVersion,
+  "io.github.vigoo"        %% "zio-aws-cloudwatch"          % zioAwsVersion,
+  "io.github.vigoo"        %% "zio-aws-netty"               % zioAwsVersion,
   "javax.xml.bind"          % "jaxb-api"                    % "2.3.1"
 ) ++ {
   if (scalaBinaryVersion.value == "2.13") silencer else Seq.empty

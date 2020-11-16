@@ -3,14 +3,15 @@ package nl.vroste.zio.kinesis.client.producer
 import java.io.IOException
 import java.time.Instant
 
+import io.github.vigoo.zioaws.kinesis.Kinesis
+import io.github.vigoo.zioaws.kinesis.model.{ PutRecordsRequest, PutRecordsRequestEntry, PutRecordsResultEntry }
 import io.netty.handler.timeout.ReadTimeoutException
-import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.producer.ProducerLive.ProduceRequest
 import nl.vroste.zio.kinesis.client.serde.Serializer
-import software.amazon.awssdk.core.SdkBytes
-import software.amazon.awssdk.services.kinesis.model.{ KinesisException, PutRecordsRequestEntry, PutRecordsResultEntry }
+import software.amazon.awssdk.core.exception.SdkException
+import software.amazon.awssdk.services.kinesis.model.KinesisException
 import zio._
 import zio.clock.{ instant, Clock }
 import zio.duration._
@@ -18,11 +19,10 @@ import zio.logging.{ log, Logging }
 import zio.stream.ZTransducer.Push
 import zio.stream.{ ZStream, ZTransducer }
 
-import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
 private[client] final class ProducerLive[R, R1, T](
-  client: Client.Service,
+  client: Kinesis.Service,
   env: R with Clock,
   queue: Queue[ProduceRequest],
   failedQueue: Queue[ProduceRequest],
@@ -68,9 +68,7 @@ private[client] final class ProducerLive[R, R1, T](
       .mapChunks(
         _.map { request =>
           request
-            .copy(complete =
-              result => request.complete(result) *> result.tap(_ => throttler.addSuccess(shardId)).ignore
-            )
+            .copy(complete = result => request.complete(result) *> result.zipLeft(throttler.addSuccess(shardId)).ignore)
         }
       )
       .throttleShapeM(maxRecordsPerShardPerSecond.toLong, 1.second)(chunk =>
@@ -81,7 +79,7 @@ private[client] final class ProducerLive[R, R1, T](
       )
 
   private def processBatch(batch: Seq[ProduceRequest]): ZIO[Clock with Logging, Nothing, Unit] = {
-    val totalPayload = batch.map(_.r.data().asByteArrayUnsafe().length).sum
+    val totalPayload = batch.map(_.r.data.length).sum
     (for {
       _                  <- log.info(
              s"PutRecords for batch of size ${batch.map(_.aggregateCount).sum} (${batch.size} aggregated). " +
@@ -90,18 +88,17 @@ private[client] final class ProducerLive[R, R1, T](
            )
 
       response           <- client
-                    .putRecords(streamName, batch.map(_.r))
+                    .putRecords(PutRecordsRequest(batch.map(_.r), streamName))
+                    .mapError(_.toThrowable)
                     .tapError(e => log.warn(s"Error producing records, will retry if recoverable: $e"))
                     .retry(scheduleCatchRecoverable && settings.backoffRequests)
-                    .timed
-                    .tap(rt => log.debug(s"PutRecords took ${rt._1}")) andThen ZIO.second
 
-      responseAndRequests = response.records().asScala.zip(batch)
+      responseAndRequests = response.recordsValue.zip(batch)
 
-      (newFailed, succeeded)    = if (response.failedRecordCount() > 0)
+      (newFailed, succeeded)    = if (response.failedRecordCountValue.getOrElse(0) > 0)
                                  responseAndRequests.partition {
                                    case (result, _) =>
-                                     result.errorCode() != null && recoverableErrorCodes.contains(result.errorCode())
+                                     result.errorCodeValue.exists(recoverableErrorCodes.contains)
                                  }
                                else
                                  (Seq.empty, responseAndRequests)
@@ -115,8 +112,8 @@ private[client] final class ProducerLive[R, R1, T](
                request.complete(
                  ZIO.succeed(
                    ProduceResponse(
-                     response.shardId(),
-                     response.sequenceNumber(),
+                     response.shardIdValue.get,
+                     response.sequenceNumberValue.get,
                      request.attemptNumber,
                      completed = now
                    )
@@ -131,7 +128,10 @@ private[client] final class ProducerLive[R, R1, T](
     }
   }
 
-  private def handleFailures(newFailed: collection.Seq[(PutRecordsResultEntry, ProduceRequest)], repredict: Boolean) = {
+  private def handleFailures(
+    newFailed: collection.Seq[(PutRecordsResultEntry.ReadOnly, ProduceRequest)],
+    repredict: Boolean
+  ) = {
     val requests    = newFailed.map(_._2)
     val responses   = newFailed.map(_._1)
     val failedCount = requests.map(_.aggregateCount).sum
@@ -140,7 +140,7 @@ private[client] final class ProducerLive[R, R1, T](
       _ <- currentMetrics.update(_.addFailures(failedCount))
       _ <- ZIO.foreach_(requests)(r => throttler.addFailure(r.predictedShard))
       _ <- log.warn(s"Failed to produce ${failedCount} records").when(newFailed.nonEmpty)
-      _ <- log.warn(responses.take(10).map(_.errorCode()).mkString(", ")).when(newFailed.nonEmpty)
+      _ <- log.warn(responses.take(10).flatMap(_.errorCodeValue).mkString(", ")).when(newFailed.nonEmpty)
 
       // The shard map may not yet be updated unless we're experiencing high latency
       updatedFailed <-
@@ -158,12 +158,14 @@ private[client] final class ProducerLive[R, R1, T](
     } yield ()
   }
 
-  private def checkShardPredictionErrors(responseAndRequests: Iterable[(PutRecordsResultEntry, ProduceRequest)]) = {
+  private def checkShardPredictionErrors(
+    responseAndRequests: Iterable[(PutRecordsResultEntry.ReadOnly, ProduceRequest)]
+  ) = {
     val shardPredictionErrors = responseAndRequests.filter {
-      case (result, request) => Option(result.shardId()).exists(_ != request.predictedShard)
+      case (result, request) => result.shardIdValue.exists(_ != request.predictedShard)
     }
 
-    val (succeeded, failed) = shardPredictionErrors.partition(_._1.errorCode() == null)
+    val (succeeded, failed) = shardPredictionErrors.partition(_._1.errorCodeValue.isEmpty)
 
     ZIO
       .when(shardPredictionErrors.nonEmpty) {
@@ -270,7 +272,7 @@ private[client] object ProducerLive {
 
     def isRetry: Boolean = attemptNumber > 1
 
-    def payloadSize: Int = r.data().asByteArrayUnsafe().length + r.partitionKey().length
+    def payloadSize: Int = r.data.length + r.partitionKey.length
   }
 
   def makeProduceRequest[R, T](
@@ -282,30 +284,30 @@ private[client] object ProducerLive {
     for {
       done          <- Promise.make[Throwable, ProduceResponse]
       data          <- serializer.serialize(r.data)
-      entry          = PutRecordsRequestEntry
-                .builder()
-                .partitionKey(r.partitionKey)
-                .data(SdkBytes.fromByteBuffer(data))
-                .build()
-      predictedShard = shardMap.shardForPartitionKey(Option(entry.explicitHashKey()).getOrElse(entry.partitionKey()))
+      entry          = PutRecordsRequestEntry(Chunk.fromByteBuffer(data), partitionKey = r.partitionKey)
+      predictedShard = shardMap.shardForPartitionKey(entry.explicitHashKey.getOrElse(entry.partitionKey))
     } yield (done.await, ProduceRequest(entry, done.completeWith(_).unit, now, predictedShard))
 
   final def scheduleCatchRecoverable: Schedule[Any, Throwable, Throwable] =
-    Schedule.recurWhile {
+    Schedule.recurWhile(isRecoverableException)
+
+  private def isRecoverableException(e: Throwable): Boolean =
+    e match {
       case e: KinesisException if e.statusCode() / 100 != 4 => true
       case _: ReadTimeoutException                          => true
       case _: IOException                                   => true
+      case e: SdkException if Option(e.getCause).isDefined  => isRecoverableException(e.getCause)
       case _                                                => false
     }
 
   def payloadSizeForEntry(entry: PutRecordsRequestEntry): Int =
-    entry.partitionKey().length + entry.data().asByteArray().length
+    entry.partitionKey.length + entry.data.length
 
   def payloadSizeForEntryAggregated(entry: PutRecordsRequestEntry): Int =
     payloadSizeForEntry(entry) +
-      3 +                                                                // Data
-      3 + 2 +                                                            // Partition key
-      Option(entry.explicitHashKey()).map(_.length + 2).getOrElse(1) + 3 // Explicit hash key
+      3 +                                                      // Data
+      3 + 2 +                                                  // Partition key
+      entry.explicitHashKey.map(_.length + 2).getOrElse(1) + 3 // Explicit hash key
 
   /**
    * Like ZTransducer.foldM, but with 'while' instead of 'until' semantics regarding `contFn`
