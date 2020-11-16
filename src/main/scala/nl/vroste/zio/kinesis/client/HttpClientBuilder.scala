@@ -5,7 +5,7 @@ import software.amazon.awssdk.http.nio.netty.{ Http2Configuration, NettyNioAsync
 import zio.duration._
 import zio.{ ZIO, ZLayer, ZManaged }
 
-object HttpClient {
+object HttpClientBuilder {
 
   /**
    * Wrapper around SdkAsyncHttpClient to support configuring the HTTP Protocol
@@ -39,9 +39,9 @@ object HttpClient {
     readTimeout: Duration = 30.seconds,
     allowHttp2: Boolean = true,
     build: NettyNioAsyncHttpClient.Builder => SdkAsyncHttpClient = _.build()
-  ): ZLayer[Any, Nothing, HttpClient] =
-    ZLayer.succeed { http2Supported =>
-      val protocol = if (allowHttp2 && http2Supported) Protocol.HTTP2 else Protocol.HTTP1_1
+  ): ZLayer[Any, Nothing, HttpClientBuilder] =
+    ZLayer.succeed { httpSupported =>
+      val protocol = if (allowHttp2 & httpSupported) Protocol.HTTP2 else Protocol.HTTP1_1
 
       val builder = NettyNioAsyncHttpClient
         .builder()
@@ -60,6 +60,7 @@ object HttpClient {
         )
         .protocol(protocol)
 
-      ZManaged.fromAutoCloseable(ZIO(build(builder)))
+      ZManaged
+        .fromAutoCloseable(ZIO(build(builder)))
     }
 }

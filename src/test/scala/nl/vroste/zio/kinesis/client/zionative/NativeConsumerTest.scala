@@ -3,11 +3,13 @@ package nl.vroste.zio.kinesis.client.zionative
 import java.time.Instant
 import java.{ util => ju }
 
-import nl.vroste.zio.kinesis.client
-
 import scala.collection.compat._
-import nl.vroste.zio.kinesis.client.Client.ProducerRecord
-import nl.vroste.zio.kinesis.client.{ AdminClient, Client, Producer, ProducerSettings, TestUtil }
+
+import io.github.vigoo.zioaws.kinesis
+import io.github.vigoo.zioaws.kinesis.Kinesis
+import io.github.vigoo.zioaws.kinesis.model.{ DescribeStreamRequest, ScalingType, UpdateShardCountRequest }
+import nl.vroste.zio.kinesis.client
+import nl.vroste.zio.kinesis.client.{ Producer, ProducerSettings, TestUtil }
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.TestUtil.{ retryOnResourceNotFound, withStream }
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
@@ -15,15 +17,16 @@ import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.LeaseCoordinationSettings
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
+import nl.vroste.zio.kinesis.client._
 import zio._
 import zio.clock.Clock
 import zio.console._
 import zio.duration._
+import zio.logging.{ log, _ }
 import zio.logging.log
 import zio.stream.{ ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test._
-import zio.logging._
 
 object NativeConsumerTest extends DefaultRunnableSpec {
   /*
@@ -44,7 +47,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
   - [ ] Recover from a lost connection
    */
 
-  def streamPrefix = ju.UUID.randomUUID().toString().take(9)
+  def streamPrefix = ju.UUID.randomUUID().toString.take(9)
 
   override def spec =
     suite("ZIO Native Kinesis Stream Consumer")(
@@ -72,7 +75,10 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                            }
                            .take(nrRecords.toLong)
                            .runCollect
-              shardIds <- AdminClient.describeStream(streamName).map(_.shards.map(_.shardId()))
+              shardIds <- kinesis
+                            .describeStream(DescribeStreamRequest(streamName))
+                            .mapError(_.toThrowable)
+                            .map(_.streamDescriptionValue.shardsValue.map(_.shardIdValue))
               _        <- producer.interrupt
 
             } yield assert(records.map(_.shardId).toSet)(equalTo(shardIds.toSet))
@@ -625,12 +631,13 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
             for {
               producer      <- produceSampleRecords(streamName, nrRecords, chunkSize = 50, throttle = Some(1.second)).fork
-              adminClient   <- ZIO.service[AdminClient.Service]
               stream        <-
                 consumer("worker1", e => UIO(println(e.toString))).runCollect.tapCause(e => UIO(println(e))).fork
               _             <- ZIO.sleep(20.seconds)
               _              = println("Resharding")
-              _             <- adminClient.updateShardCount(streamName, 4)
+              _             <- kinesis
+                     .updateShardCount(UpdateShardCountRequest(streamName, 4, ScalingType.UNIFORM_SCALING))
+                     .mapError(_.toThrowable)
               finishedShard <- stream.join.map(_.head)
               _             <- producer.interrupt
               checkpoints   <- getCheckpoints(applicationName)
@@ -676,14 +683,15 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                 .take(3)
 
             for {
-              producer    <- produceSampleRecords(streamName, nrRecords, chunkSize = 50, throttle = Some(1.second)).fork
-              adminClient <- ZIO.service[AdminClient.Service]
+              producer <- produceSampleRecords(streamName, nrRecords, chunkSize = 50, throttle = Some(1.second)).fork
 
               stream  <-
                 consumer("worker1", e => UIO(println(e.toString))).runCollect.tapCause(e => UIO(println(e))).fork
               _       <- ZIO.sleep(10.seconds)
               _        = println("Resharding")
-              _       <- adminClient.updateShardCount(streamName, nrShards * 2)
+              _       <- kinesis
+                     .updateShardCount(UpdateShardCountRequest(streamName, nrShards * 2, ScalingType.UNIFORM_SCALING))
+                     .mapError(_.toThrowable)
               _       <- ZIO.sleep(10.seconds)
               _       <- stream.join
               shards  <- TestUtil.getShards(streamName)
@@ -770,10 +778,10 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
   val useAws = Runtime.default.unsafeRun(system.envOrElse("ENABLE_AWS", "0")).toInt == 1
 
-  val env = (((if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()).orDie >+>
-    (AdminClient.live ++ Client.live ++ DynamoDbLeaseRepository.live)).orDie ++
-    zio.test.environment.testEnvironment ++
-    Clock.live) >>>
+  val env = (((if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()).orDie) >+>
+    DynamoDbLeaseRepository.live ++
+      zio.test.environment.testEnvironment ++
+      Clock.live) >>>
     (ZLayer.identity ++ loggingLayer)
 
   def produceSampleRecords(
@@ -783,7 +791,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     throttle: Option[Duration] = None,
     indexStart: Int = 1,
     aggregated: Boolean = false
-  ): ZIO[Client with Clock with Logging, Throwable, Chunk[ProduceResponse]] =
+  ): ZIO[Kinesis with Clock with Logging, Throwable, Chunk[ProduceResponse]] =
     Producer
       .make(streamName, Serde.asciiString, ProducerSettings(maxParallelRequests = 1, aggregate = aggregated))
       .use { producer =>
@@ -809,7 +817,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     nrRecords: Int,
     chunkSize: Int = 100,
     indexStart: Int = 1
-  ): ZIO[Client with Clock with Logging, Throwable, Chunk[ProduceResponse]] =
+  ): ZIO[Kinesis with Clock with Logging, Throwable, Chunk[ProduceResponse]] =
     Producer.make(streamName, Serde.asciiString).use { producer =>
       val records =
         (indexStart until (nrRecords + indexStart)).map(i => ProducerRecord(s"key$i", s"msg$i"))
@@ -861,11 +869,9 @@ object NativeConsumerTest extends DefaultRunnableSpec {
       .service[LeaseRepository.Service]
       .flatMap(_.deleteTable(tableName).unit)
 
-  def withRandomStreamAndApplicationName[R, A](
-    nrShards: Int
-  )(
+  def withRandomStreamAndApplicationName[R, A](nrShards: Int)(
     f: (String, String) => ZIO[R, Throwable, A]
-  ): ZIO[Client with AdminClient with Clock with Logging with Console with Has[
+  ): ZIO[Kinesis with Clock with Console with Logging with Console with Has[
     LeaseRepository.Service
   ] with R, Throwable, A] =
     ZIO.effectTotal((streamPrefix + "testStream", streamPrefix + "testApplication")).flatMap {

@@ -1,5 +1,6 @@
 package nl.vroste.zio.kinesis.client.examples
 
+import nl.vroste.zio.kinesis.client.HttpClientBuilder
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.Consumer
 import nl.vroste.zio.kinesis.client.zionative.metrics.{ CloudWatchMetricsPublisher, CloudWatchMetricsPublisherConfig }
@@ -36,7 +37,10 @@ object NativeConsumerWithMetricsExample extends zio.App {
           }
           .runDrain
       }
-      .provideCustomLayer(Consumer.defaultEnvironment ++ loggingLayer ++ ZLayer.succeed(metricsConfig))
+      .provideCustomLayer(
+        (HttpClientBuilder.make() >>> Consumer.defaultEnvironment) ++ loggingLayer ++ ZLayer
+          .succeed(metricsConfig)
+      )
       .exitCode
 
   val loggingLayer = Logging.console() >>> Logging.withRootLoggerName(getClass.getName)

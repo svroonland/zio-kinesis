@@ -1,25 +1,32 @@
 package nl.vroste.zio.kinesis.client.zionative
 import java.nio.charset.Charset
 
-import nl.vroste.zio.kinesis.client.Client
-import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
+import io.github.vigoo.zioaws.core.AwsError
+import io.github.vigoo.zioaws.core.aspects.AwsCallAspect
+import io.github.vigoo.zioaws.kinesis.model.{
+  GetRecordsResponse,
+  GetShardIteratorResponse,
+  Record,
+  ShardIteratorType,
+  StartingPosition
+}
+import io.github.vigoo.zioaws.kinesis.{ model, Kinesis }
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.Polling
 import nl.vroste.zio.kinesis.client.zionative.fetcher.PollingFetcher
-import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.services.kinesis.model.{
   ChildShard,
-  GetRecordsResponse,
-  ProvisionedThroughputExceededException,
-  Record
+  HashKeyRange,
+  ProvisionedThroughputExceededException
 }
+import software.amazon.awssdk.services.kinesis.{ model => aws }
 import zio._
+import zio.duration._
 import zio.logging.Logging
+import zio.stream.ZStream
 import zio.test.Assertion._
 import zio.test._
 import zio.test.environment.TestClock
-import zio.duration._
-import zio.stream.ZStream
 
 import scala.jdk.CollectionConverters._
 
@@ -52,7 +59,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
                          .make("my-stream-1", FetchMode.Polling(10), _ => UIO.unit)
                          .use { fetcher =>
                            fetcher
-                             .shardRecordStream("shard1", ShardIteratorType.TrimHorizon)
+                             .shardRecordStream("shard1", StartingPosition(ShardIteratorType.TRIM_HORIZON))
                              .mapChunks(Chunk.single)
                              .take(nrBatches)
                              .runCollect
@@ -74,7 +81,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
                          .make("my-stream-1", FetchMode.Polling(batchSize), _ => UIO.unit)
                          .use { fetcher =>
                            fetcher
-                             .shardRecordStream("shard1", ShardIteratorType.TrimHorizon)
+                             .shardRecordStream("shard1", StartingPosition(ShardIteratorType.TRIM_HORIZON))
                              .mapChunks(Chunk.single)
                              .take(nrBatches)
                              .runDrain
@@ -98,7 +105,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
               .make("my-stream-1", FetchMode.Polling(batchSize, Polling.dynamicSchedule(pollInterval)), _ => UIO.unit)
               .use { fetcher =>
                 fetcher
-                  .shardRecordStream("shard1", ShardIteratorType.TrimHorizon)
+                  .shardRecordStream("shard1", StartingPosition(ShardIteratorType.TRIM_HORIZON))
                   .mapChunks(Chunk.single)
                   .tap(_ => chunksReceived.update(_ + 1))
                   .take(nrBatches + 1)
@@ -128,7 +135,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
               .make("my-stream-1", FetchMode.Polling(batchSize, Polling.dynamicSchedule(pollInterval)), _ => UIO.unit)
               .use { fetcher =>
                 fetcher
-                  .shardRecordStream("shard1", ShardIteratorType.TrimHorizon)
+                  .shardRecordStream("shard1", StartingPosition(ShardIteratorType.TRIM_HORIZON))
                   .mapChunks(Chunk.single)
                   .tap(_ => chunksReceived.update(_ + 1))
                   .take(nrBatches)
@@ -155,13 +162,13 @@ object PollingFetcherTest extends DefaultRunnableSpec {
                        .make("my-stream-1", FetchMode.Polling(batchSize), _ => UIO.unit)
                        .use { fetcher =>
                          fetcher
-                           .shardRecordStream("shard1", ShardIteratorType.TrimHorizon)
+                           .shardRecordStream("shard1", StartingPosition(ShardIteratorType.TRIM_HORIZON))
                            .mapChunks(Chunk.single)
                            .take(nrBatches)
                            .flattenChunks
                            .runCollect
                        }
-          partitionKeys = fetched.map(_.partitionKey)
+          partitionKeys = fetched.map(_.partitionKeyValue)
         } yield assert(partitionKeys)(equalTo(records.map(_.partitionKey))))
           .provideSomeLayer[ZEnv with Logging](ZLayer.succeed(stubClient(records)))
       },
@@ -175,7 +182,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
                  .make("my-stream-1", FetchMode.Polling(batchSize), _ => UIO.unit)
                  .use { fetcher =>
                    fetcher
-                     .shardRecordStream("shard1", ShardIteratorType.TrimHorizon)
+                     .shardRecordStream("shard1", StartingPosition(ShardIteratorType.TRIM_HORIZON))
                      .mapChunks(Chunk.single)
                      .catchAll {
                        case Left(e)  => ZStream.fail(e)
@@ -201,7 +208,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
                  .make("my-stream-1", FetchMode.Polling(batchSize), emitDiagnostic)
                  .use { fetcher =>
                    fetcher
-                     .shardRecordStream("shard1", ShardIteratorType.TrimHorizon)
+                     .shardRecordStream("shard1", StartingPosition(ShardIteratorType.TRIM_HORIZON))
                      .mapChunks(Chunk.single)
                      .take(nrBatches)
                      .runCollect
@@ -226,7 +233,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
               .make("my-stream-1", FetchMode.Polling(batchSize, Polling.dynamicSchedule(pollInterval)), _ => UIO.unit)
               .use { fetcher =>
                 fetcher
-                  .shardRecordStream("shard1", ShardIteratorType.TrimHorizon)
+                  .shardRecordStream("shard1", StartingPosition(ShardIteratorType.TRIM_HORIZON))
                   .mapChunks(Chunk.single)
                   .tap(_ => chunksReceived.update(_ + 1))
                   .take(nrBatches)
@@ -249,12 +256,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
 
   private def makeRecords(nrRecords: Long): Seq[Record] =
     (0 until nrRecords.toInt).map { i =>
-      Record
-        .builder()
-        .data(SdkBytes.fromString("test", Charset.defaultCharset()))
-        .partitionKey(s"key${i}")
-        .sequenceNumber(s"${i}")
-        .build()
+      Record(s"${i}", data = Chunk.fromByteBuffer(Charset.defaultCharset().encode("test")), partitionKey = s"key${i}")
     }
 
 // Simple single-shard GetRecords mock that uses the sequence number as shard iterator
@@ -262,40 +264,57 @@ object PollingFetcherTest extends DefaultRunnableSpec {
     records: Seq[Record],
     endAfterRecords: Boolean = false,
     doThrottle: (String, Int) => UIO[Boolean] = (_, _) => UIO(false)
-  ): Client.Service =
-    new StubClient {
-      override def getShardIterator(
-        streamName: String,
-        shardId: String,
-        iteratorType: Client.ShardIteratorType
-      ): Task[String] = Task.succeed("0")
+  ): Kinesis.Service =
+    new StubClient { self =>
+      override def withAspect[R](newAspect: AwsCallAspect[R], r: R): Kinesis.Service = self
 
-      override def getRecords(shardIterator: String, limit: Int): Task[GetRecordsResponse] =
+      override def getShardIterator(
+        request: model.GetShardIteratorRequest
+      ): IO[AwsError, GetShardIteratorResponse.ReadOnly] =
+        IO.succeed(GetShardIteratorResponse.wrap(aws.GetShardIteratorResponse.builder().shardIterator("0").build()))
+
+      override def getRecords(request: model.GetRecordsRequest): IO[AwsError, GetRecordsResponse.ReadOnly] = {
+        val shardIterator = request.shardIterator
+        val limit         = request.limit.getOrElse(0)
+
         doThrottle(shardIterator, limit).flatMap { throttle =>
           if (throttle)
-            Task.fail(ProvisionedThroughputExceededException.builder.message("take it easy").build())
-          else
-            Task {
-              val offset             = shardIterator.toInt
-              val lastRecordOffset   = offset + limit
-              val recordsInResponse  = records.slice(offset, offset + limit)
-              val shouldEnd          = lastRecordOffset >= records.size && endAfterRecords
-              val nextShardIterator  =
-                if (shouldEnd) null else lastRecordOffset.toString
-              val childShards        =
-                if (shouldEnd) Seq(ChildShard.builder().shardId("shard-002").parentShards("001").build) else null
-              val millisBehindLatest = if (lastRecordOffset >= records.size) 0 else records.size - lastRecordOffset
+            IO.fail(
+              AwsError.fromThrowable(ProvisionedThroughputExceededException.builder.message("take it easy").build())
+            )
+          else {
+            val offset             = shardIterator.toInt
+            val lastRecordOffset   = offset + limit
+            val recordsInResponse  = records.slice(offset, offset + limit)
+            val shouldEnd          = lastRecordOffset >= records.size && endAfterRecords
+            val nextShardIterator  =
+              if (shouldEnd) null else lastRecordOffset.toString
+            val childShards        =
+              if (shouldEnd)
+                Seq(
+                  ChildShard
+                    .builder()
+                    .shardId("shard-002")
+                    .parentShards("001")
+                    .hashKeyRange(HashKeyRange.builder().startingHashKey("123").endingHashKey("456").build())
+                    .build
+                )
+              else null
+            val millisBehindLatest = if (lastRecordOffset >= records.size) 0 else records.size - lastRecordOffset
 
-              //          println(s"GetRecords from ${shardIterator} (max ${limit}. Next iterator: ${nextShardIterator}")
+            //          println(s"GetRecords from ${shardIterator} (max ${limit}. Next iterator: ${nextShardIterator}")
 
-              GetRecordsResponse
-                .builder()
-                .records(recordsInResponse.asJava)
-                .millisBehindLatest(millisBehindLatest)
-                .nextShardIterator(nextShardIterator)
-                .childShards(childShards.asJava)
-                .build()
-            }
+            val awsResponse = aws.GetRecordsResponse
+              .builder()
+              .millisBehindLatest(millisBehindLatest)
+              .nextShardIterator(nextShardIterator)
+              .childShards(childShards.asJava)
+              .records(recordsInResponse.map(_.buildAwsValue()).asJavaCollection)
+              .build()
+
+            IO.succeed(GetRecordsResponse.wrap(awsResponse))
+          }
         }
+      }
     }
 }

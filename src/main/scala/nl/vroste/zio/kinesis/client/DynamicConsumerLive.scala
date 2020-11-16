@@ -39,7 +39,7 @@ private[client] class DynamicConsumerLive(
   ): ZStream[
     Blocking with R,
     Throwable,
-    (String, ZStream[Blocking, Throwable, Record[T]], DynamicConsumer.Checkpointer)
+    (String, ZStream[Blocking, Throwable, DynamicConsumer.Record[T]], DynamicConsumer.Checkpointer)
   ] = {
     /*
      * A queue for a single Shard and interface between the KCL threadpool and the ZIO runtime
@@ -158,9 +158,9 @@ private[client] class DynamicConsumerLive(
     def toRecord(
       shardId: String,
       r: KinesisClientRecord
-    ): ZIO[R, Throwable, Record[T]] =
+    ): ZIO[R, Throwable, DynamicConsumer.Record[T]] =
       deserializer.deserialize(r.data()).map { data =>
-        Record(
+        DynamicConsumer.Record(
           shardId,
           r.sequenceNumber(),
           r.approximateArrivalTimestamp(),
