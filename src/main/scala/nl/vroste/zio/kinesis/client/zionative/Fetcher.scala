@@ -1,7 +1,7 @@
 package nl.vroste.zio.kinesis.client.zionative
-import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
+
+import io.github.vigoo.zioaws.kinesis.model.{ Record, Shard, StartingPosition }
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
-import software.amazon.awssdk.services.kinesis.model.{ Shard, Record => KinesisRecord }
 import zio.clock.Clock
 import zio.stream.ZStream
 
@@ -17,18 +17,18 @@ private[zionative] trait Fetcher {
    */
   def shardRecordStream(
     shardId: String,
-    startingPosition: ShardIteratorType
-  ): ZStream[Clock, Either[Throwable, EndOfShard], KinesisRecord]
+    startingPosition: StartingPosition
+  ): ZStream[Clock, Either[Throwable, EndOfShard], Record.ReadOnly]
 }
 
 private[zionative] object Fetcher {
-  case class EndOfShard(childShards: Seq[Shard])
+  case class EndOfShard(childShards: Seq[Shard.ReadOnly])
 
   def apply(
     f: (
       String,
-      ShardIteratorType
-    ) => ZStream[Clock, Either[Throwable, EndOfShard], KinesisRecord]
+      StartingPosition
+    ) => ZStream[Clock, Either[Throwable, EndOfShard], Record.ReadOnly]
   ): Fetcher =
     (shard, startingPosition) => f(shard, startingPosition)
 }

@@ -1,8 +1,8 @@
 package nl.vroste.zio.kinesis.client
 import com.google.protobuf.ByteString
+import io.github.vigoo.zioaws.kinesis.model.PutRecordsRequestEntry
 import nl.vroste.zio.kinesis.client.zionative.protobuf.Messages
 import nl.vroste.zio.kinesis.client.zionative.protobuf.Messages.AggregatedRecord
-import software.amazon.awssdk.services.kinesis.model.PutRecordsRequestEntry
 import software.amazon.awssdk.utils.Md5Utils
 import zio.Chunk
 
@@ -16,10 +16,10 @@ object ProtobufAggregation {
   def putRecordsRequestEntryToRecord(r: PutRecordsRequestEntry, tableIndex: Int): Messages.Record = {
     val b = Messages.Record
       .newBuilder()
-      .setData(ByteString.copyFrom(r.data().asByteArrayUnsafe()))
+      .setData(ByteString.copyFrom(r.data.toArray))
       .setPartitionKeyIndex(tableIndex.toLong)
 
-    Option(r.explicitHashKey())
+    r.explicitHashKey
       .fold(b)(_ => b.setExplicitHashKeyIndex(tableIndex.toLong))
       .build()
   }

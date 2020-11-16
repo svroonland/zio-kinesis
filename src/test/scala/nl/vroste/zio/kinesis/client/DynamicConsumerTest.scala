@@ -2,7 +2,9 @@ package nl.vroste.zio.kinesis.client
 
 import java.util.UUID
 
-import nl.vroste.zio.kinesis.client.Client.ProducerRecord
+import io.github.vigoo.zioaws.cloudwatch.CloudWatch
+import io.github.vigoo.zioaws.dynamodb.DynamoDb
+import io.github.vigoo.zioaws.kinesis.Kinesis
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.kinesis.exceptions.ShutdownException
@@ -22,11 +24,14 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
   val loggingLayer: ZLayer[Any, Nothing, Logging] =
     (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
-  private val env: ZLayer[Any, Throwable, Client with AdminClient with DynamicConsumer with Clock] =
-    (loggingLayer ++ LocalStackServices
-      .localStackAwsLayer() >>> (Client.live ++ AdminClient.live ++ DynamicConsumer.live)) ++ Clock.live
+  private val env: ZLayer[
+    Any,
+    Throwable,
+    CloudWatch with Kinesis with DynamoDb with DynamicConsumer with Clock with Blocking
+  ] =
+    (loggingLayer ++ LocalStackServices.localStackAwsLayer()) >+> DynamicConsumer.live ++ Clock.live ++ Blocking.live
 
-  def testConsume1: ZSpec[Clock with Blocking with Console with DynamicConsumer with Client, Throwable] =
+  def testConsume1: ZSpec[Clock with Blocking with Console with DynamicConsumer with Kinesis, Throwable] =
     testM("consume records produced on all shards produced on the stream") {
       val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
       val applicationName = "zio-test-" + UUID.randomUUID().toString
@@ -36,14 +41,11 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
         .use { _ =>
           (for {
             _ <- putStrLn("Putting records")
-            _ <- ZIO
-                   .accessM[Client](
-                     _.get
-                       .putRecords(
-                         streamName,
-                         Serde.asciiString,
-                         Seq(ProducerRecord("key1", "msg1"), ProducerRecord("key2", "msg2"))
-                       )
+            _ <- TestUtil
+                   .putRecords(
+                     streamName,
+                     Serde.asciiString,
+                     Seq(ProducerRecord("key1", "msg1"), ProducerRecord("key2", "msg2"))
                    )
                    .tapError(e => putStrLn(s"error1: $e").provideLayer(Console.live))
                    .retry(retryOnResourceNotFound)
@@ -89,7 +91,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
       ): ZStream[Console with Blocking with DynamicConsumer with Clock, Throwable, (String, String)] = {
         val checkpointDivisor = 1
 
-        def handler(shardId: String, r: Record[String]) =
+        def handler(shardId: String, r: DynamicConsumer.Record[String]) =
           for {
             id <- ZIO.fiberId
             _  <- putStrLn(s"Consumer $workerIdentifier on fiber $id got record $r on shard $shardId")
@@ -113,7 +115,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                           .flatMapPar(Int.MaxValue) {
                             case (shardId, shardStream, checkpointer @ _) =>
                               shardStream.zipWithIndex.tap {
-                                case (r: Record[String], sequenceNumberForShard: Long) =>
+                                case (r: DynamicConsumer.Record[String], sequenceNumberForShard: Long) =>
                                   checkpointer.stageOnSuccess(handler(shardId, r))(r).as(r) <*
                                     (putStrLn(
                                       s"Checkpointing at offset ${sequenceNumberForShard} in consumer ${workerIdentifier}, shard ${shardId}"
@@ -148,11 +150,8 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                         .fromIterable(1 to nrRecords)
                         .schedule(Schedule.spaced(250.millis))
                         .mapM { _ =>
-                          ZIO
-                            .accessM[Client](
-                              _.get
-                                .putRecords(streamName, Serde.asciiString, records)
-                            )
+                          TestUtil
+                            .putRecords(streamName, Serde.asciiString, records)
                             .tapError(e => putStrLn(s"error2: $e").provideLayer(Console.live))
                             .retry(retryOnResourceNotFound)
                         }
@@ -183,7 +182,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
         interrupted: Promise[Nothing, Unit],
         lastProcessedRecords: Ref[Map[String, String]],
         lastCheckpointedRecords: Ref[Map[String, String]]
-      ): ZStream[Console with Blocking with Clock with DynamicConsumer, Throwable, Record[
+      ): ZStream[Console with Blocking with Clock with DynamicConsumer with Kinesis, Throwable, DynamicConsumer.Record[
         String
       ]] =
         (for {
@@ -233,15 +232,12 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                    .fromIterable(1 to nrBatches)
                    .schedule(Schedule.spaced(250.millis))
                    .mapM { batchIndex =>
-                     ZIO
-                       .accessM[Client](
-                         _.get
-                           .putRecords(
-                             streamName,
-                             Serde.asciiString,
-                             recordsForBatch(batchIndex, batchSize)
-                               .map(i => ProducerRecord(s"key$i", s"msg$i"))
-                           )
+                     TestUtil
+                       .putRecords(
+                         streamName,
+                         Serde.asciiString,
+                         recordsForBatch(batchIndex, batchSize)
+                           .map(i => ProducerRecord(s"key$i", s"msg$i"))
                        )
                        .tapError(e => putStrLn(s"error3: $e"))
                        .retry(retryOnResourceNotFound)

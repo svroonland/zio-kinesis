@@ -1,12 +1,9 @@
 package nl.vroste.zio.kinesis.client
 
-import java.util.concurrent.{ CompletableFuture, CompletionException }
-
-import software.amazon.awssdk.core.exception.SdkException
+import zio._
 import zio.clock.Clock
 import zio.duration._
 import zio.stream.ZStream
-import zio._
 
 object Util {
   implicit class ZStreamExtensions[-R, +E, +O](val stream: ZStream[R, E, O]) extends AnyVal {
@@ -97,30 +94,6 @@ object Util {
       }
   }
 
-  def asZIO[T](f: => CompletableFuture[T]): Task[T] =
-    ZIO
-      .effect(f)
-      .flatMap(ZIO.fromCompletionStage(_))
-      .catchSome {
-        case e: CompletionException =>
-          ZIO.fail(Option(e.getCause).getOrElse(e))
-        case e: SdkException        =>
-          ZIO.fail(Option(e.getCause).getOrElse(e))
-      }
-
-  // TODO there might be some optimization here
-  def paginatedRequest[R, E, A, Token](fetch: Option[Token] => ZIO[R, E, (A, Option[Token])])(
-    throttling: Schedule[Clock, Any, Long] = Schedule.forever
-  ): ZStream[Clock with R, E, A] =
-    ZStream.fromEffect(fetch(None)).flatMap {
-      case (results, nextTokenOpt) =>
-        ZStream.succeed(results) ++ (nextTokenOpt match {
-          case None            => ZStream.empty
-          case Some(nextToken) =>
-            ZStream.paginateM[R, E, A, Token](nextToken)(token => fetch(Some(token))).repeatElements(throttling)
-        })
-    }
-
   /**
    * Schedule for exponential backoff up to a maximum interval and an optional maximum number of retries
    *
@@ -185,7 +158,7 @@ object Util {
   }
 
   /**
-   * Creates a resource that executes `effect`` with intervals of `period` or via manual invocation
+   * Creates a resource that executes `effect` with intervals of `period` or via manual invocation
    *
    * After manual invocation, the next effect execution will be after interval. Any triggers during
    * effect execution are ignored.

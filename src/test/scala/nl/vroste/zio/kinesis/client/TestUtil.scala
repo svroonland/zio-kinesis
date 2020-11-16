@@ -2,16 +2,18 @@ package nl.vroste.zio.kinesis.client
 
 import java.util.UUID
 
-import nl.vroste.zio.kinesis.client.Client.ProducerRecord
+import io.github.vigoo.zioaws.kinesis
+import io.github.vigoo.zioaws.kinesis.Kinesis
+import io.github.vigoo.zioaws.kinesis.model._
 import nl.vroste.zio.kinesis.client.producer.ProducerMetrics
-import nl.vroste.zio.kinesis.client.serde.Serde
-import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException, Shard }
+import nl.vroste.zio.kinesis.client.serde.{ Serde, Serializer }
+import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException }
 import zio.clock.Clock
 import zio.console.{ putStrLn, Console }
 import zio.duration._
 import zio.logging.{ log, Logging }
 import zio.stream.ZStream
-import zio.{ Chunk, Ref, Schedule, ZIO, ZManaged }
+import zio._
 
 import scala.util.Random
 
@@ -19,45 +21,42 @@ object TestUtil {
 
   def withStream[R, A](name: String, shards: Int)(
     f: ZIO[R, Throwable, A]
-  ): ZIO[AdminClient with Client with Clock with Console with R, Throwable, A] =
-    TestUtil
-      .createStream(name, shards)
+  ): ZIO[Kinesis with Clock with Console with R, Throwable, A] =
+    createStream(name, shards)
       .tapM(_ => getShards(name))
       .use_(f)
 
-  def getShards(name: String): ZIO[Client with Clock, Throwable, Chunk[Shard]]                                        =
-    ZIO
-      .service[Client.Service]
-      .flatMap(_.listShards(name).runCollect)
+  def getShards(name: String): ZIO[Kinesis with Clock, Throwable, Chunk[Shard.ReadOnly]]                          =
+    kinesis
+      .listShards(ListShardsRequest(streamName = Some(name)))
+      .mapError(_.toThrowable)
+      .runCollect
       .filterOrElse(_.nonEmpty)(_ => getShards(name).delay(1.second))
       .catchSome { case _: ResourceInUseException => getShards(name).delay(1.second) }
 
-  def createStream(streamName: String, nrShards: Int): ZManaged[Console with AdminClient with Clock, Throwable, Unit] =
-    createStreamUnmanaged(streamName, nrShards)
-      .toManaged(_ =>
-        ZIO
-          .service[AdminClient.Service]
-          .flatMap(_.deleteStream(streamName, enforceConsumerDeletion = true))
-          .catchSome {
-            case _: ResourceNotFoundException => ZIO.unit
-          }
-          .orDie
-      )
+  def createStream(streamName: String, nrShards: Int): ZManaged[Console with Clock with Kinesis, Throwable, Unit] =
+    createStreamUnmanaged(streamName, nrShards).toManaged(_ =>
+      kinesis
+        .deleteStream(DeleteStreamRequest(streamName, enforceConsumerDeletion = Some(true)))
+        .mapError(_.toThrowable)
+        .catchSome {
+          case _: ResourceNotFoundException => ZIO.unit
+        }
+        .orDie
+    )
 
   def createStreamUnmanaged(
     streamName: String,
     nrShards: Int
-  ): ZIO[Console with AdminClient with Clock, Throwable, Unit] =
-    for {
-      adminClient <- ZIO.service[AdminClient.Service]
-      _           <- adminClient
-             .createStream(streamName, nrShards)
-             .catchSome {
-               case _: ResourceInUseException =>
-                 putStrLn("Stream already exists")
-             }
-             .retry(Schedule.exponential(1.second) && Schedule.recurs(10))
-    } yield ()
+  ): ZIO[Console with Clock with Kinesis, Throwable, Unit] =
+    kinesis
+      .createStream(CreateStreamRequest(streamName, nrShards))
+      .mapError(_.toThrowable)
+      .catchSome {
+        case _: ResourceInUseException =>
+          putStrLn("Stream already exists")
+      }
+      .retry(Schedule.exponential(1.second) && Schedule.recurs(10))
 
   val retryOnResourceNotFound: Schedule[Clock, Throwable, ((Throwable, Long), Duration)] =
     Schedule.recurWhile[Throwable] {
@@ -79,7 +78,7 @@ object TestUtil {
     produceRate: Int,
     size: Int,
     producerSettings: ProducerSettings = ProducerSettings()
-  ): ZIO[Any with Console with Clock with Client with Logging, Throwable, Unit] =
+  ): ZIO[Any with Console with Clock with Kinesis with Logging, Throwable, Unit] =
     Ref
       .make(ProducerMetrics.empty)
       .toManaged_
@@ -99,6 +98,22 @@ object TestUtil {
       .use(massProduceRecords(_, nrRecords, produceRate, size))
 
   val chunkSize = 1000
+
+  def putRecords[R, T](
+    streamName: String,
+    serializer: Serializer[R, T],
+    records: Iterable[ProducerRecord[T]]
+  ): ZIO[Kinesis with R, Throwable, PutRecordsResponse.ReadOnly] =
+    for {
+      recordsAndBytes <- ZIO.foreach(records)(r => serializer.serialize(r.data).map((_, r.partitionKey)))
+      entries          = recordsAndBytes.map {
+                  case (data, partitionKey) =>
+                    PutRecordsRequestEntry(Chunk.fromByteBuffer(data), partitionKey = partitionKey)
+                }
+      response        <- kinesis
+                    .putRecords(PutRecordsRequest(entries.toList, streamName))
+                    .mapError(_.toThrowable)
+    } yield response
 
   /**
    * Produces a lot of random records at some rate
@@ -132,7 +147,7 @@ object TestUtil {
         producer
           .produceChunk(chunk)
           .retry(retryOnResourceNotFound && Schedule.recurs(1))
-          .tapCause(e => log.error("Producing records chunk failed, will retry", e))
+          .tapError(e => log.error(s"Producing records chunk failed, will retry: ${e}"))
           .retry(Schedule.exponential(1.second))
       }
       .runDrain
