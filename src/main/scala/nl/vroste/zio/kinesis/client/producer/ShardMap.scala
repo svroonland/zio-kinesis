@@ -2,8 +2,8 @@ package nl.vroste.zio.kinesis.client.producer
 import java.nio.charset.StandardCharsets
 import java.time.Instant
 
+import io.github.vigoo.zioaws.kinesis.model.{ PutRecordsRequestEntry, Shard }
 import nl.vroste.zio.kinesis.client.producer.ProducerLive.{ PartitionKey, ShardId }
-import software.amazon.awssdk.services.kinesis.model.{ PutRecordsRequestEntry, Shard }
 import software.amazon.awssdk.utils.Md5Utils
 import zio.Chunk
 
@@ -13,7 +13,7 @@ private[client] case class ShardMap(
   invalid: Boolean = false
 ) {
   def shardForPutRecordsRequestEntry(e: PutRecordsRequestEntry): ShardId =
-    shardForPartitionKey(Option(e.explicitHashKey()).getOrElse(e.partitionKey()))
+    shardForPartitionKey(e.explicitHashKey.getOrElse(e.partitionKey))
 
   def shardForPartitionKey(key: PartitionKey): ShardId = {
     val hashBytes = Md5Utils.computeMD5Hash(key.getBytes(StandardCharsets.US_ASCII))
@@ -31,11 +31,17 @@ private[client] object ShardMap {
   val minHashKey: BigInt = BigInt(0)
   val maxHashKey: BigInt = BigInt("340282366920938463463374607431768211455")
 
-  def fromShards(shards: Chunk[Shard], now: Instant): ShardMap = {
+  def fromShards(shards: Chunk[Shard.ReadOnly], now: Instant): ShardMap = {
     if (shards.isEmpty) throw new IllegalArgumentException("Cannot create ShardMap from empty shards list")
     ShardMap(
       shards
-        .map(s => (s.shardId(), BigInt(s.hashKeyRange().startingHashKey()), BigInt(s.hashKeyRange().endingHashKey())))
+        .map(s =>
+          (
+            s.shardIdValue,
+            BigInt(s.hashKeyRangeValue.startingHashKeyValue),
+            BigInt(s.hashKeyRangeValue.endingHashKeyValue)
+          )
+        )
         .sortBy(_._2),
       now
     )

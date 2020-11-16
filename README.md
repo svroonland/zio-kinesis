@@ -4,8 +4,7 @@
 
 ZIO Kinesis is a ZIO-based interface to Amazon Kinesis Data Streams for consuming and producing. A Future-based version of some of the functionality is also available.
 
-The project is in beta stage. Although already being used in production by a small number of organisations, expect some issues to pop up and some changes to the interface.
-More beta users and feedback are of course welcome.
+The project is in beta stage. Although already being used in production by a small number of organisations, expect some issues to pop up and some changes to the interface. More beta users and feedback are of course welcome.
 
 - [Features](#features)
 - [Installation](#installation)
@@ -29,7 +28,6 @@ More beta users and feedback are of course welcome.
   * [Basic usage using `consumeWith`](#basic-usage-using--consumewith--1)
   * [DynamicConsumerFake](#dynamicconsumerfake)
   * [Advanced usage](#advanced-usage)
-- [Client and AdminClient](#client-and-adminclient)
 - [Running tests and more usage examples](#running-tests-and-more-usage-examples)
 - [Credits](#credits)
 
@@ -38,18 +36,16 @@ More beta users and feedback are of course welcome.
 The library consists of:
 
 * `Consumer`  
-  A ZStream interface to Kinesis streams, including checkpointing , lease coordination and metrics. This is a ZIO-native client built on top of the AWS SDK, designed for compatibility with KCL clients. Both polling and enhanced fanout (HTTP2 streaming) are supported.
+  A ZStream interface to Kinesis streams, including checkpointing , lease coordination and metrics. This is a ZIO-native client built on top of the AWS SDK (via `zio-aws`), designed for compatibility with KCL clients. Both polling and enhanced fanout (HTTP2 streaming) are supported.
   
 * `Producer`  
   Put records efficiently and reliably on Kinesis while respecting Kinesis throughput limits. Features batching and failure handling.
-
-* `Client` and `AdminClient`  
-  ZIO wrappers around the low level AWS SDK methods for Kinesis. Methods offer a ZIO-native interface with ZStream where applicable, taking care of paginated request and AWS rate limits. 
   
-* `DynamicConsumer`  
-  A ZStream-based wrapper around the Kinesis Client Library; an auto-rebalancing and checkpointing consumer.  
+* `DynamicConsumer`
+  An alternative to `Consumer`, being a wrapper around the AWS Kinesis Client Library (KCL).   
   _NOTE Although `DynamicConsumer` will be included in this library for some time to come, it will eventually be deprecated and removed in favour of the ZIO-native `Consumer`. Users are recommended to upgrade._
-
+  
+`zio-kinesis` is built on top of [zio-aws](https://github.com/vigoo/zio-aws), a library of automatically generated ZIO wrappers around AWS SDK methods.
 
 ## Installation
 
@@ -96,9 +92,6 @@ import zio.console.{ putStrLn, Console }
 import zio.duration._
 import zio.logging.Logging
 
-/**
- * Basic usage example for `Consumer.consumeWith` convenience method
- */
 object ConsumeWithExample extends zio.App {
   val loggingLayer: ZLayer[Any, Nothing, Logging] =
     (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
@@ -113,16 +106,17 @@ object ConsumeWithExample extends zio.App {
         checkpointBatchSize = 1000L,
         checkpointDuration = 5.minutes
       )(record => putStrLn(s"Processing record $record"))
-      .provideCustomLayer(loggingLayer ++ Consumer.defaultEnvironment ++ loggingLayer)
+      .provideCustomLayer(Consumer.defaultEnvironment ++ loggingLayer)
       .exitCode
 }
 ``` 
 
 ### More advanced usage
-
 If you want more fine-grained control over the processing stream, error handling or checkpointing, use `Consumer.shardedStream` to get a stream of shard-streams, like in the following example:
 
 ```scala
+import io.github.vigoo.zioaws.core.config
+import nl.vroste.zio.kinesis.client.HttpClientBuilder
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.Consumer
 import zio._
@@ -147,7 +141,7 @@ object NativeConsumerBasicUsageExample extends zio.App {
             .via(checkpointer.checkpointBatched[Console](nr = 1000, interval = 5.second))
       }
       .runDrain
-      .provideCustomLayer(Consumer.defaultEnvironment ++ loggingLayer)
+      .provideCustomLayer((HttpClientBuilder.make() >>> config.default >>> Consumer.defaultEnvironment) ++ loggingLayer)
       .exitCode
 
   val loggingLayer = Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
@@ -273,9 +267,8 @@ Usage example:
 
 ```scala
 import nl.vroste.zio.kinesis.client
-import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.serde.Serde
-import nl.vroste.zio.kinesis.client.{ Client, Producer }
+import nl.vroste.zio.kinesis.client.{ Producer, ProducerRecord }
 import zio._
 import zio.clock.Clock
 import zio.console.{ putStrLn, Console }
@@ -288,7 +281,7 @@ object ProducerExample extends zio.App {
   val loggingLayer: ZLayer[Any, Nothing, Logging] =
     (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
-  val env = client.defaultAwsLayer >+> Client.live ++ loggingLayer
+  val env = client.defaultAwsLayer ++ loggingLayer
 
   val program = Producer.make(streamName, Serde.asciiString).use { producer =>
     val record = ProducerRecord("key1", "message1")
@@ -333,10 +326,9 @@ The list of available metrics is:
 Example usage:
 ```scala
 import nl.vroste.zio.kinesis.client
-import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.producer.ProducerMetrics
 import nl.vroste.zio.kinesis.client.serde.Serde
-import nl.vroste.zio.kinesis.client.{ Client, Producer, ProducerSettings }
+import nl.vroste.zio.kinesis.client.{ Producer, ProducerRecord, ProducerSettings }
 import zio._
 import zio.clock.Clock
 import zio.console.{ putStrLn, Console }
@@ -349,7 +341,7 @@ object ProducerWithMetricsExample extends zio.App {
   val loggingLayer: ZLayer[Any, Nothing, Logging] =
     (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
-  val env = client.defaultAwsLayer >+> Client.live ++ loggingLayer
+  val env = client.defaultAwsLayer ++ loggingLayer
 
   val program = (for {
     totalMetrics <- Ref.make(ProducerMetrics.empty).toManaged_
@@ -464,7 +456,7 @@ object DynamicConsumerConsumeWithExample extends zio.App {
         checkpointBatchSize = 1000L,
         checkpointDuration = 5.minutes
       )(record => putStrLn(s"Processing record $record"))
-      .provideCustomLayer(loggingLayer ++ defaultAwsLayer >>> DynamicConsumer.live ++ loggingLayer)
+      .provideCustomLayer((loggingLayer ++ defaultAwsLayer) >+> DynamicConsumer.live)
       .exitCode
 }
 ``` 
@@ -477,16 +469,13 @@ this end we provide a fake ZLayer instance of the `DynamicConsumer` accessed via
 Note this also provides full checkpointing functionality which can be tracked via a `Ref` passed into the `refCheckpointedList` parameter.  
 
 ```scala
-package nl.vroste.zio.kinesis.client.examples
-
-import java.nio.ByteBuffer
-
+import nl.vroste.zio.kinesis.client.DynamicConsumer
+import nl.vroste.zio.kinesis.client.DynamicConsumer.Record
 import nl.vroste.zio.kinesis.client.fake.DynamicConsumerFake
 import nl.vroste.zio.kinesis.client.serde.Serde
-import nl.vroste.zio.kinesis.client.{DynamicConsumer, _}
 import zio._
 import zio.clock.Clock
-import zio.console.{Console, putStrLn}
+import zio.console.{ putStrLn, Console }
 import zio.duration._
 import zio.logging.Logging
 import zio.stream.ZStream
@@ -503,7 +492,7 @@ object DynamicConsumerFakeExample extends zio.App {
 
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     for {
-      refCheckpointedList <- Ref.make[Seq[Any]](Seq.empty[String])
+      refCheckpointedList <- Ref.make[Seq[Record[Any]]](Seq.empty)
       exitCode            <- DynamicConsumer
                     .consumeWith(
                       streamName = "my-stream",
@@ -558,19 +547,13 @@ object DynamicConsumerBasicUsageExample extends zio.App {
             .via(checkpointer.checkpointBatched[Blocking with Console](nr = 1000, interval = 5.second))
       }
       .runDrain
-      .provideCustomLayer(loggingLayer ++ defaultAwsLayer >>> DynamicConsumer.live)
+      .provideCustomLayer((loggingLayer ++ defaultAwsLayer) >>> DynamicConsumer.live)
       .exitCode
 }
 ```
 
 DynamicConsumer is built on `ZManaged` and therefore resource-safe: after stream completion all resources acquired will be shutdown.
 
-
-## Client and AdminClient
-More low-level operations for consuming, producing and administering streams are available in `Client` and `AdminClient`.
-
-Refer to the [AWS Kinesis Streams API Reference](https://docs.aws.amazon.com/kinesis/latest/APIReference/Welcome.html) 
-for more information.
 
 ## Running tests and more usage examples 
 

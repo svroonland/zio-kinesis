@@ -1,13 +1,13 @@
 package nl.vroste.zio.kinesis.client
-
 import java.time.Instant
 
-import nl.vroste.zio.kinesis.client.Client.ProducerRecord
+import io.github.vigoo.zioaws.kinesis
+import io.github.vigoo.zioaws.kinesis.model.{ ListShardsRequest, ShardFilter, ShardFilterType }
+import io.github.vigoo.zioaws.kinesis.Kinesis
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.producer.ProducerLive.ProduceRequest
-import nl.vroste.zio.kinesis.client.producer.{ CurrentMetrics, ProducerLive, ProducerMetrics, ShardMap, ShardThrottler }
+import nl.vroste.zio.kinesis.client.producer._
 import nl.vroste.zio.kinesis.client.serde.Serializer
-import software.amazon.awssdk.services.kinesis.model.{ ShardFilter, ShardFilterType }
 import zio._
 import zio.clock.{ instant, Clock }
 import zio.duration.{ Duration, _ }
@@ -116,9 +116,9 @@ object Producer {
     serializer: Serializer[R, T],
     settings: ProducerSettings = ProducerSettings(),
     metricsCollector: ProducerMetrics => ZIO[R1, Nothing, Unit] = (_: ProducerMetrics) => ZIO.unit
-  ): ZManaged[R with R1 with Clock with Client with Logging, Throwable, Producer[T]] =
+  ): ZManaged[R with R1 with Clock with Kinesis with Logging, Throwable, Producer[T]] =
     for {
-      client          <- ZManaged.service[Client.Service]
+      client          <- ZManaged.service[Kinesis.Service]
       env             <- ZIO.environment[R with Clock].toManaged_
       queue           <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
       currentMetrics  <- instant.map(CurrentMetrics.empty).flatMap(Ref.make).toManaged_
@@ -130,7 +130,9 @@ object Producer {
       triggerUpdateShards <- Util.periodicAndTriggerableOperation(
                                (log.debug("Refreshing shard map") *>
                                  (getShardMap(streamName) >>= currentShardMap.set) *>
-                                 log.info("Shard map was refreshed")).orDie,
+                                 log.info("Shard map was refreshed")).tapError(e =>
+                                 log.error(s"Error refreshing shard map: ${e}").ignore
+                               ),
                                settings.updateShardInterval
                              )
       throttler           <- ShardThrottler.make(allowedError = settings.allowedErrorRate)
@@ -155,10 +157,11 @@ object Producer {
       _       <- producer.metricsCollection.forkManaged.ensuring(producer.collectMetrics)
     } yield producer
 
-  private def getShardMap(streamName: String): ZIO[Clock with Client, Throwable, ShardMap] = {
-    val shardFilter = ShardFilter.builder().`type`(ShardFilterType.AT_LATEST).build() // Currently open shards
-    Client
-      .listShards(streamName, filter = Some(shardFilter))
+  private def getShardMap(streamName: String): ZIO[Clock with Kinesis, Throwable, ShardMap] = {
+    val shardFilter = ShardFilter(ShardFilterType.AT_LATEST) // Currently open shards
+    kinesis
+      .listShards(ListShardsRequest(Some(streamName), shardFilter = Some(shardFilter)))
+      .mapError(_.toThrowable)
       .runCollect
       .flatMap(shards => instant.map(ShardMap.fromShards(shards, _)))
   }

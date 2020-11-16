@@ -2,9 +2,9 @@ package nl.vroste.zio.kinesis.client.fake
 
 import java.nio.ByteBuffer
 
-import nl.vroste.zio.kinesis.client.DynamicConsumer.Checkpointer
+import nl.vroste.zio.kinesis.client.DynamicConsumer
+import nl.vroste.zio.kinesis.client.DynamicConsumer.{ Checkpointer, Record }
 import nl.vroste.zio.kinesis.client.serde.{ Deserializer, Serializer }
-import nl.vroste.zio.kinesis.client.{ DynamicConsumer, Record }
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import software.amazon.kinesis.common.InitialPositionInStreamExtended
 import zio._

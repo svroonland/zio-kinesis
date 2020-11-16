@@ -1,51 +1,58 @@
 package nl.vroste.zio.kinesis.client
 
+import io.github.vigoo.zioaws.cloudwatch.CloudWatch
+import io.github.vigoo.zioaws.core.AwsError
+import io.github.vigoo.zioaws.core.aspects.{ AwsCallAspect, Described }
+import io.github.vigoo.zioaws.kinesis.Kinesis
+import io.github.vigoo.zioaws.kinesis.model.{ ScalingType, UpdateShardCountRequest }
+import io.github.vigoo.zioaws.{ dynamodb, kinesis }
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.Consumer.InitialPosition
 import nl.vroste.zio.kinesis.client.zionative._
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
 import nl.vroste.zio.kinesis.client.zionative.metrics.{ CloudWatchMetricsPublisher, CloudWatchMetricsPublisherConfig }
-import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
-import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
-import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
+import software.amazon.awssdk.http.SdkHttpConfigurationOption
+import software.amazon.awssdk.utils.AttributeMap
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio._
+import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.console.Console
 import zio.duration._
 import zio.logging.{ log, Logging }
+import zio.random.Random
 import zio.stream.{ ZStream, ZTransducer }
 
 /**
  * Runnable used for manually testing various features
  */
 object ExampleApp extends zio.App {
-  val streamName                      = "zio-test-stream-3" // + java.util.UUID.randomUUID().toString
-  val applicationName                 = "testApp-3"         // + java.util.UUID.randomUUID().toString(),
-  val nrRecords                       = 3000000
-  val produceRate                     = 20000               // Nr records to produce per second
+  val streamName                      = "zio-test-stream-6" // + java.util.UUID.randomUUID().toString
+  val applicationName                 = "testApp-10"        // + java.util.UUID.randomUUID().toString(),
+  val nrRecords                       = 300000
+  val produceRate                     = 200                 // Nr records to produce per second
   val recordSize                      = 50
-  val nrShards                        = 10
+  val nrShards                        = 2
   val reshardFactor                   = 2
   val reshardAfter: Option[Duration]  = None                // Some(10.seconds)
-  val enhancedFanout                  = false
+  val enhancedFanout                  = true
   val nrNativeWorkers                 = 1
   val nrKclWorkers                    = 0
   val runtime                         = 10.minute
   val maxRandomWorkerStartDelayMillis = 1 + 0 * 60 * 1000
   val recordProcessingTime: Duration  = 1.millisecond
 
-  val producerSettings = ProducerSettings(
+  val producerSettings                = ProducerSettings(
     aggregate = true,
     metricsInterval = 5.seconds,
     bufferSize = 8192 * 8,
     maxParallelRequests = 10
   )
 
-  override def run(
-    args: List[String]
-  ): ZIO[zio.ZEnv, Nothing, ExitCode] = {
+  val program: ZIO[Logging with Clock with Blocking with Random with Console with Kinesis with CloudWatch with Has[
+    CloudWatchMetricsPublisherConfig
+  ] with DynamicConsumer with LeaseRepository, Throwable, ExitCode] = {
     for {
       _          <- TestUtil.createStreamUnmanaged(streamName, nrShards)
       _          <- TestUtil.getShards(streamName)
@@ -69,9 +76,13 @@ object ExampleApp extends zio.App {
       _          <- reshardAfter
              .map(delay =>
                (log.info("Resharding") *>
-                 ZIO
-                   .service[AdminClient.Service]
-                   .flatMap(_.updateShardCount(streamName, Math.ceil(nrShards.toDouble * reshardFactor).toInt)))
+                 kinesis.updateShardCount(
+                   UpdateShardCountRequest(
+                     streamName,
+                     Math.ceil(nrShards.toDouble * reshardFactor).toInt,
+                     ScalingType.UNIFORM_SCALING
+                   )
+                 ))
                  .delay(delay)
              )
              .getOrElse(ZIO.unit)
@@ -85,18 +96,19 @@ object ExampleApp extends zio.App {
 
            })
     } yield ExitCode.success
-  }.foldCauseM(e => log.error(s"Program failed: ${e.prettyPrint}", e).exitCode, ZIO.succeed(_))
-    .provideCustomLayer(
-      awsEnv // TODO switch back!!
-      // localStackEnv
-    )
+  }
+  override def run(
+    args: List[String]
+  ): ZIO[zio.ZEnv, Nothing, ExitCode] =
+    program
+      .foldCauseM(e => log.error(s"Program failed: ${e.prettyPrint}", e).exitCode, ZIO.succeed(_))
+      .provideCustomLayer(awsEnv)
 
   def worker(id: String) =
     ZStream.unwrapManaged {
       for {
         metrics <- CloudWatchMetricsPublisher.make(applicationName, id)
-        //          delay   <- zio.random.nextIntBetween(0, maxRandomWorkerStartDelayMillis).map(_.millis).toManaged_
-        delay    = 2230.seconds
+        delay   <- zio.random.nextIntBetween(0, maxRandomWorkerStartDelayMillis).map(_.millis).toManaged_
         _       <- log.info(s"Waiting ${delay.toMillis} ms to start worker ${id}").toManaged_
       } yield ZStream.fromEffect(ZIO.sleep(delay)) *> Consumer
         .shardedStream(
@@ -147,7 +159,12 @@ object ExampleApp extends zio.App {
         .ensuring(log.info(s"Worker ${id} stream completed"))
     }
 
-  def kclWorker(id: String, requestShutdown: Promise[Nothing, Unit]) =
+  def kclWorker(
+    id: String,
+    requestShutdown: Promise[Nothing, Unit]
+  ): ZStream[DynamicConsumer with Blocking with Logging with Clock with Random, Throwable, DynamicConsumer.Record[
+    String
+  ]] =
     ZStream.fromEffect(
       zio.random.nextIntBetween(0, 1000).flatMap(d => ZIO.sleep(d.millis))
     ) *> DynamicConsumer
@@ -185,26 +202,39 @@ object ExampleApp extends zio.App {
     (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   val localStackEnv =
-    LocalStackServices.localStackAwsLayer() >+>
-      (AdminClient.live ++ Client.live ++ DynamoDbLeaseRepository.live).orDie ++
-        loggingLayer
+    LocalStackServices.localStackAwsLayer().orDie >+> (DynamoDbLeaseRepository.live) ++ loggingLayer
 
-  val awsEnv: ZLayer[Clock, Nothing, Clock with Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[
-    DynamoDbAsyncClient
-  ] with Logging with Client with AdminClient with Has[DynamicConsumer.Service] with LeaseRepository with Has[
-    CloudWatchMetricsPublisherConfig
-  ]] = {
-    val httpClient    = HttpClient.make(
+  val awsEnv: ZLayer[
+    Any,
+    Nothing,
+    Kinesis with CloudWatch with dynamodb.DynamoDb with Logging with DynamicConsumer with LeaseRepository with Has[
+      CloudWatchMetricsPublisherConfig
+    ]
+  ] = {
+    val httpClient = HttpClientBuilder.make(
       maxConcurrency = 100,
-      allowHttp2 = false
+      allowHttp2 = true,
+      build = _.buildWithDefaults(
+        AttributeMap.builder.put(SdkHttpConfigurationOption.TRUST_ALL_CERTIFICATES, java.lang.Boolean.TRUE).build
+      )
     )
-    val kinesisClient = kinesisAsyncClientLayer()
-    val cloudWatch    = cloudWatchAsyncClientLayer()
-    val dynamo        = dynamoDbAsyncClientLayer()
-    val awsClients    = (httpClient >>> (kinesisClient ++ cloudWatch ++ dynamo)).orDie
 
-    val client      = Client.live.orDie
-    val adminClient = AdminClient.live.orDie
+    val callLogging: AwsCallAspect[Logging] =
+      new AwsCallAspect[Logging] {
+        override final def apply[R1 <: Logging, A](
+          f: ZIO[R1, AwsError, Described[A]]
+        ): ZIO[R1, AwsError, Described[A]] =
+          f.flatMap {
+            case r @ Described(value @ _, description) =>
+              log.info(s"Finished [${description.service}/${description.operation}]").as(r)
+          }
+      }
+
+    val kinesisClient = kinesisAsyncClientLayer() @@ (callLogging)
+
+    val cloudWatch = cloudWatchAsyncClientLayer()
+    val dynamo     = dynamoDbAsyncClientLayer()
+    val awsClients = ((ZLayer.requires[Logging] ++ httpClient) >>> (kinesisClient ++ cloudWatch ++ dynamo)).orDie
 
     val leaseRepo       = DynamoDbLeaseRepository.live
     val dynamicConsumer = DynamicConsumer.live
@@ -212,8 +242,6 @@ object ExampleApp extends zio.App {
 
     val metricsPublisherConfig = ZLayer.succeed(CloudWatchMetricsPublisherConfig())
 
-    ZLayer.requires[Clock] >+>
-      awsClients ++ loggingLayer >+>
-      (client ++ adminClient ++ dynamicConsumer ++ leaseRepo ++ logging ++ metricsPublisherConfig)
+    logging >+> awsClients >+> (dynamicConsumer ++ leaseRepo ++ metricsPublisherConfig)
   }
 }

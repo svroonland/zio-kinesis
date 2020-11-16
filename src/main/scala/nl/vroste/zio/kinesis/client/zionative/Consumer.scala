@@ -1,10 +1,12 @@
 package nl.vroste.zio.kinesis.client.zionative
 
+import java.nio.ByteBuffer
 import java.time.Instant
 
-import nl.vroste.zio.kinesis.client.AdminClient.StreamDescription
-import nl.vroste.zio.kinesis.client.Client.ShardIteratorType
-import nl.vroste.zio.kinesis.client._
+import io.github.vigoo.zioaws.cloudwatch.CloudWatch
+import io.github.vigoo.zioaws.kinesis
+import io.github.vigoo.zioaws.kinesis.Kinesis
+import io.github.vigoo.zioaws.kinesis.model._
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.{ EnhancedFanOut, Polling }
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
@@ -12,15 +14,11 @@ import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative.fetcher.{ EnhancedFanOutFetcher, PollingFetcher }
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.{ DefaultLeaseCoordinator, LeaseCoordinationSettings }
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
-import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
+import nl.vroste.zio.kinesis.client.{ HttpClientBuilder, Record, Util, _ }
 import software.amazon.awssdk.services.kinesis.model.{
-  ChildShard,
-  GetRecordsResponse,
   KmsThrottlingException,
   LimitExceededException,
-  ProvisionedThroughputExceededException,
-  Shard,
-  Record => KinesisRecord
+  ProvisionedThroughputExceededException
 }
 import zio._
 import zio.clock.Clock
@@ -55,7 +53,7 @@ object FetchMode {
    */
   final case class Polling(
     batchSize: Int = 1000,
-    pollSchedule: Schedule[Clock, GetRecordsResponse, Any] = Polling.dynamicSchedule(1.second),
+    pollSchedule: Schedule[Clock, GetRecordsResponse.ReadOnly, Any] = Polling.dynamicSchedule(1.second),
     throttlingBackoff: Schedule[Clock, Any, (Duration, Long)] = Util.exponentialBackoff(5.seconds, 30.seconds),
     retrySchedule: Schedule[Clock, Any, (Duration, Long)] = Util.exponentialBackoff(1.second, 1.minute),
     bufferNrBatches: Int = 2
@@ -69,9 +67,9 @@ object FetchMode {
      *
      * @param interval Fixed interval for polling when no more records are currently available
      */
-    def dynamicSchedule(interval: Duration): Schedule[Clock, GetRecordsResponse, Any] =
+    def dynamicSchedule(interval: Duration): Schedule[Clock, GetRecordsResponse.ReadOnly, Any] =
       (Schedule.recurWhile[Boolean](_ == true) || Schedule.fixed(interval))
-        .contramap((_: GetRecordsResponse).millisBehindLatest() != 0)
+        .contramap((_: GetRecordsResponse.ReadOnly).millisBehindLatestValue.getOrElse(0) != 0)
   }
 
   /**
@@ -160,7 +158,7 @@ object Consumer {
     emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit,
     shardAssignmentStrategy: ShardAssignmentStrategy = ShardAssignmentStrategy.balanced()
   ): ZStream[
-    Clock with Random with Client with AdminClient with LeaseRepository with Logging with R,
+    Clock with Random with Kinesis with LeaseRepository with Logging with R,
     Throwable,
     (
       String,
@@ -172,9 +170,11 @@ object Consumer {
       Checkpointer
     )
   ] = {
-    def toRecords(shardId: String, r: KinesisRecord): ZIO[Logging with R, Throwable, Chunk[Record[T]]] = {
-      val data      = r.data().asByteBuffer()
-      val dataChunk = Chunk.fromByteBuffer(data)
+    def toRecords(
+      shardId: String,
+      r: io.github.vigoo.zioaws.kinesis.model.Record.ReadOnly
+    ): ZIO[Logging with R, Throwable, Chunk[Record[T]]] = {
+      val dataChunk = r.dataValue
 
       if (ProtobufAggregation.isAggregatedRecord(dataChunk))
         for {
@@ -189,11 +189,11 @@ object Consumer {
                            .map { data =>
                              Record(
                                shardId,
-                               r.sequenceNumber,
-                               r.approximateArrivalTimestamp,
+                               r.sequenceNumberValue,
+                               r.approximateArrivalTimestampValue.get,
                                data,
                                aggregatedRecord.getPartitionKeyTable(subRecord.getPartitionKeyIndex.toInt),
-                               r.encryptionType,
+                               r.encryptionTypeValue,
                                Some(subSequenceNr.toLong),
                                if (subRecord.hasExplicitHashKeyIndex)
                                  Some(aggregatedRecord.getExplicitHashKeyTable(subRecord.getExplicitHashKeyIndex.toInt))
@@ -205,15 +205,15 @@ object Consumer {
         } yield Chunk.fromIterable(records)
       else
         deserializer
-          .deserialize(r.data.asByteBuffer())
+          .deserialize(ByteBuffer.wrap(r.dataValue.toArray))
           .map { data =>
             Record(
               shardId,
-              r.sequenceNumber,
-              r.approximateArrivalTimestamp,
+              r.sequenceNumberValue,
+              r.approximateArrivalTimestampValue.get,
               data,
-              r.partitionKey,
-              r.encryptionType,
+              r.partitionKeyValue,
+              r.encryptionTypeValue,
               subSequenceNumber = None,
               explicitHashKey = None,
               aggregated = false
@@ -223,64 +223,73 @@ object Consumer {
     }
 
     def makeFetcher(
-      streamDescription: StreamDescription
-    ): ZManaged[Clock with Client with Logging, Throwable, Fetcher] =
+      streamDescription: StreamDescription.ReadOnly
+    ): ZManaged[Clock with Kinesis with Logging, Throwable, Fetcher] =
       fetchMode match {
-        case c: Polling        => PollingFetcher.make(streamDescription.streamName, c, emitDiagnostic)
+        case c: Polling        => PollingFetcher.make(streamDescription.streamNameValue, c, emitDiagnostic)
         case c: EnhancedFanOut => EnhancedFanOutFetcher.make(streamDescription, workerIdentifier, c, emitDiagnostic)
       }
 
-    val listShards: ZIO[Clock with Client, Throwable, Map[String, Shard]] = Client
-      .listShards(streamName)
+    val listShards: ZIO[Kinesis, Throwable, Map[String, Shard.ReadOnly]] = kinesis
+      .listShards(ListShardsRequest(streamName = Some(streamName)))
+      .mapError(_.toThrowable)
       .runCollect
-      .map(_.map(l => (l.shardId(), l)).toMap)
+      .map(_.map(l => (l.shardIdValue, l)).toMap)
       .flatMap { shards =>
         if (shards.isEmpty) ZIO.fail(new Exception("No shards in stream!"))
         else ZIO.succeed(shards)
       }
 
     def createDependencies =
-      ZManaged.fromEffect(AdminClient.describeStream(streamName).fork).flatMap { streamDescriptionFib =>
-        val fetchShards = streamDescriptionFib.join.flatMap { streamDescription =>
-          if (!streamDescription.hasMoreShards)
-            ZIO.succeed(streamDescription.shards.map(s => s.shardId() -> s).toMap)
-          else
-            listShards
-        }
+      ZManaged
+        .fromEffect(
+          kinesis
+            .describeStream(DescribeStreamRequest(streamName))
+            .mapError(_.toThrowable)
+            .map(_.streamDescriptionValue)
+            .fork
+        )
+        .flatMap { streamDescriptionFib =>
+          val fetchShards = streamDescriptionFib.join.flatMap { streamDescription =>
+            if (!streamDescription.hasMoreShardsValue)
+              ZIO.succeed(streamDescription.shardsValue.map(s => s.shardIdValue -> s).toMap)
+            else
+              listShards
+          }
 
-        ZManaged
-          .mapParN(
-            ZManaged
-              .unwrap(streamDescriptionFib.join.map(makeFetcher))
-              .ensuring(log.debug("Fetcher shut down")),
-            // Fetch shards and initialize the lease coordinator at the same time
-            // When we have the shards, we inform the lease coordinator. When the lease table
-            // still has to be created, we have the shards in time for lease claiming begins.
-            // If not in time, the next cycle of takeLeases will take care of it
-            // When the lease table already exists, the updateShards call will not provide
-            // additional information to the lease coordinator, and the list of leases is used
-            // as the list of shards.
-            for {
-              env              <- ZIO.environment[Clock with Client].toManaged_
-              leaseCoordinator <- DefaultLeaseCoordinator
-                                    .make(
-                                      applicationName,
-                                      workerIdentifier,
-                                      emitDiagnostic,
-                                      leaseCoordinationSettings,
-                                      fetchShards.provide(env),
-                                      shardAssignmentStrategy,
-                                      initialPosition
-                                    )
-              _                <- log.info("Lease coordinator created").toManaged_
-              // Periodically refresh shards
-              _                <- (listShards >>= leaseCoordinator.updateShards)
-                     .repeat(Schedule.spaced(leaseCoordinationSettings.shardRefreshInterval))
-                     .delay(leaseCoordinationSettings.shardRefreshInterval)
-                     .forkManaged
-            } yield leaseCoordinator
-          )(_ -> _)
-      }
+          ZManaged
+            .mapParN(
+              ZManaged
+                .unwrap(streamDescriptionFib.join.map(makeFetcher))
+                .ensuring(log.debug("Fetcher shut down")),
+              // Fetch shards and initialize the lease coordinator at the same time
+              // When we have the shards, we inform the lease coordinator. When the lease table
+              // still has to be created, we have the shards in time for lease claiming begins.
+              // If not in time, the next cycle of takeLeases will take care of it
+              // When the lease table already exists, the updateShards call will not provide
+              // additional information to the lease coordinator, and the list of leases is used
+              // as the list of shards.
+              for {
+                env              <- ZIO.environment[Clock with Kinesis].toManaged_
+                leaseCoordinator <- DefaultLeaseCoordinator
+                                      .make(
+                                        applicationName,
+                                        workerIdentifier,
+                                        emitDiagnostic,
+                                        leaseCoordinationSettings,
+                                        fetchShards.provide(env),
+                                        shardAssignmentStrategy,
+                                        initialPosition
+                                      )
+                _                <- log.info("Lease coordinator created").toManaged_
+                // Periodically refresh shards
+                _                <- (listShards >>= leaseCoordinator.updateShards)
+                       .repeat(Schedule.spaced(leaseCoordinationSettings.shardRefreshInterval))
+                       .delay(leaseCoordinationSettings.shardRefreshInterval)
+                       .forkManaged
+              } yield leaseCoordinator
+            )(_ -> _)
+        }
 
     ZStream.unwrapManaged {
       createDependencies.map {
@@ -295,8 +304,8 @@ object Consumer {
                 env             <- ZIO.environment[Logging with Clock with Random with R]
                 checkpointOpt   <- leaseCoordinator.getCheckpointForShard(shardId)
                 startingPosition = checkpointOpt
-                                     .map(checkpointToShardIteratorType(_, initialPosition))
-                                     .getOrElse(InitialPosition.toShardIteratorType(initialPosition))
+                                     .map(checkpointToStartingPosition(_, initialPosition))
+                                     .getOrElse(InitialPosition.toStartingPosition(initialPosition))
                 stop             = ZStream.fromEffect(leaseLost.await).as(Exit.fail(None))
                 shardStream      = (stop mergeTerminateEither fetcher
                                   .shardRecordStream(shardId, startingPosition)
@@ -308,7 +317,7 @@ object Consumer {
                                       ZStream.fromEffect(
                                         log.debug(
                                           s"Found end of shard for ${shardId}. " +
-                                            s"Child shards are ${childShards.map(_.shardId()).mkString(", ")}"
+                                            s"Child shards are ${childShards.map(_.shardId).mkString(", ")}"
                                         ) *>
                                           checkpointer.markEndOfShard() *>
                                           leaseCoordinator.childShardsDetected(childShards)
@@ -377,7 +386,7 @@ object Consumer {
   )(
     recordProcessor: Record[T] => RIO[RC, Unit]
   ): ZIO[
-    R with RC with Clock with Random with Client with AdminClient with LeaseRepository with Logging,
+    R with RC with Clock with Random with Kinesis with LeaseRepository with Logging,
     Throwable,
     Unit
   ] =
@@ -412,32 +421,29 @@ object Consumer {
   ): Schedule[R, Throwable, (Throwable, A)] =
     Schedule.recurWhile[Throwable](e => isThrottlingException.lift(e).isDefined) && schedule
 
-  private[client] def childShardToShard(s: ChildShard): Shard = {
-    val parentShards = s.parentShards().asScala.toSeq
+  private[client] def childShardToShard(s: ChildShard.ReadOnly): Shard.ReadOnly = {
+    val parentShards = s.parentShardsValue
 
-    val builder = Shard
-      .builder()
-      .shardId(s.shardId())
-      .hashKeyRange(s.hashKeyRange())
+    val shard = Shard(
+      s.shardIdValue,
+      hashKeyRange = s.hashKeyRangeValue.editable,
+      sequenceNumberRange = SequenceNumberRange("0", None)
+    )
 
-    if (parentShards.size == 2)
-      builder
-        .parentShardId(parentShards.head)
-        .adjacentParentShardId(parentShards(1))
-        .build()
-    else if (parentShards.size == 1)
-      builder
-        .parentShardId(parentShards.head)
-        .build()
-    else
-      throw new IllegalArgumentException(s"Unexpected nr of parent shards: ${parentShards.size}")
+    val shardWithParents =
+      if (parentShards.size == 2)
+        shard.copy(parentShardId = Some(parentShards.head), adjacentParentShardId = Some(parentShards(1)))
+      else if (parentShards.size == 1)
+        shard.copy(parentShardId = Some(parentShards.head))
+      else
+        throw new IllegalArgumentException(s"Unexpected nr of parent shards: ${parentShards.size}")
+
+    Shard.wrap(shardWithParents.buildAwsValue())
   }
 
-  val defaultEnvironment
-    : ZLayer[Any, Throwable, AdminClient with Client with LeaseRepository with Has[CloudWatchAsyncClient]] =
-    HttpClient.make() >>>
-      sdkClientsLayer >+>
-      (AdminClient.live ++ Client.live ++ DynamoDbLeaseRepository.live)
+  val defaultEnvironment: ZLayer[Any, Throwable, Kinesis with LeaseRepository with CloudWatch] =
+    HttpClientBuilder.make() >>>
+      (kinesisAsyncClientLayer() ++ (dynamoDbAsyncClientLayer() >>> DynamoDbLeaseRepository.live) ++ cloudWatchAsyncClientLayer())
 
   sealed trait InitialPosition
   object InitialPosition {
@@ -445,24 +451,28 @@ object Consumer {
     final case object TrimHorizon                    extends InitialPosition
     final case class AtTimestamp(timestamp: Instant) extends InitialPosition
 
-    def toShardIteratorType(p: InitialPosition): ShardIteratorType =
+    def toStartingPosition(p: InitialPosition): StartingPosition =
       p match {
-        case InitialPosition.Latest                 => ShardIteratorType.Latest
-        case InitialPosition.TrimHorizon            => ShardIteratorType.TrimHorizon
-        case InitialPosition.AtTimestamp(timestamp) => ShardIteratorType.AtTimestamp(timestamp)
+        case InitialPosition.Latest                 => StartingPosition(ShardIteratorType.LATEST)
+        case InitialPosition.TrimHorizon            => StartingPosition(ShardIteratorType.TRIM_HORIZON)
+        case InitialPosition.AtTimestamp(timestamp) =>
+          StartingPosition(ShardIteratorType.AT_TIMESTAMP, timestamp = Some(timestamp))
       }
   }
 
-  private[zionative] val checkpointToShardIteratorType
-    : (Either[SpecialCheckpoint, ExtendedSequenceNumber], InitialPosition) => ShardIteratorType = {
-    case (Left(SpecialCheckpoint.TrimHorizon), _)                                      => ShardIteratorType.TrimHorizon
-    case (Left(SpecialCheckpoint.Latest), _)                                           => ShardIteratorType.Latest
+  private[zionative] val checkpointToStartingPosition
+    : (Either[SpecialCheckpoint, ExtendedSequenceNumber], InitialPosition) => StartingPosition = {
+    case (Left(SpecialCheckpoint.TrimHorizon), _)                                      => StartingPosition(ShardIteratorType.TRIM_HORIZON)
+    case (Left(SpecialCheckpoint.Latest), _)                                           => StartingPosition(ShardIteratorType.LATEST)
     case (Left(SpecialCheckpoint.AtTimestamp), InitialPosition.AtTimestamp(timestamp)) =>
-      ShardIteratorType.AtTimestamp(timestamp)
+      StartingPosition(ShardIteratorType.AT_TIMESTAMP, timestamp = Some(timestamp))
     case (Right(s), _)                                                                 =>
-      ShardIteratorType.AtSequenceNumber(s.sequenceNumber)
+      StartingPosition(
+        ShardIteratorType.AT_SEQUENCE_NUMBER,
+        sequenceNumber = Some(s.sequenceNumber)
+      )
     case s @ _                                                                         =>
-      throw new IllegalArgumentException(s"${s} is not a valid starting checkpoint")
+      throw new IllegalArgumentException(s"${s} is not a valid checkpoint as starting position")
   }
 
   private[zionative] def aggregatedRecordIsAfterCheckpoint(

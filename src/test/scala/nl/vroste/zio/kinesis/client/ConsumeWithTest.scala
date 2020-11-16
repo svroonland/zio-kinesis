@@ -2,13 +2,12 @@ package nl.vroste.zio.kinesis.client
 
 import java.util.UUID
 
-import nl.vroste.zio.kinesis.client.Client.ProducerRecord
+import io.github.vigoo.zioaws.cloudwatch.CloudWatch
+import io.github.vigoo.zioaws.dynamodb.DynamoDb
+import io.github.vigoo.zioaws.kinesis.Kinesis
 import nl.vroste.zio.kinesis.client.DynamicConsumer.consumeWith
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
-import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
-import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
-import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import zio._
 import zio.blocking.Blocking
 import zio.clock.Clock
@@ -25,12 +24,15 @@ object ConsumeWithTest extends DefaultRunnableSpec {
   val loggingLayer: ZLayer[Console with Clock, Nothing, Logging] =
     Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
-  private val env
-    : ZLayer[Any, Throwable, Console with Clock with Logging with Blocking with Has[CloudWatchAsyncClient] with Has[
-      KinesisAsyncClient
-    ] with Has[DynamoDbAsyncClient] with Has[DynamicConsumer.Service] with Client with AdminClient] =
+  private val env: ZLayer[
+    Any,
+    Throwable,
+    Console with Clock with Logging with Blocking with Kinesis with CloudWatch with DynamoDb with Has[
+      DynamicConsumer.Service
+    ]
+  ] =
     (Console.live ++ Clock.live ++ Blocking.live) >+> loggingLayer >+> LocalStackServices
-      .localStackAwsLayer() >+> (DynamicConsumer.live ++ Client.live ++ AdminClient.live)
+      .localStackAwsLayer() >+> DynamicConsumer.live
 
   def testConsume1 =
     testM("consumeWith should consume records produced on all shards") {
@@ -46,15 +48,7 @@ object ConsumeWithTest extends DefaultRunnableSpec {
                       (1 to nrRecords).map(i => ProducerRecord(s"key$i", s"msg$i"))
                     (for {
                       _                <- putStrLn("Putting records")
-                      _                <- ZIO
-                             .accessM[Client](
-                               _.get
-                                 .putRecords(
-                                   streamName,
-                                   Serde.asciiString,
-                                   records
-                                 )
-                             )
+                      _                <- putRecords(streamName, Serde.asciiString, records)
                              .tapError(e => putStrLn(s"error1: $e").provideLayer(Console.live))
                              .retry(retryOnResourceNotFound)
                       _                <- putStrLn("Starting dynamic consumer")
@@ -98,15 +92,7 @@ object ConsumeWithTest extends DefaultRunnableSpec {
                       (1 to nrRecords).map(i => ProducerRecord(s"key$i", s"msg$i"))
                     (for {
                       _                <- putStrLn("Putting records")
-                      _                <- ZIO
-                             .accessM[Client](
-                               _.get
-                                 .putRecords(
-                                   streamName,
-                                   Serde.asciiString,
-                                   records
-                                 )
-                             )
+                      _                <- putRecords(streamName, Serde.asciiString, records)
                              .tapError(e => putStrLn(s"error1: $e").provideLayer(Console.live))
                              .retry(retryOnResourceNotFound)
                       _                <- putStrLn("Starting dynamic consumer - about to fail")

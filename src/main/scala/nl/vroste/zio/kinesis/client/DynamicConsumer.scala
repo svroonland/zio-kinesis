@@ -1,13 +1,15 @@
 package nl.vroste.zio.kinesis.client
 
 import java.nio.ByteBuffer
+import java.time.Instant
 import java.util.UUID
 
+import io.github.vigoo.zioaws.cloudwatch.CloudWatch
+import io.github.vigoo.zioaws.dynamodb.DynamoDb
+import io.github.vigoo.zioaws.kinesis.Kinesis
 import nl.vroste.zio.kinesis.client.fake.DynamicConsumerFake
 import nl.vroste.zio.kinesis.client.serde.Deserializer
-import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
-import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
-import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
+import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import software.amazon.kinesis.common.{ InitialPositionInStream, InitialPositionInStreamExtended }
 import software.amazon.kinesis.exceptions.ShutdownException
 import software.amazon.kinesis.processor.RecordProcessorCheckpointer
@@ -24,17 +26,24 @@ import zio.stream.{ ZStream, ZTransducer }
  * Ensures proper resource shutdown and failure handling
  */
 object DynamicConsumer {
-  // For (some) backwards compatibility
-  type Record[T] = nl.vroste.zio.kinesis.client.Record[T]
+  final case class Record[+T](
+    shardId: String,
+    sequenceNumber: String,
+    approximateArrivalTimestamp: Instant,
+    data: T,
+    partitionKey: String,
+    encryptionType: EncryptionType,
+    subSequenceNumber: Option[Long],
+    explicitHashKey: Option[String],
+    aggregated: Boolean
+  )
 
-  val live: ZLayer[Logging with Has[KinesisAsyncClient] with Has[CloudWatchAsyncClient] with Has[
-    DynamoDbAsyncClient
-  ], Nothing, Has[Service]] =
-    ZLayer.fromServices[Logger[
-      String
-    ], KinesisAsyncClient, CloudWatchAsyncClient, DynamoDbAsyncClient, DynamicConsumer.Service] {
-      new DynamicConsumerLive(_, _, _, _)
-    }
+  val live: ZLayer[Logging with Kinesis with CloudWatch with DynamoDb, Nothing, DynamicConsumer] =
+    ZLayer
+      .fromServices[Logger[String], Kinesis.Service, CloudWatch.Service, DynamoDb.Service, DynamicConsumer.Service] {
+        case (logger, kinesis, cloudwatch, dynamodb) =>
+          new DynamicConsumerLive(logger, kinesis.api, cloudwatch.api, dynamodb.api)
+      }
 
   /**
    * Implements a fake `DynamicConsumer` that also offers fake checkpointing functionality that can be tracked using the
@@ -321,5 +330,4 @@ object DynamicConsumer {
         override private[client] def peek: UIO[Option[Record[_]]] = latestStaged.get
       }
   }
-
 }

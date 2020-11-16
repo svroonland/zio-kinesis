@@ -10,19 +10,19 @@ object FakeRecordProcessor {
     refProcessed: Ref[Seq[T]],
     promise: Promise[Nothing, Unit],
     expectedCount: Int
-  ): Record[T] => RIO[Logging, Unit] = process(refProcessed, promise, Right(expectedCount))
+  ): DynamicConsumer.Record[T] => RIO[Logging, Unit] = process(refProcessed, promise, Right(expectedCount))
 
   def makeFailing[RC, T](
     refProcessed: Ref[Seq[T]],
     promise: Promise[Nothing, Unit],
     failFunction: T => Boolean
-  ): Record[T] => RIO[Logging, Unit] = process(refProcessed, promise, Left(failFunction))
+  ): DynamicConsumer.Record[T] => RIO[Logging, Unit] = process(refProcessed, promise, Left(failFunction))
 
   private def process[T](
     refProcessed: Ref[Seq[T]],
     promise: Promise[Nothing, Unit],
     failFunctionOrExpectedCount: Either[T => Boolean, Int]
-  ): Record[T] => RIO[Logging, Unit] =
+  ): DynamicConsumer.Record[T] => RIO[Logging, Unit] =
     rec => {
       val data          = rec.data
       def error(rec: T) = new IllegalStateException(s"Failed processing record " + rec)
