@@ -47,7 +47,7 @@ inThisBuild(
 name := "zio-kinesis"
 scalafmtOnCompile := false
 
-val zioAwsVersion = "3.15.33.2"
+val zioAwsVersion = "3.15.33.4"
 
 libraryDependencies ++= Seq(
   "dev.zio"                %% "zio"                         % "1.0.3",
