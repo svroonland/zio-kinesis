@@ -129,7 +129,7 @@ object Util {
       _             <- ZStream
              .fromQueueWithShutdown(requestsQueue)
              .throttleShape(units.toLong, duration, units.toLong)(_ => 1)
-             .mapM { case (effect, promise) => promise.completeWith(effect) }
+             .mapMPar(units) { case (effect, promise) => promise.complete(effect) }
              .runDrain
              .forkManaged
     } yield (input: I) =>
