@@ -58,7 +58,7 @@ libraryDependencies ++= Seq(
   "dev.zio"                %% "zio-logging"                 % "0.5.3",
   "software.amazon.awssdk"  % "kinesis"                     % "2.15.34",
   "ch.qos.logback"          % "logback-classic"             % "1.2.3",
-  "software.amazon.kinesis" % "amazon-kinesis-client"       % "2.2.11",
+  "software.amazon.kinesis" % "amazon-kinesis-client"       % "2.3.2",
   "org.scala-lang.modules" %% "scala-collection-compat"     % "2.3.0",
   "org.hdrhistogram"        % "HdrHistogram"                % "2.1.12",
   "io.github.vigoo"        %% "zio-aws-core"                % zioAwsVersion,
