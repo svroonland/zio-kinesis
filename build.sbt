@@ -12,7 +12,6 @@ lazy val silencer = {
   )
 }
 
-enablePlugins(ProtobufPlugin)
 enablePlugins(GitVersioning)
 
 inThisBuild(
@@ -44,61 +43,74 @@ inThisBuild(
   )
 )
 
-name := "zio-kinesis"
-scalafmtOnCompile := false
-
 val zioAwsVersion = "3.15.35.3"
 
-libraryDependencies ++= Seq(
-  "dev.zio"                %% "zio"                         % "1.0.3",
-  "dev.zio"                %% "zio-streams"                 % "1.0.3",
-  "dev.zio"                %% "zio-test"                    % "1.0.3" % "test",
-  "dev.zio"                %% "zio-test-sbt"                % "1.0.3" % "test",
-  "dev.zio"                %% "zio-interop-reactivestreams" % "1.3.0.7-2",
-  "dev.zio"                %% "zio-logging"                 % "0.5.3",
-  "software.amazon.awssdk"  % "kinesis"                     % "2.15.35",
-  "ch.qos.logback"          % "logback-classic"             % "1.2.3",
-  "software.amazon.kinesis" % "amazon-kinesis-client"       % "2.2.11",
-  "org.scala-lang.modules" %% "scala-collection-compat"     % "2.3.1",
-  "org.hdrhistogram"        % "HdrHistogram"                % "2.1.12",
-  "io.github.vigoo"        %% "zio-aws-core"                % zioAwsVersion,
-  "io.github.vigoo"        %% "zio-aws-kinesis"             % zioAwsVersion,
-  "io.github.vigoo"        %% "zio-aws-dynamodb"            % zioAwsVersion,
-  "io.github.vigoo"        %% "zio-aws-cloudwatch"          % zioAwsVersion,
-  "io.github.vigoo"        %% "zio-aws-netty"               % zioAwsVersion,
-  "javax.xml.bind"          % "jaxb-api"                    % "2.3.1"
-) ++ {
-  if (scalaBinaryVersion.value == "2.13") silencer else Seq.empty
-}
+lazy val root = project
+  .in(file("."))
+  .settings(
+    Seq(
+      name := "zio-kinesis",
+      scalafmtOnCompile := false
+    )
+  )
+  .settings(stdSettings: _*)
+  .aggregate(core, interopFutures)
+  .dependsOn(core, interopFutures)
 
-Compile / compile / scalacOptions ++= {
-  if (scalaBinaryVersion.value == "2.13") Seq("-P:silencer:globalFilters=[import scala.collection.compat._]")
-  else Seq.empty
-}
-Test / compile / scalacOptions ++= {
-  if (scalaBinaryVersion.value == "2.13") Seq("-P:silencer:globalFilters=[import scala.collection.compat._]")
-  else Seq.empty
-}
-Compile / doc / scalacOptions ++= {
-  if (scalaBinaryVersion.value == "2.13") Seq("-P:silencer:globalFilters=[import scala.collection.compat._]")
-  else Seq.empty
-}
+lazy val core = (project in file("core"))
+  .enablePlugins(ProtobufPlugin)
+  .settings(stdSettings: _*)
 
+lazy val stdSettings: Seq[sbt.Def.SettingsDefinition] = Seq(
+  Compile / compile / scalacOptions ++= {
+    if (scalaBinaryVersion.value == "2.13") Seq("-P:silencer:globalFilters=[import scala.collection.compat._]")
+    else Seq.empty
+  },
+  Test / compile / scalacOptions ++= {
+    if (scalaBinaryVersion.value == "2.13") Seq("-P:silencer:globalFilters=[import scala.collection.compat._]")
+    else Seq.empty
+  },
+  Compile / doc / scalacOptions ++= {
+    if (scalaBinaryVersion.value == "2.13") Seq("-P:silencer:globalFilters=[import scala.collection.compat._]")
+    else Seq.empty
+  },
 // Suppresses problems with Scaladoc @throws links
-scalacOptions in (Compile, doc) ++= Seq("-no-link-warnings")
-
-testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework")
+  scalacOptions in (Compile, doc) ++= Seq("-no-link-warnings"),
+  testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework"),
+  libraryDependencies ++= Seq(
+    "dev.zio"                %% "zio"                         % "1.0.3",
+    "dev.zio"                %% "zio-streams"                 % "1.0.3",
+    "dev.zio"                %% "zio-test"                    % "1.0.3" % "test",
+    "dev.zio"                %% "zio-test-sbt"                % "1.0.3" % "test",
+    "dev.zio"                %% "zio-interop-reactivestreams" % "1.3.0.7-2",
+    "dev.zio"                %% "zio-logging"                 % "0.5.3",
+    "software.amazon.awssdk"  % "kinesis"                     % "2.15.35",
+    "ch.qos.logback"          % "logback-classic"             % "1.2.3",
+    "software.amazon.kinesis" % "amazon-kinesis-client"       % "2.2.11",
+    "org.scala-lang.modules" %% "scala-collection-compat"     % "2.3.1",
+    "org.hdrhistogram"        % "HdrHistogram"                % "2.1.12",
+    "io.github.vigoo"        %% "zio-aws-core"                % zioAwsVersion,
+    "io.github.vigoo"        %% "zio-aws-kinesis"             % zioAwsVersion,
+    "io.github.vigoo"        %% "zio-aws-dynamodb"            % zioAwsVersion,
+    "io.github.vigoo"        %% "zio-aws-cloudwatch"          % zioAwsVersion,
+    "io.github.vigoo"        %% "zio-aws-netty"               % zioAwsVersion,
+    "javax.xml.bind"          % "jaxb-api"                    % "2.3.1"
+  ) ++ {
+    if (scalaBinaryVersion.value == "2.13") silencer else Seq.empty
+  }
+)
 
 addCommandAlias("fmt", "all scalafmtSbt scalafmt test:scalafmt")
 addCommandAlias("check", "all scalafmtSbtCheck scalafmtCheck test:scalafmtCheck")
 
 lazy val interopFutures = (project in file("interop-futures"))
+  .settings(stdSettings: _*)
   .settings(
     name := "zio-kinesis-future",
     resolvers += Resolver.jcenterRepo,
     assemblyJarName in assembly := "zio-kinesis-future" + version.value + ".jar",
     libraryDependencies ++= Seq(
-      "nl.vroste" %% "zio-kinesis"                 % "0.16.0",
-      "dev.zio"   %% "zio-interop-reactivestreams" % "1.3.0.7-2"
+      "dev.zio" %% "zio-interop-reactivestreams" % "1.3.0.7-2"
     )
   )
+  .dependsOn(core)

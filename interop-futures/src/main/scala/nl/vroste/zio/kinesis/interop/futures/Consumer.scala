@@ -1,15 +1,16 @@
 package nl.vroste.zio.kinesis.interop.futures
+import io.github.vigoo.zioaws.kinesis.Kinesis
+import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import nl.vroste.zio.kinesis.client.zionative.Consumer.InitialPosition
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.LeaseCoordinationSettings
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
 import nl.vroste.zio.kinesis.client.zionative.{ DiagnosticEvent, FetchMode, LeaseRepository, ShardAssignmentStrategy }
-import nl.vroste.zio.kinesis.client._
 import software.amazon.awssdk.http.async.SdkAsyncHttpClient
 import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient
-import software.amazon.awssdk.services.cloudwatch.{ CloudWatchAsyncClient, CloudWatchAsyncClientBuilder }
-import software.amazon.awssdk.services.dynamodb.{ DynamoDbAsyncClient, DynamoDbAsyncClientBuilder }
-import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyncClientBuilder }
+import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClientBuilder
+import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClientBuilder
+import software.amazon.awssdk.services.kinesis.KinesisAsyncClientBuilder
 import zio.clock.Clock
 import zio.logging.Logging
 import zio.random.Random
@@ -22,7 +23,7 @@ import scala.concurrent.{ ExecutionContext, Future }
  * A scala-native Future based interface to the zio-kinesis Consumer
  */
 class Consumer private (
-  runtime: zio.Runtime.Managed[Clock with Random with Client with AdminClient with LeaseRepository with Logging]
+  runtime: zio.Runtime.Managed[Clock with Random with Kinesis with LeaseRepository with Logging]
 ) {
 
   /**
@@ -75,13 +76,13 @@ class Consumer private (
 
 object Consumer {
   def make(
-    buildKinesisClient: KinesisAsyncClientBuilder => KinesisAsyncClient = _.build(),
-    buildCloudWatchClient: CloudWatchAsyncClientBuilder => CloudWatchAsyncClient = _.build(),
-    buildDynamoDbClient: DynamoDbAsyncClientBuilder => DynamoDbAsyncClient = _.build(),
+    buildKinesisClient: KinesisAsyncClientBuilder => KinesisAsyncClientBuilder = identity,
+    buildCloudWatchClient: CloudWatchAsyncClientBuilder => CloudWatchAsyncClientBuilder = identity,
+    buildDynamoDbClient: DynamoDbAsyncClientBuilder => DynamoDbAsyncClientBuilder = identity,
     buildHttpClient: NettyNioAsyncHttpClient.Builder => SdkAsyncHttpClient = _.build()
   ): Consumer = {
 
-    val sdkClients = HttpClient.make(build = buildHttpClient) >>> (
+    val sdkClients = HttpClientBuilder.make(build = buildHttpClient) >>> (
       kinesisAsyncClientLayer(buildKinesisClient) ++
         cloudWatchAsyncClientLayer(buildCloudWatchClient) ++
         dynamoDbAsyncClientLayer(buildDynamoDbClient)
@@ -90,7 +91,7 @@ object Consumer {
     val layer = Clock.live ++
       Random.live ++
       Logging.ignore ++
-      (sdkClients >>> (AdminClient.live ++ Client.live ++ DynamoDbLeaseRepository.live))
+      (sdkClients >+> DynamoDbLeaseRepository.live)
 
     val runtime = zio.Runtime.unsafeFromLayer(layer)
 

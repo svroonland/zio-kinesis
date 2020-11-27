@@ -2,16 +2,15 @@ package nl.vroste.zio.kinesis.interop.futures
 
 import izumi.reflect.Tag
 import nl.vroste.zio.kinesis.client
-import nl.vroste.zio.kinesis.client.Client.ProducerRecord
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.producer.ProducerMetrics
 import nl.vroste.zio.kinesis.client.serde.Serializer
 import software.amazon.awssdk.http.async.SdkAsyncHttpClient
 import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient
-import software.amazon.awssdk.services.cloudwatch.{ CloudWatchAsyncClient, CloudWatchAsyncClientBuilder }
-import software.amazon.awssdk.services.dynamodb.{ DynamoDbAsyncClient, DynamoDbAsyncClientBuilder }
-import software.amazon.awssdk.services.kinesis.{ KinesisAsyncClient, KinesisAsyncClientBuilder }
+import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClientBuilder
+import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClientBuilder
+import software.amazon.awssdk.services.kinesis.KinesisAsyncClientBuilder
 import zio.clock.Clock
 import zio.logging.Logging
 import zio.{ CancelableFuture, Chunk, ZIO }
@@ -66,13 +65,13 @@ object Producer {
     serializer: Serializer[Any, T],
     settings: ProducerSettings = ProducerSettings(),
     metricsCollector: ProducerMetrics => Unit = (_: ProducerMetrics) => (),
-    buildKinesisClient: KinesisAsyncClientBuilder => KinesisAsyncClient = _.build(),
-    buildCloudWatchClient: CloudWatchAsyncClientBuilder => CloudWatchAsyncClient = _.build(),
-    buildDynamoDbClient: DynamoDbAsyncClientBuilder => DynamoDbAsyncClient = _.build(),
+    buildKinesisClient: KinesisAsyncClientBuilder => KinesisAsyncClientBuilder = identity,
+    buildCloudWatchClient: CloudWatchAsyncClientBuilder => CloudWatchAsyncClientBuilder = identity,
+    buildDynamoDbClient: DynamoDbAsyncClientBuilder => DynamoDbAsyncClientBuilder = identity,
     buildHttpClient: NettyNioAsyncHttpClient.Builder => SdkAsyncHttpClient = _.build()
   ): Producer[T] = {
 
-    val sdkClients = HttpClient.make(build = buildHttpClient) >>> (
+    val sdkClients = HttpClientBuilder.make(build = buildHttpClient) >>> (
       kinesisAsyncClientLayer(buildKinesisClient) ++
         cloudWatchAsyncClientLayer(buildCloudWatchClient) ++
         dynamoDbAsyncClientLayer(buildDynamoDbClient)
@@ -83,7 +82,7 @@ object Producer {
         .make(streamName, serializer, settings, metricsCollector = m => ZIO(metricsCollector(m)).orDie)
         .toLayer
 
-    val layer   = (Clock.live ++ Logging.ignore ++ (sdkClients >>> Client.live)) >>> producer
+    val layer   = (Clock.live ++ Logging.ignore ++ sdkClients) >>> producer
     val runtime = zio.Runtime.unsafeFromLayer(layer)
 
     new Producer[T](runtime, runtime.unsafeRun(ZIO.service[client.Producer[T]]))
