@@ -192,7 +192,7 @@ object DynamicConsumer {
     workerIdentifier: String = UUID.randomUUID().toString,
     maxShardBufferSize: Int = 1024, // Prefer powers of 2
     checkpointBatchSize: Long = 200,
-    checkpointDuration: Duration = 5.second
+    checkpointDuration: Duration = 5.minutes
   )(
     recordProcessor: Record[T] => RIO[RC, Unit]
   ): ZIO[R with RC with Blocking with Logging with Clock with DynamicConsumer, Throwable, Unit] =
