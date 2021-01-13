@@ -183,7 +183,7 @@ object ExampleApp extends zio.App {
               checkpointer
                 .stageOnSuccess(log.info(s"${id} Processing record $r").when(false))(r)
             )
-            .aggregateAsyncWithin(ZTransducer.collectAllN(1000), Schedule.fixed(5.second))
+            .aggregateAsyncWithin(ZTransducer.collectAllN(1000), Schedule.fixed(5.minutes))
             .mapConcat(_.lastOption.toList)
             .tap(_ => log.info(s"${id} Checkpointing shard ${shardID}") *> checkpointer.checkpoint)
             .catchAll {
