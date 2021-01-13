@@ -29,7 +29,7 @@ object DynamicConsumerBasicUsageExample extends zio.App {
           shardStream
             .tap(record => putStrLn(s"Processing record ${record} on shard ${shardId}"))
             .tap(checkpointer.stage(_))
-            .via(checkpointer.checkpointBatched[Blocking with Console](nr = 1000, interval = 5.second))
+            .via(checkpointer.checkpointBatched[Blocking with Console](nr = 1000, interval = 5.minutes))
       }
       .runDrain
       .provideCustomLayer((loggingLayer ++ defaultAwsLayer) >>> DynamicConsumer.live)

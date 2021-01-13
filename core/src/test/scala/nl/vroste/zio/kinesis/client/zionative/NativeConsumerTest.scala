@@ -211,7 +211,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                 // .tap(r => UIO(println(s"Worker 1 got record on shard ${r.shardId}")))
                                   .tap(checkpointer.stage)
                                   .tap(_ => consumer1Started.succeed(()))
-                                  .aggregateAsyncWithin(ZTransducer.collectAllN(2000), Schedule.fixed(5.second))
+                                  .aggregateAsyncWithin(ZTransducer.collectAllN(2000), Schedule.fixed(5.minutes))
                                   .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
                                   .tap(_ => checkpointer.checkpoint())
                                   .catchAll {

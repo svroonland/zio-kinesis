@@ -138,7 +138,7 @@ object NativeConsumerBasicUsageExample extends zio.App {
           shardStream
             .tap(record => putStrLn(s"Processing record ${record} on shard ${shardId}"))
             .tap(checkpointer.stage(_))
-            .via(checkpointer.checkpointBatched[Console](nr = 1000, interval = 5.second))
+            .via(checkpointer.checkpointBatched[Console](nr = 1000, interval = 5.minutes))
       }
       .runDrain
       .provideCustomLayer((HttpClientBuilder.make() >>> config.default >>> Consumer.defaultEnvironment) ++ loggingLayer)
