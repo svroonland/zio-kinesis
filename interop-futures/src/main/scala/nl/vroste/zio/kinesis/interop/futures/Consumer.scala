@@ -51,7 +51,7 @@ class Consumer private (
     emitDiagnostic: DiagnosticEvent => Unit = (_: DiagnosticEvent) => (),
     shardAssignmentStrategy: ShardAssignmentStrategy = ShardAssignmentStrategy.balanced(),
     checkpointBatchSize: Long = 200,
-    checkpointDuration: Duration = 5.second
+    checkpointDuration: Duration = 5.minutes
   )(
     recordProcessor: Record[T] => ExecutionContext => Future[Unit]
   ): CancelableFuture[Unit] =

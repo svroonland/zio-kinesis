@@ -382,7 +382,7 @@ object Consumer {
     emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit,
     shardAssignmentStrategy: ShardAssignmentStrategy = ShardAssignmentStrategy.balanced(),
     checkpointBatchSize: Long = 200,
-    checkpointDuration: Duration = 5.second
+    checkpointDuration: Duration = 5.minutes
   )(
     recordProcessor: Record[T] => RIO[RC, Unit]
   ): ZIO[
