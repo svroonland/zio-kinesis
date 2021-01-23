@@ -56,7 +56,7 @@ object HttpClientBuilder {
             )
             .protocol(protocol)
 
-          ZIO(builder.build())
+          ZIO(build(builder))
         }
       }
     }
