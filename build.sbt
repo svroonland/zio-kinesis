@@ -43,7 +43,8 @@ inThisBuild(
   )
 )
 
-val zioAwsVersion = "3.15.35.4"
+val zioVersion    = "1.0.4"
+val zioAwsVersion = "3.15.68.2"
 
 lazy val root = project
   .in(file("."))
@@ -78,13 +79,12 @@ lazy val stdSettings: Seq[sbt.Def.SettingsDefinition] = Seq(
   scalacOptions in (Compile, doc) ++= Seq("-no-link-warnings"),
   testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework"),
   libraryDependencies ++= Seq(
-    "dev.zio"                %% "zio"                         % "1.0.3",
-    "dev.zio"                %% "zio-streams"                 % "1.0.3",
-    "dev.zio"                %% "zio-test"                    % "1.0.3" % "test",
-    "dev.zio"                %% "zio-test-sbt"                % "1.0.3" % "test",
+    "dev.zio"                %% "zio"                         % zioVersion,
+    "dev.zio"                %% "zio-streams"                 % zioVersion,
+    "dev.zio"                %% "zio-test"                    % zioVersion % "test",
+    "dev.zio"                %% "zio-test-sbt"                % zioVersion % "test",
     "dev.zio"                %% "zio-interop-reactivestreams" % "1.3.0.7-2",
     "dev.zio"                %% "zio-logging"                 % "0.5.5",
-    "software.amazon.awssdk"  % "kinesis"                     % "2.15.64",
     "ch.qos.logback"          % "logback-classic"             % "1.2.3",
     "software.amazon.kinesis" % "amazon-kinesis-client"       % "2.2.11",
     "org.scala-lang.modules" %% "scala-collection-compat"     % "2.3.2",

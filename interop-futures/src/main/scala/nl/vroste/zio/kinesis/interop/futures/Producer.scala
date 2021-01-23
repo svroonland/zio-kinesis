@@ -1,5 +1,6 @@
 package nl.vroste.zio.kinesis.interop.futures
 
+import io.github.vigoo.zioaws.core.config
 import izumi.reflect.Tag
 import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
@@ -71,7 +72,7 @@ object Producer {
     buildHttpClient: NettyNioAsyncHttpClient.Builder => SdkAsyncHttpClient = _.build()
   ): Producer[T] = {
 
-    val sdkClients = HttpClientBuilder.make(build = buildHttpClient) >>> (
+    val sdkClients = HttpClientBuilder.make(build = buildHttpClient) >>> config.default >>> (
       kinesisAsyncClientLayer(buildKinesisClient) ++
         cloudWatchAsyncClientLayer(buildCloudWatchClient) ++
         dynamoDbAsyncClientLayer(buildDynamoDbClient)

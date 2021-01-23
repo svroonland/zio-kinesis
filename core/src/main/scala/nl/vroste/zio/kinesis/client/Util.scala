@@ -7,46 +7,6 @@ import zio.stream.ZStream
 
 object Util {
   implicit class ZStreamExtensions[-R, +E, +O](val stream: ZStream[R, E, O]) extends AnyVal {
-
-    /**
-     * When the stream fails, retry it according to the given schedule
-     *
-     * This retries the entire stream, so will re-execute all of the stream's acquire operations.
-     *
-     * The schedule is reset as soon as the first element passes through the stream again.
-     *
-      * @param schedule Schedule receiving as input the errors of the stream
-     * @return Stream outputting elements of all attempts of the stream
-     */
-    // To be included in ZIO with https://github.com/zio/zio/pull/3902
-    def retry[R1 <: R](schedule: Schedule[R1, E, _]): ZStream[R1 with Clock, E, O] =
-      ZStream {
-        for {
-          driver       <- schedule.driver.toManaged_
-          currStream   <- Ref.make[ZIO[R, Option[E], Chunk[O]]](IO.fail(None)).toManaged_ // IO.fail(None) = Pull.end
-          switchStream <- ZManaged.switchable[R, Nothing, ZIO[R, Option[E], Chunk[O]]]
-          _            <- switchStream(stream.process).flatMap(currStream.set).toManaged_
-          pull          = {
-            def loop: ZIO[R1 with Clock, Option[E], Chunk[O]] =
-              currStream.get.flatten.catchSome {
-                case Some(e) =>
-                  driver
-                    .next(e)
-                    .foldM(
-                      // Failure of the schedule indicates it doesn't accept the input
-                      _ => IO.fail(Some(e)), // TODO = Pull.fail
-                      _ =>
-                        switchStream(stream.process).flatMap(currStream.set) *>
-                          // Reset the schedule when a chunk is successfully pulled
-                          loop.tap(_ => driver.reset)
-                    )
-              }
-
-            loop
-          }
-        } yield pull
-      }
-
     // ZStream's groupBy using distributedWithDynamic is not performant enough, maybe because
     // it breaks chunks
     final def groupByKey2[K](
