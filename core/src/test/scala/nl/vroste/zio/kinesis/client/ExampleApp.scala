@@ -234,7 +234,9 @@ object ExampleApp extends zio.App {
 
     val cloudWatch = cloudWatchAsyncClientLayer()
     val dynamo     = dynamoDbAsyncClientLayer()
-    val awsClients = ((ZLayer.requires[Logging] ++ httpClient) >>> (kinesisClient ++ cloudWatch ++ dynamo)).orDie
+    val awsClients = ((ZLayer.requires[Logging] ++ httpClient) >+>
+      io.github.vigoo.zioaws.core.config.default >>>
+      (kinesisClient ++ cloudWatch ++ dynamo)).orDie
 
     val leaseRepo       = DynamoDbLeaseRepository.live
     val dynamicConsumer = DynamicConsumer.live

@@ -442,7 +442,7 @@ object Consumer {
   }
 
   val defaultEnvironment: ZLayer[Any, Throwable, Kinesis with LeaseRepository with CloudWatch] =
-    HttpClientBuilder.make() >>>
+    HttpClientBuilder.make() >>> io.github.vigoo.zioaws.core.config.default >>>
       (kinesisAsyncClientLayer() ++ (dynamoDbAsyncClientLayer() >>> DynamoDbLeaseRepository.live) ++ cloudWatchAsyncClientLayer())
 
   sealed trait InitialPosition

@@ -1,4 +1,5 @@
 package nl.vroste.zio.kinesis.interop.futures
+import io.github.vigoo.zioaws.core.config
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.serde.Deserializer
@@ -82,7 +83,7 @@ object Consumer {
     buildHttpClient: NettyNioAsyncHttpClient.Builder => SdkAsyncHttpClient = _.build()
   ): Consumer = {
 
-    val sdkClients = HttpClientBuilder.make(build = buildHttpClient) >>> (
+    val sdkClients = HttpClientBuilder.make(build = buildHttpClient) >>> config.default >>> (
       kinesisAsyncClientLayer(buildKinesisClient) ++
         cloudWatchAsyncClientLayer(buildCloudWatchClient) ++
         dynamoDbAsyncClientLayer(buildDynamoDbClient)
