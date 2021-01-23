@@ -18,7 +18,6 @@ import scala.util.control.NonFatal
 
 object EnhancedFanOutFetcher {
   import FetchUtil.repeatWhileNotNone
-  import Util.ZStreamExtensions
 
   def make(
     streamDescription: StreamDescription.ReadOnly,
