@@ -431,11 +431,11 @@ care of checkpointing which you can configure through `checkpointBatchSize` and 
 
 ```scala
 import nl.vroste.zio.kinesis.client._
-import nl.vroste.zio.kinesis.client.DynamicConsumer
+import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio._
 import zio.clock.Clock
-import zio.console.{ putStrLn, Console }
+import zio.console.{Console, putStrLn}
 import zio.duration._
 import zio.logging.Logging
 
@@ -466,16 +466,16 @@ object DynamicConsumerConsumeWithExample extends zio.App {
 Often it's extremely useful to test your consumer logic without the overhead of a full stack or localstack Kinesis. To
 this end we provide a fake ZLayer instance of the `DynamicConsumer` accessed via `DynamicConsumer.fake`.
 
-Note this also provides full checkpointing functionality which can be tracked via a `Ref` passed into the `refCheckpointedList` parameter.  
+Note this also provides full checkpointing functionality which can be tracked via a `Ref` passed into the `refCheckpointedList` parameter.
 
 ```scala
-import nl.vroste.zio.kinesis.client.DynamicConsumer
 import nl.vroste.zio.kinesis.client.DynamicConsumer.Record
-import nl.vroste.zio.kinesis.client.fake.DynamicConsumerFake
+import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer
+import nl.vroste.zio.kinesis.client.dynamicconsumer.fake.DynamicConsumerFake
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio._
 import zio.clock.Clock
-import zio.console.{ putStrLn, Console }
+import zio.console.{putStrLn, Console}
 import zio.duration._
 import zio.logging.Logging
 import zio.stream.ZStream
@@ -493,21 +493,22 @@ object DynamicConsumerFakeExample extends zio.App {
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     for {
       refCheckpointedList <- Ref.make[Seq[Record[Any]]](Seq.empty)
-      exitCode            <- DynamicConsumer
-                    .consumeWith(
-                      streamName = "my-stream",
-                      applicationName = "my-application",
-                      deserializer = Serde.asciiString,
-                      workerIdentifier = "worker1",
-                      checkpointBatchSize = 1000L,
-                      checkpointDuration = 5.minutes
-                    )(record => putStrLn(s"Processing record $record"))
-                    .provideCustomLayer(DynamicConsumer.fake(shards, refCheckpointedList) ++ loggingLayer)
-                    .exitCode
-      _                   <- putStrLn(s"refCheckpointedList=$refCheckpointedList")
+      exitCode <- DynamicConsumer
+              .consumeWith(
+                streamName = "my-stream",
+                applicationName = "my-application",
+                deserializer = Serde.asciiString,
+                workerIdentifier = "worker1",
+                checkpointBatchSize = 1000L,
+                checkpointDuration = 5.minutes
+              )(record => putStrLn(s"Processing record $record"))
+              .provideCustomLayer(DynamicConsumer.fake(shards, refCheckpointedList) ++ loggingLayer)
+              .exitCode
+      _ <- putStrLn(s"refCheckpointedList=$refCheckpointedList")
     } yield exitCode
 
 }
+
 ```
   
 ### Advanced usage
@@ -516,11 +517,12 @@ If you want more control over your stream, `DynamicConsumer.shardedStream` can b
 
 ```scala
 import nl.vroste.zio.kinesis.client._
+import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio._
 import zio.blocking.Blocking
 import zio.clock.Clock
-import zio.console.{ putStrLn, Console }
+import zio.console.{Console, putStrLn}
 import zio.duration._
 import zio.logging.Logging
 

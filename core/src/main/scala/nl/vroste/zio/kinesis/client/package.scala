@@ -14,8 +14,6 @@ import software.amazon.awssdk.services.kinesis.KinesisAsyncClientBuilder
 import zio.{ Has, ZLayer }
 
 package object client {
-  type DynamicConsumer = Has[DynamicConsumer.Service]
-
   def kinesisAsyncClientLayer(
     build: KinesisAsyncClientBuilder => KinesisAsyncClientBuilder = identity
   ): ZLayer[AwsConfig, Throwable, Kinesis] =

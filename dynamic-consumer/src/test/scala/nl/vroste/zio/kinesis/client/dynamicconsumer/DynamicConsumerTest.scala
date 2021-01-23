@@ -1,22 +1,23 @@
-package nl.vroste.zio.kinesis.client
-
-import java.util.UUID
+package nl.vroste.zio.kinesis.client.dynamicconsumer
 
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.dynamodb.DynamoDb
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
+import nl.vroste.zio.kinesis.client.{ ProducerRecord, TestUtil }
 import software.amazon.kinesis.exceptions.ShutdownException
-import zio._
 import zio.blocking.Blocking
 import zio.clock.Clock
-import zio.console._
-import zio.duration._
+import zio.console.{ putStrLn, Console }
+import zio.duration.{ durationInt, Duration }
 import zio.logging.Logging
 import zio.stream.{ ZStream, ZTransducer }
-import zio.test.TestAspect._
+import zio.test.TestAspect.{ sequential, timeout }
 import zio.test._
+import zio._
+
+import java.util.UUID
 
 object DynamicConsumerTest extends DefaultRunnableSpec {
   import TestUtil._

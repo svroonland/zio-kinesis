@@ -1,17 +1,17 @@
-package nl.vroste.zio.kinesis.client.examples
+package nl.vroste.zio.kinesis.client.dynamicconsumer.examples
 
-import java.nio.ByteBuffer
-
-import nl.vroste.zio.kinesis.client.DynamicConsumer
-import nl.vroste.zio.kinesis.client.DynamicConsumer.Record
-import nl.vroste.zio.kinesis.client.fake.DynamicConsumerFake
+import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer
+import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.Record
+import nl.vroste.zio.kinesis.client.dynamicconsumer.fake.DynamicConsumerFake
 import nl.vroste.zio.kinesis.client.serde.Serde
-import zio._
 import zio.clock.Clock
 import zio.console.{ putStrLn, Console }
-import zio.duration._
+import zio.duration.durationInt
 import zio.logging.Logging
 import zio.stream.ZStream
+import zio.{ ExitCode, Ref, URIO, ZLayer }
+
+import java.nio.ByteBuffer
 
 /**
  * Basic usage example for `DynamicConsumerFake`
