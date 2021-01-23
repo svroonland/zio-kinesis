@@ -5,7 +5,7 @@ import software.amazon.awssdk.http.Protocol
 import software.amazon.awssdk.http.async.SdkAsyncHttpClient
 import software.amazon.awssdk.http.nio.netty.{ Http2Configuration, NettyNioAsyncHttpClient }
 import zio.duration._
-import zio.{ Task, ZIO, ZLayer, ZManaged }
+import zio.{ Task, ZIO, ZLayer }
 
 object HttpClientBuilder {
 
