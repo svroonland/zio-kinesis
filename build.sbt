@@ -86,7 +86,7 @@ lazy val stdSettings: Seq[sbt.Def.SettingsDefinition] = Seq(
     "dev.zio"                %% "zio-interop-reactivestreams" % "1.3.0.7-2",
     "dev.zio"                %% "zio-logging"                 % "0.5.5",
     "ch.qos.logback"          % "logback-classic"             % "1.2.3",
-    "software.amazon.kinesis" % "amazon-kinesis-client"       % "2.2.11",
+    "software.amazon.kinesis" % "amazon-kinesis-client"       % "2.3.3",
     "org.scala-lang.modules" %% "scala-collection-compat"     % "2.3.2",
     "org.hdrhistogram"        % "HdrHistogram"                % "2.1.12",
     "io.github.vigoo"        %% "zio-aws-core"                % zioAwsVersion,

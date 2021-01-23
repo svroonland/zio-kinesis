@@ -9,7 +9,11 @@ import software.amazon.kinesis.common.{ ConfigsBuilder, InitialPositionInStreamE
 import software.amazon.kinesis.coordinator.Scheduler
 import software.amazon.kinesis.exceptions.ShutdownException
 import software.amazon.kinesis.lifecycle.events._
-import software.amazon.kinesis.processor.{ RecordProcessorCheckpointer, ShardRecordProcessor }
+import software.amazon.kinesis.processor.{
+  RecordProcessorCheckpointer,
+  ShardRecordProcessor,
+  ShardRecordProcessorFactory
+}
 import software.amazon.kinesis.retrieval.KinesisClientRecord
 import software.amazon.kinesis.retrieval.fanout.FanOutConfig
 import software.amazon.kinesis.retrieval.polling.PollingConfig
@@ -186,7 +190,9 @@ private[client] class DynamicConsumerLive(
             dynamoDbAsyncClient,
             cloudWatchAsyncClient,
             workerIdentifier,
-            () => new ZioShardProcessor(queues)
+            new ShardRecordProcessorFactory {
+              override def shardRecordProcessor(): ShardRecordProcessor = new ZioShardProcessor(queues)
+            }
           )
           leaseTableName.fold(configsBuilder)(configsBuilder.tableName)
         }
