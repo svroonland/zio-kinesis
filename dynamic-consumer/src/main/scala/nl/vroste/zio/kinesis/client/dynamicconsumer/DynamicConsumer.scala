@@ -1,24 +1,24 @@
-package nl.vroste.zio.kinesis.client
-
-import java.nio.ByteBuffer
-import java.time.Instant
-import java.util.UUID
+package nl.vroste.zio.kinesis.client.dynamicconsumer
 
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.dynamodb.DynamoDb
 import io.github.vigoo.zioaws.kinesis.Kinesis
-import nl.vroste.zio.kinesis.client.fake.DynamicConsumerFake
+import nl.vroste.zio.kinesis.client.dynamicconsumer.fake.DynamicConsumerFake
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import software.amazon.kinesis.common.{ InitialPositionInStream, InitialPositionInStreamExtended }
 import software.amazon.kinesis.exceptions.ShutdownException
 import software.amazon.kinesis.processor.RecordProcessorCheckpointer
-import zio._
 import zio.blocking.Blocking
 import zio.clock.Clock
-import zio.duration.{ Duration, _ }
+import zio.duration.{ durationInt, Duration }
 import zio.logging.{ Logger, Logging }
 import zio.stream.{ ZStream, ZTransducer }
+import zio._
+
+import java.nio.ByteBuffer
+import java.time.Instant
+import java.util.UUID
 
 /**
  * Offers a ZStream based interface to the Amazon Kinesis Client Library (KCL)

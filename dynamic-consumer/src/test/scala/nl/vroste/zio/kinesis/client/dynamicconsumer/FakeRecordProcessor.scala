@@ -1,4 +1,4 @@
-package nl.vroste.zio.kinesis.client
+package nl.vroste.zio.kinesis.client.dynamicconsumer
 
 import zio._
 

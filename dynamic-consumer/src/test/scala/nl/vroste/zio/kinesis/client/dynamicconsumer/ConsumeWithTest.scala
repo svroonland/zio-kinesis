@@ -1,22 +1,24 @@
-package nl.vroste.zio.kinesis.client
-
-import java.util.UUID
+package nl.vroste.zio.kinesis.client.dynamicconsumer
 
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.dynamodb.DynamoDb
 import io.github.vigoo.zioaws.kinesis.Kinesis
-import nl.vroste.zio.kinesis.client.DynamicConsumer.consumeWith
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
-import zio._
+import nl.vroste.zio.kinesis.client.{ ProducerRecord, TestUtil }
 import zio.blocking.Blocking
 import zio.clock.Clock
-import zio.console._
-import zio.duration._
+import zio.console.{ putStrLn, Console }
 import zio.logging.Logging
-import zio.test.Assertion._
-import zio.test.TestAspect._
-import zio.test._
+
+import zio.test.Assertion.equalTo
+import zio.test.TestAspect.{ sequential, timeout }
+import zio.test.{ assert, suite, testM, DefaultRunnableSpec }
+import zio.{ Has, Promise, Ref, ZLayer }
+import DynamicConsumer.consumeWith
+import zio.duration.durationInt
+
+import java.util.UUID
 
 object ConsumeWithTest extends DefaultRunnableSpec {
   import TestUtil._

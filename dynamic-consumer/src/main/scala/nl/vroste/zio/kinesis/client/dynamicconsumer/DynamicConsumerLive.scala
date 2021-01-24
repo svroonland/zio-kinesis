@@ -1,6 +1,6 @@
-package nl.vroste.zio.kinesis.client
+package nl.vroste.zio.kinesis.client.dynamicconsumer
 
-import nl.vroste.zio.kinesis.client.DynamicConsumer.Checkpointer
+import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.Checkpointer
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient

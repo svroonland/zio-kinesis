@@ -1,19 +1,19 @@
-package nl.vroste.zio.kinesis.client.fake
+package nl.vroste.zio.kinesis.client.dynamicconsumer
 
-import java.nio.ByteBuffer
-import java.time.OffsetDateTime
-
+import nl.vroste.zio.kinesis.client.dynamicconsumer.fake.DynamicConsumerFake
+import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.Record
 import nl.vroste.zio.kinesis.client.serde.Serde
-import nl.vroste.zio.kinesis.client.DynamicConsumer
-import nl.vroste.zio.kinesis.client.DynamicConsumer.Record
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import zio.clock.Clock
 import zio.console.Console
-import zio.duration._
+import zio.duration.durationInt
 import zio.logging.Logging
 import zio.stream.ZStream
 import zio.test._
 import zio.{ Queue, Ref, ZLayer }
+
+import java.nio.ByteBuffer
+import java.time.OffsetDateTime
 
 object DynamicConsumerFakeTest extends DefaultRunnableSpec {
   private type Shard = ZStream[Any, Nothing, (String, ZStream[Any, Throwable, ByteBuffer])]

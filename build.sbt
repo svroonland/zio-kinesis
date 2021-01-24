@@ -55,8 +55,8 @@ lazy val root = project
     )
   )
   .settings(stdSettings: _*)
-  .aggregate(core, interopFutures)
-  .dependsOn(core, interopFutures)
+  .aggregate(core, interopFutures, dynamicConsumer)
+  .dependsOn(core, interopFutures, dynamicConsumer)
 
 lazy val core = (project in file("core"))
   .enablePlugins(ProtobufPlugin)
@@ -86,7 +86,6 @@ lazy val stdSettings: Seq[sbt.Def.SettingsDefinition] = Seq(
     "dev.zio"                %% "zio-interop-reactivestreams" % "1.3.0.7-2",
     "dev.zio"                %% "zio-logging"                 % "0.5.5",
     "ch.qos.logback"          % "logback-classic"             % "1.2.3",
-    "software.amazon.kinesis" % "amazon-kinesis-client"       % "2.2.11",
     "org.scala-lang.modules" %% "scala-collection-compat"     % "2.3.2",
     "org.hdrhistogram"        % "HdrHistogram"                % "2.1.12",
     "io.github.vigoo"        %% "zio-aws-core"                % zioAwsVersion,
@@ -114,3 +113,15 @@ lazy val interopFutures = (project in file("interop-futures"))
     )
   )
   .dependsOn(core)
+
+lazy val dynamicConsumer = (project in file("dynamic-consumer"))
+  .settings(stdSettings: _*)
+  .settings(
+    name := "zio-kinesis-dynamic-consumer",
+    resolvers += Resolver.jcenterRepo,
+    assemblyJarName in assembly := "zio-kinesis-dynamic-consumer" + version.value + ".jar",
+    libraryDependencies ++= Seq(
+      "software.amazon.kinesis" % "amazon-kinesis-client" % "2.2.11"
+    )
+  )
+  .dependsOn(core % "compile->compile;test->test")

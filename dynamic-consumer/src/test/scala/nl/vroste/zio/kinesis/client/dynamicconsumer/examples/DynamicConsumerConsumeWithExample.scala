@@ -1,13 +1,13 @@
-package nl.vroste.zio.kinesis.client.examples
+package nl.vroste.zio.kinesis.client.dynamicconsumer.examples
 
-import nl.vroste.zio.kinesis.client._
-import nl.vroste.zio.kinesis.client.DynamicConsumer
+import nl.vroste.zio.kinesis.client.defaultAwsLayer
+import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer
 import nl.vroste.zio.kinesis.client.serde.Serde
-import zio._
 import zio.clock.Clock
 import zio.console.{ putStrLn, Console }
-import zio.duration._
+import zio.duration.durationInt
 import zio.logging.Logging
+import zio.{ ExitCode, URIO, ZLayer }
 
 /**
  * Basic usage example for `DynamicConsumer.consumeWith` convenience method

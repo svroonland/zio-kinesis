@@ -1,4 +1,4 @@
-package nl.vroste.zio.kinesis.client
+package nl.vroste.zio.kinesis.client.dynamicconsumer
 
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.core.AwsError
@@ -9,13 +9,13 @@ import io.github.vigoo.zioaws.{ dynamodb, kinesis }
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.Consumer.InitialPosition
-import nl.vroste.zio.kinesis.client.zionative._
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
 import nl.vroste.zio.kinesis.client.zionative.metrics.{ CloudWatchMetricsPublisher, CloudWatchMetricsPublisherConfig }
+import nl.vroste.zio.kinesis.client.zionative._
+import nl.vroste.zio.kinesis.client._
 import software.amazon.awssdk.http.SdkHttpConfigurationOption
 import software.amazon.awssdk.utils.AttributeMap
 import software.amazon.kinesis.exceptions.ShutdownException
-import zio._
 import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.console.Console
@@ -23,6 +23,7 @@ import zio.duration._
 import zio.logging.{ log, Logging }
 import zio.random.Random
 import zio.stream.{ ZStream, ZTransducer }
+import zio._
 
 /**
  * Runnable used for manually testing various features

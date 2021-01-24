@@ -1,9 +1,7 @@
-package nl.vroste.zio.kinesis.client.fake
+package nl.vroste.zio.kinesis.client.dynamicconsumer.fake
 
-import java.nio.ByteBuffer
-
-import nl.vroste.zio.kinesis.client.DynamicConsumer
-import nl.vroste.zio.kinesis.client.DynamicConsumer.{ Checkpointer, Record }
+import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer
+import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.{ Checkpointer, Record }
 import nl.vroste.zio.kinesis.client.serde.{ Deserializer, Serializer }
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import software.amazon.kinesis.common.InitialPositionInStreamExtended
@@ -11,6 +9,8 @@ import zio._
 import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.stream.ZStream
+
+import java.nio.ByteBuffer
 
 private[client] class DynamicConsumerFake(
   shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, ByteBuffer])],
