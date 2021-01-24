@@ -287,10 +287,12 @@ object PollingFetcherTest extends DefaultRunnableSpec {
               if (shouldEnd) null else lastRecordOffset.toString
             val childShards        =
               if (shouldEnd)
-                Seq(
-                  ChildShard("shard-002", Seq("001"), HashKeyRange("123", "456"))
+                Some(
+                  Seq(
+                    ChildShard("shard-002", Seq("001"), HashKeyRange("123", "456"))
+                  )
                 )
-              else null
+              else None
             val millisBehindLatest = if (lastRecordOffset >= records.size) 0 else records.size - lastRecordOffset
 
             //          println(s"GetRecords from ${shardIterator} (max ${limit}. Next iterator: ${nextShardIterator}")
@@ -299,7 +301,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
               recordsInResponse,
               Some(nextShardIterator),
               Some(millisBehindLatest),
-              Some(childShards)
+              childShards
             ).asReadOnly
 
             IO.succeed(awsResponse)

@@ -4,20 +4,22 @@ import nl.vroste.zio.kinesis.client.zionative.Consumer.InitialPosition
 import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.Lease
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator
 import software.amazon.awssdk.services.kinesis.model.{ Shard => SdkShard }
-import io.github.vigoo.zioaws.kinesis.model.{ HashKeyRange, Shard }
+import io.github.vigoo.zioaws.kinesis.model.{ HashKeyRange, SequenceNumberRange, Shard }
 import zio.test.Assertion._
 import zio.test._
 
 object LeaseCoordinatorTest extends DefaultRunnableSpec {
 
-  val shard1 = Shard("001", hashKeyRange = null, sequenceNumberRange = null).asReadOnly
-  val shard2 = Shard("002", hashKeyRange = null, sequenceNumberRange = null).asReadOnly
+  val shard1 =
+    Shard("001", hashKeyRange = HashKeyRange("0", "0"), sequenceNumberRange = SequenceNumberRange("1")).asReadOnly
+  val shard2 =
+    Shard("002", hashKeyRange = HashKeyRange("0", "0"), sequenceNumberRange = SequenceNumberRange("1")).asReadOnly
   val shard3 = Shard(
     "003",
-    hashKeyRange = null,
     parentShardId = Some("001"),
     adjacentParentShardId = Some("002"),
-    sequenceNumberRange = null
+    hashKeyRange = HashKeyRange("0", "0"),
+    sequenceNumberRange = SequenceNumberRange("1")
   ).asReadOnly
 
   override def spec =
