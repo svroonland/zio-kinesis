@@ -24,8 +24,6 @@ import zio.test.Assertion._
 import zio.test._
 import zio.test.environment.TestClock
 
-import scala.jdk.CollectionConverters._
-
 object PollingFetcherTest extends DefaultRunnableSpec {
 
   val loggingLayer = Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
@@ -300,7 +298,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
             val awsResponse = GetRecordsResponse(
               recordsInResponse,
               Some(nextShardIterator),
-              Some(millisBehindLatest),
+              Some(millisBehindLatest.toLong),
               childShards
             ).asReadOnly
 
