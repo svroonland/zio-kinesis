@@ -1,11 +1,12 @@
 package nl.vroste.zio.kinesis.client.zionative
 import java.nio.charset.Charset
-
 import io.github.vigoo.zioaws.core.AwsError
 import io.github.vigoo.zioaws.core.aspects.AwsCallAspect
 import io.github.vigoo.zioaws.kinesis.model.{
+  ChildShard,
   GetRecordsResponse,
   GetShardIteratorResponse,
+  HashKeyRange,
   Record,
   ShardIteratorType,
   StartingPosition
@@ -14,12 +15,7 @@ import io.github.vigoo.zioaws.kinesis.{ model, Kinesis }
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.Polling
 import nl.vroste.zio.kinesis.client.zionative.fetcher.PollingFetcher
-import software.amazon.awssdk.services.kinesis.model.{
-  ChildShard,
-  HashKeyRange,
-  ProvisionedThroughputExceededException
-}
-import software.amazon.awssdk.services.kinesis.{ model => aws }
+import software.amazon.awssdk.services.kinesis.model.ProvisionedThroughputExceededException
 import zio._
 import zio.duration._
 import zio.logging.Logging
@@ -271,7 +267,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
       override def getShardIterator(
         request: model.GetShardIteratorRequest
       ): IO[AwsError, GetShardIteratorResponse.ReadOnly] =
-        IO.succeed(GetShardIteratorResponse.wrap(aws.GetShardIteratorResponse.builder().shardIterator("0").build()))
+        IO.succeed(GetShardIteratorResponse(Some("0")).asReadOnly)
 
       override def getRecords(request: model.GetRecordsRequest): IO[AwsError, GetRecordsResponse.ReadOnly] = {
         val shardIterator = request.shardIterator
@@ -291,28 +287,24 @@ object PollingFetcherTest extends DefaultRunnableSpec {
               if (shouldEnd) null else lastRecordOffset.toString
             val childShards        =
               if (shouldEnd)
-                Seq(
-                  ChildShard
-                    .builder()
-                    .shardId("shard-002")
-                    .parentShards("001")
-                    .hashKeyRange(HashKeyRange.builder().startingHashKey("123").endingHashKey("456").build())
-                    .build
+                Some(
+                  Seq(
+                    ChildShard("shard-002", Seq("001"), HashKeyRange("123", "456"))
+                  )
                 )
-              else null
+              else None
             val millisBehindLatest = if (lastRecordOffset >= records.size) 0 else records.size - lastRecordOffset
 
             //          println(s"GetRecords from ${shardIterator} (max ${limit}. Next iterator: ${nextShardIterator}")
 
-            val awsResponse = aws.GetRecordsResponse
-              .builder()
-              .millisBehindLatest(millisBehindLatest)
-              .nextShardIterator(nextShardIterator)
-              .childShards(childShards.asJava)
-              .records(recordsInResponse.map(_.buildAwsValue()).asJavaCollection)
-              .build()
+            val awsResponse = GetRecordsResponse(
+              recordsInResponse,
+              Some(nextShardIterator),
+              Some(millisBehindLatest),
+              childShards
+            ).asReadOnly
 
-            IO.succeed(GetRecordsResponse.wrap(awsResponse))
+            IO.succeed(awsResponse)
           }
         }
       }

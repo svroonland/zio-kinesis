@@ -438,7 +438,7 @@ object Consumer {
       else
         throw new IllegalArgumentException(s"Unexpected nr of parent shards: ${parentShards.size}")
 
-    Shard.wrap(shardWithParents.buildAwsValue())
+    shardWithParents.asReadOnly
   }
 
   val defaultEnvironment: ZLayer[Any, Throwable, Kinesis with LeaseRepository with CloudWatch] =
