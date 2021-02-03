@@ -13,7 +13,7 @@ import zio.logging.Logging
 
 import zio.test.Assertion.equalTo
 import zio.test.TestAspect.{ sequential, timeout }
-import zio.test.{ assert, suite, testM, DefaultRunnableSpec }
+import zio.test.{ assert, DefaultRunnableSpec }
 import zio.{ Has, Promise, Ref, ZLayer }
 import DynamicConsumer.consumeWith
 import zio.duration.durationInt
