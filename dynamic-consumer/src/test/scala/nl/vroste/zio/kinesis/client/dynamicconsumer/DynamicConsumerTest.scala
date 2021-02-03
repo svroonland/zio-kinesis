@@ -256,7 +256,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
             (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
           } yield assert(processed)(Assertion.equalTo(checkpointed))
         }
-    } @@ TestAspect.timeout(60.seconds)
+    } @@ TestAspect.timeout(5.minutes)
 
   // TODO check the order of received records is correct
 
@@ -265,7 +265,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
       testConsume1,
       testConsume2,
       testCheckpointAtShutdown
-    ).provideCustomLayerShared(env.orDie) @@ timeout(5.minute) @@ sequential
+    ).provideCustomLayerShared(env.orDie) @@ timeout(10.minutes) @@ sequential
 
   def delayStream[R, E, O](s: ZStream[R, E, O], delay: Duration) =
     ZStream.fromEffect(ZIO.sleep(delay)).flatMap(_ => s)
