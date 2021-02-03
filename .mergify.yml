@@ -9,6 +9,7 @@ pull_request_rules:
       - base=master
       - author=scala-steward
       - "status-success=ci/circleci: test213_jdk11"
+      - "status-success=ci/circleci: test213_jdk11_dynamic_consumer"
       - "status-success=ci/circleci: test213_jdk8"
       - "status-success=ci/circleci: test212_jdk11"
       - "status-success=ci/circleci: test212_jdk8"
