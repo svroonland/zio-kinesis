@@ -98,16 +98,16 @@ object ConsumeWithExample extends zio.App {
 
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     Consumer
-      .consumeWith(
-        streamName = "my-stream",
-        applicationName = "my-application",
-        deserializer = Serde.asciiString,
-        workerIdentifier = "worker1",
-        checkpointBatchSize = 1000L,
-        checkpointDuration = 5.minutes
-      )(record => putStrLn(s"Processing record $record"))
-      .provideCustomLayer(Consumer.defaultEnvironment ++ loggingLayer)
-      .exitCode
+            .consumeWith(
+              streamName = "my-stream",
+              applicationName = "my-application",
+              deserializer = Serde.asciiString,
+              workerIdentifier = "worker1",
+              checkpointBatchSize = 1000L,
+              checkpointDuration = 5.minutes
+            )(record => putStrLn(s"Processing record $record"))
+            .provideCustomLayer(Consumer.defaultEnvironment ++ loggingLayer)
+            .exitCode
 }
 ``` 
 
@@ -115,8 +115,6 @@ object ConsumeWithExample extends zio.App {
 If you want more fine-grained control over the processing stream, error handling or checkpointing, use `Consumer.shardedStream` to get a stream of shard-streams, like in the following example:
 
 ```scala
-import io.github.vigoo.zioaws.core.config
-import nl.vroste.zio.kinesis.client.HttpClientBuilder
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.Consumer
 import zio._
@@ -127,22 +125,22 @@ import zio.logging.Logging
 object NativeConsumerBasicUsageExample extends zio.App {
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     Consumer
-      .shardedStream(
-        streamName = "my-stream",
-        applicationName = "my-application",
-        deserializer = Serde.asciiString,
-        workerIdentifier = "worker1"
-      )
-      .flatMapPar(Int.MaxValue) {
-        case (shardId, shardStream, checkpointer) =>
-          shardStream
-            .tap(record => putStrLn(s"Processing record ${record} on shard ${shardId}"))
-            .tap(checkpointer.stage(_))
-            .via(checkpointer.checkpointBatched[Console](nr = 1000, interval = 5.minutes))
-      }
-      .runDrain
-      .provideCustomLayer((HttpClientBuilder.make() >>> config.default >>> Consumer.defaultEnvironment) ++ loggingLayer)
-      .exitCode
+            .shardedStream(
+              streamName = "my-stream",
+              applicationName = "my-application",
+              deserializer = Serde.asciiString,
+              workerIdentifier = "worker1"
+            )
+            .flatMapPar(Int.MaxValue) {
+              case (shardId, shardStream, checkpointer) =>
+                shardStream
+                        .tap(record => putStrLn(s"Processing record ${record} on shard ${shardId}"))
+                        .tap(checkpointer.stage(_))
+                        .via(checkpointer.checkpointBatched[Console](nr = 1000, interval = 5.minutes))
+            }
+            .runDrain
+            .provideCustomLayer(Consumer.defaultEnvironment ++ loggingLayer)
+            .exitCode
 
   val loggingLayer = Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 }
@@ -346,12 +344,12 @@ object ProducerWithMetricsExample extends zio.App {
   val program = (for {
     totalMetrics <- Ref.make(ProducerMetrics.empty).toManaged_
     producer     <- Producer
-                  .make(
-                    streamName,
-                    Serde.asciiString,
-                    ProducerSettings(),
-                    metrics => totalMetrics.updateAndGet(_ + metrics).flatMap(m => putStrLn(m.toString))
-                  )
+            .make(
+              streamName,
+              Serde.asciiString,
+              ProducerSettings(),
+              metrics => totalMetrics.updateAndGet(_ + metrics).flatMap(m => putStrLn(m.toString))
+            )
   } yield (producer, totalMetrics)).use {
     case (producer, totalMetrics) =>
       val records = (1 to 100).map(j => ProducerRecord(s"key${j}", s"message${j}"))
@@ -430,14 +428,14 @@ convenience method `DynamicConsumer.consumeWith`. This method lets you execute a
 care of checkpointing which you can configure through `checkpointBatchSize` and `checkpointDuration` parameters.   
 
 ```scala
-import nl.vroste.zio.kinesis.client._
+import nl.vroste.zio.kinesis.client.defaultAwsLayer
 import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer
 import nl.vroste.zio.kinesis.client.serde.Serde
-import zio._
 import zio.clock.Clock
-import zio.console.{Console, putStrLn}
-import zio.duration._
+import zio.console.{ putStrLn, Console }
+import zio.duration.durationInt
 import zio.logging.Logging
+import zio.{ ExitCode, URIO, ZLayer }
 
 /**
  * Basic usage example for `DynamicConsumer.consumeWith` convenience method
@@ -448,16 +446,16 @@ object DynamicConsumerConsumeWithExample extends zio.App {
 
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     DynamicConsumer
-      .consumeWith(
-        streamName = "my-stream",
-        applicationName = "my-application",
-        deserializer = Serde.asciiString,
-        workerIdentifier = "worker1",
-        checkpointBatchSize = 1000L,
-        checkpointDuration = 5.minutes
-      )(record => putStrLn(s"Processing record $record"))
-      .provideCustomLayer((loggingLayer ++ defaultAwsLayer) >+> DynamicConsumer.live)
-      .exitCode
+            .consumeWith(
+              streamName = "my-stream",
+              applicationName = "my-application",
+              deserializer = Serde.asciiString,
+              workerIdentifier = "worker1",
+              checkpointBatchSize = 1000L,
+              checkpointDuration = 5.minutes
+            )(record => putStrLn(s"Processing record $record"))
+            .provideCustomLayer((loggingLayer ++ defaultAwsLayer) >+> DynamicConsumer.live)
+            .exitCode
 }
 ``` 
 
@@ -516,15 +514,15 @@ If you want more control over your stream, `DynamicConsumer.shardedStream` can b
 
 
 ```scala
-import nl.vroste.zio.kinesis.client._
+import nl.vroste.zio.kinesis.client.defaultAwsLayer
 import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer
 import nl.vroste.zio.kinesis.client.serde.Serde
-import zio._
 import zio.blocking.Blocking
 import zio.clock.Clock
-import zio.console.{Console, putStrLn}
-import zio.duration._
+import zio.console.{ putStrLn, Console }
+import zio.duration.durationInt
 import zio.logging.Logging
+import zio.{ ExitCode, URIO, ZLayer }
 
 /**
  * Basic usage example for DynamicConsumer
@@ -535,22 +533,22 @@ object DynamicConsumerBasicUsageExample extends zio.App {
 
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     DynamicConsumer
-      .shardedStream(
-        streamName = "my-stream",
-        applicationName = "my-application",
-        deserializer = Serde.asciiString,
-        workerIdentifier = "worker1"
-      )
-      .flatMapPar(Int.MaxValue) {
-        case (shardId, shardStream, checkpointer) =>
-          shardStream
-            .tap(record => putStrLn(s"Processing record ${record} on shard ${shardId}"))
-            .tap(checkpointer.stage(_))
-            .via(checkpointer.checkpointBatched[Blocking with Console](nr = 1000, interval = 5.second))
-      }
-      .runDrain
-      .provideCustomLayer((loggingLayer ++ defaultAwsLayer) >>> DynamicConsumer.live)
-      .exitCode
+            .shardedStream(
+              streamName = "my-stream",
+              applicationName = "my-application",
+              deserializer = Serde.asciiString,
+              workerIdentifier = "worker1"
+            )
+            .flatMapPar(Int.MaxValue) {
+              case (shardId, shardStream, checkpointer) =>
+                shardStream
+                        .tap(record => putStrLn(s"Processing record ${record} on shard ${shardId}"))
+                        .tap(checkpointer.stage(_))
+                        .via(checkpointer.checkpointBatched[Blocking with Console](nr = 1000, interval = 5.minutes))
+            }
+            .runDrain
+            .provideCustomLayer((loggingLayer ++ defaultAwsLayer) >>> DynamicConsumer.live)
+            .exitCode
 }
 ```
 
