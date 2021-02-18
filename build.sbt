@@ -50,7 +50,6 @@ lazy val root = project
   .in(file("."))
   .settings(
     Seq(
-      name := "zio-kinesis",
       scalafmtOnCompile := false
     )
   )
@@ -61,6 +60,11 @@ lazy val root = project
 lazy val core = (project in file("core"))
   .enablePlugins(ProtobufPlugin)
   .settings(stdSettings: _*)
+  .settings(
+    Seq(
+      name := "zio-kinesis"
+    )
+  )
 
 lazy val stdSettings: Seq[sbt.Def.SettingsDefinition] = Seq(
   Compile / compile / scalacOptions ++= {
