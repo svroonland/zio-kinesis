@@ -46,7 +46,7 @@ jobs:
       - restore_cache:
           key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
       - run: apt update && apt install -y protobuf-compiler
-      - run: sbt ciReleaseBintray
+      - run: sbt ciRelease
 
 workflows:
   version: 2
