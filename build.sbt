@@ -43,6 +43,7 @@ inThisBuild(
         url("https://github.com/svroonland")
       )
     ),
+    skip in publish := true,
     resolvers += "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots"
   )
 )
