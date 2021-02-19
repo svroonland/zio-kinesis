@@ -14,6 +14,9 @@ lazy val silencer = {
 
 enablePlugins(GitVersioning)
 
+ThisBuild / publishTo := sonatypePublishToBundle.value
+skip in publish := true
+
 inThisBuild(
   List(
     organization := "nl.vroste",
@@ -25,20 +28,22 @@ inThisBuild(
     cancelable in Global := true,
     fork in Test := true,
     fork in run := true,
-    publishMavenStyle := true,
-    publishArtifact in Test :=
-      false,
-    assemblyJarName in assembly := "zio-kinesis-" + version.value + ".jar",
-    test in assembly := {},
-    target in assembly := file(baseDirectory.value + "/../bin/"),
     assemblyMergeStrategy in assembly := {
       case PathList("META-INF", xs @ _*)       => MergeStrategy.discard
       case n if n.startsWith("reference.conf") => MergeStrategy.concat
       case _                                   => MergeStrategy.first
     },
-    bintrayOrganization := Some("vroste"),
-    bintrayPackageLabels := Seq("zio", "kinesis", "aws"),
-    bintrayVcsUrl := Some("https://github.com/svroonland/zio-kinesis"),
+    scmInfo := Some(
+      ScmInfo(url("https://github.com/svroonland/zio-kinesis/"), "scm:git:git@github.com:svroonland/zio-kinesis.git")
+    ),
+    developers := List(
+      Developer(
+        "svroonland",
+        "Vroste",
+        "info@vroste.nl",
+        url("https://github.com/svroonland")
+      )
+    ),
     resolvers += "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots"
   )
 )
@@ -110,7 +115,6 @@ lazy val interopFutures = (project in file("interop-futures"))
   .settings(stdSettings: _*)
   .settings(
     name := "zio-kinesis-future",
-    resolvers += Resolver.jcenterRepo,
     assemblyJarName in assembly := "zio-kinesis-future" + version.value + ".jar",
     libraryDependencies ++= Seq(
       "dev.zio" %% "zio-interop-reactivestreams" % "1.3.0.7-2"
@@ -122,7 +126,6 @@ lazy val dynamicConsumer = (project in file("dynamic-consumer"))
   .settings(stdSettings: _*)
   .settings(
     name := "zio-kinesis-dynamic-consumer",
-    resolvers += Resolver.jcenterRepo,
     assemblyJarName in assembly := "zio-kinesis-dynamic-consumer" + version.value + ".jar",
     libraryDependencies ++= Seq(
       "software.amazon.kinesis" % "amazon-kinesis-client" % "2.3.3"
