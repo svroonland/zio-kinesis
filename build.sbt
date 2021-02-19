@@ -14,8 +14,6 @@ lazy val silencer = {
 
 enablePlugins(GitVersioning)
 
-ThisBuild / publishTo := sonatypePublishToBundle.value
-
 inThisBuild(
   List(
     organization := "nl.vroste",
