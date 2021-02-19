@@ -41,9 +41,6 @@ inThisBuild(
     scmInfo := Some(
       ScmInfo(url("https://github.com/svroonland/zio-kinesis/"), "scm:git:git@github.com:svroonland/zio-kinesis.git")
     ),
-    pgpPublicRing := file("/tmp/public.asc"),
-    pgpSecretRing := file("/tmp/secret.asc"),
-    pgpPassphrase := sys.env.get("PGP_PASSPHRASE").map(_.toArray),
     resolvers += "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots"
   )
 )
