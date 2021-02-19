@@ -41,6 +41,14 @@ inThisBuild(
     scmInfo := Some(
       ScmInfo(url("https://github.com/svroonland/zio-kinesis/"), "scm:git:git@github.com:svroonland/zio-kinesis.git")
     ),
+    developers := List(
+      Developer(
+        "svroonland",
+        "Vroste",
+        "info@vroste.nl",
+        url("https://github.com/svroonland")
+      )
+    ),
     resolvers += "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots"
   )
 )
