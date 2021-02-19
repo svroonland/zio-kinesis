@@ -15,6 +15,7 @@ lazy val silencer = {
 enablePlugins(GitVersioning)
 
 ThisBuild / publishTo := sonatypePublishToBundle.value
+skip in publish := true
 
 inThisBuild(
   List(
@@ -43,7 +44,6 @@ inThisBuild(
         url("https://github.com/svroonland")
       )
     ),
-    skip in publish := true,
     resolvers += "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots"
   )
 )
