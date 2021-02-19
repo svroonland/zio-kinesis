@@ -1,8 +1,4 @@
-[![Bintray](https://img.shields.io/bintray/v/vroste/maven/zio-kinesis?label=latest)](https://bintray.com/vroste/maven/zio-kinesis/_latestVersion)
-
-[![Sonatype Nexus (Snapshots)](https://img.shields.io/nexus/s/nl.vroste/zio-kinesis_2.13?server=https%3A%2F%2Foss.sonatype.org)](https://oss.sonatype.org/content/repositories/snapshots/nl/vroste/zio-kinesis_2.13/)
-
-![Sonatype Nexus (Releases)](https://img.shields.io/nexus/r/nl.vroste/zio-kinesis_2.13?nexusVersion=3&server=https%3A%2F%2Fnexus.pentaho.org)
+[![Bintray](https://img.shields.io/bintray/v/vroste/maven/zio-kinesis?label=latest)](https://bintray.com/vroste/maven/zio-kinesis/_latestVersion) [![Sonatype Nexus (Snapshots)](https://img.shields.io/nexus/s/nl.vroste/zio-kinesis_2.13?server=https%3A%2F%2Foss.sonatype.org)](https://oss.sonatype.org/content/repositories/snapshots/nl/vroste/zio-kinesis_2.13/) ![Sonatype Nexus (Releases)](https://img.shields.io/nexus/r/nl.vroste/zio-kinesis_2.13?nexusVersion=3&server=https%3A%2F%2Fnexus.pentaho.org)
 
 # ZIO Kinesis
 
