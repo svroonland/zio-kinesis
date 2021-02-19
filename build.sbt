@@ -14,6 +14,8 @@ lazy val silencer = {
 
 enablePlugins(GitVersioning)
 
+ThisBuild / publishTo := sonatypePublishToBundle.value
+
 inThisBuild(
   List(
     organization := "nl.vroste",
@@ -118,7 +120,6 @@ lazy val interopFutures = (project in file("interop-futures"))
   .settings(stdSettings: _*)
   .settings(
     name := "zio-kinesis-future",
-    resolvers += Resolver.jcenterRepo,
     assemblyJarName in assembly := "zio-kinesis-future" + version.value + ".jar",
     libraryDependencies ++= Seq(
       "dev.zio" %% "zio-interop-reactivestreams" % "1.3.0.7-2"
@@ -130,7 +131,6 @@ lazy val dynamicConsumer = (project in file("dynamic-consumer"))
   .settings(stdSettings: _*)
   .settings(
     name := "zio-kinesis-dynamic-consumer",
-    resolvers += Resolver.jcenterRepo,
     assemblyJarName in assembly := "zio-kinesis-dynamic-consumer" + version.value + ".jar",
     libraryDependencies ++= Seq(
       "software.amazon.kinesis" % "amazon-kinesis-client" % "2.3.3"

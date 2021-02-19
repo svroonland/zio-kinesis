@@ -1,4 +1,4 @@
-[![Bintray](https://img.shields.io/bintray/v/vroste/maven/zio-kinesis?label=latest)](https://bintray.com/vroste/maven/zio-kinesis/_latestVersion)
+[![Release Artifacts][Badge-SonatypeReleases]][Link-SonatypeReleases]
 
 # ZIO Kinesis
 
@@ -52,7 +52,6 @@ The library consists of:
 Add to your build.sbt:
 
 ```scala
-resolvers += Resolver.jcenterRepo
 libraryDependencies += "nl.vroste" %% "zio-kinesis" % "<version>"
 ```
 
@@ -376,7 +375,6 @@ For cases when you need to integrate with existing `Future`-based application co
 To use, add the following to your `build.sbt`:
 
 ```scala
-resolvers += Resolver.jcenterRepo
 libraryDependencies += "nl.vroste" %% "zio-kinesis-future" % "<version>"
 ```
 
