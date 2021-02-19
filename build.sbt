@@ -27,12 +27,6 @@ inThisBuild(
     cancelable in Global := true,
     fork in Test := true,
     fork in run := true,
-    publishMavenStyle := true,
-    publishArtifact in Test :=
-      false,
-    assemblyJarName in assembly := "zio-kinesis-" + version.value + ".jar",
-    test in assembly := {},
-    target in assembly := file(baseDirectory.value + "/../bin/"),
     assemblyMergeStrategy in assembly := {
       case PathList("META-INF", xs @ _*)       => MergeStrategy.discard
       case n if n.startsWith("reference.conf") => MergeStrategy.concat
