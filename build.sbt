@@ -14,6 +14,8 @@ lazy val silencer = {
 
 enablePlugins(GitVersioning)
 
+ThisBuild / publishTo := sonatypePublishToBundle.value
+
 inThisBuild(
   List(
     organization := "nl.vroste",
@@ -39,7 +41,6 @@ inThisBuild(
     scmInfo := Some(
       ScmInfo(url("https://github.com/svroonland/zio-kinesis/"), "scm:git:git@github.com:svroonland/zio-kinesis.git")
     ),
-    publishTo := sonatypePublishToBundle.value,
     pgpPublicRing := file("/tmp/public.asc"),
     pgpSecretRing := file("/tmp/secret.asc"),
     pgpPassphrase := sys.env.get("PGP_PASSPHRASE").map(_.toArray),
