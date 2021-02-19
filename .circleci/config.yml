@@ -107,14 +107,14 @@ workflows:
           filters:
             tags:
               only: << pipeline.parameters.tag_regex >>
-      - release
-#          requires:
-#            - test213_jdk8
-#            - test213_jdk11
-#            - test213_jdk11_dynamic_consumer
-#            - test212_jdk8
-#            - test212_jdk11
-#          filters:
-#            branches:
-#              only:
-#                - master
+      - release:
+          requires:
+            - test213_jdk8
+            - test213_jdk11
+            - test213_jdk11_dynamic_consumer
+            - test212_jdk8
+            - test212_jdk11
+          filters:
+            branches:
+              only:
+                - master
