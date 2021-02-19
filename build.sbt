@@ -36,9 +36,12 @@ inThisBuild(
       case n if n.startsWith("reference.conf") => MergeStrategy.concat
       case _                                   => MergeStrategy.first
     },
-    bintrayOrganization := Some("vroste"),
-    bintrayPackageLabels := Seq("zio", "kinesis", "aws"),
-    bintrayVcsUrl := Some("https://github.com/svroonland/zio-kinesis"),
+    scmInfo := Some(
+      ScmInfo(url("https://github.com/svroonland/zio-kinesis/"), "scm:git:git@github.com:svroonland/zio-kinesis.git")
+    ),
+    pgpPublicRing := file("/tmp/public.asc"),
+    pgpSecretRing := file("/tmp/secret.asc"),
+    pgpPassphrase := sys.env.get("PGP_PASSPHRASE").map(_.toArray),
     resolvers += "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots"
   )
 )
