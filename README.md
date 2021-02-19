@@ -1,4 +1,6 @@
 [![Bintray](https://img.shields.io/bintray/v/vroste/maven/zio-kinesis?label=latest)](https://bintray.com/vroste/maven/zio-kinesis/_latestVersion)
+[![Release Artifacts][Badge-SonatypeReleases]][Link-SonatypeReleases] 
+[![Snapshot Artifacts][Badge-SonatypeSnapshots]][Link-SonatypeSnapshots]
 
 # ZIO Kinesis
 
