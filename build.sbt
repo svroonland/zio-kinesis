@@ -128,7 +128,7 @@ lazy val dynamicConsumer = (project in file("dynamic-consumer"))
     name := "zio-kinesis-dynamic-consumer",
     assemblyJarName in assembly := "zio-kinesis-dynamic-consumer" + version.value + ".jar",
     libraryDependencies ++= Seq(
-      "software.amazon.kinesis" % "amazon-kinesis-client" % "2.3.3"
+      "software.amazon.kinesis" % "amazon-kinesis-client" % "2.3.4"
     )
   )
   .dependsOn(core % "compile->compile;test->test")
