@@ -15,6 +15,7 @@ lazy val silencer = {
 enablePlugins(GitVersioning)
 
 ThisBuild / publishTo := sonatypePublishToBundle.value
+ThisBuild / publishMavenStyle := true
 skip in publish := true
 
 inThisBuild(
