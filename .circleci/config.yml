@@ -8,7 +8,7 @@ jobs:
   run_with_localstack:
     parameters:
       image:
-        default: hseeberger/scala-sbt:8u265_1.3.13_2.13.3
+        default: hseeberger/scala-sbt:8u265_1.3.13_2.13.5
         type: string
       sbt_command:
         type: string
@@ -64,7 +64,7 @@ workflows:
               only: << pipeline.parameters.tag_regex >>
       - run_with_localstack:
           name: test213_jdk8
-          image: hseeberger/scala-sbt:8u265_1.3.13_2.13.3
+          image: hseeberger/scala-sbt:8u265_1.3.13_2.13.5
           sbt_command: ++2.13.3! core/test interopFutures/test
           requires:
             - lint
@@ -73,7 +73,7 @@ workflows:
               only: << pipeline.parameters.tag_regex >>
       - run_with_localstack:
           name: test213_jdk11
-          image: hseeberger/scala-sbt:11.0.8_1.3.13_2.13.3
+          image: hseeberger/scala-sbt:11.0.8_1.3.13_2.13.5
           sbt_command: ++2.13.3! core/test interopFutures/test
           requires:
             - lint
@@ -82,7 +82,7 @@ workflows:
               only: << pipeline.parameters.tag_regex >>
       - run_with_localstack:
           name: test213_jdk11_dynamic_consumer
-          image: hseeberger/scala-sbt:11.0.8_1.3.13_2.13.3
+          image: hseeberger/scala-sbt:11.0.8_1.3.13_2.13.5
           sbt_command: ++2.13.3! dynamicConsumer/test
           requires:
             - lint
