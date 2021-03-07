@@ -8,7 +8,7 @@ jobs:
   run_with_localstack:
     parameters:
       image:
-        default: hseeberger/scala-sbt:8u265_1.3.13_2.13.3
+        default: hseeberger/scala-sbt:11.0.10_1.4.7_2.13.5
         type: string
       sbt_command:
         type: string
@@ -39,7 +39,7 @@ jobs:
             - "~/.m2"
   release:
     docker:
-      - image: hseeberger/scala-sbt:11.0.7_1.3.13_2.12.12
+      - image: hseeberger/scala-sbt:11.0.10_1.4.7_2.13.5
     steps:
       - checkout
       - run: git fetch --tags
@@ -58,14 +58,14 @@ workflows:
     jobs:
       - run_with_localstack:
           name: lint
-          sbt_command: ++2.13.3! check
+          sbt_command: ++2.13.5! check
           filters:
             tags:
               only: << pipeline.parameters.tag_regex >>
       - run_with_localstack:
           name: test213_jdk8
-          image: hseeberger/scala-sbt:8u265_1.3.13_2.13.3
-          sbt_command: ++2.13.3! core/test interopFutures/test
+          image: hseeberger/scala-sbt:8u282_1.4.7_2.13.5
+          sbt_command: ++2.13.5! core/test interopFutures/test
           requires:
             - lint
           filters:
@@ -73,8 +73,8 @@ workflows:
               only: << pipeline.parameters.tag_regex >>
       - run_with_localstack:
           name: test213_jdk11
-          image: hseeberger/scala-sbt:11.0.8_1.3.13_2.13.3
-          sbt_command: ++2.13.3! core/test interopFutures/test
+          image: hseeberger/scala-sbt:11.0.10_1.4.7_2.13.5
+          sbt_command: ++2.13.5! core/test interopFutures/test
           requires:
             - lint
           filters:
@@ -82,8 +82,8 @@ workflows:
               only: << pipeline.parameters.tag_regex >>
       - run_with_localstack:
           name: test213_jdk11_dynamic_consumer
-          image: hseeberger/scala-sbt:11.0.8_1.3.13_2.13.3
-          sbt_command: ++2.13.3! dynamicConsumer/test
+          image: hseeberger/scala-sbt:11.0.10_1.4.7_2.13.5
+          sbt_command: ++2.13.5! dynamicConsumer/test
           requires:
             - lint
           filters:
@@ -91,8 +91,8 @@ workflows:
               only: << pipeline.parameters.tag_regex >>
       - run_with_localstack:
           name: test212_jdk8
-          image: hseeberger/scala-sbt:8u265_1.3.13_2.12.12
-          sbt_command: ++2.12.11! core/test interopFutures/test
+          image: hseeberger/scala-sbt:8u282_1.4.7_2.12.13
+          sbt_command: ++2.12.13! core/test interopFutures/test
           requires:
             - lint
           filters:
@@ -100,8 +100,8 @@ workflows:
               only: << pipeline.parameters.tag_regex >>
       - run_with_localstack:
           name: test212_jdk11
-          image: hseeberger/scala-sbt:11.0.7_1.3.13_2.12.12
-          sbt_command: ++2.12.11! core/test interopFutures/test
+          image: hseeberger/scala-sbt:11.0.10_1.4.7_2.12.13
+          sbt_command: ++2.12.13! core/test interopFutures/test
           requires:
             - lint
           filters:
