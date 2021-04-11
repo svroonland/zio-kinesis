@@ -8,7 +8,7 @@ import software.amazon.awssdk.utils.Md5Utils
 import zio.Chunk
 
 private[client] case class ShardMap(
-  shards: Iterable[(ShardId, BigInt, BigInt)],
+  shards: Chunk[(ShardId, BigInt, BigInt)],
   lastUpdated: Instant,
   invalid: Boolean = false
 ) {

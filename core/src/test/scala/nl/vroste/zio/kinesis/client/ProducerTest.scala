@@ -358,7 +358,7 @@ object ProducerTest extends DefaultRunnableSpec {
     ZStream.fromIterable(input).transduce(parser).runCollect
 
   val shardMap = ShardMap(
-    Seq(
+    Chunk(
       ("001", ShardMap.minHashKey, ShardMap.maxHashKey / 2),
       ("002", ShardMap.maxHashKey / 2 + 1, ShardMap.maxHashKey)
     ),

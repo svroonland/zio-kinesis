@@ -60,7 +60,7 @@ trait Producer[T] {
    *
    * @return Task that fails if any of the records fail to be produced with a non-recoverable error
    */
-  def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[Seq[ProduceResponse]]
+  def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[Chunk[ProduceResponse]]
 
   /**
    * ZSink interface to the Producer
