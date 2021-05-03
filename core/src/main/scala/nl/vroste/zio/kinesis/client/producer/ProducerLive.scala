@@ -255,7 +255,6 @@ private[client] object ProducerLive {
   type PartitionKey = String
 
   val maxChunkSize: Int             = 1024            // Stream-internal max chunk size
-  val bufferSizeInNrChunks: Int     = 128
   val maxRecordsPerRequest          = 500             // This is a Kinesis API limitation
   val maxPayloadSizePerRequest      = 5 * 1024 * 1024 // 5 MB
   val maxPayloadSizePerRecord       = 1 * 1024 * 1024 // 1 MB
