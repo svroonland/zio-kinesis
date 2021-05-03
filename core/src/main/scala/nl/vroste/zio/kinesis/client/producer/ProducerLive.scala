@@ -41,29 +41,28 @@ private[client] final class ProducerLive[R, R1, T](
   import Util.ZStreamExtensions
 
   val runloop: ZIO[Logging with Clock, Nothing, Unit] = {
-    val retries = ZStream.fromQueue(failedQueue, maxChunkSize = maxChunkSize)
+    val retries         = ZStream.fromQueue(failedQueue, maxChunkSize = maxChunkSize)
+    val chunkBufferSize = Math.ceil(settings.bufferSize * 1.0 / maxChunkSize).toInt
 
     // Failed records get precedence
     (retries merge ZStream
       .fromQueue(queue, maxChunkSize)
       .mapChunksM(chunk => log.trace(s"Dequeued chunk of size ${chunk.size}").as(chunk))
       // Aggregate records per shard
-      .groupByKey2(_.predictedShard, settings.bufferSize / maxChunkSize)
-      .flatMapPar(Int.MaxValue, settings.bufferSize / maxChunkSize) {
+      .groupByKey2(_.predictedShard, chunkBufferSize)
+      .flatMapPar(Int.MaxValue, chunkBufferSize) {
         case (shardId @ _, requests) =>
           requests.aggregateAsync(if (aggregate) aggregator else ZTransducer.identity)
       })
-      .groupByKey2(_.predictedShard, settings.bufferSize / maxChunkSize) // TODO can we avoid this second group by?
-      .flatMapPar(Int.MaxValue, settings.bufferSize / maxChunkSize)(
+      .groupByKey2(_.predictedShard, chunkBufferSize) // TODO can we avoid this second group by?
+      .flatMapPar(Int.MaxValue, chunkBufferSize)(
         Function.tupled(throttleShardRequests)
       )
       // Batch records up to the Kinesis PutRecords request limits as long as downstream is busy
       .aggregateAsync(batcher)
-      .filter(_.nonEmpty)                                                // TODO why would this be necessary?
+      .filter(_.nonEmpty)                             // TODO why would this be necessary?
       // Several putRecords requests in parallel
-      .flatMapPar(settings.maxParallelRequests, settings.maxParallelRequests)(b =>
-        ZStream.fromEffect(countInFlight(processBatch(b)))
-      )
+      .mapMParUnordered(settings.maxParallelRequests)(b => countInFlight(processBatch(b)))
       .runDrain
   }
 
