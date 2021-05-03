@@ -53,13 +53,13 @@ private[client] final class ProducerLive[R, R1, T](
         case (shardId @ _, requests) =>
           requests.aggregateAsync(if (aggregate) aggregator else ZTransducer.identity)
       })
-      .groupByKey2(_.predictedShard) // TODO can we avoid this second group by?
+      .groupByKey2(_.predictedShard, settings.maxParallelRequests * 16) // TODO can we avoid this second group by?
       .flatMapPar(Int.MaxValue, settings.maxParallelRequests * 16)(
         Function.tupled(throttleShardRequests)
-      )                              // TODO good buffer size?
+      )                                                                 // TODO good buffer size?
       // Batch records up to the Kinesis PutRecords request limits as long as downstream is busy
       .aggregateAsync(batcher)
-      .filter(_.nonEmpty)            // TODO why would this be necessary?
+      .filter(_.nonEmpty)                                               // TODO why would this be necessary?
       // Several putRecords requests in parallel
       .mapMParUnordered(settings.maxParallelRequests)(b => countInFlight(processBatch(b)))
       .runDrain
