@@ -48,21 +48,25 @@ private[client] final class ProducerLive[R, R1, T](
       .fromQueue(queue, maxChunkSize)
       .mapChunksM(chunk => log.trace(s"Dequeued chunk of size ${chunk.size}").as(chunk))
       // Aggregate records per shard
-      .groupByKey2(_.predictedShard, substreamBufferRequests)
-      .flatMapPar(Int.MaxValue, substreamBufferRequests) { // TODO good buffer size, depends on nr of substreams..?
+      .groupByKey2(_.predictedShard, settings.bufferSize / maxChunkSize)
+      .flatMapPar(Int.MaxValue, settings.bufferSize / maxChunkSize) {
         case (shardId @ _, requests) =>
           requests.aggregateAsync(if (aggregate) aggregator else ZTransducer.identity)
       })
-      .groupByKey2(_.predictedShard, substreamBufferRequests) // TODO can we avoid this second group by?
-      .flatMapPar(Int.MaxValue, settings.maxParallelRequests * 16)(
+      .groupByKey2(_.predictedShard, settings.bufferSize / maxChunkSize) // TODO can we avoid this second group by?
+      .flatMapPar(Int.MaxValue, settings.bufferSize / maxChunkSize)(
         Function.tupled(throttleShardRequests)
-      )                                                       // TODO good buffer size?
+      )
       // Batch records up to the Kinesis PutRecords request limits as long as downstream is busy
       .aggregateAsync(batcher)
-      .filter(_.nonEmpty)                                     // TODO why would this be necessary?
+      .filter(_.nonEmpty)                                                // TODO why would this be necessary?
       // Several putRecords requests in parallel
-      .mapMParUnordered(settings.maxParallelRequests)(b => countInFlight(processBatch(b)))
-      .runDrain
+      .flatMapPar(settings.maxParallelRequests, settings.bufferSize / maxChunkSize)(b =>
+        ZStream.fromEffect(countInFlight(processBatch(b)))
+      )
+      .foreachChunk(_ => ZIO.unit)
+      .run
+      .unit
   }
 
   private def throttleShardRequests(shardId: ShardId, requests: ZStream[Any, Nothing, ProduceRequest]) =
@@ -252,12 +256,12 @@ private[client] object ProducerLive {
   type ShardId      = String
   type PartitionKey = String
 
-  val maxChunkSize: Int             = 512               // Stream-internal max chunk size
-  val substreamBufferRequests: Int  = maxChunkSize * 64 // ? TODO
-  val maxRecordsPerRequest          = 500               // This is a Kinesis API limitation
-  val maxPayloadSizePerRequest      = 5 * 1024 * 1024   // 5 MB
-  val maxPayloadSizePerRecord       = 1 * 1024 * 1024   // 1 MB
-  val maxIngestionPerShardPerSecond = 1 * 1024 * 1024   // 1 MB
+  val maxChunkSize: Int             = 512             // Stream-internal max chunk size
+  val bufferSizeInNrChunks: Int     = 128
+  val maxRecordsPerRequest          = 500             // This is a Kinesis API limitation
+  val maxPayloadSizePerRequest      = 5 * 1024 * 1024 // 5 MB
+  val maxPayloadSizePerRecord       = 1 * 1024 * 1024 // 1 MB
+  val maxIngestionPerShardPerSecond = 1 * 1024 * 1024 // 1 MB
   val maxRecordsPerShardPerSecond   = 1000
 
   val recoverableErrorCodes = Set("ProvisionedThroughputExceededException", "InternalFailure", "ServiceUnavailable")
