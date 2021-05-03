@@ -132,7 +132,7 @@ object TestUtil {
     produceRate: Int,
     recordSize: Int
   ): ZIO[Logging with Clock, Throwable, Unit] = {
-    val intervals = 20
+    val intervals = 5
 
     ZStream
       .unfoldChunk(0)(i =>
@@ -148,7 +148,6 @@ object TestUtil {
       .buffer(produceRate * 10)
       .mapChunks(Chunk.single)
       .mapMParUnordered(200) { chunk =>
-        println(s"Producing chunk of size ${chunk.size}")
         producer
           .produceChunk(chunk)
           .retry(retryOnResourceNotFound && Schedule.recurs(1))
