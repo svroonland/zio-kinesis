@@ -11,14 +11,14 @@ object Util {
     // it breaks chunks
     final def groupByKey2[K](
       getKey: O => K,
-      buffer: Int = 16
+      substreamChunkBuffer: Int = 32 // Number of chunks to buffer per substream
     ): ZStream[R, E, (K, ZStream[Any, E, O])] =
       ZStream.unwrapManaged {
         type GroupQueueValues = Exit[Option[E], Chunk[O]]
 
         for {
           substreamsQueue     <- Queue
-                               .bounded[Exit[Option[E], (K, Queue[GroupQueueValues])]](buffer)
+                               .unbounded[Exit[Option[E], (K, Queue[GroupQueueValues])]]
                                .toManaged(_.shutdown)
           substreamsQueuesMap <- Ref.make(Map.empty[K, Queue[GroupQueueValues]]).toManaged_
           _                   <- {
@@ -29,7 +29,7 @@ object Util {
                        substreams(key).offer(Exit.succeed(values))
                      else
                        Queue
-                         .bounded[GroupQueueValues](buffer)
+                         .bounded[GroupQueueValues](substreamChunkBuffer)
                          .tap(_.offer(Exit.succeed(values)))
                          .tap(q => substreamsQueue.offer(Exit.succeed((key, q))))
                          .tap(q => substreamsQueuesMap.update(_ + (key -> q)))
