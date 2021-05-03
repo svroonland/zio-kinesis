@@ -41,7 +41,7 @@ private[client] final class ProducerLive[R, R1, T](
   import Util.ZStreamExtensions
 
   val runloop: ZIO[Logging with Clock, Nothing, Unit] = {
-    val retries = ZStream.fromQueue(failedQueue, maxChunkSize)
+    val retries = ZStream.fromQueue(failedQueue, maxChunkSize = maxChunkSize)
 
     // Failed records get precedence
     (retries merge ZStream
@@ -61,12 +61,10 @@ private[client] final class ProducerLive[R, R1, T](
       .aggregateAsync(batcher)
       .filter(_.nonEmpty)                                                // TODO why would this be necessary?
       // Several putRecords requests in parallel
-      .flatMapPar(settings.maxParallelRequests, settings.bufferSize / maxChunkSize)(b =>
+      .flatMapPar(settings.maxParallelRequests, settings.maxParallelRequests)(b =>
         ZStream.fromEffect(countInFlight(processBatch(b)))
       )
-      .foreachChunk(_ => ZIO.unit)
-      .run
-      .unit
+      .runDrain
   }
 
   private def throttleShardRequests(shardId: ShardId, requests: ZStream[Any, Nothing, ProduceRequest]) =
@@ -256,7 +254,7 @@ private[client] object ProducerLive {
   type ShardId      = String
   type PartitionKey = String
 
-  val maxChunkSize: Int             = 512             // Stream-internal max chunk size
+  val maxChunkSize: Int             = 1024            // Stream-internal max chunk size
   val bufferSizeInNrChunks: Int     = 128
   val maxRecordsPerRequest          = 500             // This is a Kinesis API limitation
   val maxPayloadSizePerRequest      = 5 * 1024 * 1024 // 5 MB

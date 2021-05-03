@@ -131,7 +131,9 @@ object TestUtil {
     nrRecords: Int,
     produceRate: Int,
     recordSize: Int
-  ): ZIO[Logging with Clock, Throwable, Unit] =
+  ): ZIO[Logging with Clock, Throwable, Unit] = {
+    val intervals = 20
+
     ZStream
       .unfoldChunk(0)(i =>
         if ((i + 1) * chunkSize <= nrRecords)
@@ -139,11 +141,14 @@ object TestUtil {
         else
           None
       )
-      .throttleShape(produceRate.toLong / 10, 100.millis, produceRate.toLong / 10)(_.size.toLong)
+      .throttleShape(produceRate.toLong / intervals, 1000.millis * (1.0 / intervals), produceRate.toLong / intervals)(
+        _.size.toLong
+      )
       .as(ProducerRecord(s"${UUID.randomUUID()}", Random.nextString(recordSize)))
       .buffer(produceRate * 10)
       .mapChunks(Chunk.single)
-      .mapMParUnordered(20) { chunk =>
+      .mapMParUnordered(200) { chunk =>
+        println(s"Producing chunk of size ${chunk.size}")
         producer
           .produceChunk(chunk)
           .retry(retryOnResourceNotFound && Schedule.recurs(1))
@@ -153,4 +158,5 @@ object TestUtil {
       .runDrain
       .tapCause(e => log.error("Producing records chunk failed", e)) *>
       log.info("Producing records is done!")
+  }
 }
