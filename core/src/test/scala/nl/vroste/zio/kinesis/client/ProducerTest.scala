@@ -2,7 +2,6 @@ package nl.vroste.zio.kinesis.client
 
 import java.time.Instant
 import java.util.UUID
-
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.dynamodb.DynamoDb
 import io.github.vigoo.zioaws.kinesis
@@ -18,6 +17,7 @@ import zio.clock.Clock
 import zio.console.{ putStrLn, Console }
 import zio.duration._
 import zio.logging.{ Logger, Logging }
+import zio.random.Random
 import zio.stream.{ ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test.TestAspect._
@@ -31,9 +31,10 @@ object ProducerTest extends DefaultRunnableSpec {
 
   val useAws = Runtime.default.unsafeRun(system.envOrElse("ENABLE_AWS", "0")).toInt == 1
 
-  val env: ZLayer[Any, Nothing, CloudWatch with Kinesis with DynamoDb with Clock with Console with Logging] =
+  val env
+    : ZLayer[Any, Nothing, CloudWatch with Kinesis with DynamoDb with Clock with Console with Logging with Random] =
     ((if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()).orDie) >+>
-      (Clock.live ++ zio.console.Console.live >+> loggingLayer)
+      (Clock.live ++ zio.console.Console.live ++ Random.live >+> loggingLayer)
 
   def spec =
     suite("Producer")(
@@ -117,11 +118,12 @@ object ProducerTest extends DefaultRunnableSpec {
                 producer <- Producer
                               .make(
                                 streamName,
-                                Serde.asciiString,
+                                Serde.bytes,
                                 ProducerSettings(
                                   bufferSize = 16384 * 4,
-                                  maxParallelRequests = 24,
-                                  metricsInterval = 5.seconds
+                                  maxParallelRequests = 5,
+                                  metricsInterval = 5.seconds,
+                                  aggregate = true
                                 ),
                                 metrics =>
                                   totalMetrics
@@ -254,11 +256,11 @@ object ProducerTest extends DefaultRunnableSpec {
         def makeProducer(
           workerId: String,
           totalMetrics: Ref[ProducerMetrics]
-        ): ZManaged[Any with Console with Clock with Kinesis with Logging, Throwable, Producer[String]] =
+        ): ZManaged[Any with Console with Clock with Kinesis with Logging, Throwable, Producer[Chunk[Byte]]] =
           Producer
             .make(
               streamName,
-              Serde.asciiString,
+              Serde.bytes,
               ProducerSettings(
                 bufferSize = 16384 * 4,
                 maxParallelRequests = 12,

@@ -1,21 +1,19 @@
 package nl.vroste.zio.kinesis.client
 
-import java.util.UUID
-
 import io.github.vigoo.zioaws.kinesis
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model._
 import nl.vroste.zio.kinesis.client.producer.ProducerMetrics
 import nl.vroste.zio.kinesis.client.serde.{ Serde, Serializer }
 import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException }
+import zio._
 import zio.clock.Clock
+import zio.random.Random
 import zio.console.{ putStrLn, Console }
 import zio.duration._
 import zio.logging.{ log, Logging }
 import zio.stream.ZStream
-import zio._
-
-import scala.util.Random
+import zio.test.Gen
 
 object TestUtil {
 
@@ -78,7 +76,7 @@ object TestUtil {
     produceRate: Int,
     size: Int,
     producerSettings: ProducerSettings = ProducerSettings()
-  ): ZIO[Any with Console with Clock with Kinesis with Logging, Throwable, Unit] =
+  ): ZIO[Random with Console with Clock with Kinesis with Logging, Throwable, Unit] =
     Ref
       .make(ProducerMetrics.empty)
       .toManaged_
@@ -86,7 +84,7 @@ object TestUtil {
         Producer
           .make(
             streamName,
-            Serde.asciiString,
+            Serde.bytes,
             producerSettings,
             metrics =>
               totalMetrics
@@ -127,29 +125,48 @@ object TestUtil {
    * @return
    */
   def massProduceRecords(
-    producer: Producer[String],
+    producer: Producer[Chunk[Byte]],
     nrRecords: Int,
     produceRate: Int,
     recordSize: Int
-  ): ZIO[Logging with Clock, Throwable, Unit] = {
+  ): ZIO[Logging with Clock with Random, Throwable, Unit] = {
+
+//    val partitionKeyGen = Gen.stringBounded(1, 256)(Gen.anyUnicodeChar)
+//    val valueGen        = Gen.chunkOfN(recordSize)(Gen.const(0x01.toByte))
+////    Gen.oneOf(Gen.char('\u0000', '\uD7FF'), Gen.char('\uE000', '\uFFFD'))
+    val records = ZStream.repeatEffect {
+//      (partitionKeyGen zipWith valueGen)(ProducerRecord.apply).sample.runHead.some.map(_.value)
+      for {
+        key   <- random
+                 .nextIntBetween(1, 256)
+                 .flatMap(keyLength =>
+                   ZIO.replicateM(keyLength)(random.nextIntBetween('\u0000', '\uD7FF').map(_.toChar)).map(_.mkString)
+                 )
+        value <-
+          random.nextIntBetween(1, 1024).map(valueLength => Chunk.fromIterable(List.fill(valueLength)(0x01.toByte)))
+      } yield ProducerRecord(key, value)
+    }.chunkN(chunkSize).take(nrRecords).buffer(chunkSize)
+    massProduceRecords(producer, produceRate, records)
+  }
+
+  def massProduceRecords[R, T](
+    producer: Producer[T],
+    produceRate: Int,
+    records: ZStream[R, Nothing, ProducerRecord[T]]
+  ): ZIO[Logging with Clock with R, Throwable, Unit] = {
     val intervals = 5
 
-    ZStream
-      .unfoldChunk(0)(i =>
-        if ((i + 1) * chunkSize <= nrRecords)
-          Some((Chunk.fromIterable((i * chunkSize) until ((i + 1) * chunkSize)), i + 1))
-        else
-          None
-      )
+    records
       .throttleShape(produceRate.toLong / intervals, 1000.millis * (1.0 / intervals), produceRate.toLong / intervals)(
         _.size.toLong
       )
-      .as(ProducerRecord(s"${UUID.randomUUID()}", Random.nextString(recordSize)))
       .buffer(produceRate * 10)
       .mapChunks(Chunk.single)
-      .mapMParUnordered(200) { chunk =>
+      .mapMParUnordered(20) { chunk =>
+        println(s"Producing chunk of size ${chunk.size}")
         producer
           .produceChunk(chunk)
+          .tapError(e => log.error(s"Producing records chunk failed, will retry: ${e}"))
           .retry(retryOnResourceNotFound && Schedule.recurs(1))
           .tapError(e => log.error(s"Producing records chunk failed, will retry: ${e}"))
           .retry(Schedule.exponential(1.second))
