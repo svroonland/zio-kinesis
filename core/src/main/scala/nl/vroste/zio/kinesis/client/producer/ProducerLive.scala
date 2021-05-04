@@ -81,7 +81,7 @@ private[client] final class ProducerLive[R, R1, T](
         throttler.throughputFactor(shardId).map(c => (chunk.map(_.payloadSize).sum * 1.0 / c).toLong)
       )
 
-  private def processBatch(batch: Seq[ProduceRequest]): ZIO[Clock with Logging, Nothing, Unit] = {
+  private def processBatch(batch: Chunk[ProduceRequest]): ZIO[Clock with Logging, Nothing, Unit] = {
     val totalPayload = batch.map(_.r.data.length).sum
     (for {
       _                  <- log.info(
@@ -96,7 +96,7 @@ private[client] final class ProducerLive[R, R1, T](
                     .tapError(e => log.warn(s"Error producing records, will retry if recoverable: $e"))
                     .retry(scheduleCatchRecoverable && settings.backoffRequests)
 
-      responseAndRequests = response.recordsValue.zip(batch)
+      responseAndRequests = Chunk.fromIterable(response.recordsValue).zip(batch)
 
       (newFailed, succeeded)    = if (response.failedRecordCountValue.getOrElse(0) > 0)
                                  responseAndRequests.partition {
@@ -104,7 +104,7 @@ private[client] final class ProducerLive[R, R1, T](
                                      result.errorCodeValue.exists(recoverableErrorCodes.contains)
                                  }
                                else
-                                 (Seq.empty, responseAndRequests)
+                                 (Chunk.empty, responseAndRequests)
 
       hasShardPredictionErrors <- checkShardPredictionErrors(responseAndRequests)
       _                        <- handleFailures(newFailed, repredict = hasShardPredictionErrors)
@@ -132,7 +132,7 @@ private[client] final class ProducerLive[R, R1, T](
   }
 
   private def handleFailures(
-    newFailed: collection.Seq[(PutRecordsResultEntry.ReadOnly, ProduceRequest)],
+    newFailed: Chunk[(PutRecordsResultEntry.ReadOnly, ProduceRequest)],
     repredict: Boolean
   ) = {
     val requests    = newFailed.map(_._2)
@@ -162,7 +162,7 @@ private[client] final class ProducerLive[R, R1, T](
   }
 
   private def checkShardPredictionErrors(
-    responseAndRequests: Iterable[(PutRecordsResultEntry.ReadOnly, ProduceRequest)]
+    responseAndRequests: Chunk[(PutRecordsResultEntry.ReadOnly, ProduceRequest)]
   ) = {
     val shardPredictionErrors = responseAndRequests.filter {
       case (result, request) => result.shardIdValue.exists(_ != request.predictedShard)
@@ -236,7 +236,7 @@ private[client] final class ProducerLive[R, R1, T](
       _               <- currentMetrics.getAndUpdate(_.addSuccess(response.attempts, latency))
     } yield response).provide(env)
 
-  override def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[Seq[ProduceResponse]] =
+  override def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[Chunk[ProduceResponse]] =
     (for {
       shardMap <- shards.get
       now      <- instant
@@ -342,7 +342,7 @@ private[client] object ProducerLive {
       }
     }
 
-  val batcher: ZTransducer[Any, Nothing, ProduceRequest, Seq[ProduceRequest]] =
+  val batcher: ZTransducer[Any, Nothing, ProduceRequest, Chunk[ProduceRequest]] =
     foldWhile(PutRecordsBatch.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
       batch.add(record)
     }.map(_.entriesInOrder)
