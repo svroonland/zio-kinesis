@@ -9,32 +9,31 @@ import nl.vroste.zio.kinesis.client.producer.ProducerLive.{
 }
 import nl.vroste.zio.kinesis.client.zionative.protobuf.Messages
 import nl.vroste.zio.kinesis.client.zionative.protobuf.Messages.AggregatedRecord
-import zio.{ UIO, ZIO }
+import zio.{ Chunk, UIO, ZIO }
 
 import scala.jdk.CollectionConverters._
 
 final case class PutRecordsAggregatedBatchForShard(
-  entries: List[ProduceRequest],
+  entries: Chunk[ProduceRequest],
   payloadSize: Int
 ) {
   private def builtAggregate: AggregatedRecord = {
     val builder = Messages.AggregatedRecord.newBuilder()
 
-    val entriesInOrder = entries.reverse
-    val records        = entriesInOrder.zipWithIndex.map {
+    val records = entries.zipWithIndex.map {
       case (e, index) => ProtobufAggregation.putRecordsRequestEntryToRecord(e.r, index)
     }
     builder
       .addAllRecords(records.asJava)
       .addAllExplicitHashKeyTable(
-        entriesInOrder.map(e => e.r.explicitHashKey.getOrElse("0")).asJava
+        entries.map(e => e.r.explicitHashKey.getOrElse("0")).asJava
       ) // TODO optimize: only filled ones
-      .addAllPartitionKeyTable(entriesInOrder.map(e => e.r.partitionKey).asJava)
+      .addAllPartitionKeyTable(entries.map(e => e.r.partitionKey).asJava)
       .build()
   }
 
   def add(entry: ProduceRequest): PutRecordsAggregatedBatchForShard =
-    copy(entries = entry +: entries, payloadSize = payloadSize + payloadSizeForEntryAggregated(entry.r))
+    copy(entries = entries :+ entry, payloadSize = payloadSize + payloadSizeForEntryAggregated(entry.r))
 
   def isWithinLimits: Boolean =
     payloadSize <= maxPayloadSizePerRecord
@@ -59,7 +58,7 @@ final case class PutRecordsAggregatedBatchForShard(
 
 object PutRecordsAggregatedBatchForShard {
   val empty: PutRecordsAggregatedBatchForShard = PutRecordsAggregatedBatchForShard(
-    List.empty,
+    Chunk.empty,
     ProtobufAggregation.magicBytes.length + ProtobufAggregation.checksumSize
   )
 
