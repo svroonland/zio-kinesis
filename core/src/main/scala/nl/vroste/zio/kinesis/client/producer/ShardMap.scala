@@ -16,7 +16,7 @@ private[client] case class ShardMap(
     shardForPartitionKey(e.explicitHashKey.getOrElse(e.partitionKey))
 
   def shardForPartitionKey(key: PartitionKey): ShardId = {
-    val hashBytes = Md5Utils.computeMD5Hash(key.getBytes(StandardCharsets.US_ASCII))
+    val hashBytes = Md5Utils.computeMD5Hash(key.getBytes(StandardCharsets.UTF_8))
     val hashInt   = BigInt.apply(1, hashBytes)
 
     shards.collectFirst {
