@@ -5,16 +5,17 @@ import nl.vroste.zio.kinesis.client.producer.ProducerLive.{
   payloadSizeForEntry,
   ProduceRequest
 }
+import zio.Chunk
 
-final case class PutRecordsBatch(entries: List[ProduceRequest], nrRecords: Int, payloadSize: Long) {
+final case class PutRecordsBatch(entries: Chunk[ProduceRequest], nrRecords: Int, payloadSize: Long) {
   def add(entry: ProduceRequest): PutRecordsBatch =
     copy(
-      entries = entry +: entries,
+      entries = entries :+ entry,
       nrRecords = nrRecords + 1,
       payloadSize = payloadSize + payloadSizeForEntry(entry.r)
     )
 
-  lazy val entriesInOrder: Seq[ProduceRequest] = entries.reverse.sortBy(e => -1 * e.attemptNumber)
+  lazy val entriesInOrder: Chunk[ProduceRequest] = entries.sortBy(e => -1 * e.attemptNumber)
 
   def isWithinLimits =
     nrRecords <= maxRecordsPerRequest &&
@@ -22,5 +23,5 @@ final case class PutRecordsBatch(entries: List[ProduceRequest], nrRecords: Int, 
 }
 
 object PutRecordsBatch {
-  val empty = PutRecordsBatch(List.empty, 0, 0)
+  val empty = PutRecordsBatch(Chunk.empty, 0, 0)
 }
