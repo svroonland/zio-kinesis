@@ -2,7 +2,6 @@ package nl.vroste.zio.kinesis.client.producer
 
 import java.io.IOException
 import java.time.Instant
-
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model.{ PutRecordsRequest, PutRecordsRequestEntry, PutRecordsResultEntry }
 import io.netty.handler.timeout.ReadTimeoutException
@@ -19,6 +18,7 @@ import zio.logging.{ log, Logging }
 import zio.stream.ZTransducer.Push
 import zio.stream.{ ZStream, ZTransducer }
 
+import java.nio.charset.StandardCharsets
 import scala.util.control.NonFatal
 
 private[client] final class ProducerLive[R, R1, T](
@@ -275,7 +275,7 @@ private[client] object ProducerLive {
 
     def isRetry: Boolean = attemptNumber > 1
 
-    def payloadSize: Int = r.data.length + r.partitionKey.length
+    def payloadSize: Int = r.data.length + r.partitionKey.getBytes(StandardCharsets.UTF_8).length
   }
 
   def makeProduceRequest[R, T](
@@ -304,7 +304,7 @@ private[client] object ProducerLive {
     }
 
   def payloadSizeForEntry(entry: PutRecordsRequestEntry): Int =
-    entry.partitionKey.length + entry.data.length
+    entry.partitionKey.getBytes(StandardCharsets.UTF_8).length + entry.data.length
 
   def payloadSizeForEntryAggregated(entry: PutRecordsRequestEntry): Int =
     payloadSizeForEntry(entry) +
