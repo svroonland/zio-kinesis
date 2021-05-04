@@ -33,7 +33,7 @@ final case class PutRecordsAggregatedBatchForShard(
   }
 
   def add(entry: ProduceRequest): PutRecordsAggregatedBatchForShard =
-    copy(entries = entries.appended(entry), payloadSize = payloadSize + payloadSizeForEntryAggregated(entry.r))
+    copy(entries = entries :+ entry, payloadSize = payloadSize + payloadSizeForEntryAggregated(entry.r))
 
   def isWithinLimits: Boolean =
     payloadSize <= maxPayloadSizePerRecord
