@@ -13,7 +13,6 @@ import zio.console.{ putStrLn, Console }
 import zio.duration._
 import zio.logging.{ log, Logging }
 import zio.stream.ZStream
-import zio.test.Gen
 
 object TestUtil {
 
