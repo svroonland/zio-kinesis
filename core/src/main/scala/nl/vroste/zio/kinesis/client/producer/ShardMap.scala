@@ -8,7 +8,7 @@ import software.amazon.awssdk.utils.Md5Utils
 import zio.Chunk
 
 private[client] case class ShardMap(
-  shards: Iterable[(ShardId, BigInt, BigInt)],
+  shards: Chunk[(ShardId, BigInt, BigInt)],
   lastUpdated: Instant,
   invalid: Boolean = false
 ) {
@@ -16,7 +16,7 @@ private[client] case class ShardMap(
     shardForPartitionKey(e.explicitHashKey.getOrElse(e.partitionKey))
 
   def shardForPartitionKey(key: PartitionKey): ShardId = {
-    val hashBytes = Md5Utils.computeMD5Hash(key.getBytes(StandardCharsets.US_ASCII))
+    val hashBytes = Md5Utils.computeMD5Hash(key.getBytes(StandardCharsets.UTF_8))
     val hashInt   = BigInt.apply(1, hashBytes)
 
     shards.collectFirst {
