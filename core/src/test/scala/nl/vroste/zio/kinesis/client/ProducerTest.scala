@@ -165,15 +165,26 @@ object ProducerTest extends DefaultRunnableSpec {
             assert(batches.flatMap(Chunk.fromIterable).map(_.aggregateCount).sum)(equalTo(nrRecords))
         },
         testM("aggregate records up to the record size limit") {
-          val batcher = aggregatingBatcherForProducerRecord(shardMap, Serde.asciiString)
+          checkM(
+            Gen
+              .listOf(
+                Gen.crossN(
+                  Gen.stringBounded(1, 1024)(Gen.anyUnicodeChar),
+                  Gen.stringBounded(1, 1024 * 10)(Gen.anyUnicodeChar)
+                )(Tuple2.apply)
+              )
+              .filter(_.nonEmpty)
+          ) {
+            inputs =>
+              val batcher = aggregatingBatcherForProducerRecord(shardMap, Serde.asciiString)
 
-          val nrRecords = 100000
-          val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))
+              val records = inputs.map { case (key, value) => ProducerRecord(key, value) }
 
-          for {
-            batches           <- runTransducer(batcher, records)
-            recordPayloadSizes = batches.flatMap(Chunk.fromIterable).map(_.r.data.length)
-          } yield assert(recordPayloadSizes)(forall(isLessThanEqualTo(ProducerLive.maxPayloadSizePerRecord)))
+              for {
+                batches           <- runTransducer(batcher, records)
+                recordPayloadSizes = batches.flatMap(Chunk.fromIterable).map(r => r.payloadSize)
+              } yield assert(recordPayloadSizes)(forall(isLessThanEqualTo(ProducerLive.maxPayloadSizePerRecord)))
+          }
         },
         testM("aggregate records up to the batch size limit") {
           val batcher = aggregatingBatcherForProducerRecord(shardMap, Serde.asciiString)
@@ -347,7 +358,7 @@ object ProducerTest extends DefaultRunnableSpec {
     ZStream.fromIterable(input).transduce(parser).runCollect
 
   val shardMap = ShardMap(
-    Seq(
+    Chunk(
       ("001", ShardMap.minHashKey, ShardMap.maxHashKey / 2),
       ("002", ShardMap.maxHashKey / 2 + 1, ShardMap.maxHashKey)
     ),
