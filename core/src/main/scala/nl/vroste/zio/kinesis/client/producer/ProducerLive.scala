@@ -253,10 +253,11 @@ private[client] object ProducerLive {
   type ShardId      = String
   type PartitionKey = String
 
-  val maxChunkSize: Int             = 1024            // Stream-internal max chunk size
-  val maxRecordsPerRequest          = 500             // This is a Kinesis API limitation
-  val maxPayloadSizePerRequest      = 5 * 1024 * 1024 // 5 MB
-  val maxPayloadSizePerRecord       = 1 * 1024 * 1024 // 1 MB
+  val maxChunkSize: Int        = 1024            // Stream-internal max chunk size
+  val maxRecordsPerRequest     = 500             // This is a Kinesis API limitation
+  val maxPayloadSizePerRequest = 5 * 1024 * 1024 // 5 MB
+  val maxPayloadSizePerRecord  =
+    1 * 1024 * 921 // 1 MB TODO actually 90%, to avoid underestimating and getting Kinesis errors
   val maxIngestionPerShardPerSecond = 1 * 1024 * 1024 // 1 MB
   val maxRecordsPerShardPerSecond   = 1000
 
@@ -309,6 +310,7 @@ private[client] object ProducerLive {
   def payloadSizeForEntryAggregated(entry: PutRecordsRequestEntry): Int =
     payloadSizeForEntry(entry) +
       3 +                                                      // Data
+      100 +                                                    // An overestimate margin, could perhaps be reduced when fully reading the Protobuf spec
       3 + 2 +                                                  // Partition key
       entry.explicitHashKey.map(_.length + 2).getOrElse(1) + 3 // Explicit hash key
 
@@ -350,5 +352,16 @@ private[client] object ProducerLive {
   val aggregator: ZTransducer[Any, Nothing, ProduceRequest, ProduceRequest] =
     foldWhile(PutRecordsAggregatedBatchForShard.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
       batch.add(record)
-    }.mapM(_.toProduceRequest)
+    }.mapM { batch =>
+      for {
+        request      <- batch.toProduceRequest
+        estimatedSize = batch.payloadSize
+        actualSize    = request.payloadSize
+        eq            = estimatedSize == actualSize
+        qualif        = if (actualSize == estimatedSize) "EQUAL"
+                 else if (actualSize > estimatedSize) "UNDERESTIMATED"
+                 else "OVERESTIMATED"
+        _             = println(s"Estimated size: ${estimatedSize}, actual: ${actualSize}.(${qualif})")
+      } yield request
+    }
 }
