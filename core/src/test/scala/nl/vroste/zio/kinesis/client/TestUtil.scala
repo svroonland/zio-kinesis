@@ -145,7 +145,7 @@ object TestUtil {
                    .nextIntBetween(1, maxRecordSize)
                    .map(valueLength => Chunk.fromIterable(List.fill(valueLength)(0x01.toByte)))
       } yield ProducerRecord(key, value)
-    }.chunkN(chunkSize).take(nrRecords).buffer(chunkSize)
+    }.chunkN(chunkSize).take(nrRecords.toLong).buffer(chunkSize)
     massProduceRecords(producer, produceRate, records)
   }
 
