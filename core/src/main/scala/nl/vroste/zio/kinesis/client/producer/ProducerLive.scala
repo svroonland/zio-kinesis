@@ -2,7 +2,6 @@ package nl.vroste.zio.kinesis.client.producer
 
 import java.io.IOException
 import java.time.Instant
-
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model.{ PutRecordsRequest, PutRecordsRequestEntry, PutRecordsResultEntry }
 import io.netty.handler.timeout.ReadTimeoutException
@@ -19,6 +18,7 @@ import zio.logging.{ log, Logging }
 import zio.stream.ZTransducer.Push
 import zio.stream.{ ZStream, ZTransducer }
 
+import java.nio.charset.StandardCharsets
 import scala.util.control.NonFatal
 
 private[client] final class ProducerLive[R, R1, T](
@@ -41,23 +41,26 @@ private[client] final class ProducerLive[R, R1, T](
   import Util.ZStreamExtensions
 
   val runloop: ZIO[Logging with Clock, Nothing, Unit] = {
-    val retries = ZStream.fromQueue(failedQueue, maxChunkSize)
+    val retries         = ZStream.fromQueue(failedQueue, maxChunkSize = maxChunkSize)
+    val chunkBufferSize = Math.ceil(settings.bufferSize * 1.0 / maxChunkSize).toInt
 
     // Failed records get precedence
     (retries merge ZStream
       .fromQueue(queue, maxChunkSize)
       .mapChunksM(chunk => log.trace(s"Dequeued chunk of size ${chunk.size}").as(chunk))
       // Aggregate records per shard
-      .groupByKey2(_.predictedShard)
-      .flatMapPar(Int.MaxValue, 1) {
+      .groupByKey2(_.predictedShard, chunkBufferSize)
+      .flatMapPar(Int.MaxValue, chunkBufferSize) {
         case (shardId @ _, requests) =>
           requests.aggregateAsync(if (aggregate) aggregator else ZTransducer.identity)
       })
-      .groupByKey2(_.predictedShard) // TODO can we avoid this second group by?
-      .flatMapPar(Int.MaxValue, 1)(Function.tupled(throttleShardRequests))
+      .groupByKey2(_.predictedShard, chunkBufferSize) // TODO can we avoid this second group by?
+      .flatMapPar(Int.MaxValue, chunkBufferSize)(
+        Function.tupled(throttleShardRequests)
+      )
       // Batch records up to the Kinesis PutRecords request limits as long as downstream is busy
       .aggregateAsync(batcher)
-      .filter(_.nonEmpty)            // TODO why would this be necessary?
+      .filter(_.nonEmpty)                             // TODO why would this be necessary?
       // Several putRecords requests in parallel
       .mapMParUnordered(settings.maxParallelRequests)(b => countInFlight(processBatch(b)))
       .runDrain
@@ -78,7 +81,7 @@ private[client] final class ProducerLive[R, R1, T](
         throttler.throughputFactor(shardId).map(c => (chunk.map(_.payloadSize).sum * 1.0 / c).toLong)
       )
 
-  private def processBatch(batch: Seq[ProduceRequest]): ZIO[Clock with Logging, Nothing, Unit] = {
+  private def processBatch(batch: Chunk[ProduceRequest]): ZIO[Clock with Logging, Nothing, Unit] = {
     val totalPayload = batch.map(_.r.data.length).sum
     (for {
       _                  <- log.info(
@@ -93,7 +96,7 @@ private[client] final class ProducerLive[R, R1, T](
                     .tapError(e => log.warn(s"Error producing records, will retry if recoverable: $e"))
                     .retry(scheduleCatchRecoverable && settings.backoffRequests)
 
-      responseAndRequests = response.recordsValue.zip(batch)
+      responseAndRequests = Chunk.fromIterable(response.recordsValue).zip(batch)
 
       (newFailed, succeeded)    = if (response.failedRecordCountValue.getOrElse(0) > 0)
                                  responseAndRequests.partition {
@@ -101,7 +104,7 @@ private[client] final class ProducerLive[R, R1, T](
                                      result.errorCodeValue.exists(recoverableErrorCodes.contains)
                                  }
                                else
-                                 (Seq.empty, responseAndRequests)
+                                 (Chunk.empty, responseAndRequests)
 
       hasShardPredictionErrors <- checkShardPredictionErrors(responseAndRequests)
       _                        <- handleFailures(newFailed, repredict = hasShardPredictionErrors)
@@ -129,7 +132,7 @@ private[client] final class ProducerLive[R, R1, T](
   }
 
   private def handleFailures(
-    newFailed: collection.Seq[(PutRecordsResultEntry.ReadOnly, ProduceRequest)],
+    newFailed: Chunk[(PutRecordsResultEntry.ReadOnly, ProduceRequest)],
     repredict: Boolean
   ) = {
     val requests    = newFailed.map(_._2)
@@ -159,7 +162,7 @@ private[client] final class ProducerLive[R, R1, T](
   }
 
   private def checkShardPredictionErrors(
-    responseAndRequests: Iterable[(PutRecordsResultEntry.ReadOnly, ProduceRequest)]
+    responseAndRequests: Chunk[(PutRecordsResultEntry.ReadOnly, ProduceRequest)]
   ) = {
     val shardPredictionErrors = responseAndRequests.filter {
       case (result, request) => result.shardIdValue.exists(_ != request.predictedShard)
@@ -233,7 +236,7 @@ private[client] final class ProducerLive[R, R1, T](
       _               <- currentMetrics.getAndUpdate(_.addSuccess(response.attempts, latency))
     } yield response).provide(env)
 
-  override def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[Seq[ProduceResponse]] =
+  override def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[Chunk[ProduceResponse]] =
     (for {
       shardMap <- shards.get
       now      <- instant
@@ -250,7 +253,7 @@ private[client] object ProducerLive {
   type ShardId      = String
   type PartitionKey = String
 
-  val maxChunkSize: Int             = 512             // Stream-internal max chunk size
+  val maxChunkSize: Int             = 1024            // Stream-internal max chunk size
   val maxRecordsPerRequest          = 500             // This is a Kinesis API limitation
   val maxPayloadSizePerRequest      = 5 * 1024 * 1024 // 5 MB
   val maxPayloadSizePerRecord       = 1 * 1024 * 1024 // 1 MB
@@ -272,7 +275,7 @@ private[client] object ProducerLive {
 
     def isRetry: Boolean = attemptNumber > 1
 
-    def payloadSize: Int = r.data.length + r.partitionKey.length
+    def payloadSize: Int = r.data.length + r.partitionKey.getBytes(StandardCharsets.UTF_8).length
   }
 
   def makeProduceRequest[R, T](
@@ -301,7 +304,7 @@ private[client] object ProducerLive {
     }
 
   def payloadSizeForEntry(entry: PutRecordsRequestEntry): Int =
-    entry.partitionKey.length + entry.data.length
+    entry.partitionKey.getBytes(StandardCharsets.UTF_8).length + entry.data.length
 
   def payloadSizeForEntryAggregated(entry: PutRecordsRequestEntry): Int =
     payloadSizeForEntry(entry) +
@@ -339,7 +342,7 @@ private[client] object ProducerLive {
       }
     }
 
-  val batcher: ZTransducer[Any, Nothing, ProduceRequest, Seq[ProduceRequest]] =
+  val batcher: ZTransducer[Any, Nothing, ProduceRequest, Chunk[ProduceRequest]] =
     foldWhile(PutRecordsBatch.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
       batch.add(record)
     }.map(_.entriesInOrder)

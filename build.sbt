@@ -48,8 +48,8 @@ inThisBuild(
   )
 )
 
-val zioVersion    = "1.0.4-2"
-val zioAwsVersion = "3.16.1.1"
+val zioVersion    = "1.0.5"
+val zioAwsVersion = "3.16.1.2"
 
 lazy val root = project
   .in(file("."))
@@ -92,10 +92,10 @@ lazy val stdSettings: Seq[sbt.Def.SettingsDefinition] = Seq(
     "dev.zio"                %% "zio-streams"                 % zioVersion,
     "dev.zio"                %% "zio-test"                    % zioVersion % "test",
     "dev.zio"                %% "zio-test-sbt"                % zioVersion % "test",
-    "dev.zio"                %% "zio-interop-reactivestreams" % "1.3.0.7-2",
+    "dev.zio"                %% "zio-interop-reactivestreams" % "1.3.4",
     "dev.zio"                %% "zio-logging"                 % "0.5.6",
     "ch.qos.logback"          % "logback-classic"             % "1.2.3",
-    "org.scala-lang.modules" %% "scala-collection-compat"     % "2.4.2",
+    "org.scala-lang.modules" %% "scala-collection-compat"     % "2.4.3",
     "org.hdrhistogram"        % "HdrHistogram"                % "2.1.12",
     "io.github.vigoo"        %% "zio-aws-core"                % zioAwsVersion,
     "io.github.vigoo"        %% "zio-aws-kinesis"             % zioAwsVersion,
@@ -117,7 +117,7 @@ lazy val interopFutures = (project in file("interop-futures"))
     name := "zio-kinesis-future",
     assemblyJarName in assembly := "zio-kinesis-future" + version.value + ".jar",
     libraryDependencies ++= Seq(
-      "dev.zio" %% "zio-interop-reactivestreams" % "1.3.0.7-2"
+      "dev.zio" %% "zio-interop-reactivestreams" % "1.3.4"
     )
   )
   .dependsOn(core)
