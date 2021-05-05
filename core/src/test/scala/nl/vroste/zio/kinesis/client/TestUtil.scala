@@ -74,7 +74,7 @@ object TestUtil {
     streamName: String,
     nrRecords: Int,
     produceRate: Int,
-    size: Int,
+    maxRecordSize: Int,
     producerSettings: ProducerSettings = ProducerSettings()
   ): ZIO[Random with Console with Clock with Kinesis with Logging, Throwable, Unit] =
     Ref
@@ -93,7 +93,7 @@ object TestUtil {
                                           |Total metrics: ${m.toString}""".stripMargin))
           )
       }
-      .use(massProduceRecords(_, nrRecords, produceRate, size))
+      .use(massProduceRecords(_, nrRecords, produceRate, maxRecordSize))
 
   val chunkSize = 1000
 
@@ -121,14 +121,14 @@ object TestUtil {
    * @param producer
    * @param nrRecords
    * @param produceRate
-   * @param recordSize
+   * @param maxRecordSize
    * @return
    */
   def massProduceRecords(
     producer: Producer[Chunk[Byte]],
     nrRecords: Int,
     produceRate: Int,
-    recordSize: Int
+    maxRecordSize: Int
   ): ZIO[Logging with Clock with Random, Throwable, Unit] = {
 
 //    val partitionKeyGen = Gen.stringBounded(1, 256)(Gen.anyUnicodeChar)
@@ -142,8 +142,9 @@ object TestUtil {
                  .flatMap(keyLength =>
                    ZIO.replicateM(keyLength)(random.nextIntBetween('\u0000', '\uD7FF').map(_.toChar)).map(_.mkString)
                  )
-        value <-
-          random.nextIntBetween(1, 1024).map(valueLength => Chunk.fromIterable(List.fill(valueLength)(0x01.toByte)))
+        value <- random
+                   .nextIntBetween(1, maxRecordSize)
+                   .map(valueLength => Chunk.fromIterable(List.fill(valueLength)(0x01.toByte)))
       } yield ProducerRecord(key, value)
     }.chunkN(chunkSize).take(nrRecords).buffer(chunkSize)
     massProduceRecords(producer, produceRate, records)

@@ -33,7 +33,7 @@ object ExampleApp extends zio.App {
   val applicationName                 = "testApp-10"        // + java.util.UUID.randomUUID().toString(),
   val nrRecords                       = 300000
   val produceRate                     = 200                 // Nr records to produce per second
-  val recordSize                      = 50
+  val maxRecordSize                   = 50
   val nrShards                        = 2
   val reshardFactor                   = 2
   val reshardAfter: Option[Duration]  = None                // Some(10.seconds)
@@ -58,7 +58,7 @@ object ExampleApp extends zio.App {
       _          <- TestUtil.createStreamUnmanaged(streamName, nrShards)
       _          <- TestUtil.getShards(streamName)
       producer   <- TestUtil
-                    .produceRecords(streamName, nrRecords, produceRate, recordSize, producerSettings)
+                    .produceRecords(streamName, nrRecords, produceRate, maxRecordSize, producerSettings)
                     .tapError(e => log.error(s"Producer error: ${e}"))
                     .fork
 //      _          <- producer.join
