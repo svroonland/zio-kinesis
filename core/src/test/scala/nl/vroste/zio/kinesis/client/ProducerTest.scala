@@ -113,7 +113,7 @@ object ProducerTest extends DefaultRunnableSpec {
             totalMetrics =>
               (for {
                 _        <- putStrLn("creating stream").toManaged_
-                _        <- createStreamUnmanaged(streamName, 24).toManaged_
+                _        <- createStreamUnmanaged(streamName, 10).toManaged_
                 _        <- putStrLn("creating producer").toManaged_
                 producer <- Producer
                               .make(

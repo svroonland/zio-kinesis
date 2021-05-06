@@ -10,13 +10,12 @@ import zio.duration.durationInt
 import zio.logging.Logging
 import zio.stream.ZStream
 import zio.test._
-import zio.{ Queue, Ref, ZLayer }
+import zio.{ Chunk, Queue, Ref, ZLayer }
 
-import java.nio.ByteBuffer
 import java.time.OffsetDateTime
 
 object DynamicConsumerFakeTest extends DefaultRunnableSpec {
-  private type Shard = ZStream[Any, Nothing, (String, ZStream[Any, Throwable, ByteBuffer])]
+  private type Shard = ZStream[Any, Nothing, (String, ZStream[Any, Throwable, Chunk[Byte]])]
 
   private val now = OffsetDateTime.parse("1970-01-01T00:00:00Z")
 

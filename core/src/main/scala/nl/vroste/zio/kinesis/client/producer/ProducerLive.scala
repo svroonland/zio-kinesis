@@ -272,7 +272,7 @@ private[client] final class ProducerLive[R, R1, T](
       requests          <- ZIO.foreach(chunk) { r =>
                     for {
                       data          <- serializer.serialize(r.data)
-                      entry          = PutRecordsRequestEntry(Chunk.fromByteBuffer(data), partitionKey = r.partitionKey)
+                      entry          = PutRecordsRequestEntry(data, partitionKey = r.partitionKey)
                       predictedShard =
                         shardMap.shardForPartitionKey(entry.explicitHashKey.getOrElse(entry.partitionKey))
                     } yield (done.await, ProduceRequest(entry, onDone, now, predictedShard))
@@ -324,7 +324,7 @@ private[client] object ProducerLive {
     for {
       done          <- Promise.make[Throwable, ProduceResponse]
       data          <- serializer.serialize(r.data)
-      entry          = PutRecordsRequestEntry(Chunk.fromByteBuffer(data), partitionKey = r.partitionKey)
+      entry          = PutRecordsRequestEntry(data, partitionKey = r.partitionKey)
       predictedShard = shardMap.shardForPartitionKey(entry.explicitHashKey.getOrElse(entry.partitionKey))
     } yield (done.await, ProduceRequest(entry, done.completeWith(_).unit, now, predictedShard))
 

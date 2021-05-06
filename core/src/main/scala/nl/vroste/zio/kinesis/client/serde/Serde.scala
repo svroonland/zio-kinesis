@@ -1,8 +1,6 @@
 package nl.vroste.zio.kinesis.client.serde
 
-import java.nio.ByteBuffer
-
-import zio.RIO
+import zio.{ Chunk, RIO }
 
 import scala.util.Try
 
@@ -35,12 +33,12 @@ object Serde extends Serdes {
    * The (de)serializer functions can returned a failure ZIO with a Throwable to indicate (de)serialization failure
    */
   def apply[R, T](
-    deser: ByteBuffer => RIO[R, T]
-  )(ser: T => RIO[R, ByteBuffer]): Serde[R, T] =
+    deser: Chunk[Byte] => RIO[R, T]
+  )(ser: T => RIO[R, Chunk[Byte]]): Serde[R, T] =
     new Serde[R, T] {
-      override def serialize(value: T): RIO[R, ByteBuffer]  =
+      override def serialize(value: T): RIO[R, Chunk[Byte]]  =
         ser(value)
-      override def deserialize(data: ByteBuffer): RIO[R, T] =
+      override def deserialize(data: Chunk[Byte]): RIO[R, T] =
         deser(data)
     }
 
@@ -49,9 +47,9 @@ object Serde extends Serdes {
    */
   def apply[R, T](deser: Deserializer[R, T])(ser: Serializer[R, T]): Serde[R, T] =
     new Serde[R, T] {
-      override def serialize(value: T): RIO[R, ByteBuffer]  =
+      override def serialize(value: T): RIO[R, Chunk[Byte]]  =
         ser.serialize(value)
-      override def deserialize(data: ByteBuffer): RIO[R, T] =
+      override def deserialize(data: Chunk[Byte]): RIO[R, T] =
         deser.deserialize(data)
     }
 

@@ -16,7 +16,6 @@ import zio.logging.{ Logger, Logging }
 import zio.stream.{ ZStream, ZTransducer }
 import zio._
 
-import java.nio.ByteBuffer
 import java.time.Instant
 import java.util.UUID
 
@@ -54,7 +53,7 @@ object DynamicConsumer {
    * @return A ZLayer of the fake `DynamicConsumer` implementation
    */
   def fake(
-    shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, ByteBuffer])],
+    shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, Chunk[Byte]])],
     refCheckpointedList: Ref[Seq[Record[Any]]]
   ): ZLayer[Clock, Nothing, Has[Service]] =
     ZLayer.fromService[Clock.Service, DynamicConsumer.Service] { clock =>
@@ -68,7 +67,7 @@ object DynamicConsumer {
    * @return A ZLayer of the fake `DynamicConsumer` implementation
    */
   def fake(
-    shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, ByteBuffer])]
+    shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, Chunk[Byte]])]
   ): ZLayer[Clock, Nothing, Has[Service]] =
     ZLayer.fromServiceM[Clock.Service, Any, Nothing, DynamicConsumer.Service] { clock =>
       Ref.make[Seq[Record[Any]]](Seq.empty).map { refCheckpointedList =>

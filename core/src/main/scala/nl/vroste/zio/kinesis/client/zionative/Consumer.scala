@@ -182,7 +182,7 @@ object Consumer {
           _                 = log.debug(s"Found aggregated record with ${aggregatedRecord.getRecordsCount} sub records")
           records          <- ZIO.foreach(aggregatedRecord.getRecordsList.asScala.zipWithIndex.toSeq) {
                        case (subRecord, subSequenceNr) =>
-                         val data = subRecord.getData.asReadOnlyByteBuffer()
+                         val data = Chunk.fromByteBuffer(subRecord.getData.asReadOnlyByteBuffer())
 
                          deserializer
                            .deserialize(data)
@@ -205,7 +205,7 @@ object Consumer {
         } yield Chunk.fromIterable(records)
       else
         deserializer
-          .deserialize(ByteBuffer.wrap(r.dataValue.toArray))
+          .deserialize(r.dataValue)
           .map { data =>
             Record(
               shardId,

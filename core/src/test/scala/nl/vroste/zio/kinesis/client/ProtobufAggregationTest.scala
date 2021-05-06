@@ -2,7 +2,7 @@ package nl.vroste.zio.kinesis.client
 import io.github.vigoo.zioaws.kinesis.model.PutRecordsRequestEntry
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.protobuf.Messages
-import zio.{ Chunk, ZIO }
+import zio.ZIO
 import zio.test.Assertion._
 import zio.test._
 
@@ -15,7 +15,7 @@ object ProtobufAggregationTest extends DefaultRunnableSpec {
 
         for {
           bytes         <- Serde.asciiString.serialize(payload)
-          entry          = PutRecordsRequestEntry(Chunk.fromByteBuffer(bytes), partitionKey = "123")
+          entry          = PutRecordsRequestEntry(bytes, partitionKey = "123")
           protobufRecord = ProtobufAggregation.putRecordsRequestEntryToRecord(entry, 0)
 
           aggregatedRecord = Messages.AggregatedRecord
@@ -27,7 +27,7 @@ object ProtobufAggregationTest extends DefaultRunnableSpec {
           encoded          = ProtobufAggregation.encodeAggregatedRecord(aggregatedRecord)
 
           decoded <- ZIO.fromTry(ProtobufAggregation.decodeAggregatedRecord(encoded))
-        } yield assert(decoded.getRecords(0).getData.asReadOnlyByteBuffer())(equalTo(bytes))
+        } yield assert(decoded.getRecords(0).getData.toByteArray)(equalTo(bytes.toArray))
 
       }
     )
