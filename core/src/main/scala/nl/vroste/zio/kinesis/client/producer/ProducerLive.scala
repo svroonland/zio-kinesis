@@ -352,16 +352,5 @@ private[client] object ProducerLive {
   val aggregator: ZTransducer[Any, Nothing, ProduceRequest, ProduceRequest] =
     foldWhile(PutRecordsAggregatedBatchForShard.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
       batch.add(record)
-    }.mapM { batch =>
-      for {
-        request      <- batch.toProduceRequest
-        estimatedSize = batch.payloadSize
-        actualSize    = request.payloadSize
-        eq            = estimatedSize == actualSize
-        qualif        = if (actualSize == estimatedSize) "EQUAL"
-                 else if (actualSize > estimatedSize) "UNDERESTIMATED"
-                 else "OVERESTIMATED"
-        _             = println(s"Estimated size: ${estimatedSize}, actual: ${actualSize}.(${qualif})")
-      } yield request
-    }
+    }.mapM(_.toProduceRequest)
 }
