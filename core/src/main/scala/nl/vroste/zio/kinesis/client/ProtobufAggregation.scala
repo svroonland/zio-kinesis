@@ -1,5 +1,5 @@
 package nl.vroste.zio.kinesis.client
-import com.google.protobuf.ByteString
+import com.google.protobuf.UnsafeByteOperations
 import io.github.vigoo.zioaws.kinesis.model.PutRecordsRequestEntry
 import nl.vroste.zio.kinesis.client.zionative.protobuf.Messages
 import nl.vroste.zio.kinesis.client.zionative.protobuf.Messages.AggregatedRecord
@@ -16,7 +16,7 @@ object ProtobufAggregation {
   def putRecordsRequestEntryToRecord(r: PutRecordsRequestEntry, tableIndex: Int): Messages.Record = {
     val b = Messages.Record
       .newBuilder()
-      .setData(ByteString.copyFrom(r.data.toArray))
+      .setData(UnsafeByteOperations.unsafeWrap(r.data.toArray)) // Safe because chunks are immutable
       .setPartitionKeyIndex(tableIndex.toLong)
 
     r.explicitHashKey
