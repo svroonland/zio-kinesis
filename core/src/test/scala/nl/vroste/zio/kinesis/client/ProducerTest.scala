@@ -121,7 +121,7 @@ object ProducerTest extends DefaultRunnableSpec {
                                 Serde.bytes,
                                 ProducerSettings(
                                   bufferSize = 16384 * 4,
-                                  maxParallelRequests = 5,
+                                  maxParallelRequests = 24,
                                   metricsInterval = 5.seconds,
                                   aggregate = true
                                 ),
@@ -136,7 +136,7 @@ object ProducerTest extends DefaultRunnableSpec {
                                     )
                               )
               } yield producer).use { producer =>
-                TestUtil.massProduceRecords(producer, 800000, 8000, 14)
+                TestUtil.massProduceRecords(producer, 8000000, None, 14)
               } *> totalMetrics.get.flatMap(m => putStrLn(m.toString)).as(assertCompletes)
           }
           .untraced
@@ -288,8 +288,8 @@ object ProducerTest extends DefaultRunnableSpec {
           _          <- (makeProducer("producer1", metrics) zip makeProducer("producer2", metrics)).use {
                  case (p1, p2) =>
                    for {
-                     run1 <- TestUtil.massProduceRecords(p1, nrRecords / 2, nrRecords / 100, 14).fork
-                     run2 <- TestUtil.massProduceRecords(p2, nrRecords / 2, nrRecords / 100, 14).fork
+                     run1 <- TestUtil.massProduceRecords(p1, nrRecords / 2, Some(nrRecords / 100), 14).fork
+                     run2 <- TestUtil.massProduceRecords(p2, nrRecords / 2, Some(nrRecords / 100), 14).fork
                      _    <- run1.join <&> run2.join
                    } yield ()
                }
