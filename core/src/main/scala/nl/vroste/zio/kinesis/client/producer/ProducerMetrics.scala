@@ -83,10 +83,10 @@ final case class ProducerMetrics(
 }
 
 object ProducerMetrics {
-  private[client] val emptyAttempts     = new IntCountsHistogram(1, 20, 2)
-  private[client] val emptyLatency      = new Histogram(1, 120000, 3)
-  private[client] val emptyPayloadSizes = new IntCountsHistogram(1, ProducerLive.maxPayloadSizePerRequest.toLong, 5)
-  private[client] val emptyRecordSizes  = new IntCountsHistogram(1, ProducerLive.maxPayloadSizePerRecord.toLong, 4)
+  private[client] def emptyAttempts     = new IntCountsHistogram(1, 20, 2)
+  private[client] def emptyLatency      = new Histogram(1, 120000, 3)
+  private[client] def emptyPayloadSizes = new IntCountsHistogram(1, ProducerLive.maxPayloadSizePerRequest.toLong, 5)
+  private[client] def emptyRecordSizes  = new IntCountsHistogram(1, ProducerLive.maxPayloadSizePerRecord.toLong, 4)
 
   val empty = ProducerMetrics(
     interval = 0.millis,

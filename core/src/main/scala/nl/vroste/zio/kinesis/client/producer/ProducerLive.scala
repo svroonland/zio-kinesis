@@ -209,12 +209,12 @@ private[client] final class ProducerLive[R, R1, T](
     m      <- currentMetrics.getAndUpdate(_ => CurrentMetrics.empty(now))
     metrics = ProducerMetrics(
                 java.time.Duration.between(m.start, now),
-                m.published,
+                m.publishedHist,
                 m.nrFailed,
-                m.latency,
+                m.latencyHist,
                 m.shardPredictionErrors,
-                m.payloadSize,
-                m.recordSize
+                m.payloadSizeHist,
+                m.recordSizeHist
               )
     _      <- metricsCollector(metrics)
   } yield ()
