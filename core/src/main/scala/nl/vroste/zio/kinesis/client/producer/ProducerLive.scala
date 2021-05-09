@@ -67,9 +67,12 @@ private[client] final class ProducerLive[R, R1, T](
       .aggregateAsync(batcher)
       .filter(_.nonEmpty)                             // TODO why would this be necessary?
       // Several putRecords requests in parallel
-      .mapMParUnordered(settings.maxParallelRequests)(b => countInFlight(processBatch(b)))
+      .flatMapPar(settings.maxParallelRequests, chunkBufferSize)(b =>
+        ZStream.fromEffect(countInFlight(processBatch(b)))
+      )
       .collect { case (Some(response), requests) => (response, requests) }
-      .mapChunksM(ZIO.foreach(_)((processBatchResponse _).tupled))
+      .mapM((processBatchResponse _).tupled)
+      .tap(metrics => currentMetrics.update(_ append metrics))
       .runDrain
   }
 
@@ -114,7 +117,7 @@ private[client] final class ProducerLive[R, R1, T](
   private def processBatchResponse(
     response: PutRecordsResponse.ReadOnly,
     batch: Chunk[ProduceRequest]
-  ): ZIO[Clock with Logging, Nothing, Unit] = {
+  ): ZIO[Logging with Clock, Nothing, CurrentMetrics] = {
     val totalPayload = batch.map(_.r.data.length).sum
 
     val responseAndRequests    = Chunk.fromIterable(response.recordsValue).zip(batch)
@@ -126,13 +129,14 @@ private[client] final class ProducerLive[R, R1, T](
         }
       else
         (Chunk.empty, responseAndRequests)
-    (for {
+    for {
 
-      hasShardPredictionErrors <- checkShardPredictionErrors(responseAndRequests)
-      _   <- handleFailures(newFailed, repredict = hasShardPredictionErrors)
       now <- instant
-      _   <- currentMetrics.update(_.addPayloadSize(totalPayload).addRecordSizes(batch.map(_.payloadSize)))
-      _   <- ZIO.foreach_(succeeded) {
+      m1                             = CurrentMetrics.empty(now).addPayloadSize(totalPayload).addRecordSizes(batch.map(_.payloadSize))
+      r                             <- checkShardPredictionErrors(responseAndRequests, m1)
+      (hasShardPredictionErrors, m2) = r
+      m3                            <- handleFailures(newFailed, repredict = hasShardPredictionErrors, m2)
+      _                             <- ZIO.foreach_(succeeded) {
              case (response, request) =>
                request.complete(
                  ZIO.succeed(
@@ -146,19 +150,19 @@ private[client] final class ProducerLive[R, R1, T](
                )
            }
       // TODO handle connection failure
-    } yield ())
+    } yield m3
   }
 
   private def handleFailures(
     newFailed: Chunk[(PutRecordsResultEntry.ReadOnly, ProduceRequest)],
-    repredict: Boolean
+    repredict: Boolean,
+    metrics: CurrentMetrics
   ) = {
     val requests    = newFailed.map(_._2)
     val responses   = newFailed.map(_._1)
     val failedCount = requests.map(_.aggregateCount).sum
 
     for {
-      _ <- currentMetrics.update(_.addFailures(failedCount))
       _ <- ZIO.foreach_(requests)(r => throttler.addFailure(r.predictedShard))
       _ <- log.warn(s"Failed to produce ${failedCount} records").when(newFailed.nonEmpty)
       _ <- log.warn(responses.take(10).flatMap(_.errorCodeValue).mkString(", ")).when(newFailed.nonEmpty)
@@ -176,17 +180,20 @@ private[client] final class ProducerLive[R, R1, T](
       _ <- failedQueue
              .offerAll(updatedFailed)
              .when(newFailed.nonEmpty)
-    } yield ()
+    } yield metrics.addFailures(failedCount)
   }
 
   private def checkShardPredictionErrors(
-    responseAndRequests: Chunk[(PutRecordsResultEntry.ReadOnly, ProduceRequest)]
-  ) = {
+    responseAndRequests: Chunk[(PutRecordsResultEntry.ReadOnly, ProduceRequest)],
+    metrics: CurrentMetrics
+  ): ZIO[Logging, Nothing, (Boolean, CurrentMetrics)] = {
     val shardPredictionErrors = responseAndRequests.filter {
       case (result, request) => result.shardIdValue.exists(_ != request.predictedShard)
     }
 
     val (succeeded, failed) = shardPredictionErrors.partition(_._1.errorCodeValue.isEmpty)
+
+    val updatedMetrics = metrics.addShardPredictionErrors(shardPredictionErrors.map(_._2.aggregateCount).sum.toLong)
 
     ZIO
       .when(shardPredictionErrors.nonEmpty) {
@@ -204,11 +211,9 @@ private[client] final class ProducerLive[R, R1, T](
           shards
             .getAndUpdate(_.invalidate)
             .map(shardMap => !shardMap.invalid && shardMap.lastUpdated.toEpochMilli < maxProduceRequestTimestamp)
-        } *> currentMetrics.update(
-          _.addShardPredictionErrors(shardPredictionErrors.map(_._2.aggregateCount).sum.toLong)
-        )
+        }
       }
-      .as(shardPredictionErrors.nonEmpty)
+      .as((shardPredictionErrors.nonEmpty, updatedMetrics))
   }
 
   private def countInFlight[R0, E, A](e: ZIO[R0, E, A]): ZIO[R0 with Logging, E, A] =

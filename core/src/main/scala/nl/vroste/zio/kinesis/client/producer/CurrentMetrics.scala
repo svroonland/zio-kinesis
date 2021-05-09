@@ -63,6 +63,16 @@ private[client] final case class CurrentMetrics(
     hist
   }
 
+  def append(that: CurrentMetrics): CurrentMetrics =
+    copy(
+      nrFailed = nrFailed + that.nrFailed,
+      shardPredictionErrors = shardPredictionErrors + that.shardPredictionErrors,
+      published = published ++ that.published,
+      payloadSizes = payloadSizes ++ that.payloadSizes,
+      recordSizes = recordSizes ++ that.recordSizes,
+      latencies = latencies ++ that.latencies
+    )
+
 }
 
 private[client] object CurrentMetrics {
