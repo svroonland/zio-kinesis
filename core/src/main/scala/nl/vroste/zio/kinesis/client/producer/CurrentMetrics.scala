@@ -41,7 +41,7 @@ private[client] final case class CurrentMetrics(
 
   def publishedHist: IntCountsHistogram = {
     val hist = emptyAttempts
-    published.foreach(hist.recordValue(_))
+    published.foreach(i => hist.recordValue(i.toLong))
     hist
   }
 
@@ -53,13 +53,13 @@ private[client] final case class CurrentMetrics(
 
   def payloadSizeHist: IntCountsHistogram = {
     val hist = emptyPayloadSizes
-    payloadSizes.foreach(hist.recordValue(_))
+    payloadSizes.foreach(i => hist.recordValue(i.toLong))
     hist
   }
 
   def recordSizeHist: IntCountsHistogram = {
     val hist = emptyRecordSizes
-    recordSizes.foreach(hist.recordValue(_))
+    recordSizes.foreach(i => hist.recordValue(i.toLong))
     hist
   }
 
