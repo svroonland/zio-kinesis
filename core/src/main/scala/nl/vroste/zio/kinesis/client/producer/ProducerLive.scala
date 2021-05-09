@@ -209,12 +209,12 @@ private[client] final class ProducerLive[R, R1, T](
     m      <- currentMetrics.getAndUpdate(_ => CurrentMetrics.empty(now))
     metrics = ProducerMetrics(
                 java.time.Duration.between(m.start, now),
-                m.published,
+                m.publishedHist,
                 m.nrFailed,
-                m.latency,
+                m.latencyHist,
                 m.shardPredictionErrors,
-                m.payloadSize,
-                m.recordSize
+                m.payloadSizeHist,
+                m.recordSizeHist
               )
     _      <- metricsCollector(metrics)
   } yield ()
@@ -352,16 +352,5 @@ private[client] object ProducerLive {
   val aggregator: ZTransducer[Any, Nothing, ProduceRequest, ProduceRequest] =
     foldWhile(PutRecordsAggregatedBatchForShard.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
       batch.add(record)
-    }.mapM { batch =>
-      for {
-        request      <- batch.toProduceRequest
-        estimatedSize = batch.payloadSize
-        actualSize    = request.payloadSize
-        eq            = estimatedSize == actualSize
-        qualif        = if (actualSize == estimatedSize) "EQUAL"
-                 else if (actualSize > estimatedSize) "UNDERESTIMATED"
-                 else "OVERESTIMATED"
-        _             = println(s"Estimated size: ${estimatedSize}, actual: ${actualSize}.(${qualif})")
-      } yield request
-    }
+    }.mapM(_.toProduceRequest)
 }

@@ -1,62 +1,79 @@
 package nl.vroste.zio.kinesis.client.producer
-import java.time.Instant
-
 import nl.vroste.zio.kinesis.client.producer.ProducerMetrics.{
   emptyAttempts,
   emptyLatency,
   emptyPayloadSizes,
   emptyRecordSizes
 }
-import org.HdrHistogram.{ AbstractHistogram, Histogram, IntCountsHistogram }
+import org.HdrHistogram.{ Histogram, IntCountsHistogram }
+import zio.Chunk
 import zio.duration.Duration
+
+import java.time.Instant
 
 private[client] final case class CurrentMetrics(
   start: Instant,
-  published: IntCountsHistogram,   // Tracks number of attempts
   nrFailed: Long,
-  latency: Histogram,
   shardPredictionErrors: Long,
-  payloadSize: IntCountsHistogram, // PutRecords call histogram
-  recordSize: IntCountsHistogram   // PutRecords call histogram
+  published: Chunk[Int], // Tracks number of attempts
+  payloadSizes: Chunk[Int],
+  recordSizes: Chunk[Int],
+  latencies: Chunk[Long]
 ) {
-  val nrPublished = published.getTotalCount
+  val nrPublished = published.size
 
   def addSuccess(attempts: Int, latency1: Duration): CurrentMetrics =
-    addSuccesses(Seq(attempts), Seq(latency1))
+    copy(published = published :+ attempts, latencies = latencies :+ latency1.toMillis)
 
   def addFailures(nr: Int): CurrentMetrics =
     copy(nrFailed = nrFailed + nr)
 
-  def addSuccesses(publishedWithAttempts: Seq[Int], latencies: Seq[Duration]): CurrentMetrics =
-    copy(
-      published = addToHistogram(published, publishedWithAttempts.map(_.toLong)),
-      latency = addToHistogram(latency, latencies.map(_.toMillis max 0))
-    )
+  def addSuccesses(publishedWithAttempts: Chunk[Int], latenciesNew: Chunk[Duration]): CurrentMetrics =
+    copy(published = published ++ publishedWithAttempts, latencies = latencies ++ latenciesNew.map(_.toMillis))
 
   def addShardPredictionErrors(nr: Long): CurrentMetrics = copy(shardPredictionErrors = shardPredictionErrors + nr)
 
   def addPayloadSize(size: Int): CurrentMetrics =
-    copy(payloadSize = addToHistogram(payloadSize, Seq(size.toLong)))
+    copy(payloadSizes = payloadSizes :+ size)
 
-  def addRecordSizes(sizes: Seq[Int]): CurrentMetrics =
-    copy(recordSize = addToHistogram(payloadSize, sizes.map(_.toLong)))
+  def addRecordSizes(sizes: Chunk[Int]): CurrentMetrics =
+    copy(recordSizes = recordSizes ++ sizes)
 
-  private def addToHistogram[T <: AbstractHistogram](hist: T, values: Seq[Long]): T = {
-    val newHist = hist.copy().asInstanceOf[T]
-    values.foreach(newHist.recordValue)
-    newHist
+  def publishedHist: IntCountsHistogram = {
+    val hist = emptyAttempts
+    published.foreach(i => hist.recordValue(i.toLong))
+    hist
   }
+
+  def latencyHist: Histogram = {
+    val hist = emptyLatency
+    latencies.foreach(hist.recordValue)
+    hist
+  }
+
+  def payloadSizeHist: IntCountsHistogram = {
+    val hist = emptyPayloadSizes
+    payloadSizes.foreach(i => hist.recordValue(i.toLong))
+    hist
+  }
+
+  def recordSizeHist: IntCountsHistogram = {
+    val hist = emptyRecordSizes
+    recordSizes.foreach(i => hist.recordValue(i.toLong))
+    hist
+  }
+
 }
 
 private[client] object CurrentMetrics {
   def empty(now: Instant): CurrentMetrics =
     CurrentMetrics(
       start = now,
-      published = emptyAttempts,
       nrFailed = 0,
-      latency = emptyLatency,
       shardPredictionErrors = 0,
-      payloadSize = emptyPayloadSizes,
-      recordSize = emptyRecordSizes
+      published = Chunk.empty,
+      payloadSizes = Chunk.empty,
+      recordSizes = Chunk.empty,
+      latencies = Chunk.empty
     )
 }

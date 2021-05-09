@@ -14,6 +14,8 @@ import zio.duration._
 import zio.logging.{ log, Logging }
 import zio.stream.ZStream
 
+import java.util.UUID
+
 object TestUtil {
 
   def withStream[R, A](name: String, shards: Int)(
@@ -92,7 +94,7 @@ object TestUtil {
                                           |Total metrics: ${m.toString}""".stripMargin))
           )
       }
-      .use(massProduceRecords(_, nrRecords, produceRate, maxRecordSize))
+      .use(massProduceRecords(_, nrRecords, produceRate = Some(produceRate), maxRecordSize))
 
   val chunkSize = 1000
 
@@ -126,15 +128,42 @@ object TestUtil {
   def massProduceRecords(
     producer: Producer[Chunk[Byte]],
     nrRecords: Int,
-    produceRate: Int,
+    produceRate: Option[Int] = None,
     maxRecordSize: Int
   ): ZIO[Logging with Clock with Random, Throwable, Unit] = {
+    val value = Chunk.fill(maxRecordSize)(0x01.toByte)
 
-//    val partitionKeyGen = Gen.stringBounded(1, 256)(Gen.anyUnicodeChar)
-//    val valueGen        = Gen.chunkOfN(recordSize)(Gen.const(0x01.toByte))
-////    Gen.oneOf(Gen.char('\u0000', '\uD7FF'), Gen.char('\uE000', '\uFFFD'))
+    val records = ZStream
+      .repeatEffectChunk(UIO(Chunk.fill(chunkSize)(ProducerRecord(UUID.randomUUID().toString, value))))
+      .take(nrRecords.toLong)
+      .via(throttle(produceRate, _))
+    massProduceRecords(producer, records)
+  }
+
+  private def throttle[R, E, A](
+    produceRate: Option[Int],
+    s: ZStream[R with Clock, E, A]
+  ): ZStream[R with Clock, E, A] = {
+    val intervals = 10
+    produceRate.fold(s) { produceRate =>
+      s.throttleShape(
+          produceRate.toLong / intervals,
+          1000.millis * (1.0 / intervals),
+          produceRate.toLong / intervals
+        )(
+          _.size.toLong
+        )
+        .buffer(produceRate * 10)
+    }
+  }
+
+  def massProduceRecordsRandomKeyAndValueSize(
+    producer: Producer[Chunk[Byte]],
+    nrRecords: Int,
+    produceRate: Option[Int] = None,
+    maxRecordSize: Int
+  ): ZIO[Logging with Clock with Random, Throwable, Unit] = {
     val records = ZStream.repeatEffect {
-//      (partitionKeyGen zipWith valueGen)(ProducerRecord.apply).sample.runHead.some.map(_.value)
       for {
         key   <- random
                  .nextIntBetween(1, 256)
@@ -145,25 +174,17 @@ object TestUtil {
                    .nextIntBetween(1, maxRecordSize)
                    .map(valueLength => Chunk.fromIterable(List.fill(valueLength)(0x01.toByte)))
       } yield ProducerRecord(key, value)
-    }.chunkN(chunkSize).take(nrRecords.toLong).buffer(chunkSize)
-    massProduceRecords(producer, produceRate, records)
+    }.chunkN(chunkSize).take(nrRecords.toLong).via(throttle(produceRate, _)).buffer(chunkSize)
+    massProduceRecords(producer, records)
   }
 
   def massProduceRecords[R, T](
     producer: Producer[T],
-    produceRate: Int,
     records: ZStream[R, Nothing, ProducerRecord[T]]
-  ): ZIO[Logging with Clock with R, Throwable, Unit] = {
-    val intervals = 5
-
+  ): ZIO[Logging with Clock with R, Throwable, Unit] =
     records
-      .throttleShape(produceRate.toLong / intervals, 1000.millis * (1.0 / intervals), produceRate.toLong / intervals)(
-        _.size.toLong
-      )
-      .buffer(produceRate * 10)
       .mapChunks(Chunk.single)
-      .mapMParUnordered(20) { chunk =>
-        println(s"Producing chunk of size ${chunk.size}")
+      .mapMParUnordered(50) { chunk =>
         producer
           .produceChunk(chunk)
           .tapError(e => log.error(s"Producing records chunk failed, will retry: ${e}"))
@@ -174,5 +195,4 @@ object TestUtil {
       .runDrain
       .tapCause(e => log.error("Producing records chunk failed", e)) *>
       log.info("Producing records is done!")
-  }
 }
