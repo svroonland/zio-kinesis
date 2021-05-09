@@ -77,19 +77,23 @@ private[client] final class ProducerLive[R, R1, T](
   }
 
   private def throttleShardRequests(shardId: ShardId, requests: ZStream[Any, Nothing, ProduceRequest]) =
-    requests
-      .mapChunks(
-        _.map { request =>
-          request
-            .copy(complete = result => request.complete(result) *> result.zipLeft(throttler.addSuccess(shardId)).ignore)
-        }
-      )
-      .throttleShapeM(maxRecordsPerShardPerSecond.toLong, 1.second)(chunk =>
-        throttler.throughputFactor(shardId).map(c => (chunk.size * 1.0 / c).toLong)
-      )
-      .throttleShapeM(maxIngestionPerShardPerSecond.toLong, 1.second)(chunk =>
-        throttler.throughputFactor(shardId).map(c => (chunk.map(_.payloadSize).sum * 1.0 / c).toLong)
-      )
+    ZStream.fromEffect(throttler.getForShard(shardId)).flatMap { throttlerForShard =>
+      requests
+        .mapChunks(
+          _.map { request =>
+            request
+              .copy(complete =
+                result => request.complete(result) *> result.zipLeft(throttlerForShard.addSuccess).ignore
+              )
+          }
+        )
+        .throttleShapeM(maxRecordsPerShardPerSecond.toLong, 1.second)(chunk =>
+          throttlerForShard.throughputFactor.map(c => (chunk.size * 1.0 / c).toLong)
+        )
+        .throttleShapeM(maxIngestionPerShardPerSecond.toLong, 1.second)(chunk =>
+          throttlerForShard.throughputFactor.map(c => (chunk.map(_.payloadSize).sum * 1.0 / c).toLong)
+        )
+    }
 
   private def processBatch(
     batch: Chunk[ProduceRequest]

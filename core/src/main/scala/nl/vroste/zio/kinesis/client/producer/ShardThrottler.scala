@@ -1,12 +1,15 @@
 package nl.vroste.zio.kinesis.client.producer
+import nl.vroste.zio.kinesis.client.producer.ShardThrottler.DynamicThrottler
 import zio.{ UIO, _ }
 import zio.clock.Clock
 import zio.duration._
 
 private[client] trait ShardThrottler {
+  // TODO deprecate
   def throughputFactor(shard: String): UIO[Double]
   def addSuccess(shard: String): UIO[Unit]
   def addFailure(shard: String): UIO[Unit]
+  def getForShard(shardId: String): UIO[DynamicThrottler]
 }
 
 private[client] object ShardThrottler {
@@ -24,15 +27,19 @@ private[client] object ShardThrottler {
       override def addFailure(shard: String): UIO[Unit]         = withShard(shard, _.addFailure)
 
       def withShard[E, A](shard: String, f: DynamicThrottler => IO[E, A]): IO[E, A] =
+        getForShard(shard)
+          .flatMap(f)
+
+      override def getForShard(shardId: String): UIO[DynamicThrottler] =
         shards.get.flatMap { throttlers =>
-          if (throttlers.contains(shard)) ZIO.succeed(throttlers(shard))
+          if (throttlers.contains(shardId)) ZIO.succeed(throttlers(shardId))
           else
             for {
               throttlerAndFinalizer <- scope.apply(DynamicThrottler.make(updatePeriod, allowedError))
               throttler              = throttlerAndFinalizer._2
-              _                     <- shards.update(_ + (shard -> throttler))
+              _                     <- shards.update(_ + (shardId -> throttler))
             } yield throttler
-        }.flatMap(f).provide(clock)
+        }.provide(clock)
     }
 
   trait DynamicThrottler {
