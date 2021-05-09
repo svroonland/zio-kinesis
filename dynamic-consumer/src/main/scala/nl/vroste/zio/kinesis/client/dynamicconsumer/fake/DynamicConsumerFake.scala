@@ -10,10 +10,8 @@ import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.stream.ZStream
 
-import java.nio.ByteBuffer
-
 private[client] class DynamicConsumerFake(
-  shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, ByteBuffer])],
+  shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, Chunk[Byte]])],
   refCheckpointedList: Ref[Seq[Record[Any]]],
   clock: Clock.Service
 ) extends DynamicConsumer.Service {
@@ -96,7 +94,7 @@ object DynamicConsumerFake {
   /**
    * A constructor for a fake shard, for use with the `DynamicConsumer.fake` ZLayer function. It takes a list of `List[T]` and produces
    * a ZStream of fake shards from it.
-   * @param serializer A `Serializer` used to convert elements to the ByteBuffer type expected by `DynamicConsumer`
+   * @param serializer A `Serializer` used to convert elements to the Chunk[Byte] type expected by `DynamicConsumer`
    * @param lists list of shards - each shard is represented by a List of `T`
    * @tparam R Environment for `Serializer`
    * @tparam T Type of the list element
@@ -106,7 +104,7 @@ object DynamicConsumerFake {
   def shardsFromIterables[R, T](
     serializer: Serializer[R, T],
     lists: List[T]*
-  ): ZStream[Any, Nothing, (String, ZStream[R, Throwable, ByteBuffer])] = {
+  ): ZStream[Any, Nothing, (String, ZStream[R, Throwable, Chunk[Byte]])] = {
     val listOfShards = lists.zipWithIndex.map {
       case (xs, i) => (s"shard$i", ZStream.fromIterable(xs).mapM(serializer.serialize))
     }
@@ -116,7 +114,7 @@ object DynamicConsumerFake {
   /**
    * A constructor for a fake shard, for use with the `DynamicConsumer.fake` ZLayer function. It takes a list ZStream of type `T` and produces
    * a ZStream of fake shards from it.
-   * @param serializer A `Serializer` used to convert elements to the ByteBuffer type expected by `DynamicConsumer`
+   * @param serializer A `Serializer` used to convert elements to the Chunk[Byte] type expected by `DynamicConsumer`
    * @param streams list of shards - each shard is represented by a ZStream of `T`
    * @tparam R Environment for `Serializer`
    * @tparam T Type of the ZStream element
@@ -126,7 +124,7 @@ object DynamicConsumerFake {
   def shardsFromStreams[R, T](
     serializer: Serializer[R, T],
     streams: ZStream[R, Throwable, T]*
-  ): ZStream[Any, Nothing, (String, ZStream[R, Throwable, ByteBuffer])] = {
+  ): ZStream[Any, Nothing, (String, ZStream[R, Throwable, Chunk[Byte]])] = {
     val listOfShards = streams.zipWithIndex.map {
       case (stream, i) => (s"shard$i", stream.mapM(serializer.serialize))
     }

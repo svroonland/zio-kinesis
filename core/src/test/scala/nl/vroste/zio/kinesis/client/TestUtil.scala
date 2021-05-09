@@ -107,7 +107,7 @@ object TestUtil {
       recordsAndBytes <- ZIO.foreach(records)(r => serializer.serialize(r.data).map((_, r.partitionKey)))
       entries          = recordsAndBytes.map {
                   case (data, partitionKey) =>
-                    PutRecordsRequestEntry(Chunk.fromByteBuffer(data), partitionKey = partitionKey)
+                    PutRecordsRequestEntry(data, partitionKey = partitionKey)
                 }
       response        <- kinesis
                     .putRecords(PutRecordsRequest(entries.toList, streamName))

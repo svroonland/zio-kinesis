@@ -167,7 +167,7 @@ private[client] class DynamicConsumerLive(
       shardId: String,
       r: KinesisClientRecord
     ): ZIO[R, Throwable, DynamicConsumer.Record[T]] =
-      deserializer.deserialize(r.data()).map { data =>
+      deserializer.deserialize(Chunk.fromByteBuffer(r.data())).map { data =>
         DynamicConsumer.Record(
           shardId,
           r.sequenceNumber(),

@@ -1,8 +1,6 @@
 package nl.vroste.zio.kinesis.client.serde
 
-import java.nio.ByteBuffer
-
-import zio.RIO
+import zio.{ Chunk, RIO }
 
 /**
  * Serializer from values of some type T to a byte array
@@ -11,7 +9,7 @@ import zio.RIO
  * @tparam T
  */
 trait Serializer[-R, -T] {
-  def serialize(value: T): RIO[R, ByteBuffer]
+  def serialize(value: T): RIO[R, Chunk[Byte]]
 
   /**
    * Create a serializer for a type U based on the serializer for type T and a mapping function
@@ -31,6 +29,6 @@ object Serializer extends Serdes {
   /**
    * Create a serializer from a function
    */
-  def apply[R, T](ser: T => RIO[R, ByteBuffer]): Serializer[R, T] =
+  def apply[R, T](ser: T => RIO[R, Chunk[Byte]]): Serializer[R, T] =
     (value: T) => ser(value)
 }
