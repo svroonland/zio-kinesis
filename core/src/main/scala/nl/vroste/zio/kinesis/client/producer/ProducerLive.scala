@@ -240,11 +240,29 @@ private[client] final class ProducerLive[R, R1, T](
     (for {
       shardMap <- shards.get
       now      <- instant
-      requests <- ZIO.foreach(chunk)(makeProduceRequest(_, serializer, now, shardMap))
-      _        <- queue.offerAll(requests.map(_._2))
-      results  <- ZIO.foreach(requests)(_._1)
-      latencies = results.map(r => java.time.Duration.between(now, r.completed))
-      _        <- currentMetrics.getAndUpdate(_.addSuccesses(results.map(_.attempts), latencies))
+
+      done              <- Promise.make[Throwable, Chunk[ProduceResponse]]
+      resultsCollection <- Ref.make[Chunk[ProduceResponse]](Chunk.empty)
+      nrRequests         = chunk.size
+      onDone             = (response: Task[ProduceResponse]) =>
+                 response.flatMap { response =>
+                   for {
+                     responses <- resultsCollection.updateAndGet(_ :+ response)
+                     _         <- ZIO.when(responses.size == nrRequests)(done.succeed(responses))
+                   } yield ()
+                 }.catchAll(done.fail).unit
+      requests          <- ZIO.foreach(chunk) { r =>
+                    for {
+                      data          <- serializer.serialize(r.data)
+                      entry          = PutRecordsRequestEntry(Chunk.fromByteBuffer(data), partitionKey = r.partitionKey)
+                      predictedShard =
+                        shardMap.shardForPartitionKey(entry.explicitHashKey.getOrElse(entry.partitionKey))
+                    } yield (done.await, ProduceRequest(entry, onDone, now, predictedShard))
+                  }
+      _                 <- queue.offerAll(requests.map(_._2))
+      results           <- done.await
+      latencies          = results.map(r => java.time.Duration.between(now, r.completed))
+      _                 <- currentMetrics.getAndUpdate(_.addSuccesses(results.map(_.attempts), latencies))
     } yield results)
       .provide(env)
 }
@@ -310,7 +328,6 @@ private[client] object ProducerLive {
   def payloadSizeForEntryAggregated(entry: PutRecordsRequestEntry): Int =
     payloadSizeForEntry(entry) +
       3 +                                                      // Data
-      100 +                                                    // An overestimate margin, could perhaps be reduced when fully reading the Protobuf spec
       3 + 2 +                                                  // Partition key
       entry.explicitHashKey.map(_.length + 2).getOrElse(1) + 3 // Explicit hash key
 
