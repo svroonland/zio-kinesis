@@ -1,6 +1,5 @@
 package nl.vroste.zio.kinesis.client
 import com.google.protobuf.UnsafeByteOperations
-import io.github.vigoo.zioaws.kinesis.model.PutRecordsRequestEntry
 import nl.vroste.zio.kinesis.client.zionative.protobuf.Messages
 import nl.vroste.zio.kinesis.client.zionative.protobuf.Messages.AggregatedRecord
 import software.amazon.awssdk.utils.Md5Utils
@@ -13,13 +12,18 @@ object ProtobufAggregation {
   val magicBytes: Array[Byte] = List(0xf3, 0x89, 0x9a, 0xc2).map(_.toByte).toArray
   val checksumSize            = 16
 
-  def putRecordsRequestEntryToRecord(r: PutRecordsRequestEntry, tableIndex: Int): Messages.Record = {
+  def putRecordsRequestEntryToRecord(
+    data: Chunk[Byte],
+    partitionKey: String,
+    explicitHashKey: Option[String],
+    tableIndex: Int
+  ): Messages.Record = {
     val b = Messages.Record
       .newBuilder()
-      .setData(UnsafeByteOperations.unsafeWrap(r.data.toArray)) // Safe because chunks are immutable
+      .setData(UnsafeByteOperations.unsafeWrap(data.toArray)) // Safe because chunks are immutable
       .setPartitionKeyIndex(tableIndex.toLong)
 
-    r.explicitHashKey
+    explicitHashKey
       .fold(b)(_ => b.setExplicitHashKeyIndex(tableIndex.toLong))
       .build()
   }

@@ -1,7 +1,5 @@
 package nl.vroste.zio.kinesis.client.producer
 
-import java.io.IOException
-import java.time.Instant
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model.{
   PutRecordsRequest,
@@ -23,7 +21,9 @@ import zio.logging.{ log, Logging }
 import zio.stream.ZTransducer.Push
 import zio.stream.{ ZStream, ZTransducer }
 
+import java.io.IOException
 import java.nio.charset.StandardCharsets
+import java.time.Instant
 import scala.util.control.NonFatal
 
 private[client] final class ProducerLive[R, R1, T](
@@ -98,16 +98,17 @@ private[client] final class ProducerLive[R, R1, T](
   private def processBatch(
     batch: Chunk[ProduceRequest]
   ): ZIO[Clock with Logging, Nothing, (Option[PutRecordsResponse.ReadOnly], Chunk[ProduceRequest])] = {
-    val totalPayload = batch.map(_.r.data.length).sum
+    val totalPayload = batch.map(_.data.length).sum
     (for {
       _        <- log.info(
              s"PutRecords for batch of size ${batch.map(_.aggregateCount).sum} (${batch.size} aggregated). " +
-//               s"Payload sizes: ${batch.map(_.r.data().asByteArrayUnsafe().length).mkString(",")} " +
+//               s"Payload sizes: ${batch.map(_.data.asByteArrayUnsafe().length).mkString(",")} " +
                s"(total = ${totalPayload} = ${totalPayload * 100.0 / maxPayloadSizePerRequest}%)."
            )
 
+      // Avoid an allocation
       response <- client
-                    .putRecords(PutRecordsRequest(batch.map(_.r), streamName))
+                    .putRecords(new PutRecordsRequest(batch.map(_.asPutRecordsRequestEntry), streamName))
                     .mapError(_.toThrowable)
                     .tapError(e => log.warn(s"Error producing records, will retry if recoverable: $e"))
                     .retry(scheduleCatchRecoverable && settings.backoffRequests)
@@ -122,7 +123,7 @@ private[client] final class ProducerLive[R, R1, T](
     response: PutRecordsResponse.ReadOnly,
     batch: Chunk[ProduceRequest]
   ): ZIO[Logging with Clock, Nothing, CurrentMetrics] = {
-    val totalPayload = batch.map(_.r.data.length).sum
+    val totalPayload = batch.map(_.data.length).sum
 
     val responseAndRequests    = Chunk.fromIterable(response.recordsValue).zip(batch)
     val (newFailed, succeeded) =
@@ -175,7 +176,7 @@ private[client] final class ProducerLive[R, R1, T](
       updatedFailed <-
         if (repredict)
           shards.get.map(shardMap =>
-            requests.map(r => r.newAttempt.copy(predictedShard = shardMap.shardForPutRecordsRequestEntry(r.r)))
+            requests.map(r => r.newAttempt.copy(predictedShard = shardMap.shardForPartitionKey(r.partitionKey)))
           )
         else
           ZIO.succeed(requests.map(_.newAttempt))
@@ -281,10 +282,8 @@ private[client] final class ProducerLive[R, R1, T](
       requests          <- ZIO.foreach(chunk) { r =>
                     for {
                       data          <- serializer.serialize(r.data)
-                      entry          = PutRecordsRequestEntry(data, partitionKey = r.partitionKey)
-                      predictedShard =
-                        shardMap.shardForPartitionKey(entry.explicitHashKey.getOrElse(entry.partitionKey))
-                    } yield (done.await, ProduceRequest(entry, onDone, now, predictedShard))
+                      predictedShard = shardMap.shardForPartitionKey(r.partitionKey)
+                    } yield (done.await, ProduceRequest(data, r.partitionKey, onDone, now, predictedShard))
                   }
       _                 <- queue.offerAll(requests.map(_._2))
       results           <- done.await
@@ -309,7 +308,8 @@ private[client] object ProducerLive {
   val recoverableErrorCodes = Set("ProvisionedThroughputExceededException", "InternalFailure", "ServiceUnavailable")
 
   final case class ProduceRequest(
-    r: PutRecordsRequestEntry,
+    data: Chunk[Byte],
+    partitionKey: String,
     complete: ZIO[Any, Throwable, ProduceResponse] => UIO[Unit],
     timestamp: Instant,
     predictedShard: ShardId,
@@ -321,7 +321,9 @@ private[client] object ProducerLive {
 
     def isRetry: Boolean = attemptNumber > 1
 
-    def payloadSize: Int = r.data.length + r.partitionKey.getBytes(StandardCharsets.UTF_8).length
+    def payloadSize: Int = data.length + partitionKey.getBytes(StandardCharsets.UTF_8).length
+
+    def asPutRecordsRequestEntry: PutRecordsRequestEntry = PutRecordsRequestEntry(data, partitionKey = partitionKey)
   }
 
   def makeProduceRequest[R, T](
@@ -333,9 +335,8 @@ private[client] object ProducerLive {
     for {
       done          <- Promise.make[Throwable, ProduceResponse]
       data          <- serializer.serialize(r.data)
-      entry          = PutRecordsRequestEntry(data, partitionKey = r.partitionKey)
-      predictedShard = shardMap.shardForPartitionKey(entry.explicitHashKey.getOrElse(entry.partitionKey))
-    } yield (done.await, ProduceRequest(entry, done.completeWith(_).unit, now, predictedShard))
+      predictedShard = shardMap.shardForPartitionKey(r.partitionKey)
+    } yield (done.await, ProduceRequest(data, r.partitionKey, done.completeWith(_).unit, now, predictedShard))
 
   final def scheduleCatchRecoverable: Schedule[Any, Throwable, Throwable] =
     Schedule.recurWhile(isRecoverableException)
@@ -350,13 +351,16 @@ private[client] object ProducerLive {
     }
 
   def payloadSizeForEntry(entry: PutRecordsRequestEntry): Int =
-    entry.partitionKey.getBytes(StandardCharsets.UTF_8).length + entry.data.length
+    payloadSizeForEntry(entry.data, entry.partitionKey)
 
-  def payloadSizeForEntryAggregated(entry: PutRecordsRequestEntry): Int =
-    payloadSizeForEntry(entry) +
-      3 +                                                      // Data
-      3 + 2 +                                                  // Partition key
-      entry.explicitHashKey.map(_.length + 2).getOrElse(1) + 3 // Explicit hash key
+  def payloadSizeForEntry(data: Chunk[Byte], partitionKey: String): Int =
+    partitionKey.getBytes(StandardCharsets.UTF_8).length + data.length
+
+  def payloadSizeForEntryAggregated(entry: ProduceRequest): Int =
+    payloadSizeForEntry(entry.data, entry.partitionKey) +
+      3 +     // Data
+      3 + 2 + // Partition key
+      0       // entry.explicitHashKey.map(_.length + 2).getOrElse(1) + 3 // Explicit hash key
 
   /**
    * Like ZTransducer.foldM, but with 'while' instead of 'until' semantics regarding `contFn`

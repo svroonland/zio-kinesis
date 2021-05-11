@@ -196,7 +196,7 @@ object ProducerTest extends DefaultRunnableSpec {
 
           for {
             batches          <- runTransducer(batcher, records)
-            batchPayloadSizes = batches.map(_.map(_.r.data.length).sum)
+            batchPayloadSizes = batches.map(_.map(_.data.length).sum)
           } yield assert(batches.map(_.size))(forall(isLessThanEqualTo(ProducerLive.maxRecordsPerRequest))) &&
             assert(batchPayloadSizes)(forall(isLessThanEqualTo(ProducerLive.maxPayloadSizePerRequest)))
         }

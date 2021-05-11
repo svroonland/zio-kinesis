@@ -21,37 +21,33 @@ final case class PutRecordsAggregatedBatchForShard(
     val builder = Messages.AggregatedRecord.newBuilder()
 
     val records = entries.zipWithIndex.map {
-      case (e, index) => ProtobufAggregation.putRecordsRequestEntryToRecord(e.r, index)
+      case (e, index) => ProtobufAggregation.putRecordsRequestEntryToRecord(e.data, e.partitionKey, None, index)
     }
     builder
       .addAllRecords(records.asJava)
       .addAllExplicitHashKeyTable(
-        entries.map(e => e.r.explicitHashKey.getOrElse("0")).asJava
+        entries.map(_ => "0").asJava
       ) // TODO optimize: only filled ones
-      .addAllPartitionKeyTable(entries.map(e => e.r.partitionKey).asJava)
+      .addAllPartitionKeyTable(entries.map(e => e.partitionKey).asJava)
       .build()
   }
 
   def add(entry: ProduceRequest): PutRecordsAggregatedBatchForShard =
-    copy(entries = entries :+ entry, payloadSize = payloadSize + payloadSizeForEntryAggregated(entry.r))
+    copy(entries = entries :+ entry, payloadSize = payloadSize + payloadSizeForEntryAggregated(entry))
 
   def isWithinLimits: Boolean =
     payloadSize <= maxPayloadSizePerRecord
 
   def toProduceRequest: UIO[ProduceRequest] =
     UIO {
-      val r = model.PutRecordsRequestEntry(
-        ProtobufAggregation.encodeAggregatedRecord(builtAggregate),
-        partitionKey = entries.head.r.partitionKey // First one?
-      )
-
       // Do not inline to avoid capturing the entire chunk in the closure below
       val completes = entries.map(_.complete)
 
       ProduceRequest(
-        r,
-        result => ZIO.foreach_(completes)(_(result)),
-        entries.head.timestamp,
+        data = ProtobufAggregation.encodeAggregatedRecord(builtAggregate),
+        partitionKey = entries.head.partitionKey, // First one?
+        complete = result => ZIO.foreach_(completes)(_(result)),
+        timestamp = entries.head.timestamp,
         isAggregated = true,
         aggregateCount = entries.size,
         predictedShard = entries.head.predictedShard
