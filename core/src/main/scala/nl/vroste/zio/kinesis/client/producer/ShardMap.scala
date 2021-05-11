@@ -7,7 +7,7 @@ import nl.vroste.zio.kinesis.client.producer.ProducerLive.{ PartitionKey, ShardI
 import software.amazon.awssdk.utils.Md5Utils
 import zio.Chunk
 
-private[client] case class ShardMap(
+private[client] final case class ShardMap(
   shards: Chunk[(ShardId, BigInt, BigInt)],
   lastUpdated: Instant,
   invalid: Boolean = false
