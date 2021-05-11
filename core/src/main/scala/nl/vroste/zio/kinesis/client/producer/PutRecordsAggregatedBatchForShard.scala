@@ -45,9 +45,12 @@ final case class PutRecordsAggregatedBatchForShard(
         partitionKey = entries.head.r.partitionKey // First one?
       )
 
+      // Do not inline to avoid capturing the entire chunk in the closure below
+      val completes = entries.map(_.complete)
+
       ProduceRequest(
         r,
-        result => ZIO.foreach_(entries)(e => e.complete(result)),
+        result => ZIO.foreach_(completes)(_(result)),
         entries.head.timestamp,
         isAggregated = true,
         aggregateCount = entries.size,
