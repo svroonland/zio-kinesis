@@ -37,11 +37,14 @@ final case class ProducerMetrics(
   val throughput: Option[Double] =
     if (interval.toMillis > 0) Some(nrRecordsPublished * 1000.0 / interval.toMillis) else None
 
+  val meanNrPutRecordCalls: Double = if (interval > Duration.Zero) nrPutRecordCalls * 1000.0 / interval.toMillis else 0
+
   override def toString: String                 =
     Seq(
       ("interval", interval.getSeconds, "s"),
       ("total records published", nrRecordsPublished, ""),
-      ("throughput", throughput.getOrElse(0), "records/s"),
+      ("throughput (records)", throughput.getOrElse(0), "records/s"),
+      ("throughput (bytes)", (payloadSize.getMean * meanNrPutRecordCalls).toInt, "bytes/s"),
       ("success rate", "%.02f".format(successRate * 100), "%"),
       ("failed attempts", nrFailures, ""),
       ("shard prediction errors", shardPredictionErrors, ""),
@@ -50,15 +53,10 @@ final case class ProducerMetrics(
       ("min latency", latency.getMinValue.toInt, "ms"),
       ("2nd attempts", attempts.getCountAtValue(2), ""),
       ("max attempts", attempts.getMaxValue, ""),
-      ("mean latency", latency.getMean.toInt, "ms"),
       ("mean payload size", payloadSize.getMean.toInt, "bytes"),
       ("mean record size", recordSize.getMean.toInt, "bytes"),
       ("nr PutRecords calls", nrPutRecordCalls, ""),
-      (
-        "mean nr PutRecords calls",
-        if (interval > Duration.Zero) nrPutRecordCalls * 1000.0 / interval.toMillis else 0,
-        "calls/s"
-      )
+      ("mean nr PutRecords calls", meanNrPutRecordCalls, "calls/s")
     ).map { case (name, value, unit) => s"${name}=${value}${if (unit.isEmpty) "" else " " + unit}" }.mkString(", ")
 
   /**
