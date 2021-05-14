@@ -12,10 +12,8 @@ final case class PutRecordsBatch(entries: Chunk[ProduceRequest], nrRecords: Int,
     copy(
       entries = entries :+ entry,
       nrRecords = nrRecords + 1,
-      payloadSize = payloadSize + payloadSizeForEntry(entry.r)
+      payloadSize = payloadSize + payloadSizeForEntry(entry.data, entry.partitionKey)
     )
-
-  lazy val entriesInOrder: Chunk[ProduceRequest] = entries.sortBy(e => -1 * e.attemptNumber)
 
   def isWithinLimits =
     nrRecords <= maxRecordsPerRequest &&

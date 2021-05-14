@@ -1,6 +1,5 @@
 package nl.vroste.zio.kinesis.client.producer
 
-import io.github.vigoo.zioaws.kinesis.model
 import nl.vroste.zio.kinesis.client.ProtobufAggregation
 import nl.vroste.zio.kinesis.client.producer.ProducerLive.{
   maxPayloadSizePerRecord,
@@ -20,35 +19,42 @@ final case class PutRecordsAggregatedBatchForShard(
   private def builtAggregate: AggregatedRecord = {
     val builder = Messages.AggregatedRecord.newBuilder()
 
-    val records = entries.zipWithIndex.map {
-      case (e, index) => ProtobufAggregation.putRecordsRequestEntryToRecord(e.r, index)
+    // Hand-rolled
+    var index = 0
+    val it    = entries.iterator
+    while (it.hasNext) {
+      val e = it.next()
+
+      val record = ProtobufAggregation.putRecordsRequestEntryToRecord(e.data, None, index)
+      builder.addRecords(record)
+
+      index = index + 1
     }
+
     builder
-      .addAllRecords(records.asJava)
       .addAllExplicitHashKeyTable(
-        entries.map(e => e.r.explicitHashKey.getOrElse("0")).asJava
+        entries.map(_ => "0").asJava
       ) // TODO optimize: only filled ones
-      .addAllPartitionKeyTable(entries.map(e => e.r.partitionKey).asJava)
+      .addAllPartitionKeyTable(entries.map(e => e.partitionKey).asJava)
       .build()
   }
 
   def add(entry: ProduceRequest): PutRecordsAggregatedBatchForShard =
-    copy(entries = entries :+ entry, payloadSize = payloadSize + payloadSizeForEntryAggregated(entry.r))
+    copy(entries = entries :+ entry, payloadSize = payloadSize + payloadSizeForEntryAggregated(entry))
 
   def isWithinLimits: Boolean =
     payloadSize <= maxPayloadSizePerRecord
 
   def toProduceRequest: UIO[ProduceRequest] =
     UIO {
-      val r = model.PutRecordsRequestEntry(
-        ProtobufAggregation.encodeAggregatedRecord(builtAggregate),
-        partitionKey = entries.head.r.partitionKey // First one?
-      )
+      // Do not inline to avoid capturing the entire chunk in the closure below
+      val completes = entries.map(_.complete)
 
       ProduceRequest(
-        r,
-        result => ZIO.foreach_(entries)(e => e.complete(result)),
-        entries.head.timestamp,
+        data = ProtobufAggregation.encodeAggregatedRecord(builtAggregate),
+        partitionKey = entries.head.partitionKey, // First one?
+        complete = result => ZIO.foreach_(completes)(_(result)),
+        timestamp = entries.head.timestamp,
         isAggregated = true,
         aggregateCount = entries.size,
         predictedShard = entries.head.predictedShard

@@ -16,7 +16,7 @@ object ProtobufAggregationTest extends DefaultRunnableSpec {
         for {
           bytes         <- Serde.asciiString.serialize(payload)
           entry          = PutRecordsRequestEntry(bytes, partitionKey = "123")
-          protobufRecord = ProtobufAggregation.putRecordsRequestEntryToRecord(entry, 0)
+          protobufRecord = ProtobufAggregation.putRecordsRequestEntryToRecord(entry.data, None, 0)
 
           aggregatedRecord = Messages.AggregatedRecord
                                .newBuilder()
