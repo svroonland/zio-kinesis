@@ -19,11 +19,19 @@ final case class PutRecordsAggregatedBatchForShard(
   private def builtAggregate: AggregatedRecord = {
     val builder = Messages.AggregatedRecord.newBuilder()
 
-    val records = entries.zipWithIndex.map {
-      case (e, index) => ProtobufAggregation.putRecordsRequestEntryToRecord(e.data, None, index)
+    // Hand-rolled
+    var index = 0
+    val it    = entries.iterator
+    while (it.hasNext) {
+      val e = it.next()
+
+      val record = ProtobufAggregation.putRecordsRequestEntryToRecord(e.data, None, index)
+      builder.addRecords(record)
+
+      index = index + 1
     }
+
     builder
-      .addAllRecords(records.asJava)
       .addAllExplicitHashKeyTable(
         entries.map(_ => "0").asJava
       ) // TODO optimize: only filled ones
