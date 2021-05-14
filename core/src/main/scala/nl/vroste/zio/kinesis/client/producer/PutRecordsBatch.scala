@@ -15,8 +15,6 @@ final case class PutRecordsBatch(entries: Chunk[ProduceRequest], nrRecords: Int,
       payloadSize = payloadSize + payloadSizeForEntry(entry.data, entry.partitionKey)
     )
 
-  val entriesInOrder: Chunk[ProduceRequest] = entries // .sortBy(e => -1 * e.attemptNumber)
-
   def isWithinLimits =
     nrRecords <= maxRecordsPerRequest &&
       payloadSize <= maxPayloadSizePerRequest

@@ -395,7 +395,7 @@ private[client] object ProducerLive {
   val batcher: ZTransducer[Any, Nothing, ProduceRequest, Chunk[ProduceRequest]] =
     foldWhile(PutRecordsBatch.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
       batch.add(record)
-    }.map(_.entriesInOrder)
+    }.map(_.entries)
 
   val aggregator: ZTransducer[Any, Nothing, ProduceRequest, ProduceRequest] =
     foldWhile(PutRecordsAggregatedBatchForShard.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
