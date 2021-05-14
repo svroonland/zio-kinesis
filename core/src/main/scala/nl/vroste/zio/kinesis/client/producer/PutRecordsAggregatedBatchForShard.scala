@@ -1,6 +1,5 @@
 package nl.vroste.zio.kinesis.client.producer
 
-import io.github.vigoo.zioaws.kinesis.model
 import nl.vroste.zio.kinesis.client.ProtobufAggregation
 import nl.vroste.zio.kinesis.client.producer.ProducerLive.{
   maxPayloadSizePerRecord,
@@ -21,7 +20,7 @@ final case class PutRecordsAggregatedBatchForShard(
     val builder = Messages.AggregatedRecord.newBuilder()
 
     val records = entries.zipWithIndex.map {
-      case (e, index) => ProtobufAggregation.putRecordsRequestEntryToRecord(e.data, e.partitionKey, None, index)
+      case (e, index) => ProtobufAggregation.putRecordsRequestEntryToRecord(e.data, None, index)
     }
     builder
       .addAllRecords(records.asJava)

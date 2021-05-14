@@ -14,7 +14,6 @@ object ProtobufAggregation {
 
   def putRecordsRequestEntryToRecord(
     data: Chunk[Byte],
-    partitionKey: String,
     explicitHashKey: Option[String],
     tableIndex: Int
   ): Messages.Record = {
