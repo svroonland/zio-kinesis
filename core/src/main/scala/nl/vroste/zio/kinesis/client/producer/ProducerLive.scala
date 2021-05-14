@@ -273,12 +273,16 @@ private[client] final class ProducerLive[R, R1, T](
       resultsCollection <- Ref.make[Chunk[ProduceResponse]](Chunk.empty)
       nrRequests         = chunk.size
       onDone             = (response: Task[ProduceResponse]) =>
-                 response.flatMap { response =>
-                   for {
-                     responses <- resultsCollection.updateAndGet(_ :+ response)
-                     _         <- ZIO.when(responses.size == nrRequests)(done.succeed(responses))
-                   } yield ()
-                 }.catchAll(done.fail).unit
+                 response
+                   .foldM(
+                     done.fail,
+                     response =>
+                       for {
+                         responses <- resultsCollection.updateAndGet(_ :+ response)
+                         _         <- ZIO.when(responses.size == nrRequests)(done.succeed(responses))
+                       } yield ()
+                   )
+                   .unit
       requests          <- ZIO.foreach(chunk) { r =>
                     for {
                       data          <- serializer.serialize(r.data)
