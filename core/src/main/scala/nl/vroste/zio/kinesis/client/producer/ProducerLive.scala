@@ -15,6 +15,7 @@ import nl.vroste.zio.kinesis.client.serde.Serializer
 import software.amazon.awssdk.core.exception.SdkException
 import software.amazon.awssdk.services.kinesis.model.KinesisException
 import zio._
+import zio.blocking.Blocking
 import zio.clock.{ instant, Clock }
 import zio.duration._
 import zio.logging.{ log, Logging }
@@ -23,12 +24,13 @@ import zio.stream.{ ZStream, ZTransducer }
 
 import java.io.IOException
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.time.Instant
 import scala.util.control.NonFatal
 
 private[client] final class ProducerLive[R, R1, T](
   client: Kinesis.Service,
-  env: R with Clock,
+  env: R with Clock with Blocking,
   queue: Queue[ProduceRequest],
   failedQueue: Queue[ProduceRequest],
   serializer: Serializer[R, T],
@@ -45,7 +47,7 @@ private[client] final class ProducerLive[R, R1, T](
   import ProducerLive._
   import Util.ZStreamExtensions
 
-  val runloop: ZIO[Logging with Clock, Nothing, Unit] = {
+  val runloop: ZIO[Logging with Clock with Blocking, Nothing, Unit] = {
     val retries         = ZStream.fromQueue(failedQueue, maxChunkSize = maxChunkSize)
     val chunkBufferSize = Math.ceil(settings.bufferSize * 1.0 / maxChunkSize).toInt
 
@@ -57,7 +59,9 @@ private[client] final class ProducerLive[R, R1, T](
       .groupByKey2(_.predictedShard, chunkBufferSize)
       .flatMapPar(Int.MaxValue, chunkBufferSize) {
         case (shardId @ _, requests) =>
-          requests.aggregateAsync(if (aggregate) aggregator else ZTransducer.identity)
+          ZStream.managed(ShardMap.md5.orDie).flatMap { digest =>
+            requests.aggregateAsync(if (aggregate) aggregator(digest) else ZTransducer.identity)
+          }
       })
       .groupByKey2(_.predictedShard, chunkBufferSize) // TODO can we avoid this second group by?
       .flatMapPar(Int.MaxValue, chunkBufferSize)(
@@ -97,21 +101,23 @@ private[client] final class ProducerLive[R, R1, T](
 
   private def processBatch(
     batch: Chunk[ProduceRequest]
-  ): ZIO[Clock with Logging, Nothing, (Option[PutRecordsResponse.ReadOnly], Chunk[ProduceRequest])] = {
+  ): ZIO[Clock with Logging with Blocking, Nothing, (Option[PutRecordsResponse.ReadOnly], Chunk[ProduceRequest])] = {
     val totalPayload = batch.map(_.data.length).sum
     (for {
-      _        <- log.info(
-             s"PutRecords for batch of size ${batch.map(_.aggregateCount).sum} (${batch.size} aggregated). " +
-//               s"Payload sizes: ${batch.map(_.data.asByteArrayUnsafe().length).mkString(",")} " +
-               s"(total = ${totalPayload} = ${totalPayload * 100.0 / maxPayloadSizePerRequest}%)."
-           )
+//      _        <- log.info(
+//             s"PutRecords for batch of size ${batch.map(_.aggregateCount).sum} (${batch.size} aggregated). " +
+////               s"Payload sizes: ${batch.map(_.data.asByteArrayUnsafe().length).mkString(",")} " +
+//               s"(total = ${totalPayload} = ${totalPayload * 100.0 / maxPayloadSizePerRequest}%)."
+//           )
 
       // Avoid an allocation
-      response <- client
-                    .putRecords(new PutRecordsRequest(batch.map(_.asPutRecordsRequestEntry), streamName))
-                    .mapError(_.toThrowable)
-                    .tapError(e => log.warn(s"Error producing records, will retry if recoverable: $e"))
-                    .retry(scheduleCatchRecoverable && settings.backoffRequests)
+      response <- zio.blocking.blocking {
+                    client
+                      .putRecords(new PutRecordsRequest(batch.map(_.asPutRecordsRequestEntry), streamName))
+                      .mapError(_.toThrowable)
+                      .tapError(e => log.warn(s"Error producing records, will retry if recoverable: $e"))
+                      .retry(scheduleCatchRecoverable && settings.backoffRequests)
+                  }
     } yield (Some(response), batch)).catchAll {
       case NonFatal(e) =>
         log.warn("Failed to process batch") *>
@@ -173,13 +179,16 @@ private[client] final class ProducerLive[R, R1, T](
       _ <- log.warn(responses.take(10).flatMap(_.errorCodeValue).mkString(", ")).when(newFailed.nonEmpty)
 
       // The shard map may not yet be updated unless we're experiencing high latency
-      updatedFailed <-
-        if (repredict)
-          shards.get.map(shardMap =>
-            requests.map(r => r.newAttempt.copy(predictedShard = shardMap.shardForPartitionKey(r.partitionKey)))
-          )
-        else
-          ZIO.succeed(requests.map(_.newAttempt))
+      updatedFailed <- if (repredict)
+                         ShardMap.md5.orDie.use { digest =>
+                           shards.get.map(shardMap =>
+                             requests.map(r =>
+                               r.newAttempt.copy(predictedShard = shardMap.shardForPartitionKey(digest, r.partitionKey))
+                             )
+                           )
+                         }
+                       else
+                         ZIO.succeed(requests.map(_.newAttempt))
 
       // TODO backoff for shard limit stuff
       _ <- failedQueue
@@ -283,11 +292,13 @@ private[client] final class ProducerLive[R, R1, T](
                        } yield ()
                    )
                    .unit
-      requests          <- ZIO.foreach(chunk) { r =>
-                    for {
-                      data          <- serializer.serialize(r.data)
-                      predictedShard = shardMap.shardForPartitionKey(r.partitionKey)
-                    } yield (done.await, ProduceRequest(data, r.partitionKey, onDone, now, predictedShard))
+      requests          <- ShardMap.md5.use { digest =>
+                    ZIO.foreach(chunk) { r =>
+                      for {
+                        data          <- serializer.serialize(r.data)
+                        predictedShard = shardMap.shardForPartitionKey(digest, r.partitionKey)
+                      } yield (done.await, ProduceRequest(data, r.partitionKey, onDone, now, predictedShard))
+                    }
                   }
       _                 <- queue.offerAll(requests.map(_._2))
       results           <- done.await
@@ -337,9 +348,10 @@ private[client] object ProducerLive {
     shardMap: ShardMap
   ): ZIO[R, Throwable, (ZIO[Any, Throwable, ProduceResponse], ProduceRequest)] =
     for {
-      done          <- Promise.make[Throwable, ProduceResponse]
-      data          <- serializer.serialize(r.data)
-      predictedShard = shardMap.shardForPartitionKey(r.partitionKey)
+      done <- Promise.make[Throwable, ProduceResponse]
+      data <- serializer.serialize(r.data)
+
+      predictedShard <- ShardMap.md5.use(digest => ZIO.succeed(shardMap.shardForPartitionKey(digest, r.partitionKey)))
     } yield (done.await, ProduceRequest(data, r.partitionKey, done.completeWith(_).unit, now, predictedShard))
 
   final def scheduleCatchRecoverable: Schedule[Any, Throwable, Throwable] =
@@ -401,8 +413,8 @@ private[client] object ProducerLive {
       batch.add(record)
     }.map(_.entries)
 
-  val aggregator: ZTransducer[Any, Nothing, ProduceRequest, ProduceRequest] =
+  def aggregator(digest: MessageDigest): ZTransducer[Any, Nothing, ProduceRequest, ProduceRequest] =
     foldWhile(PutRecordsAggregatedBatchForShard.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
       batch.add(record)
-    }.mapM(_.toProduceRequest)
+    }.mapM(_.toProduceRequest(digest))
 }

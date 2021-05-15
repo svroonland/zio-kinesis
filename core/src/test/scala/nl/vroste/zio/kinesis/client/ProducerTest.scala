@@ -13,6 +13,7 @@ import nl.vroste.zio.kinesis.client.producer.ProducerLive.ProduceRequest
 import nl.vroste.zio.kinesis.client.producer.{ ProducerLive, ProducerMetrics, ShardMap }
 import nl.vroste.zio.kinesis.client.serde.{ Serde, Serializer }
 import software.amazon.awssdk.services.kinesis.model.KinesisException
+import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.console.{ putStrLn, Console }
 import zio.duration._
@@ -24,6 +25,8 @@ import zio.test.TestAspect._
 import zio.test._
 import zio.{ system, Chunk, Queue, Ref, Runtime, ZIO, ZLayer, ZManaged }
 
+import java.security.MessageDigest
+
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
 
@@ -31,10 +34,13 @@ object ProducerTest extends DefaultRunnableSpec {
 
   val useAws = Runtime.default.unsafeRun(system.envOrElse("ENABLE_AWS", "0")).toInt == 1
 
-  val env
-    : ZLayer[Any, Nothing, CloudWatch with Kinesis with DynamoDb with Clock with Console with Logging with Random] =
+  val env: ZLayer[
+    Any,
+    Nothing,
+    CloudWatch with Kinesis with DynamoDb with Clock with Console with Logging with Random with Blocking
+  ] =
     ((if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()).orDie) >+>
-      (Clock.live ++ zio.console.Console.live ++ Random.live >+> loggingLayer)
+      (Clock.live ++ zio.console.Console.live ++ Random.live ++ Blocking.live >+> loggingLayer)
 
   def spec =
     suite("Producer")(
@@ -256,7 +262,9 @@ object ProducerTest extends DefaultRunnableSpec {
         def makeProducer(
           workerId: String,
           totalMetrics: Ref[ProducerMetrics]
-        ): ZManaged[Any with Console with Clock with Kinesis with Logging, Throwable, Producer[Chunk[Byte]]] =
+        ): ZManaged[Any with Console with Clock with Kinesis with Logging with Blocking, Throwable, Producer[
+          Chunk[Byte]
+        ]] =
           Producer
             .make(
               streamName,
@@ -352,9 +360,11 @@ object ProducerTest extends DefaultRunnableSpec {
     shardMap: ShardMap,
     serializer: Serializer[R, T]
   ): ZTransducer[R with Logging, Throwable, ProducerRecord[T], Seq[ProduceRequest]] =
-    ProducerLive.aggregator.contramapM((r: ProducerRecord[T]) =>
-      ProducerLive.makeProduceRequest(r, serializer, Instant.now, shardMap).map(_._2)
-    ) >>> ProducerLive.batcher
+    ProducerLive
+      .aggregator(MessageDigest.getInstance("MD5"))
+      .contramapM((r: ProducerRecord[T]) =>
+        ProducerLive.makeProduceRequest(r, serializer, Instant.now, shardMap).map(_._2)
+      ) >>> ProducerLive.batcher
 
   def runTransducer[R, E, I, O](parser: ZTransducer[R, E, I, O], input: Iterable[I]): ZIO[R, E, Chunk[O]] =
     ZStream.fromIterable(input).transduce(parser).runCollect

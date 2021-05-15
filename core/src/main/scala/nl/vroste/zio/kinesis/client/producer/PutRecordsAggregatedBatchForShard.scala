@@ -10,6 +10,7 @@ import nl.vroste.zio.kinesis.client.zionative.protobuf.Messages
 import nl.vroste.zio.kinesis.client.zionative.protobuf.Messages.AggregatedRecord
 import zio.{ Chunk, UIO, ZIO }
 
+import java.security.MessageDigest
 import scala.jdk.CollectionConverters._
 
 final case class PutRecordsAggregatedBatchForShard(
@@ -45,13 +46,13 @@ final case class PutRecordsAggregatedBatchForShard(
   def isWithinLimits: Boolean =
     payloadSize <= maxPayloadSizePerRecord
 
-  def toProduceRequest: UIO[ProduceRequest] =
+  def toProduceRequest(digest: MessageDigest): UIO[ProduceRequest] =
     UIO {
       // Do not inline to avoid capturing the entire chunk in the closure below
       val completes = entries.map(_.complete)
 
       ProduceRequest(
-        data = ProtobufAggregation.encodeAggregatedRecord(builtAggregate),
+        data = ProtobufAggregation.encodeAggregatedRecord(digest, builtAggregate),
         partitionKey = entries.head.partitionKey, // First one?
         complete = result => ZIO.foreach_(completes)(_(result)),
         timestamp = entries.head.timestamp,

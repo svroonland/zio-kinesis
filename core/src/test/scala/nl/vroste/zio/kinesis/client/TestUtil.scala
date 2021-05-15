@@ -7,6 +7,7 @@ import nl.vroste.zio.kinesis.client.producer.ProducerMetrics
 import nl.vroste.zio.kinesis.client.serde.{ Serde, Serializer }
 import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException }
 import zio._
+import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.random.Random
 import zio.console.{ putStrLn, Console }
@@ -77,7 +78,7 @@ object TestUtil {
     produceRate: Int,
     maxRecordSize: Int,
     producerSettings: ProducerSettings = ProducerSettings()
-  ): ZIO[Random with Console with Clock with Kinesis with Logging, Throwable, Unit] =
+  ): ZIO[Random with Console with Clock with Kinesis with Logging with Blocking, Throwable, Unit] =
     Ref
       .make(ProducerMetrics.empty)
       .toManaged_
@@ -132,9 +133,10 @@ object TestUtil {
     maxRecordSize: Int
   ): ZIO[Logging with Clock with Random, Throwable, Unit] = {
     val value = Chunk.fill(maxRecordSize)(0x01.toByte)
+    val chunk = Chunk.fill(chunkSize)(ProducerRecord(UUID.randomUUID().toString, value))
 
     val records = ZStream
-      .repeatEffectChunk(UIO(Chunk.fill(chunkSize)(ProducerRecord(UUID.randomUUID().toString, value))))
+      .repeatEffectChunk(UIO(chunk))
       .take(nrRecords.toLong)
       .via(throttle(produceRate, _))
     massProduceRecords(producer, records)
