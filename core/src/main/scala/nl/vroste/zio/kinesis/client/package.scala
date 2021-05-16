@@ -17,9 +17,7 @@ import software.amazon.awssdk.core.retry.RetryPolicy
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClientBuilder
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClientBuilder
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClientBuilder
-import zio.{ Task, ZLayer }
-
-import java.util.concurrent.Executor
+import zio.{ Task, ZIO, ZLayer }
 
 package object client {
   def kinesisAsyncClientLayer(
@@ -52,16 +50,14 @@ package object client {
           builder: Builder,
           serviceCaps: httpclient.ServiceHttpCapabilities
         ): Task[Builder] =
-          Task {
+          ZIO.executor.map { executor =>
             builder
               .asyncConfiguration(
                 ClientAsyncConfiguration
                   .builder()
                   .advancedOption(
                     SdkAdvancedAsyncClientOption.FUTURE_COMPLETION_EXECUTOR,
-                    new Executor {
-                      override def execute(command: Runnable): Unit = command.run()
-                    }
+                    executor.asJava
                   )
                   .build()
               )
