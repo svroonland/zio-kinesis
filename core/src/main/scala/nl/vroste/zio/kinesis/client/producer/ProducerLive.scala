@@ -104,11 +104,11 @@ private[client] final class ProducerLive[R, R1, T](
   ): ZIO[Clock with Logging with Blocking, Nothing, (Option[PutRecordsResponse.ReadOnly], Chunk[ProduceRequest])] = {
     val totalPayload = batch.map(_.data.length).sum
     (for {
-//      _        <- log.info(
-//             s"PutRecords for batch of size ${batch.map(_.aggregateCount).sum} (${batch.size} aggregated). " +
-////               s"Payload sizes: ${batch.map(_.data.asByteArrayUnsafe().length).mkString(",")} " +
-//               s"(total = ${totalPayload} = ${totalPayload * 100.0 / maxPayloadSizePerRequest}%)."
-//           )
+      _        <- log.info(
+             s"PutRecords for batch of size ${batch.map(_.aggregateCount).sum} (${batch.size} aggregated). " +
+//               s"Payload sizes: ${batch.map(_.data.asByteArrayUnsafe().length).mkString(",")} " +
+               s"(total = ${totalPayload} = ${totalPayload * 100.0 / maxPayloadSizePerRequest}%)."
+           )
 
       // Avoid an allocation
       response <- zio.blocking.blocking {
