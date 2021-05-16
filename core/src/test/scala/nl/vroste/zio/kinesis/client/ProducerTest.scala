@@ -126,7 +126,7 @@ object ProducerTest extends DefaultRunnableSpec {
                                 streamName,
                                 Serde.bytes,
                                 ProducerSettings(
-                                  bufferSize = 16384 * 4,
+                                  bufferSize = 16384 * 48,
                                   maxParallelRequests = 24,
                                   metricsInterval = 5.seconds,
                                   aggregate = true
@@ -146,7 +146,7 @@ object ProducerTest extends DefaultRunnableSpec {
               } *> totalMetrics.get.flatMap(m => putStrLn(m.toString)).as(assertCompletes)
           }
           .untraced
-      } @@ timeout(5.minute) @@ TestAspect.ifEnvSet("ENABLE_AWS"),
+      } @@ timeout(5.minute) @@ TestAspect.ifEnvSet("ENABLE_AWS") @@ TestAspect.retries(3),
       testM("fail when attempting to produce to a stream that does not exist") {
         val streamName = "zio-test-stream-not-existing"
 
@@ -370,10 +370,9 @@ object ProducerTest extends DefaultRunnableSpec {
     ZStream.fromIterable(input).transduce(parser).runCollect
 
   val shardMap = ShardMap(
-    Chunk(
-      ("001", ShardMap.minHashKey, ShardMap.maxHashKey / 2),
-      ("002", ShardMap.maxHashKey / 2 + 1, ShardMap.maxHashKey)
-    ),
+    Chunk(ShardMap.minHashKey, ShardMap.maxHashKey / 2 + 1),
+    Chunk(ShardMap.maxHashKey / 2, ShardMap.maxHashKey),
+    Chunk("001", "002"),
     Instant.now
   )
 }

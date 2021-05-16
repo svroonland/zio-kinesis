@@ -13,6 +13,7 @@ object ProtobufAggregation {
   val magicBytes: Array[Byte] = List(0xf3, 0x89, 0x9a, 0xc2).map(_.toByte).toArray
   val checksumSize            = 16
 
+  @inline
   def putRecordsRequestEntryToRecord(
     data: Chunk[Byte],
     explicitHashKey: Option[String],
