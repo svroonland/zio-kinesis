@@ -1,7 +1,5 @@
 package nl.vroste.zio.kinesis.client
 
-import java.time.Instant
-import java.util.UUID
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.dynamodb.DynamoDb
 import io.github.vigoo.zioaws.kinesis
@@ -26,6 +24,8 @@ import zio.test._
 import zio.{ system, Chunk, Queue, Ref, Runtime, ZIO, ZLayer, ZManaged }
 
 import java.security.MessageDigest
+import java.time.Instant
+import java.util.UUID
 
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
