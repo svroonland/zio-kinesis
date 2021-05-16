@@ -1,7 +1,6 @@
 package nl.vroste.zio.kinesis.client.producer
 import io.github.vigoo.zioaws.kinesis.model.Shard
 import nl.vroste.zio.kinesis.client.producer.ProducerLive.{ PartitionKey, ShardId }
-import nl.vroste.zio.kinesis.client.producer.ShardMap.minHashKey
 import zio.{ Chunk, Managed, Task, ZManaged }
 
 import java.nio.charset.StandardCharsets
