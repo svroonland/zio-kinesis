@@ -15,7 +15,6 @@ import nl.vroste.zio.kinesis.client.serde.Serializer
 import software.amazon.awssdk.core.exception.SdkException
 import software.amazon.awssdk.services.kinesis.model.KinesisException
 import zio._
-import zio.blocking.Blocking
 import zio.clock.{ instant, Clock }
 import zio.duration._
 import zio.logging.{ log, Logging }
@@ -30,7 +29,7 @@ import scala.util.control.NonFatal
 
 private[client] final class ProducerLive[R, R1, T](
   client: Kinesis.Service,
-  env: R with Clock with Blocking,
+  env: R with Clock,
   queue: Queue[ProduceRequest],
   failedQueue: Queue[ProduceRequest],
   serializer: Serializer[R, T],
@@ -47,7 +46,7 @@ private[client] final class ProducerLive[R, R1, T](
   import ProducerLive._
   import Util.ZStreamExtensions
 
-  val runloop: ZIO[Logging with Clock with Blocking, Nothing, Unit] = {
+  val runloop: ZIO[Logging with Clock, Nothing, Unit] = {
     val retries         = ZStream.fromQueue(failedQueue, maxChunkSize = maxChunkSize)
     val chunkBufferSize = Math.ceil(settings.bufferSize * 1.0 / maxChunkSize).toInt
 
@@ -101,7 +100,7 @@ private[client] final class ProducerLive[R, R1, T](
 
   private def processBatch(
     batch: Chunk[ProduceRequest]
-  ): ZIO[Clock with Logging with Blocking, Nothing, (Option[PutRecordsResponse.ReadOnly], Chunk[ProduceRequest])] = {
+  ): ZIO[Clock with Logging, Nothing, (Option[PutRecordsResponse.ReadOnly], Chunk[ProduceRequest])] = {
     val totalPayload = batch.map(_.data.length).sum
     (for {
       _        <- log.info(
@@ -111,13 +110,11 @@ private[client] final class ProducerLive[R, R1, T](
            )
 
       // Avoid an allocation
-      response <- zio.blocking.blocking {
-                    client
-                      .putRecords(new PutRecordsRequest(batch.map(_.asPutRecordsRequestEntry), streamName))
-                      .mapError(_.toThrowable)
-                      .tapError(e => log.warn(s"Error producing records, will retry if recoverable: $e"))
-                      .retry(scheduleCatchRecoverable && settings.backoffRequests)
-                  }
+      response <- client
+                    .putRecords(new PutRecordsRequest(batch.map(_.asPutRecordsRequestEntry), streamName))
+                    .mapError(_.toThrowable)
+                    .tapError(e => log.warn(s"Error producing records, will retry if recoverable: $e"))
+                    .retry(scheduleCatchRecoverable && settings.backoffRequests)
     } yield (Some(response), batch)).catchAll {
       case NonFatal(e) =>
         log.warn("Failed to process batch") *>
