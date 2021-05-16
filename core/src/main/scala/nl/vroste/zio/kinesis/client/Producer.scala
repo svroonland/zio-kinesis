@@ -8,7 +8,6 @@ import nl.vroste.zio.kinesis.client.producer.ProducerLive.ProduceRequest
 import nl.vroste.zio.kinesis.client.producer._
 import nl.vroste.zio.kinesis.client.serde.Serializer
 import zio._
-import zio.blocking.Blocking
 import zio.clock.{ instant, Clock }
 import zio.duration.{ Duration, _ }
 import zio.logging._
@@ -116,10 +115,10 @@ object Producer {
     serializer: Serializer[R, T],
     settings: ProducerSettings = ProducerSettings(),
     metricsCollector: ProducerMetrics => ZIO[R1, Nothing, Unit] = (_: ProducerMetrics) => ZIO.unit
-  ): ZManaged[R with R1 with Clock with Kinesis with Logging with Blocking, Throwable, Producer[T]] =
+  ): ZManaged[R with R1 with Clock with Kinesis with Logging, Throwable, Producer[T]] =
     for {
       client          <- ZManaged.service[Kinesis.Service]
-      env             <- ZIO.environment[R with Clock with Blocking].toManaged_
+      env             <- ZIO.environment[R with Clock].toManaged_
       queue           <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
       currentMetrics  <- instant.map(CurrentMetrics.empty).flatMap(Ref.make).toManaged_
       shardMap        <- getShardMap(streamName).toManaged_
