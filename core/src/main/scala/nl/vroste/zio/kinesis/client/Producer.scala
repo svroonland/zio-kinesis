@@ -1,6 +1,5 @@
 package nl.vroste.zio.kinesis.client
 import java.time.Instant
-
 import io.github.vigoo.zioaws.kinesis
 import io.github.vigoo.zioaws.kinesis.model.{ ListShardsRequest, ShardFilter, ShardFilterType }
 import io.github.vigoo.zioaws.kinesis.Kinesis

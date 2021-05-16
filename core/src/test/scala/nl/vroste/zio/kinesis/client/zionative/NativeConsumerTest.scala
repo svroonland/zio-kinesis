@@ -2,9 +2,7 @@ package nl.vroste.zio.kinesis.client.zionative
 
 import java.time.Instant
 import java.{ util => ju }
-
 import scala.collection.compat._
-
 import io.github.vigoo.zioaws.kinesis
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model.{ DescribeStreamRequest, ScalingType, UpdateShardCountRequest }
@@ -19,6 +17,7 @@ import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.LeaseCoordination
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
 import nl.vroste.zio.kinesis.client._
 import zio._
+import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.console._
 import zio.duration._
@@ -791,7 +790,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     throttle: Option[Duration] = None,
     indexStart: Int = 1,
     aggregated: Boolean = false
-  ): ZIO[Kinesis with Clock with Logging, Throwable, Chunk[ProduceResponse]] =
+  ): ZIO[Kinesis with Clock with Logging with Blocking, Throwable, Chunk[ProduceResponse]] =
     Producer
       .make(streamName, Serde.asciiString, ProducerSettings(maxParallelRequests = 1, aggregate = aggregated))
       .use { producer =>
@@ -817,7 +816,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     nrRecords: Int,
     chunkSize: Int = 100,
     indexStart: Int = 1
-  ): ZIO[Kinesis with Clock with Logging, Throwable, Chunk[ProduceResponse]] =
+  ): ZIO[Kinesis with Clock with Logging with Blocking, Throwable, Chunk[ProduceResponse]] =
     Producer.make(streamName, Serde.asciiString).use { producer =>
       val records =
         (indexStart until (nrRecords + indexStart)).map(i => ProducerRecord(s"key$i", s"msg$i"))

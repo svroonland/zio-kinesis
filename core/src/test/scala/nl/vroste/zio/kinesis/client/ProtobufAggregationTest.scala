@@ -6,6 +6,8 @@ import zio.ZIO
 import zio.test.Assertion._
 import zio.test._
 
+import java.security.MessageDigest
+
 object ProtobufAggregationTest extends DefaultRunnableSpec {
   override def spec =
     suite("ProtobufAggregation")(
@@ -24,7 +26,7 @@ object ProtobufAggregationTest extends DefaultRunnableSpec {
                                .addPartitionKeyTable(partitionKey)
                                .addExplicitHashKeyTable(partitionKey)
                                .build()
-          encoded          = ProtobufAggregation.encodeAggregatedRecord(aggregatedRecord)
+          encoded          = ProtobufAggregation.encodeAggregatedRecord(MessageDigest.getInstance("MD5"), aggregatedRecord)
 
           decoded <- ZIO.fromTry(ProtobufAggregation.decodeAggregatedRecord(encoded))
         } yield assert(decoded.getRecords(0).getData.toByteArray)(equalTo(bytes.toArray))

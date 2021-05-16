@@ -5,6 +5,7 @@ import nl.vroste.zio.kinesis.client.zionative.protobuf.Messages.AggregatedRecord
 import software.amazon.awssdk.utils.Md5Utils
 import zio.Chunk
 
+import java.security.MessageDigest
 import scala.util.{ Failure, Try }
 
 object ProtobufAggregation {
@@ -12,6 +13,7 @@ object ProtobufAggregation {
   val magicBytes: Array[Byte] = List(0xf3, 0x89, 0x9a, 0xc2).map(_.toByte).toArray
   val checksumSize            = 16
 
+  @inline
   def putRecordsRequestEntryToRecord(
     data: Chunk[Byte],
     explicitHashKey: Option[String],
@@ -30,9 +32,9 @@ object ProtobufAggregation {
   def encodedSize(ar: AggregatedRecord): Int =
     magicBytes.length + ar.getSerializedSize + checksumSize
 
-  def encodeAggregatedRecord(ar: AggregatedRecord): Chunk[Byte] = {
+  def encodeAggregatedRecord(digest: MessageDigest, ar: AggregatedRecord): Chunk[Byte] = {
     val payload  = ar.toByteArray
-    val checksum = Chunk.fromArray(Md5Utils.computeMD5Hash(payload))
+    val checksum = Chunk.fromArray(digest.digest(payload))
     Chunk.fromArray(magicBytes) ++ Chunk.fromArray(payload) ++ checksum
   }
 
@@ -46,6 +48,7 @@ object ProtobufAggregation {
       val payload  = dataChunk.slice(magicBytes.length, dataChunk.size - checksumSize)
       val checksum = dataChunk.slice(dataChunk.size - checksumSize, dataChunk.size)
 
+      // TODO do not instantiate MD5 digest every time
       val calculatedChecksum = Chunk.fromArray(Md5Utils.computeMD5Hash(payload.toArray))
 
       if (calculatedChecksum != checksum)
