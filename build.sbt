@@ -1,6 +1,6 @@
 import xerial.sbt.Sonatype.GitHubHosting
 
-val mainScala = "2.13.4"
+val mainScala = "2.13.6"
 val allScala  = Seq("2.12.13", mainScala)
 
 // Allows to silence scalac compilation warnings selectively by code block or file path

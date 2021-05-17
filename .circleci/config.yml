@@ -8,7 +8,7 @@ jobs:
   run_with_localstack:
     parameters:
       image:
-        default: hseeberger/scala-sbt:11.0.10_1.4.7_2.13.4
+        default: hseeberger/scala-sbt:11.0.10_1.4.7_2.13.6
         type: string
       sbt_command:
         type: string
@@ -39,7 +39,7 @@ jobs:
             - "~/.m2"
   release:
     docker:
-      - image: hseeberger/scala-sbt:11.0.10_1.4.7_2.13.4
+      - image: hseeberger/scala-sbt:11.0.10_1.4.7_2.13.6
     steps:
       - checkout
       - run: git fetch --tags
@@ -64,7 +64,7 @@ workflows:
               only: << pipeline.parameters.tag_regex >>
       - run_with_localstack:
           name: test213_jdk8
-          image: hseeberger/scala-sbt:8u282_1.4.7_2.13.4
+          image: hseeberger/scala-sbt:8u282_1.4.7_2.13.6
           sbt_command: ++2.13.4! core/test interopFutures/test
           requires:
             - lint
@@ -73,7 +73,7 @@ workflows:
               only: << pipeline.parameters.tag_regex >>
       - run_with_localstack:
           name: test213_jdk11
-          image: hseeberger/scala-sbt:11.0.10_1.4.7_2.13.4
+          image: hseeberger/scala-sbt:11.0.10_1.4.7_2.13.6
           sbt_command: ++2.13.4! core/test interopFutures/test
           requires:
             - lint
@@ -82,7 +82,7 @@ workflows:
               only: << pipeline.parameters.tag_regex >>
       - run_with_localstack:
           name: test213_jdk11_dynamic_consumer
-          image: hseeberger/scala-sbt:11.0.10_1.4.7_2.13.4
+          image: hseeberger/scala-sbt:11.0.10_1.4.7_2.13.6
           sbt_command: ++2.13.4! dynamicConsumer/test
           requires:
             - lint
