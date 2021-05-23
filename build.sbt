@@ -21,11 +21,11 @@ inThisBuild(
     licenses := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
     scalaVersion := mainScala,
     crossScalaVersions := allScala,
-    parallelExecution in Test := false,
-    cancelable in Global := true,
-    fork in Test := true,
-    fork in run := true,
-    assemblyMergeStrategy in assembly := {
+    Test / parallelExecution := false,
+    Global / cancelable := true,
+    Test / fork := true,
+    Test / fork := true,
+    assembly / assemblyMergeStrategy := {
       case PathList("META-INF", xs @ _*)       => MergeStrategy.discard
       case n if n.startsWith("reference.conf") => MergeStrategy.concat
       case _                                   => MergeStrategy.first
@@ -85,7 +85,7 @@ lazy val stdSettings: Seq[sbt.Def.SettingsDefinition] = Seq(
     else Seq.empty
   },
 // Suppresses problems with Scaladoc @throws links
-  scalacOptions in (Compile, doc) ++= Seq("-no-link-warnings"),
+  Seq(Compile / scalacOptions, doc / scalacOptions).map(_ ++= Seq("-no-link-warnings")),
   testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework"),
   libraryDependencies ++= Seq(
     "dev.zio"                %% "zio"                         % zioVersion,
@@ -115,7 +115,7 @@ lazy val interopFutures = (project in file("interop-futures"))
   .settings(stdSettings: _*)
   .settings(
     name := "zio-kinesis-future",
-    assemblyJarName in assembly := "zio-kinesis-future" + version.value + ".jar",
+    assembly / assemblyJarName := "zio-kinesis-future" + version.value + ".jar",
     libraryDependencies ++= Seq(
       "dev.zio" %% "zio-interop-reactivestreams" % "1.3.4"
     )
@@ -126,7 +126,7 @@ lazy val dynamicConsumer = (project in file("dynamic-consumer"))
   .settings(stdSettings: _*)
   .settings(
     name := "zio-kinesis-dynamic-consumer",
-    assemblyJarName in assembly := "zio-kinesis-dynamic-consumer" + version.value + ".jar",
+    assembly / assemblyJarName := "zio-kinesis-dynamic-consumer" + version.value + ".jar",
     libraryDependencies ++= Seq(
       "software.amazon.kinesis" % "amazon-kinesis-client" % "2.3.4"
     )
