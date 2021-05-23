@@ -8,11 +8,10 @@ pull_request_rules:
     conditions:
       - base=master
       - author=scala-steward
-      - "status-success=ci/circleci: test213_jdk11"
-      - "status-success=ci/circleci: test213_jdk11_dynamic_consumer"
-      - "status-success=ci/circleci: test213_jdk8"
-      - "status-success=ci/circleci: test212_jdk11"
-      - "status-success=ci/circleci: test212_jdk8"
+      - "status-success=ci/circleci: test213"
+      - "status-success=ci/circleci: test213_dynamic_consumer"
+      - "status-success=ci/circleci: test300"
+      - "status-success=ci/circleci: test212"
     actions:
       merge:
         method: squash
