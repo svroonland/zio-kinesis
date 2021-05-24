@@ -67,6 +67,12 @@ lazy val stdSettings: Seq[sbt.Def.SettingsDefinition] = Seq(
       Seq("-Wconf:cat=unused-imports:silent")
     else Seq.empty
   },
+  Test / compile / scalacOptions ++= {
+    // This is for scala.collection.compat._
+    if (scalaBinaryVersion.value == "2.13")
+      Seq("-Wconf:cat=unused-imports:silent")
+    else Seq.empty
+  },
   Compile / doc / scalacOptions ++= {
     // This is for scala.collection.compat._
     if (scalaBinaryVersion.value == "2.13")
