@@ -105,7 +105,8 @@ workflows:
             - test212_jdk8
             - test212_jdk11
           filters:
+            tags:
+              only: /^v.*/
             branches:
               only:
                 - master
-                - /tags\/.*/
