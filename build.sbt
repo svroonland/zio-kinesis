@@ -48,7 +48,10 @@ inThisBuild(
         url("https://github.com/svroonland")
       )
     ),
-    resolvers += "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots"
+    resolvers += "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots",
+    // Suppresses problems with Scaladoc @throws links
+    scalacOptions in (Compile, doc) ++= Seq("-no-link-warnings"),
+    testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework")
   )
 )
 
@@ -66,11 +69,6 @@ lazy val commonSettings = Seq(
     else Seq.empty
   }
 )
-
-// Suppresses problems with Scaladoc @throws links
-scalacOptions in (Compile, doc) ++= Seq("-no-link-warnings")
-
-testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework")
 
 addCommandAlias("fmt", "all scalafmtSbt scalafmt test:scalafmt")
 addCommandAlias("check", "all scalafmtSbtCheck scalafmtCheck test:scalafmtCheck")
