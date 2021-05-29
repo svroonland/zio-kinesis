@@ -81,15 +81,6 @@ workflows:
             tags:
               only: << pipeline.parameters.tag_regex >>
       - run_with_localstack:
-          name: test213_jdk11_dynamic_consumer
-          image: hseeberger/scala-sbt:11.0.8_1.3.13_2.13.3
-          sbt_command: ++2.13.3! dynamicConsumer/test
-          requires:
-            - lint
-          filters:
-            tags:
-              only: << pipeline.parameters.tag_regex >>
-      - run_with_localstack:
           name: test212_jdk8
           image: hseeberger/scala-sbt:8u265_1.3.13_2.12.12
           sbt_command: ++2.12.11! core/test interopFutures/test
@@ -111,11 +102,10 @@ workflows:
           requires:
             - test213_jdk8
             - test213_jdk11
-            - test213_jdk11_dynamic_consumer
             - test212_jdk8
             - test212_jdk11
           filters:
             branches:
               only:
                 - master
-                - /releases\/.*/
+                - /tags\/.*/
