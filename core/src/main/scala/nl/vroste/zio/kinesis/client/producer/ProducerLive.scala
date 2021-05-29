@@ -115,11 +115,11 @@ private[client] final class ProducerLive[R, R1, T](
                     .mapError(_.toThrowable)
                     .tapError(e => log.warn(s"Error producing records, will retry if recoverable: $e"))
                     .retry(scheduleCatchRecoverable && settings.backoffRequests)
-    } yield (Some(response), batch)).catchAll {
+    } yield (Some(response), batch)).catchSome {
       case NonFatal(e) =>
         log.warn("Failed to process batch") *>
           ZIO.foreach_(batch)(_.complete(ZIO.fail(e))).as((None, batch))
-    }
+    }.orDie
   }
 
   private def processBatchResponse(

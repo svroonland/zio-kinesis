@@ -32,10 +32,10 @@ object DynamicConsumerFakeExample extends zio.App {
                       workerIdentifier = "worker1",
                       checkpointBatchSize = 1000L,
                       checkpointDuration = 5.minutes
-                    )(record => putStrLn(s"Processing record $record"))
+                    )(record => putStrLn(s"Processing record $record").orDie)
                     .provideCustomLayer(DynamicConsumer.fake(shards, refCheckpointedList) ++ loggingLayer)
                     .exitCode
-      _                   <- putStrLn(s"refCheckpointedList=$refCheckpointedList")
+      _                   <- putStrLn(s"refCheckpointedList=$refCheckpointedList").orDie
     } yield exitCode
 
 }

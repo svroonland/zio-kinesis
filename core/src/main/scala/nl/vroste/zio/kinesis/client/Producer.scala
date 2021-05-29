@@ -16,7 +16,7 @@ import zio.stream.ZSink
 /**
  * Producer for Kinesis records
  *
- * Supports higher volume producing than making use of the [[Client]] directly.
+ * Supports higher volume producing than making use of the kinesis client directly.
  *
  * Features:
  * - Batching of records into a single PutRecords calls to Kinesis for reduced IO overhead

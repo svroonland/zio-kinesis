@@ -54,7 +54,7 @@ object TestUtil {
       .mapError(_.toThrowable)
       .catchSome {
         case _: ResourceInUseException =>
-          putStrLn("Stream already exists")
+          putStrLn("Stream already exists").orDie
       }
       .retry(Schedule.exponential(1.second) && Schedule.recurs(10))
 
@@ -92,7 +92,7 @@ object TestUtil {
               totalMetrics
                 .updateAndGet(_ + metrics)
                 .flatMap(m => putStrLn(s"""${metrics.toString}
-                                          |Total metrics: ${m.toString}""".stripMargin))
+                                          |Total metrics: ${m.toString}""".stripMargin).orDie)
           )
       }
       .use(massProduceRecords(_, nrRecords, produceRate = Some(produceRate), maxRecordSize))

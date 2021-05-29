@@ -48,7 +48,7 @@ object DynamicConsumer {
    * Implements a fake `DynamicConsumer` that also offers fake checkpointing functionality that can be tracked using the
    * `refCheckpointedList` parameter.
    * @param shards A ZStream that is a fake representation of a Kinesis shard. There are helper constructors to create
-   *               these - see [[DynamicConsumerFake.shardsFromIterables]] and [[DynamicConsumerFake.shardsFromStreams]]
+   *               these - see [[nl.vroste.zio.kinesis.client.dynamicconsumer.fake.DynamicConsumerFake.shardsFromIterables]] and [[nl.vroste.zio.kinesis.client.dynamicconsumer.fake.DynamicConsumerFake.shardsFromStreams]]
    * @param refCheckpointedList A Ref that will be used to store the checkpointed records
    * @return A ZLayer of the fake `DynamicConsumer` implementation
    */
@@ -63,7 +63,7 @@ object DynamicConsumer {
   /**
    * Overloaded version of above but without fake checkpointing functionality
    * @param shards A ZStream that is a fake representation of a Kinesis shard. There are helper constructors to create
-   *               these - see [[DynamicConsumerFake.shardsFromIterables]] and [[DynamicConsumerFake.shardsFromStreams]]
+   *               these - see [[nl.vroste.zio.kinesis.client.dynamicconsumer.fake.DynamicConsumerFake.shardsFromIterables]] and [[nl.vroste.zio.kinesis.client.dynamicconsumer.fake.DynamicConsumerFake.shardsFromStreams]]
    * @return A ZLayer of the fake `DynamicConsumer` implementation
    */
   def fake(
@@ -265,11 +265,11 @@ object DynamicConsumer {
      * Checkpoint the last staged checkpoint
      *
      * Exceptions you should be prepared to handle:
-     * - [[software.amazon.kinesis.exceptions.ShutdownException]] when the lease for this shard has been lost, when
+     * - `software.amazon.kinesis.exceptions.ShutdownException` when the lease for this shard has been lost, when
      *   another worker has stolen the lease (this can happen at any time).
-     * - [[software.amazon.kinesis.exceptions.ThrottlingException]]
+     * - `software.amazon.kinesis.exceptions.ThrottlingException`
      *
-     * See also [[RecordProcessorCheckpointer]]
+     * See also `software.amazon.kinesis.processor.RecordProcessorCheckpointer`
      */
     def checkpoint: ZIO[Blocking, Throwable, Unit]
 

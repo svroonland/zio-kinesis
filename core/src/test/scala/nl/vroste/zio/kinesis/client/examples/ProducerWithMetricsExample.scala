@@ -25,7 +25,7 @@ object ProducerWithMetricsExample extends zio.App {
                     streamName,
                     Serde.asciiString,
                     ProducerSettings(),
-                    metrics => totalMetrics.updateAndGet(_ + metrics).flatMap(m => putStrLn(m.toString))
+                    metrics => totalMetrics.updateAndGet(_ + metrics).flatMap(m => putStrLn(m.toString).orDie)
                   )
   } yield (producer, totalMetrics)).use {
     case (producer, totalMetrics) =>
@@ -33,9 +33,9 @@ object ProducerWithMetricsExample extends zio.App {
 
       for {
         _ <- producer.produceChunk(Chunk.fromIterable(records))
-        _ <- putStrLn(s"All records in the chunk were produced")
+        _ <- putStrLn(s"All records in the chunk were produced").orDie
         m <- totalMetrics.get
-        _ <- putStrLn(s"Metrics after producing: ${m}")
+        _ <- putStrLn(s"Metrics after producing: ${m}").orDie
       } yield ()
   }
 

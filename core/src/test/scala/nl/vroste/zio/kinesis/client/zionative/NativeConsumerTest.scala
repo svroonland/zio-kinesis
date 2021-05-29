@@ -7,7 +7,6 @@ import io.github.vigoo.zioaws.kinesis
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model.{ DescribeStreamRequest, ScalingType, UpdateShardCountRequest }
 import nl.vroste.zio.kinesis.client
-import nl.vroste.zio.kinesis.client.{ Producer, ProducerSettings, TestUtil }
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.TestUtil.{ retryOnResourceNotFound, withStream }
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
@@ -22,10 +21,14 @@ import zio.clock.Clock
 import zio.console._
 import zio.duration._
 import zio.logging.{ log, _ }
-import zio.logging.log
 import zio.stream.{ ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test._
+
+import java.time.Instant
+import java.{ util => ju }
+
+import scala.collection.compat._
 
 object NativeConsumerTest extends DefaultRunnableSpec {
   /*
@@ -520,7 +523,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                           .runDrain
                           .fork
               _          <- done.await
-              _          <- putStrLn("Interrupting producer and stream")
+              _          <- putStrLn("Interrupting producer and stream").orDie
               _          <- producer.interrupt
               _          <- stream.interrupt
               allEvents  <- events.get.map(
@@ -756,9 +759,9 @@ object NativeConsumerTest extends DefaultRunnableSpec {
             for {
               _        <- produceSampleRecords(streamName, nrRecords, aggregated = true)
               records1 <- consume(5).runCollect
-              _        <- putStrLn(records1.mkString("\n"))
+              _        <- putStrLn(records1.mkString("\n")).orDie
               records2 <- consume(5).runCollect
-              _        <- putStrLn(records2.mkString("\n"))
+              _        <- putStrLn(records2.mkString("\n")).orDie
               records   = records1 ++ records2
             } yield assert(records)(hasSize(equalTo(nrRecords))) &&
               assert(records.flatMap(_.subSequenceNumber.toList).map(_.toInt).toList)(
@@ -802,7 +805,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
           .mapChunksM { chunk =>
             producer
               .produceChunk(chunk)
-              .tapError(e => putStrLn(s"Error in producing fiber: $e").provideLayer(Console.live))
+              .tapError(e => putStrLn(s"Error in producing fiber: $e").provideLayer(Console.live).orDie)
               .retry(retryOnResourceNotFound)
               .tap(_ => throttle.map(ZIO.sleep(_)).getOrElse(UIO.unit))
               .map(Chunk.fromIterable)
@@ -826,7 +829,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
         .mapChunksM(chunk =>
           producer
             .produceChunk(chunk)
-            .tapError(e => putStrLn(s"Error in producing fiber: $e").provideLayer(Console.live))
+            .tapError(e => putStrLn(s"Error in producing fiber: $e").provideLayer(Console.live).orDie)
             .retry(retryOnResourceNotFound)
             .fork
             .map(fib => Chunk.single(fib))
