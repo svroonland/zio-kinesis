@@ -109,4 +109,4 @@ workflows:
               only:
                 - master
             tags:
-              only: << pipeline.parameters.tag_regex >>
+              only: /^v.*/
