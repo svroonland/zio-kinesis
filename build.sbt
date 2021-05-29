@@ -1,3 +1,5 @@
+import xerial.sbt.Sonatype.GitHubHosting
+
 val mainScala = "2.13.3"
 val allScala  = Seq("2.12.11", mainScala)
 
@@ -34,6 +36,9 @@ inThisBuild(
     },
     scmInfo := Some(
       ScmInfo(url("https://github.com/svroonland/zio-kinesis/"), "scm:git:git@github.com:svroonland/zio-kinesis.git")
+    ),
+    sonatypeProjectHosting := Some(
+      GitHubHosting("svroonland", "zio-kinesis", "info@vroste.nl")
     ),
     developers := List(
       Developer(
