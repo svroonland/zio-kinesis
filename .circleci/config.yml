@@ -108,3 +108,5 @@ workflows:
             branches:
               only:
                 - master
+            tags:
+              only: << pipeline.parameters.tag_regex >>
