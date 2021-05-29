@@ -74,7 +74,7 @@ workflows:
       - run_with_localstack:
           name: test213
           image: hseeberger/scala-sbt:16_1.5.2_2.13.6
-          sbt_command: ++2.13.6! interopFutures/compile core/test interopFutures/test
+          sbt_command: ++2.13.6! interopFutures/compile core/test interopFutures/test Compile/doc
           requires:
             - lint
           filters:
@@ -92,7 +92,7 @@ workflows:
       - run_with_localstack:
           name: test212
           image: hseeberger/scala-sbt:16_1.5.2_2.12.14
-          sbt_command: ++2.12.14! interopFutures/compile core/test interopFutures/test
+          sbt_command: ++2.12.14! interopFutures/compile core/test interopFutures/test Compile/doc
           requires:
             - lint
           filters:
