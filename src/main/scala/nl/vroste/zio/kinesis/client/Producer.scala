@@ -128,10 +128,14 @@ object Producer {
       failedQueue     <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
 
       triggerUpdateShards <- Util.periodicAndTriggerableOperation(
-                               (log.debug("Refreshing shard map") *>
-                                 (getShardMap(streamName) >>= currentShardMap.set) *>
-                                 log.info("Shard map was refreshed")).orDie,
-                               settings.updateShardInterval
+                               {
+                                 log.debug("Refreshing shard map") *>
+                                   (getShardMap(streamName) >>= currentShardMap.set) *>
+                                   log.info("Shard map was refreshed")
+                               }.tapError { e =>
+                                 log.error(s"Error refreshing shard map: ${e}").ignore
+                               },
+                               period = settings.updateShardInterval
                              )
       throttler           <- ShardThrottler.make(allowedError = settings.allowedErrorRate)
 
