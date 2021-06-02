@@ -8,11 +8,7 @@ import io.github.vigoo.zioaws.dynamodb.DynamoDb
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.{ cloudwatch, dynamodb, kinesis }
 import software.amazon.awssdk.awscore.client.builder.{ AwsAsyncClientBuilder, AwsClientBuilder }
-import software.amazon.awssdk.core.client.config.{
-  ClientAsyncConfiguration,
-  ClientOverrideConfiguration,
-  SdkAdvancedAsyncClientOption
-}
+import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
 import software.amazon.awssdk.core.retry.RetryPolicy
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClientBuilder
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClientBuilder
@@ -49,19 +45,7 @@ package object client {
         override def configureHttpClient[Client, Builder <: AwsAsyncClientBuilder[Builder, Client]](
           builder: Builder,
           serviceCaps: httpclient.ServiceHttpCapabilities
-        ): Task[Builder] =
-          ZIO.executor.map { executor =>
-            builder
-              .asyncConfiguration(
-                ClientAsyncConfiguration
-                  .builder()
-                  .advancedOption(
-                    SdkAdvancedAsyncClientOption.FUTURE_COMPLETION_EXECUTOR,
-                    executor.asJava
-                  )
-                  .build()
-              )
-          }
+        ): Task[Builder] = ZIO.succeed(builder)
       }
     }
 
