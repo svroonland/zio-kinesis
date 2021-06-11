@@ -187,7 +187,9 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                .take(1)
                                .runHead
 
-            } yield assert(firstRecord)(isSome(hasField("key", _.partitionKey, equalTo(s"key${nrRecords + 3}"))))
+            } yield assert(firstRecord)(
+              isSome(hasField("key", (_: Record[String]).partitionKey, equalTo(s"key${nrRecords + 3}")))
+            )
         }
       },
       testM("worker steals leases from other worker until they both have an equal share") {
