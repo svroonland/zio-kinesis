@@ -10,6 +10,7 @@ inThisBuild(
     licenses := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
     scalaVersion := mainScala,
     crossScalaVersions := allScala,
+    compileOrder := CompileOrder.JavaThenScala,
     Test / parallelExecution := false,
     Global / cancelable := true,
     Test / fork := true,
