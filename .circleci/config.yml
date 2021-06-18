@@ -14,7 +14,7 @@ jobs:
         type: string
     docker:
       - image: << parameters.image >>
-      - image: localstack/localstack
+      - image: localstack/localstack:0.12.12
         environment:
           LOCALSTACK_HOST: localstack
           SERVICES: 'kinesis,cloudwatch,dynamodb'
