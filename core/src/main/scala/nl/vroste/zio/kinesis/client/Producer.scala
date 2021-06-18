@@ -133,8 +133,8 @@ object Producer {
                                    (getShardMap(streamName) >>= currentShardMap.set) *>
                                    log.info("Shard map was refreshed")
                                }.tapError { e =>
-                                 log.error(s"Error refreshing shard map: ${e}").ignore
-                               },
+                                 log.error(s"Error refreshing shard map: ${e}")
+                               }.ignore,
                                period = settings.updateShardInterval
                              )
       throttler           <- ShardThrottler.make(allowedError = settings.allowedErrorRate)
