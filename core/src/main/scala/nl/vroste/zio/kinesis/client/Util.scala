@@ -123,12 +123,12 @@ object Util {
    * After manual invocation, the next effect execution will be after interval. Any triggers during
    * effect execution are ignored.
    *
-   * @return ZIO that when executed, immediately executes the `effect`
+   * @return ZIO that when executed, immediately starts execution of `effect`
    */
-  def periodicAndTriggerableOperation[R, E, A](
-    effect: ZIO[R, E, A],
+  def periodicAndTriggerableOperation[R, A](
+    effect: ZIO[R, Nothing, A],
     period: Duration
-  ): ZManaged[R with Clock, E, UIO[Unit]] =
+  ): ZManaged[R with Clock, Nothing, UIO[Unit]] =
     for {
       queue <- Queue.dropping[Unit](1).toManaged(_.shutdown)
       _     <- ((queue.take raceFirst ZIO.sleep(period)) *> effect *> queue.takeAll).forever.forkManaged
