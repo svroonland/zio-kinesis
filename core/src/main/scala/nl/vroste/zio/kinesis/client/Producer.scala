@@ -129,9 +129,9 @@ object Producer {
       triggerUpdateShards <- Util.periodicAndTriggerableOperation(
                                (log.debug("Refreshing shard map") *>
                                  (getShardMap(streamName) >>= currentShardMap.set) *>
-                                 log.info("Shard map was refreshed")).tapError(e =>
-                                 log.error(s"Error refreshing shard map: ${e}").ignore
-                               ),
+                                 log.info("Shard map was refreshed"))
+                                 .tapError(e => log.error(s"Error refreshing shard map: ${e}").ignore)
+                                 .ignore,
                                settings.updateShardInterval
                              )
       throttler           <- ShardThrottler.make(allowedError = settings.allowedErrorRate)
