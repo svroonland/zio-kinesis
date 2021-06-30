@@ -1,7 +1,7 @@
 import xerial.sbt.Sonatype.GitHubHosting
 
 val mainScala = "2.13.6"
-val allScala  = Seq("2.12.14", mainScala)
+val allScala  = Seq("2.12.14", mainScala, "3.0.0")
 
 inThisBuild(
   List(
@@ -10,6 +10,7 @@ inThisBuild(
     licenses := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
     scalaVersion := mainScala,
     crossScalaVersions := allScala,
+    compileOrder := CompileOrder.JavaThenScala,
     Test / parallelExecution := false,
     Global / cancelable := true,
     Test / fork := true,
@@ -38,7 +39,7 @@ inThisBuild(
 )
 
 val zioVersion    = "1.0.9"
-val zioAwsVersion = "3.16.74.5"
+val zioAwsVersion = "3.16.78.4"
 
 lazy val root = project
   .in(file("."))

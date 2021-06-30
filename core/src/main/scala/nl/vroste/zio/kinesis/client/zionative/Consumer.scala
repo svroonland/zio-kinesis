@@ -446,9 +446,9 @@ object Consumer {
 
   sealed trait InitialPosition
   object InitialPosition {
-    final case object Latest                         extends InitialPosition
-    final case object TrimHorizon                    extends InitialPosition
-    final case class AtTimestamp(timestamp: Instant) extends InitialPosition
+    case object Latest                         extends InitialPosition
+    case object TrimHorizon                    extends InitialPosition
+    case class AtTimestamp(timestamp: Instant) extends InitialPosition
 
     def toStartingPosition(p: InitialPosition): StartingPosition =
       p match {
