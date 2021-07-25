@@ -786,9 +786,10 @@ object NativeConsumerTest extends DefaultRunnableSpec {
       }
     ).provideSomeLayerShared(env) @@
       TestAspect.timed @@
-      TestAspect.sequential @@ // For CircleCI
-      TestAspect.timeoutWarning(60.seconds) @@
-      TestAspect.timeout(300.seconds)
+//      TestAspect.sequential @@ // For CircleCI
+      TestAspect.nonFlaky(3) @@
+      TestAspect.timeoutWarning(45.seconds) @@
+      TestAspect.timeout(120.seconds)
 
   val loggingLayer: ZLayer[Any, Nothing, Logging] =
     (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
