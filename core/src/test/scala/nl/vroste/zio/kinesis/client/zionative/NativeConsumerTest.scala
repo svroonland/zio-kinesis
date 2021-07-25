@@ -437,61 +437,64 @@ object NativeConsumerTest extends DefaultRunnableSpec {
         val nrRecords = 2000
         val nrShards  = 7
 
+        def consumer(
+          streamName: String,
+          applicationName: String,
+          workerId: String,
+          emitDiagnostic: DiagnosticEvent => UIO[Unit],
+          checkpointInterval: Duration = 1.second,
+          renewInterval: Duration = 3.seconds
+        ) =
+          Consumer
+            .shardedStream(
+              streamName,
+              applicationName,
+              Serde.asciiString,
+              workerIdentifier = workerId,
+              leaseCoordinationSettings = LeaseCoordinationSettings(
+                renewInterval = renewInterval,
+                refreshAndTakeInterval = checkpointInterval,
+                maxParallelLeaseAcquisitions = 1
+              ),
+              emitDiagnostic = emitDiagnostic
+            )
+            .flatMapPar(Int.MaxValue) {
+              case (shard @ _, shardStream, checkpointer) =>
+                shardStream
+                  .tap(checkpointer.stage)
+                  .aggregateAsyncWithin(ZTransducer.collectAllN(200000), Schedule.fixed(checkpointInterval))
+                  .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
+                  .map(_.last)
+                  .tap(_ => checkpointer.checkpoint())
+                  .catchAll {
+                    case Right(_) =>
+                      println(s"Worker appears to have lost the lease?")
+                      ZStream.empty
+                    case Left(e)  =>
+                      println(s"Worker ${workerId} failed with ${e}")
+                      ZStream.fail(e)
+                  }
+            }
+
+        // The events we have to wait for:
+        // 1. At least one LeaseAcquired by worker 1.
+        // 2. LeaseAcquired for the same shard by another worker, but it's not a steal (?)
+        // maybe NOT a LeaseReleased by worker 1
+        def testIsComplete(events: List[(String, Instant, DiagnosticEvent)]) = {
+          for {
+            acquiredByWorker1      <- Some(events.collect {
+                                   case (worker, _, event: DiagnosticEvent.LeaseAcquired) if worker == "worker1" =>
+                                     event.shardId
+                                 }).filter(_.nonEmpty)
+            acquiredByOtherWorkers <- Some(events.collect {
+                                        case (worker, _, event: DiagnosticEvent.LeaseAcquired) if worker != "worker1" =>
+                                          event.shardId
+                                      }).filter(_.nonEmpty)
+          } yield acquiredByWorker1.toSet subsetOf acquiredByOtherWorkers.toSet
+        }.getOrElse(false)
+
         withRandomStreamAndApplicationName(nrShards) {
           (streamName, applicationName) =>
-            def consumer(
-              workerId: String,
-              emitDiagnostic: DiagnosticEvent => UIO[Unit],
-              checkpointInterval: Duration = 1.second,
-              expirationTime: Duration = 10.seconds,
-              renewInterval: Duration = 3.seconds
-            ) =
-              Consumer
-                .shardedStream(
-                  streamName,
-                  applicationName,
-                  Serde.asciiString,
-                  workerIdentifier = workerId,
-                  leaseCoordinationSettings =
-                    LeaseCoordinationSettings(expirationTime, renewInterval, maxParallelLeaseAcquisitions = 1),
-                  emitDiagnostic = emitDiagnostic
-                )
-                .flatMapPar(Int.MaxValue) {
-                  case (shard @ _, shardStream, checkpointer) =>
-                    shardStream
-                      .tap(checkpointer.stage)
-                      .aggregateAsyncWithin(ZTransducer.collectAllN(200000), Schedule.fixed(checkpointInterval))
-                      .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-                      .map(_.last)
-                      .tap(_ => checkpointer.checkpoint())
-                      .catchAll {
-                        case Right(_) =>
-                          println(s"Worker appears to have lost the lease?")
-                          ZStream.empty
-                        case Left(e)  =>
-                          println(s"Worker ${workerId} failed with ${e}")
-                          ZStream.fail(e)
-                      }
-                }
-
-            // The events we have to wait for:
-            // 1. At least one LeaseAcquired by worker 1.
-            // 2. LeaseAcquired for the same shard by another worker, but it's not a steal (?)
-            // maybe NOT a LeaseReleased by worker 1
-            def testIsComplete(events: List[(String, Instant, DiagnosticEvent)]) = {
-              for {
-                acquiredByWorker1      <- Some(events.collect {
-                                       case (worker, _, event: DiagnosticEvent.LeaseAcquired) if worker == "worker1" =>
-                                         event.shardId
-                                     }).filter(_.nonEmpty)
-                acquiredByOtherWorkers <- Some(events.collect {
-                                            case (worker, _, event: DiagnosticEvent.LeaseAcquired)
-                                                if worker != "worker1" =>
-                                              event.shardId
-                                          }).filter(_.nonEmpty)
-              } yield acquiredByWorker1.toSet subsetOf acquiredByOtherWorkers.toSet
-            }.getOrElse(false)
-
             for {
               producer   <- produceSampleRecords(streamName, nrRecords, chunkSize = 50).fork
               done       <- Promise.make[Nothing, Unit]
@@ -507,30 +510,42 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                   done.succeed(()).when(testIsComplete(events))
                                 )
 
-              stream     <- ZStream
-                          .mergeAll(3)(
-                            // The zombie consumer: not updating checkpoints and not renewing leases
-                            consumer(
-                              "worker1",
-                              handleEvent("worker1"),
-                              checkpointInterval = 5.minutes,
-                              renewInterval = 5.minutes,
-                              expirationTime = 10.minutes
-                            ),
-                            consumer("worker2", handleEvent("worker2")).ensuringFirst(log.warn("worker2 DONE")),
-                            consumer("worker3", handleEvent("worker3")).ensuringFirst(log.warn("Worker3 DONE"))
-                          )
-                          .runDrain
-                          .fork
-              _          <- done.await
-              _          <- putStrLn("Interrupting producer and stream").orDie
-              _          <- producer.interrupt
-              _          <- stream.interrupt
-              allEvents  <- events.get.map(
-                             _.filterNot(_._3.isInstanceOf[PollComplete])
-                               .filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
-                           )
-              _           = println(allEvents.mkString("\n"))
+              _          <- ZManaged.finalizer {
+                     events.get
+                       .map(
+                         _.filterNot(_._3.isInstanceOf[PollComplete])
+                           .filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
+                       )
+                       .tap(allEvents => UIO(println(allEvents.mkString("\n"))))
+                   }.use_ {
+                     for {
+
+                       stream <- ZStream
+                                   .mergeAll(3)(
+                                     // The zombie consumer: not updating checkpoints and not renewing leases
+                                     consumer(
+                                       streamName,
+                                       applicationName,
+                                       "worker1",
+                                       handleEvent("worker1"),
+                                       checkpointInterval = 5.minutes,
+                                       renewInterval = 5.minutes
+                                     ),
+                                     ZStream.fromEffect(ZIO.sleep(5.seconds)) *> // Give worker1 the first lease
+                                       consumer(streamName, applicationName, "worker2", handleEvent("worker2"))
+                                         .ensuringFirst(log.warn("worker2 DONE")),
+                                     ZStream.fromEffect(ZIO.sleep(5.seconds)) *> // Give worker1 the first lease
+                                       consumer(streamName, applicationName, "worker3", handleEvent("worker3"))
+                                         .ensuringFirst(log.warn("Worker3 DONE"))
+                                   )
+                                   .runDrain
+                                   .fork
+                       _      <- done.await
+                       _      <- putStrLn("Interrupting producer and stream").orDie
+                       _      <- producer.interrupt
+                       _      <- stream.interrupt
+                     } yield ()
+                   }
             } yield assertCompletes
         }
       },
