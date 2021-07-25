@@ -34,7 +34,7 @@ object TestUtil {
       .filterOrElse(_.nonEmpty)(_ => getShards(name).delay(1.second))
       .catchSome { case _: ResourceInUseException => getShards(name).delay(1.second) }
 
-  def createStream(streamName: String, nrShards: Int): ZManaged[Console with Clock with Kinesis, Throwable, Unit] =
+  def createStream(streamName: String, nrShards: Int): ZManaged[Console with Clock with Kinesis, Throwable, Unit] = {
     createStreamUnmanaged(streamName, nrShards).toManaged(_ =>
       kinesis
         .deleteStream(DeleteStreamRequest(streamName, enforceConsumerDeletion = Some(true)))
@@ -44,6 +44,16 @@ object TestUtil {
         }
         .orDie
     )
+  } <* ZManaged.fromEffect(waitForStreamActive(streamName))
+
+  def waitForStreamActive(streamName: String): ZIO[Kinesis, Throwable, Unit] =
+    kinesis
+      .describeStream(DescribeStreamRequest(streamName))
+      .mapError(_.toThrowable)
+      .flatMap(_.streamDescription)
+      .flatMap(_.streamStatus)
+      .repeatUntilEquals(StreamStatus.ACTIVE)
+      .unit
 
   def createStreamUnmanaged(
     streamName: String,
