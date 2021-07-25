@@ -231,7 +231,7 @@ object ProducerTest extends DefaultRunnableSpec {
               } yield assert(endMetrics.shardPredictionErrors)(isZero)
             }
         }
-      },
+      } @@ TestAspect.ignore, // See https://github.com/etspaceman/kinesis-mock/issues/148
       testM("count aggregated records correctly in metrics") {
         val nrRecords = 1000
         val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))
@@ -353,7 +353,7 @@ object ProducerTest extends DefaultRunnableSpec {
             _           <- producerFib.interrupt
           } yield assertCompletes
         }
-      } @@ TestAspect.timeout(2.minute) @@ TestAspect.ifEnvSet("ENABLE_AWS") // LocalStack does not support resharding
+      } @@ TestAspect.timeout(2.minute)
     ).provideCustomLayerShared(env) @@ sequential
 
   def aggregatingBatcherForProducerRecord[R, T](

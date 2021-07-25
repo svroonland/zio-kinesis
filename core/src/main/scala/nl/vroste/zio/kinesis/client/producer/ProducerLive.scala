@@ -13,7 +13,7 @@ import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.producer.ProducerLive.ProduceRequest
 import nl.vroste.zio.kinesis.client.serde.Serializer
 import software.amazon.awssdk.core.exception.SdkException
-import software.amazon.awssdk.services.kinesis.model.KinesisException
+import software.amazon.awssdk.services.kinesis.model.{ KinesisException, ResourceInUseException }
 import zio._
 import zio.clock.{ instant, Clock }
 import zio.duration._
@@ -359,6 +359,8 @@ private[client] object ProducerLive {
       case e: KinesisException if e.statusCode() / 100 != 4 => true
       case _: ReadTimeoutException                          => true
       case _: IOException                                   => true
+      case _: ResourceInUseException                        =>
+        true // Also covers DELETING, but will result in ResourceNotFoundException on a subsequent attempt
       case e: SdkException if Option(e.getCause).isDefined  => isRecoverableException(e.getCause)
       case _                                                => false
     }
