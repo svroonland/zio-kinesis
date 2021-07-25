@@ -353,7 +353,7 @@ object ProducerTest extends DefaultRunnableSpec {
             _           <- producerFib.interrupt
           } yield assertCompletes
         }
-      } @@ TestAspect.timeout(2.minute) @@ TestAspect.ifEnvSet("ENABLE_AWS") // LocalStack does not support resharding
+      } @@ TestAspect.timeout(2.minute)
     ).provideCustomLayerShared(env) @@ sequential
 
   def aggregatingBatcherForProducerRecord[R, T](
