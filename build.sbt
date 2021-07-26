@@ -89,7 +89,7 @@ lazy val stdSettings: Seq[sbt.Def.SettingsDefinition] = Seq(
     "dev.zio"                %% "zio-interop-reactivestreams" % "1.3.5",
     "dev.zio"                %% "izumi-reflect"               % "1.1.3-RC2", // Temporarily to fix issue with Tag in zio 1.0.8
     "dev.zio"                %% "zio-logging"                 % "0.5.10",
-    "ch.qos.logback"          % "logback-classic"             % "1.2.4",
+    "ch.qos.logback"          % "logback-classic"             % "1.2.5",
     "org.scala-lang.modules" %% "scala-collection-compat"     % "2.4.4",
     "org.hdrhistogram"        % "HdrHistogram"                % "2.1.12",
     "io.github.vigoo"        %% "zio-aws-core"                % zioAwsVersion,
