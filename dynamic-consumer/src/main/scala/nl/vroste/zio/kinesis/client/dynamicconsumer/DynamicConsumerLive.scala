@@ -114,8 +114,10 @@ private[client] class DynamicConsumerLive(
       var shardId: Option[String]        = None
       var shardQueue: Option[ShardQueue] = None
 
-      override def initialize(input: InitializationInput): Unit =
+      override def initialize(input: InitializationInput): Unit = {
+        println(s"Initialized shard processor ${input.shardId()}")
         shardId = Some(input.shardId())
+      }
 
       override def processRecords(processRecordsInput: ProcessRecordsInput): Unit = {
         if (shardQueue.isEmpty)
@@ -214,7 +216,10 @@ private[client] class DynamicConsumerLive(
                        new Scheduler(
                          configsBuilder.checkpointConfig(),
                          configsBuilder.coordinatorConfig(),
-                         configsBuilder.leaseManagementConfig().initialPositionInStream(initialPosition),
+                         configsBuilder
+                           .leaseManagementConfig()
+                           .initialPositionInStream(initialPosition)
+                           .cleanupLeasesUponShardCompletion(true),
                          configsBuilder.lifecycleConfig(),
                          configsBuilder.metricsConfig(),
                          configsBuilder.processorConfig(),
