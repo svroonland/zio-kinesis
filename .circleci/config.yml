@@ -24,11 +24,9 @@ jobs:
           AWS_ACCESS_KEY_ID: dummy-key
           AWS_SECRET_ACCESS_KEY: dummy-key
           DEBUG: "1"
-          KINESIS_MOCK_VERSION: 0.1.5
-
       - image: "ghcr.io/etspaceman/kinesis-mock:0.1.6"
         environment:
-          - "LOG_LEVEL=TRACE"
+          LOG_LEVEL: TRACE
 
     steps:
       - checkout
