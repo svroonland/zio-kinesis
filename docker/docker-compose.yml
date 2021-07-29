@@ -1,5 +1,3 @@
----
-
 version: '3'
 
 services:
@@ -12,12 +10,27 @@ services:
       retries: 10
     environment:
       LOCALSTACK_HOST: localstack
-      SERVICES: 'kinesis,cloudwatch,dynamodb'
+      SERVICES: 'cloudwatch,dynamodb'
       USE_SSL: "false"
       DEFAULT_REGION: 'us-east-1'
       AWS_DEFAULT_REGION: "us-east-1"
       AWS_ACCESS_KEY_ID: dummy-key
       AWS_SECRET_ACCESS_KEY: dummy-key
+      KINESIS_MOCK_VERSION: 0.1.5
       DEBUG: "1"
     ports:
       - "4566:4566"
+
+  kinesis-mock:
+    image: "ghcr.io/etspaceman/kinesis-mock:0.1.7"
+    environment:
+      LOG_LEVEL: DEBUG
+      UPDATE_SHARD_COUNT_DURATION: "10000ms"
+    healthcheck:
+      test: "curl --fail http://localhost:4568/healthcheck || exit 1"
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "4567:4567"
+      - "4568:4568"
