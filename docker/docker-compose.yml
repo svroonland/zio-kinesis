@@ -26,7 +26,7 @@ services:
     image: "ghcr.io/etspaceman/kinesis-mock:0.1.7"
     environment:
       LOG_LEVEL: DEBUG
-      UPDATE_SHARD_COUNT_DURATION: "10000ms"
+      UPDATE_SHARD_COUNT_DURATION: "5000ms"
 #    healthcheck:
 #      test: "curl --fail http://localhost:4568/healthcheck || exit 1"
 #      interval: 5s

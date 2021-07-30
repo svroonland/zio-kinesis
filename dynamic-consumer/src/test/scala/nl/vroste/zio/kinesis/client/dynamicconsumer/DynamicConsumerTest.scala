@@ -358,10 +358,12 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
             _                         <- ZIO.sleep(20.seconds)                    // Let KCL get it together
             _                         <- requestShutdown.succeed(())
             _                         <- consumer.join.timeoutFail(())(30.seconds).ignore
+            // Unfortunately KCL gets stuck here with:
+            // s.a.k.c.GracefulShutdownCoordinator$GracefulShutdownCallable - Waiting for 2 record process to complete shutdown notification, and 6 record processor to complete final shutdown
             (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
           } yield assert(processed)(Assertion.equalTo(checkpointed))
         }
-    } @@ TestAspect.timeout(5.minutes)
+    } @@ TestAspect.timeout(5.minutes) @@ TestAspect.ifEnvSet("ENABLE_AWS")
 
   // TODO check the order of received records is correct
 
