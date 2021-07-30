@@ -131,7 +131,9 @@ private[client] class DynamicConsumerLive(
 
       override def shardEnded(shardEndedInput: ShardEndedInput): Unit = {
         shardQueue.foreach(_.stop(ShardQueueStopReason.ShardEnded))
+        println(s"Calling shard ended checkpointer for ${shardId}")
         shardEndedInput.checkpointer().checkpoint()
+        println(s"Calling shard ended checkpointer for ${shardId} COMPLETE")
       }
 
       override def shutdownRequested(shutdownRequestedInput: ShutdownRequestedInput): Unit =
@@ -219,6 +221,7 @@ private[client] class DynamicConsumerLive(
                          configsBuilder
                            .leaseManagementConfig()
                            .initialPositionInStream(initialPosition)
+                           .shardSyncIntervalMillis(1000)
                            .cleanupLeasesUponShardCompletion(true),
                          configsBuilder.lifecycleConfig(),
                          configsBuilder.metricsConfig(),

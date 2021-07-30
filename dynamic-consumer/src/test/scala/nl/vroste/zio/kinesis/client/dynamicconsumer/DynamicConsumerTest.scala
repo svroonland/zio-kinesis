@@ -355,6 +355,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                  )
             _                         <- ZStream.fromQueue(newShards).take(nrShards * 3L).runDrain
             _                          = println("All (new) shards seen")
+            _                         <- ZIO.sleep(20.seconds)                    // Let KCL get it together
             _                         <- requestShutdown.succeed(())
             _                         <- consumer.join.timeoutFail(())(30.seconds).ignore
             (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
