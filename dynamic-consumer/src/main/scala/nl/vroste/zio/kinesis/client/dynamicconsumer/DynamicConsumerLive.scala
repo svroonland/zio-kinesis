@@ -45,6 +45,13 @@ private[client] class DynamicConsumerLive(
     Throwable,
     (String, ZStream[Blocking, Throwable, DynamicConsumer.Record[T]], DynamicConsumer.Checkpointer)
   ] = {
+    sealed trait ShardQueueStopReason
+    object ShardQueueStopReason {
+      case object ShutdownRequested extends ShardQueueStopReason
+      case object ShardEnded        extends ShardQueueStopReason
+      case object LeaseLost         extends ShardQueueStopReason
+    }
+
     /*
      * A queue for a single Shard and interface between the KCL threadpool and the ZIO runtime
      *
@@ -77,21 +84,24 @@ private[client] class DynamicConsumerLive(
       /**
        * Shutdown processing for this shard
        *
-               * Clear everything that is still in the queue, offer a completion signal for the queue,
+       * Clear everything that is still in the queue, offer a completion signal for the queue,
        * set an interrupt signal and await stream completion (in-flight messages processed)
        *
-               */
-      def stop(reason: String): Unit =
+       */
+      def stop(reason: ShardQueueStopReason): Unit =
         runtime.unsafeRun {
-          logger.debug(s"stop() for ${shardId} because of ${reason}") *>
-            (
-              q.takeAll.unit *>                  // Clear the queue so it doesn't have to be drained fully
-                q.offer(Exit.fail(None)).unit <* // Pass an exit signal in the queue to stop the stream
-                q.awaitShutdown
-            ).race(
-              q.awaitShutdown
-            ) <*
-            logger.trace(s"stop() for ${shardId} because of ${reason} - COMPLETE")
+          // Clear the queue so it doesn't have to be drained fully in case of
+          def drainQueueUnlessShardEnded =
+            q.takeAll.unit.unless(reason == ShardQueueStopReason.ShardEnded)
+
+          for {
+            _ <- logger.debug(s"stop() for ${shardId} because of ${reason}")
+            _ <- (drainQueueUnlessShardEnded *>
+                     q.offer(Exit.fail(None)).unit <* // Pass an exit signal in the queue to stop the stream
+                     q.awaitShutdown).race(q.awaitShutdown)
+            _ <- logger.trace(s"stop() for ${shardId} because of ${reason} - COMPLETE")
+          } yield ()
+
           // TODO maybe we want to only do this when the main stream's completion has bubbled up..?
         }
     }
@@ -115,15 +125,15 @@ private[client] class DynamicConsumerLive(
       }
 
       override def leaseLost(leaseLostInput: LeaseLostInput): Unit =
-        shardQueue.foreach(_.stop("lease lost"))
+        shardQueue.foreach(_.stop(ShardQueueStopReason.LeaseLost))
 
       override def shardEnded(shardEndedInput: ShardEndedInput): Unit = {
-        shardQueue.foreach(_.stop("shard ended"))
+        shardQueue.foreach(_.stop(ShardQueueStopReason.ShardEnded))
         shardEndedInput.checkpointer().checkpoint()
       }
 
       override def shutdownRequested(shutdownRequestedInput: ShutdownRequestedInput): Unit =
-        shardQueue.foreach(_.stop("shutdown requested"))
+        shardQueue.foreach(_.stop(ShardQueueStopReason.ShutdownRequested))
     }
 
     class Queues(
@@ -204,7 +214,9 @@ private[client] class DynamicConsumerLive(
                        new Scheduler(
                          configsBuilder.checkpointConfig(),
                          configsBuilder.coordinatorConfig(),
-                         configsBuilder.leaseManagementConfig().initialPositionInStream(initialPosition),
+                         configsBuilder
+                           .leaseManagementConfig()
+                           .initialPositionInStream(initialPosition),
                          configsBuilder.lifecycleConfig(),
                          configsBuilder.metricsConfig(),
                          configsBuilder.processorConfig(),

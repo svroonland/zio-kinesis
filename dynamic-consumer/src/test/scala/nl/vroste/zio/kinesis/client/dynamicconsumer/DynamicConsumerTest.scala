@@ -2,20 +2,23 @@ package nl.vroste.zio.kinesis.client.dynamicconsumer
 
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.dynamodb.DynamoDb
-import io.github.vigoo.zioaws.kinesis.Kinesis
+import io.github.vigoo.zioaws.kinesis
+import io.github.vigoo.zioaws.kinesis.model.ScalingType
+import io.github.vigoo.zioaws.kinesis.{ model, Kinesis }
+import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.{ ProducerRecord, TestUtil }
 import software.amazon.kinesis.exceptions.ShutdownException
+import zio._
 import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.console.{ putStrLn, Console }
 import zio.duration.{ durationInt, Duration }
-import zio.logging.Logging
+import zio.logging.{ LogLevel, Logging }
 import zio.stream.{ ZStream, ZTransducer }
 import zio.test.TestAspect.{ sequential, timeout }
 import zio.test._
-import zio._
 
 import java.util.UUID
 
@@ -23,14 +26,16 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
   import TestUtil._
 
   val loggingLayer: ZLayer[Any, Nothing, Logging] =
-    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
+    (Console.live ++ Clock.live) >>> Logging.console(LogLevel.Trace) >>> Logging.withRootLoggerName(getClass.getName)
+
+  val useAws = Runtime.default.unsafeRun(system.envOrElse("ENABLE_AWS", "0")).toInt == 1
 
   private val env: ZLayer[
     Any,
     Throwable,
     CloudWatch with Kinesis with DynamoDb with DynamicConsumer with Clock with Blocking
-  ] =
-    (loggingLayer ++ LocalStackServices.localStackAwsLayer()) >+> DynamicConsumer.live ++ Clock.live ++ Blocking.live
+  ] = (if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()) >+> loggingLayer >+>
+    (DynamicConsumer.live ++ Clock.live ++ Blocking.live)
 
   def testConsume1: ZSpec[Clock with Blocking with Console with DynamicConsumer with Kinesis, Throwable] =
     testM("consume records produced on all shards produced on the stream") {
@@ -258,13 +263,116 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
         }
     } @@ TestAspect.timeout(5.minutes)
 
+  def testShardEnd =
+    testM("checkpoint for the last processed record at shard end") {
+      val streamName      = "zio-test-stream-" + UUID.randomUUID().toString
+      val applicationName = "zio-test-" + UUID.randomUUID().toString
+
+      val batchSize = 100
+      val nrBatches = 300
+
+      def streamConsumer(
+        requestShutdown: Promise[Nothing, Unit],
+        firstRecordProcessed: Promise[Nothing, Unit],
+        newShardDetected: Queue[Unit],
+        lastProcessedRecords: Ref[Map[String, String]],
+        lastCheckpointedRecords: Ref[Map[String, String]]
+      ): ZStream[Console with Blocking with Clock with DynamicConsumer with Kinesis, Throwable, DynamicConsumer.Record[
+        String
+      ]] =
+        (for {
+          service <- ZStream.service[DynamicConsumer.Service]
+          stream  <- service
+                      .shardedStream(
+                        streamName,
+                        applicationName = applicationName,
+                        deserializer = Serde.asciiString,
+                        isEnhancedFanOut = false,
+                        requestShutdown = requestShutdown.await *> UIO(println("Interrupting shardedStream"))
+                      )
+                      .tap(_ => newShardDetected.offer(()))
+                      .flatMapPar(Int.MaxValue) {
+                        case (shardId, shardStream, checkpointer @ _) =>
+                          shardStream
+                            .tap(_ => firstRecordProcessed.succeed(()))
+                            .tap(record => lastProcessedRecords.update(_ + (shardId -> record.sequenceNumber)))
+                            .tap(checkpointer.stage)
+                            .aggregateAsyncWithin(
+                              ZTransducer.last, // TODO we need to make sure that in our test this thing has some records buffered after shutdown request
+                              Schedule.fixed(1.seconds)
+                            )
+                            .mapConcat(_.toList)
+                            .tap { r =>
+                              putStrLn(s"Shard ${r.shardId}: checkpointing for record $r").orDie *>
+                                checkpointer.checkpoint
+                                  .tapError(e => ZIO(println(s"Checkpointing failed: ${e}")))
+                                  .tap(_ => lastCheckpointedRecords.update(_ + (shardId -> r.sequenceNumber)))
+                                  .tap(_ => ZIO(println(s"Checkpointing for shard ${r.shardId} done")))
+                            }
+                      }
+        } yield stream)
+
+      val nrShards = 2
+      createStream(streamName, nrShards)
+        .provideSomeLayer[Console](env.fresh)
+        .use { _ =>
+          for {
+            _                         <- UIO(println("Start producing records"))
+            _                         <- ZStream
+                   .fromIterable(1 to nrBatches)
+                   .schedule(Schedule.spaced(1000.millis))
+                   .mapM { batchIndex =>
+                     TestUtil
+                       .putRecords(
+                         streamName,
+                         Serde.asciiString,
+                         recordsForBatch(batchIndex, batchSize)
+                           .map(i => ProducerRecord(s"key$i", s"msg$i"))
+                       )
+                       .tapError(e => putStrLn(s"error3: $e").orDie)
+                       .retry(retryOnResourceNotFound)
+                   }
+                   .runDrain
+                   .tap(_ => ZIO(println("PRODUCING RECORDS DONE")))
+                   .fork
+
+            newShards                 <- Queue.unbounded[Unit]
+            requestShutdown           <- Promise.make[Nothing, Unit]
+            firstRecordProcessed      <- Promise.make[Nothing, Unit]
+            lastProcessedRecords      <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
+            lastCheckpointedRecords   <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
+            consumer                  <- streamConsumer(
+                          requestShutdown,
+                          firstRecordProcessed,
+                          newShards,
+                          lastProcessedRecords,
+                          lastCheckpointedRecords
+                        ).runCollect.fork
+            _                         <- firstRecordProcessed.await
+            _                          = println("Resharding")
+            _                         <- kinesis.updateShardCount(
+                   model.UpdateShardCountRequest(streamName, nrShards * 2, ScalingType.UNIFORM_SCALING)
+                 )
+            _                         <- ZStream.fromQueue(newShards).take(nrShards * 3L).runDrain
+            _                          = println("All (new) shards seen")
+            _                         <- ZIO.sleep(20.seconds)                    // Let KCL get it together
+            _                         <- requestShutdown.succeed(())
+            _                         <- consumer.join.timeoutFail(())(30.seconds).ignore
+            // Unfortunately KCL gets stuck here with:
+            // s.a.k.c.GracefulShutdownCoordinator$GracefulShutdownCallable - Waiting for 2 record process to complete shutdown notification, and 6 record processor to complete final shutdown
+            (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
+          } yield assert(processed)(Assertion.equalTo(checkpointed))
+        }
+    } @@ TestAspect.timeout(5.minutes) @@ TestAspect.ifEnvSet("ENABLE_AWS")
+
   // TODO check the order of received records is correct
 
   override def spec =
     suite("DynamicConsumer")(
       testConsume1,
       testConsume2,
-      testCheckpointAtShutdown
+      testCheckpointAtShutdown,
+      testShardEnd
     ).provideCustomLayerShared(env.orDie) @@ timeout(10.minutes) @@ sequential
 
   def delayStream[R, E, O](s: ZStream[R, E, O], delay: Duration) =
