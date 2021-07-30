@@ -43,7 +43,7 @@ object LocalStackServices {
    *         configured for localstack usage
    */
   def localStackAwsLayer(
-    kinesisUri: URI = URI.create("https://localhost:4567"),
+    kinesisUri: URI = URI.create("https://localhost:4566"),
     cloudwatchUri: URI = URI.create("http://localhost:4566"),
     dynamoDbUri: URI = URI.create("http://localhost:4566"),
     accessKey: String = "dummy-key",
