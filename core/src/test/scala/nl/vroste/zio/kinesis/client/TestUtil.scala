@@ -46,12 +46,13 @@ object TestUtil {
     )
   } <* ZManaged.fromEffect(waitForStreamActive(streamName))
 
-  def waitForStreamActive(streamName: String): ZIO[Kinesis, Throwable, Unit] =
+  def waitForStreamActive(streamName: String): ZIO[Kinesis with Clock, Throwable, Unit] =
     kinesis
       .describeStream(DescribeStreamRequest(streamName))
       .mapError(_.toThrowable)
       .flatMap(_.streamDescription)
       .flatMap(_.streamStatus)
+      .delay(500.millis)
       .repeatUntilEquals(StreamStatus.ACTIVE)
       .unit
 
