@@ -114,10 +114,8 @@ private[client] class DynamicConsumerLive(
       var shardId: Option[String]        = None
       var shardQueue: Option[ShardQueue] = None
 
-      override def initialize(input: InitializationInput): Unit = {
-        println(s"Initialized shard processor ${input.shardId()}")
+      override def initialize(input: InitializationInput): Unit =
         shardId = Some(input.shardId())
-      }
 
       override def processRecords(processRecordsInput: ProcessRecordsInput): Unit = {
         if (shardQueue.isEmpty)
@@ -131,9 +129,7 @@ private[client] class DynamicConsumerLive(
 
       override def shardEnded(shardEndedInput: ShardEndedInput): Unit = {
         shardQueue.foreach(_.stop(ShardQueueStopReason.ShardEnded))
-        println(s"Calling shard ended checkpointer for ${shardId}")
         shardEndedInput.checkpointer().checkpoint()
-        println(s"Calling shard ended checkpointer for ${shardId} COMPLETE")
       }
 
       override def shutdownRequested(shutdownRequestedInput: ShutdownRequestedInput): Unit =
@@ -220,9 +216,7 @@ private[client] class DynamicConsumerLive(
                          configsBuilder.coordinatorConfig(),
                          configsBuilder
                            .leaseManagementConfig()
-                           .initialPositionInStream(initialPosition)
-                           .shardSyncIntervalMillis(1000)
-                           .cleanupLeasesUponShardCompletion(true),
+                           .initialPositionInStream(initialPosition),
                          configsBuilder.lifecycleConfig(),
                          configsBuilder.metricsConfig(),
                          configsBuilder.processorConfig(),
