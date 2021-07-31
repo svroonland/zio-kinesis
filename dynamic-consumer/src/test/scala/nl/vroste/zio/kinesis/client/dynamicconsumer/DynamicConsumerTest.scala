@@ -292,7 +292,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                       )
                       .tap(_ => newShardDetected.offer(()))
                       .flatMapPar(Int.MaxValue) {
-                        case (shardId, shardStream, checkpointer @ _) =>
+                        case (shardId @ _, shardStream, checkpointer @ _) =>
                           shardStream
                             .tap(_ => firstRecordProcessed.succeed(()))
                             .tap(checkpointer.stage)

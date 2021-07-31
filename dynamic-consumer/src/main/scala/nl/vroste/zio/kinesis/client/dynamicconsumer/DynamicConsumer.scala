@@ -234,7 +234,7 @@ object DynamicConsumer {
     /*
      * Helper method that returns current state - useful for debugging
      */
-    private[client] def peek: UIO[Option[Record[_]]]
+    private[client] def peek: UIO[Option[ExtendedSequenceNumber]]
 
     /**
      * Stages a record for checkpointing

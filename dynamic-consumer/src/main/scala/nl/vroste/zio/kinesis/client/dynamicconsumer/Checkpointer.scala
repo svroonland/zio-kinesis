@@ -1,13 +1,13 @@
 package nl.vroste.zio.kinesis.client.dynamicconsumer
 
-import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.{ Checkpointer, CheckpointerInternal, Record }
+import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.{ Checkpointer, Record }
 import software.amazon.kinesis.processor.RecordProcessorCheckpointer
 import zio.{ Ref, Task, UIO, ZIO }
 import zio.blocking.Blocking
 import zio.logging.Logger
 
 private[dynamicconsumer] trait CheckpointerInternal extends Checkpointer {
-  def setMaxSequenceNumber(lastSequenceNumber: String): UIO[Unit]
+  def setMaxSequenceNumber(lastSequenceNumber: ExtendedSequenceNumber): UIO[Unit]
   def markEndOfShard: UIO[Unit]
   def checkEndOfShardCheckpointRequired: Task[Unit]
 }
@@ -18,39 +18,40 @@ private[dynamicconsumer] object Checkpointer {
     logger: Logger[String]
   ): UIO[CheckpointerInternal] =
     for {
-      latestStaged                 <- Ref.make[Option[Record[_]]](None)
-      lastCheckpointed             <- Ref.make[Option[String]](None)
-      maxSequenceNumber            <- Ref.make[Option[String]](None)
+      latestStaged                 <- Ref.make[Option[ExtendedSequenceNumber]](None)
+      lastCheckpointed             <- Ref.make[Option[ExtendedSequenceNumber]](None)
+      maxSequenceNumber            <- Ref.make[Option[ExtendedSequenceNumber]](None)
       endOfShardCheckpointRequired <- Ref.make[Boolean](false)
     } yield new Checkpointer with CheckpointerInternal {
       override def stage(r: Record[_]): UIO[Unit] =
-        latestStaged.set(Some(r))
+        latestStaged.set(Some(ExtendedSequenceNumber(r.sequenceNumber, r.subSequenceNumber)))
 
       override def checkpoint: ZIO[Blocking, Throwable, Unit] =
         latestStaged.get.flatMap {
-          case Some(record) =>
+          case Some(sequenceNumber) =>
             for {
-              _ <- logger.trace(s"about to checkpoint: shardId=${record.shardId} partitionKey=${record.partitionKey}")
+              _ <- logger.trace(s"about to checkpoint ${sequenceNumber}")
               _ <- zio.blocking.blocking {
-                     Task(kclCheckpointer.checkpoint(record.sequenceNumber, record.subSequenceNumber.getOrElse(0L)))
+                     Task(
+                       kclCheckpointer
+                         .checkpoint(sequenceNumber.sequenceNumber, sequenceNumber.subSequenceNumber.getOrElse(0L))
+                     )
                    }
               _ <- latestStaged.update {
-                     case Some(r) if r == record => None
-                     case r                      => r // A newer record may have been staged by now
+                     case Some(r) if r == sequenceNumber => None
+                     case r                              => r // A newer record may have been staged by now
                    }
-              // TODO both seq and subseq
-              _ <- lastCheckpointed.set(Some(record.sequenceNumber))
-              // TODO both seq and subseq
+              _ <- lastCheckpointed.set(Some(sequenceNumber))
               _ <- endOfShardCheckpointRequired
                      .set(false)
-                     .whenM(maxSequenceNumber.get.map(_.contains(record.sequenceNumber)))
+                     .whenM(maxSequenceNumber.get.map(_.contains(sequenceNumber)))
             } yield ()
-          case None         => UIO.unit
+          case None                 => UIO.unit
         }
 
-      override private[client] def peek: UIO[Option[Record[_]]] = latestStaged.get
+      override private[client] def peek: UIO[Option[ExtendedSequenceNumber]] = latestStaged.get
 
-      override def setMaxSequenceNumber(lastSequenceNumber: String): UIO[Unit] =
+      override def setMaxSequenceNumber(lastSequenceNumber: ExtendedSequenceNumber): UIO[Unit] =
         maxSequenceNumber.set(Some(lastSequenceNumber))
 
       override def markEndOfShard: UIO[Unit] =

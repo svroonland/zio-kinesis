@@ -1,6 +1,5 @@
 package nl.vroste.zio.kinesis.client.dynamicconsumer
 
-import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.{ Checkpointer, CheckpointerInternal }
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
@@ -76,7 +75,12 @@ private[client] class DynamicConsumerLive(
           val records = r.asScala
           for {
             _ <- logger.debug(s"offerRecords for ${shardId} got ${records.size} records")
-            _ <- checkpointerInternal.setMaxSequenceNumber(records.last.sequenceNumber())
+            _ <- checkpointerInternal.setMaxSequenceNumber(
+                   ExtendedSequenceNumber(
+                     records.last.sequenceNumber(),
+                     Option(records.last.subSequenceNumber()).filter(_ != 0L)
+                   )
+                 )
             _ <- q.offerAll(records.map(Exit.succeed)).unit.catchSomeCause { case c if c.interrupted => ZIO.unit }
             _ <- logger.trace(s"offerRecords for ${shardId} COMPLETE")
           } yield ()
