@@ -3,12 +3,10 @@ package nl.vroste.zio.kinesis.client.dynamicconsumer
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
-import software.amazon.awssdk.services.dynamodb.model.BillingMode
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
-import software.amazon.kinesis.common.{ ConfigsBuilder, InitialPositionInStreamExtended, LeaseCleanupConfig }
+import software.amazon.kinesis.common.{ ConfigsBuilder, InitialPositionInStreamExtended }
 import software.amazon.kinesis.coordinator.Scheduler
 import software.amazon.kinesis.exceptions.ShutdownException
-import software.amazon.kinesis.leases.LeaseManagementConfig
 import software.amazon.kinesis.lifecycle.events._
 import software.amazon.kinesis.processor.{
   RecordProcessorCheckpointer,
@@ -227,20 +225,9 @@ private[client] class DynamicConsumerLive(
                        new Scheduler(
                          configsBuilder.checkpointConfig(),
                          configsBuilder.coordinatorConfig(),
-                         new LeaseManagementConfig(
-                           configsBuilder.tableName(),
-                           configsBuilder.dynamoDBClient(),
-                           configsBuilder.kinesisClient(),
-                           configsBuilder.workerIdentifier()
-                         ) {
-                           override def leaseCleanupConfig(): LeaseCleanupConfig =
-                             LeaseCleanupConfig
-                               .builder()
-                               .leaseCleanupIntervalMillis(10000)
-                               .completedLeaseCleanupIntervalMillis(10000)
-                               .garbageLeaseCleanupIntervalMillis(10000)
-                               .build()
-                         }.initialPositionInStream(initialPosition).billingMode(BillingMode.PAY_PER_REQUEST),
+                         configsBuilder
+                           .leaseManagementConfig()
+                           .initialPositionInStream(initialPosition),
                          configsBuilder.lifecycleConfig(),
                          configsBuilder.metricsConfig(),
                          configsBuilder.processorConfig(),

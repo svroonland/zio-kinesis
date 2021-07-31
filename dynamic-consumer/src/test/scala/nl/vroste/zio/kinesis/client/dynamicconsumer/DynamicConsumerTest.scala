@@ -328,8 +328,8 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                  .mapError(_.toThrowable)
           _        <- ZStream.fromQueue(newShards).take(nrShards * 3L).runDrain
           _         = println("All (new) shards seen")
-          // The long timeout is related to LeaseCleanupConfig.completedLeaseCleanupIntervalMillis which I don't see how to alter
-          _        <- ZIO.sleep(20.seconds)
+          // The long timeout is related to LeaseCleanupConfig.completedLeaseCleanupIntervalMillis which currently cannot be configured in zio-kinesis
+          _        <- ZIO.sleep(360.seconds)
           _        <- requestShutdown.succeed(())
           _        <- consumer.join
         } yield assertCompletes
