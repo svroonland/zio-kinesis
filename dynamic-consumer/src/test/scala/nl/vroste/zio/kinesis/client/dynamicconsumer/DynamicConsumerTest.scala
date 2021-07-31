@@ -355,7 +355,8 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                  )
             _                         <- ZStream.fromQueue(newShards).take(nrShards * 3L).runDrain
             _                          = println("All (new) shards seen")
-            _                         <- ZIO.sleep(20.seconds)                    // Let KCL get it together
+            // Related to LeaseCleanupConfig.completedLeaseCleanupIntervalMillis which I don't see how to alter
+            _                         <- ZIO.sleep(360.seconds)
             _                         <- requestShutdown.succeed(())
             _                         <- consumer.join.timeoutFail(())(30.seconds).ignore
             // Unfortunately KCL gets stuck here with:
@@ -363,7 +364,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
             (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
           } yield assert(processed)(Assertion.equalTo(checkpointed))
         }
-    } @@ TestAspect.timeout(5.minutes) @@ TestAspect.ifEnvSet("ENABLE_AWS")
+    } @@ TestAspect.timeout(15.minutes) @@ TestAspect.ifEnvSet("ENABLE_AWS")
 
   // TODO check the order of received records is correct
 
