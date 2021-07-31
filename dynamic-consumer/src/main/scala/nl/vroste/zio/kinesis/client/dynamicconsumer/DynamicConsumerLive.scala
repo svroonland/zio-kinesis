@@ -271,7 +271,7 @@ private[client] class DynamicConsumerLive(
               .flattenExitOption
               .mapChunksM(_.mapM(toRecord(shardId, _)))
               .provide(env)
-              .ensuringFirst((checkpointer.checkEndOfShardCheckpointRequired *> checkpointer.checkpoint).catchSome {
+              .ensuringFirst((checkpointer.checkEndOfShardCheckpointed *> checkpointer.checkpoint).catchSome {
                 case _: ShutdownException => UIO.unit
               }.orDie)
 

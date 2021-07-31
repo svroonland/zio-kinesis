@@ -6,29 +6,36 @@ import zio.{ Ref, Task, UIO, ZIO }
 import zio.blocking.Blocking
 import zio.logging.Logger
 
+case object LastRecordMustBeCheckpointedException
+    extends Exception("Record at end of shard must be checkpointed before checkpointer shutdown")
+
 private[dynamicconsumer] trait CheckpointerInternal extends Checkpointer {
   def setMaxSequenceNumber(lastSequenceNumber: ExtendedSequenceNumber): UIO[Unit]
   def markEndOfShard: UIO[Unit]
-  def checkEndOfShardCheckpointRequired: Task[Unit]
+  def checkEndOfShardCheckpointed: Task[Unit]
 }
 
 private[dynamicconsumer] object Checkpointer {
+  case class State(
+    latestStaged: Option[ExtendedSequenceNumber],
+    lastCheckpointed: Option[ExtendedSequenceNumber],
+    maxSequenceNumber: Option[ExtendedSequenceNumber],
+    endOfShard: Boolean
+  )
+
   def make(
     kclCheckpointer: RecordProcessorCheckpointer,
     logger: Logger[String]
   ): UIO[CheckpointerInternal] =
     for {
-      latestStaged                 <- Ref.make[Option[ExtendedSequenceNumber]](None)
-      lastCheckpointed             <- Ref.make[Option[ExtendedSequenceNumber]](None)
-      maxSequenceNumber            <- Ref.make[Option[ExtendedSequenceNumber]](None)
-      endOfShardCheckpointRequired <- Ref.make[Boolean](false)
+      state <- Ref.make(State(None, None, None, false))
     } yield new Checkpointer with CheckpointerInternal {
       override def stage(r: Record[_]): UIO[Unit] =
-        latestStaged.set(Some(ExtendedSequenceNumber(r.sequenceNumber, r.subSequenceNumber)))
+        state.update(_.copy(latestStaged = Some(ExtendedSequenceNumber(r.sequenceNumber, r.subSequenceNumber))))
 
       override def checkpoint: ZIO[Blocking, Throwable, Unit] =
-        latestStaged.get.flatMap {
-          case Some(sequenceNumber) =>
+        state.get.flatMap {
+          case State(Some(sequenceNumber), _, _, _) =>
             for {
               _ <- logger.trace(s"about to checkpoint ${sequenceNumber}")
               _ <- zio.blocking.blocking {
@@ -37,40 +44,37 @@ private[dynamicconsumer] object Checkpointer {
                          .checkpoint(sequenceNumber.sequenceNumber, sequenceNumber.subSequenceNumber.getOrElse(0L))
                      )
                    }
-              _ <- latestStaged.update {
-                     case Some(r) if r == sequenceNumber => None
-                     case r                              => r // A newer record may have been staged by now
+              _ <- state.updateSome {
+                     case State(Some(latestStaged), lastCheckpointed @ _, maxSequenceNumber, endOfShard) =>
+                       State(
+                         latestStaged = if (latestStaged == sequenceNumber) None else Some(latestStaged),
+                         Some(sequenceNumber),
+                         maxSequenceNumber,
+                         endOfShard
+                       )
                    }
-              _ <- lastCheckpointed.set(Some(sequenceNumber))
-              _ <- endOfShardCheckpointRequired
-                     .set(false)
-                     .whenM(maxSequenceNumber.get.map(_.contains(sequenceNumber)))
             } yield ()
-          case None                 => UIO.unit
+          case State(None, _, _, _)                 => UIO.unit
         }
 
-      override private[client] def peek: UIO[Option[ExtendedSequenceNumber]] = latestStaged.get
+      override private[client] def peek: UIO[Option[ExtendedSequenceNumber]] = state.get.map(_.latestStaged)
 
       override def setMaxSequenceNumber(lastSequenceNumber: ExtendedSequenceNumber): UIO[Unit] =
-        maxSequenceNumber.set(Some(lastSequenceNumber))
+        state.update(_.copy(maxSequenceNumber = Some(lastSequenceNumber)))
 
       override def markEndOfShard: UIO[Unit] =
-        for {
-          lastCheckpointed <- lastCheckpointed.get
-          maxSeqNr         <- maxSequenceNumber.get
-          _                <- (maxSeqNr, lastCheckpointed) match {
-                 case (None, _)                              => ZIO.unit
-                 case (Some(max), Some(last)) if max == last => ZIO.unit
-                 case (Some(_), _)                           => endOfShardCheckpointRequired.set(true)
-               }
-        } yield ()
+        state.update(_.copy(endOfShard = true))
 
-      override def checkEndOfShardCheckpointRequired: Task[Unit] =
+      override def checkEndOfShardCheckpointed: Task[Unit] =
         ZIO
-          .fail(
-            new IllegalStateException("Record at end of shard must be checkpointed before checkpointer shutdown")
-          )
-          .tapError(e => UIO(println(e)))
-          .whenM(endOfShardCheckpointRequired.get)
+          .fail(LastRecordMustBeCheckpointedException)
+          .whenM(state.get.tap(s => UIO(println(s"State at check end of shard: ${s}"))).map {
+            case State(_, _, None, _)                                                  => false
+            case State(_, None, Some(maxSequenceNumber @ _), endOfShard) if endOfShard => true
+            case State(_, Some(lastCheckpointed), Some(maxSequenceNumber), endOfShard)
+                if endOfShard && lastCheckpointed != maxSequenceNumber =>
+              true
+            case _                                                                     => false
+          })
     }
 }

@@ -8,13 +8,12 @@ import nl.vroste.zio.kinesis.client.serde.Deserializer
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import software.amazon.kinesis.common.{ InitialPositionInStream, InitialPositionInStreamExtended }
 import software.amazon.kinesis.exceptions.ShutdownException
-import software.amazon.kinesis.processor.RecordProcessorCheckpointer
+import zio._
 import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.duration.{ durationInt, Duration }
 import zio.logging.{ Logger, Logging }
 import zio.stream.{ ZStream, ZTransducer }
-import zio._
 
 import java.time.Instant
 import java.util.UUID
