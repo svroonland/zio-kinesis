@@ -112,7 +112,7 @@ object DynamicConsumer {
       metricsNamespace: Option[String] = None,
       workerIdentifier: String = UUID.randomUUID().toString,
       maxShardBufferSize: Int = 1024, // Prefer powers of 2
-      configureKcl: SchedulerConfig => SchedulerConfig
+      configureKcl: SchedulerConfig => SchedulerConfig = identity
     ): ZStream[
       Blocking with R,
       Throwable,
