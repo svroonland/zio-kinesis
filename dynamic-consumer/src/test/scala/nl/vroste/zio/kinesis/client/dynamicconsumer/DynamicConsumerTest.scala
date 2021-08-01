@@ -6,9 +6,9 @@ import io.github.vigoo.zioaws.kinesis
 import io.github.vigoo.zioaws.kinesis.model.ScalingType
 import io.github.vigoo.zioaws.kinesis.{ model, Kinesis }
 import nl.vroste.zio.kinesis.client
+import nl.vroste.zio.kinesis.client.TestUtil
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
-import nl.vroste.zio.kinesis.client.{ ProducerRecord, TestUtil }
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio._
 import zio.blocking.Blocking
@@ -16,9 +16,10 @@ import zio.clock.Clock
 import zio.console.{ putStrLn, Console }
 import zio.duration.{ durationInt, Duration }
 import zio.logging.{ LogLevel, Logging }
+import zio.random.Random
 import zio.stream.{ SubscriptionRef, ZStream, ZTransducer }
 import zio.test.Assertion._
-import zio.test.TestAspect.{ sequential, timeout }
+import zio.test.TestAspect.timeout
 import zio.test._
 
 object DynamicConsumerTest extends DefaultRunnableSpec {
@@ -32,9 +33,9 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
   private val env: ZLayer[
     Any,
     Throwable,
-    CloudWatch with Kinesis with DynamoDb with DynamicConsumer with Clock with Blocking with Logging
+    CloudWatch with Kinesis with DynamoDb with Logging with DynamicConsumer with Clock with Blocking with Random with Console with system.System
   ] = (if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()) >+> loggingLayer >+>
-    (DynamicConsumer.live ++ Clock.live ++ Blocking.live)
+    (DynamicConsumer.live ++ Clock.live ++ Blocking.live ++ Random.live ++ Console.live ++ zio.system.System.live)
 
   def testConsume1 =
     testM("consume records produced on all shards produced on the stream") {
@@ -291,7 +292,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
       testConsume2,
       testCheckpointAtShutdown,
       testShardEnd
-    ).provideCustomLayerShared(env.orDie) @@ timeout(10.minutes) @@ sequential
+    ).provideCustomLayer(env.orDie) @@ timeout(10.minutes)
 
   def delayStream[R, E, O](s: ZStream[R, E, O], delay: Duration) =
     ZStream.fromEffect(ZIO.sleep(delay)).flatMap(_ => s)
