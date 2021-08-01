@@ -2,8 +2,7 @@ package nl.vroste.zio.kinesis.client.dynamicconsumer
 
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.dynamodb.DynamoDb
-import io.github.vigoo.zioaws.dynamodb.model.DeleteTableRequest
-import io.github.vigoo.zioaws.{ dynamodb, kinesis }
+import io.github.vigoo.zioaws.kinesis
 import io.github.vigoo.zioaws.kinesis.model.ScalingType
 import io.github.vigoo.zioaws.kinesis.{ model, Kinesis }
 import nl.vroste.zio.kinesis.client
@@ -17,12 +16,10 @@ import zio.clock.Clock
 import zio.console.{ putStrLn, Console }
 import zio.duration.{ durationInt, Duration }
 import zio.logging.{ LogLevel, Logging }
-import zio.stream.{ ZStream, ZTransducer }
+import zio.stream.{ SubscriptionRef, ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test.TestAspect.{ sequential, timeout }
 import zio.test._
-
-import java.util.UUID
 
 object DynamicConsumerTest extends DefaultRunnableSpec {
   import TestUtil._
@@ -83,23 +80,11 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
   def testConsume2 =
     testM("support multiple parallel consumers on the same Kinesis stream") {
       withRandomStreamEnv(10) { (streamName, applicationName) =>
-        val nrRecords = 80
-
         def streamConsumer(
           workerIdentifier: String,
-          activeConsumers: Ref[Set[String]]
-        ): ZStream[Console with Blocking with DynamicConsumer with Clock, Throwable, (String, String)] = {
-          val checkpointDivisor = 1
-
-          def handler(shardId: String, r: DynamicConsumer.Record[String]) =
-            for {
-              id <- ZIO.fiberId
-              _  <- putStrLn(s"Consumer $workerIdentifier on fiber $id got record $r on shard $shardId").orDie
-              // Simulate some effectful processing
-              _  <- ZIO.sleep(50.millis)
-            } yield ()
-
-          (for {
+          activeConsumers: RefM[Set[String]]
+        ): ZStream[Console with Blocking with DynamicConsumer with Clock, Throwable, (String, String)] =
+          for {
             service <- ZStream.service[DynamicConsumer.Service]
             stream  <- ZStream
                         .fromEffect(putStrLn(s"Starting consumer $workerIdentifier").orDie)
@@ -114,21 +99,11 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                             )
                             .flatMapPar(Int.MaxValue) {
                               case (shardId, shardStream, checkpointer @ _) =>
-                                shardStream.zipWithIndex.tap {
-                                  case (r: DynamicConsumer.Record[String], sequenceNumberForShard: Long) =>
-                                    checkpointer.stageOnSuccess(handler(shardId, r))(r).as(r) <*
-                                      (putStrLn(
-                                        s"Checkpointing at offset ${sequenceNumberForShard} in consumer ${workerIdentifier}, shard ${shardId}"
-                                      ).orDie *> checkpointer.checkpoint)
-                                        .when(sequenceNumberForShard % checkpointDivisor == checkpointDivisor - 1)
-                                        .tapError(_ =>
-                                          putStrLn(
-                                            s"Failed to checkpoint in consumer ${workerIdentifier}, shard ${shardId}"
-                                          ).orDie
-                                        )
-                                }.as((workerIdentifier, shardId))
+                                shardStream
+                                  .via(checkpointer.checkpointBatched[Blocking with Clock](1000, 1.second))
+                                  .as((workerIdentifier, shardId))
                                   // Background and a bit delayed so we get a chance to actually emit some records
-                                  .tap(_ => activeConsumers.update(_ + workerIdentifier).delay(1.second).fork)
+                                  .tap(_ => activeConsumers.update(s => ZIO(s + workerIdentifier)).delay(1.second).fork)
                                   .ensuring(putStrLn(s"Shard $shardId completed for consumer $workerIdentifier").orDie)
                                   .catchSome {
                                     case _: ShutdownException => // This will be thrown when the shard lease has been stolen
@@ -138,33 +113,18 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                             }
                         )
 
-          } yield stream)
-        }
+          } yield stream
 
-        val records =
-          (1 to nrRecords).map(i => ProducerRecord(s"key$i", s"msg$i"))
         for {
           _                     <- putStrLn("Putting records").orDie
-          producer              <- ZStream
-                        .fromIterable(1 to nrRecords)
-                        .schedule(Schedule.spaced(250.millis))
-                        .mapM { _ =>
-                          TestUtil
-                            .putRecords(streamName, Serde.asciiString, records)
-                            .tapError(e => putStrLn(s"error2: $e").provideLayer(Console.live).orDie)
-                            .retry(retryOnResourceNotFound)
-                        }
-                        .runDrain
-                        .fork
-
+          _                     <- TestUtil.produceRecords(streamName, 20000, 80, 10).fork
           _                     <- putStrLn("Starting dynamic consumers").orDie
-          activeConsumers       <- Ref.make[Set[String]](Set.empty)
-          allConsumersGotAShard <- awaitRefPredicate(activeConsumers)(_ == Set("1", "2"))
-          _                     <- (streamConsumer("1", activeConsumers)
-                   merge delayStream(streamConsumer("2", activeConsumers), 5.seconds))
+          activeConsumers       <- SubscriptionRef.make(Set.empty[String])
+          allConsumersGotAShard <- activeConsumers.changes.takeUntil(_ == Set("1", "2")).runDrain.fork
+          _                     <- (streamConsumer("1", activeConsumers.ref)
+                   merge delayStream(streamConsumer("2", activeConsumers.ref), 5.seconds))
                  .interruptWhen(allConsumersGotAShard.join)
                  .runCollect
-          _                     <- producer.interrupt
         } yield assertCompletes
       }
     }
