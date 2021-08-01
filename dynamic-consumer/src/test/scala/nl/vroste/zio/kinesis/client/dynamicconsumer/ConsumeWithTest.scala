@@ -56,8 +56,8 @@ object ConsumeWithTest extends DefaultRunnableSpec {
                                  streamName,
                                  applicationName = applicationName,
                                  deserializer = Serde.asciiString,
-                                 isEnhancedFanOut = false,
-                                 checkpointBatchSize = 2
+                                 checkpointBatchSize = 2,
+                                 configureKcl = _.withPolling
                                ) {
                                  FakeRecordProcessor
                                    .make(
@@ -100,8 +100,8 @@ object ConsumeWithTest extends DefaultRunnableSpec {
                      streamName,
                      applicationName = applicationName,
                      deserializer = Serde.asciiString,
-                     isEnhancedFanOut = false,
-                     checkpointBatchSize = batchSize
+                     checkpointBatchSize = batchSize,
+                     configureKcl = _.withPolling
                    ) {
                      FakeRecordProcessor
                        .makeFailing(
@@ -115,8 +115,8 @@ object ConsumeWithTest extends DefaultRunnableSpec {
                                  streamName,
                                  applicationName = applicationName,
                                  deserializer = Serde.asciiString,
-                                 isEnhancedFanOut = false,
-                                 checkpointBatchSize = batchSize
+                                 checkpointBatchSize = batchSize,
+                                 configureKcl = _.withPolling
                                ) {
                                  FakeRecordProcessor
                                    .make(

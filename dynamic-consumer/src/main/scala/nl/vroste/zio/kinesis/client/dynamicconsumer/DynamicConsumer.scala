@@ -89,13 +89,14 @@ object DynamicConsumer {
      *   and the streams.
      * @param initialPosition Position in stream to start at when there is no previous checkpoint
      *   for this application
-     * @param isEnhancedFanOut Flag for setting retrieval config - defaults to `true`. If `false` polling config is set.
      * @param leaseTableName Optionally set the lease table name - defaults to None. If not specified the `applicationName` will be used.
+     * @param metricsNamespace CloudWatch metrics namespace
      * @param workerIdentifier Identifier used for the worker in this application group. Used in logging
      *   and written to the lease table.
      * @param maxShardBufferSize The maximum number of records per shard to store in a queue before blocking
      *   the KCL record processor until records have been dequeued. Note that the stream returned from this
      *   method will have internal chunk buffers as well.
+     * @param configureKcl Make additional KCL Scheduler configurations
      * @tparam R ZIO environment type required by the `deserializer`
      * @tparam T Type of record values
      * @return A nested ZStream - the outer ZStream represents the collection of shards, and the inner ZStream represents the individual shard
@@ -107,10 +108,11 @@ object DynamicConsumer {
       requestShutdown: UIO[Unit] = UIO.never,
       initialPosition: InitialPositionInStreamExtended =
         InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON),
-      isEnhancedFanOut: Boolean = true,
       leaseTableName: Option[String] = None,
+      metricsNamespace: Option[String] = None,
       workerIdentifier: String = UUID.randomUUID().toString,
-      maxShardBufferSize: Int = 1024 // Prefer powers of 2
+      maxShardBufferSize: Int = 1024, // Prefer powers of 2
+      configureKcl: SchedulerConfig => SchedulerConfig
     ): ZStream[
       Blocking with R,
       Throwable,
@@ -126,10 +128,11 @@ object DynamicConsumer {
     requestShutdown: UIO[Unit] = UIO.never,
     initialPosition: InitialPositionInStreamExtended =
       InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON),
-    isEnhancedFanOut: Boolean = true,
     leaseTableName: Option[String] = None,
+    metricsNamespace: Option[String] = None,
     workerIdentifier: String = UUID.randomUUID().toString,
-    maxShardBufferSize: Int = 1024 // Prefer powers of 2
+    maxShardBufferSize: Int = 1024, // Prefer powers of 2
+    configureKcl: SchedulerConfig => SchedulerConfig = identity
   ): ZStream[
     DynamicConsumer with Blocking with R,
     Throwable,
@@ -145,10 +148,11 @@ object DynamicConsumer {
             deserializer,
             requestShutdown,
             initialPosition,
-            isEnhancedFanOut,
             leaseTableName,
+            metricsNamespace,
             workerIdentifier,
-            maxShardBufferSize
+            maxShardBufferSize,
+            configureKcl
           )
         )
     )
@@ -164,8 +168,8 @@ object DynamicConsumer {
    *   and the streams.
    * @param initialPosition Position in stream to start at when there is no previous checkpoint
    *   for this application
-   * @param isEnhancedFanOut Flag for setting retrieval config - defaults to `true`. If `false` polling config is set.
    * @param leaseTableName Optionally set the lease table name - defaults to None. If not specified the `applicationName` will be used.
+   * @param metricsNamespace CloudWatch metrics namespace
    * @param workerIdentifier Identifier used for the worker in this application group. Used in logging
    *   and written to the lease table.
    * @param maxShardBufferSize The maximum number of records per shard to store in a queue before blocking
@@ -174,6 +178,7 @@ object DynamicConsumer {
    * @param checkpointBatchSize Maximum number of records before checkpointing
    * @param checkpointDuration Maximum interval before checkpointing
    * @param recordProcessor A function for processing a `Record[T]`
+   * @param configureKcl Make additional KCL Scheduler configurations
    * @tparam R ZIO environment type required by the `deserializer` and the `recordProcessor`
    * @tparam T Type of record values
    * @return A ZIO that completes with Unit when record processing is stopped via requestShutdown or fails when the consumer stream fails
@@ -185,12 +190,13 @@ object DynamicConsumer {
     requestShutdown: UIO[Unit] = UIO.never,
     initialPosition: InitialPositionInStreamExtended =
       InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON),
-    isEnhancedFanOut: Boolean = true,
     leaseTableName: Option[String] = None,
+    metricsNamespace: Option[String] = None,
     workerIdentifier: String = UUID.randomUUID().toString,
     maxShardBufferSize: Int = 1024, // Prefer powers of 2
     checkpointBatchSize: Long = 200,
-    checkpointDuration: Duration = 5.minutes
+    checkpointDuration: Duration = 5.minutes,
+    configureKcl: SchedulerConfig => SchedulerConfig = identity
   )(
     recordProcessor: Record[T] => RIO[RC, Unit]
   ): ZIO[R with RC with Blocking with Logging with Clock with DynamicConsumer, Throwable, Unit] =
@@ -203,10 +209,11 @@ object DynamicConsumer {
                deserializer,
                requestShutdown,
                initialPosition,
-               isEnhancedFanOut,
                leaseTableName,
+               metricsNamespace,
                workerIdentifier,
-               maxShardBufferSize
+               maxShardBufferSize,
+               configureKcl
              )
              .flatMapPar(Int.MaxValue) {
                case (_, shardStream, checkpointer) =>

@@ -12,6 +12,11 @@ import software.amazon.kinesis.retrieval.RetrievalConfig
 import software.amazon.kinesis.retrieval.fanout.FanOutConfig
 import software.amazon.kinesis.retrieval.polling.PollingConfig
 
+/**
+ * Configuration for the KCL Scheduler
+ *
+ * Note that its fields are mutable objects
+ */
 case class SchedulerConfig(
   checkpoint: CheckpointConfig,
   coordinator: CoordinatorConfig,
@@ -20,7 +25,8 @@ case class SchedulerConfig(
   metrics: MetricsConfig,
   processor: ProcessorConfig,
   retrieval: RetrievalConfig,
-  private val kinesisClient: KinesisAsyncClient
+  private val kinesisClient: KinesisAsyncClient,
+  private val streamName: String
 ) {
   def withInitialPosition(pos: InitialPositionInStreamExtended): SchedulerConfig =
     copy(
@@ -28,8 +34,7 @@ case class SchedulerConfig(
       retrieval = retrieval.initialPositionInStreamExtended(pos)
     )
 
-  def withEnhancedFanOut: SchedulerConfig = {
-    val streamName = leaseManagement.streamName()
+  def withEnhancedFanOut: SchedulerConfig =
     copy(
       retrieval = retrieval.retrievalSpecificConfig(
         new FanOutConfig(kinesisClient)
@@ -37,16 +42,13 @@ case class SchedulerConfig(
           .applicationName(retrieval.applicationName())
       )
     )
-  }
 
-  def withPolling: SchedulerConfig = {
-    val streamName = leaseManagement.streamName()
+  def withPolling: SchedulerConfig =
     copy(
       retrieval = retrieval.retrievalSpecificConfig(
         new PollingConfig(streamName, kinesisClient)
       )
     )
-  }
 
 }
 
@@ -54,7 +56,8 @@ object SchedulerConfig {
   def makeDefault(
     builder: ConfigsBuilder,
     kinesisClient: KinesisAsyncClient,
-    initialPositionInStreamExtended: InitialPositionInStreamExtended
+    initialPositionInStreamExtended: InitialPositionInStreamExtended,
+    streamName: String
   ) =
     SchedulerConfig(
       checkpoint = builder.checkpointConfig(),
@@ -64,6 +67,7 @@ object SchedulerConfig {
       metrics = builder.metricsConfig(),
       processor = builder.processorConfig(),
       retrieval = builder.retrievalConfig(),
-      kinesisClient = kinesisClient
+      kinesisClient = kinesisClient,
+      streamName = streamName
     ).withInitialPosition(initialPositionInStreamExtended)
 }

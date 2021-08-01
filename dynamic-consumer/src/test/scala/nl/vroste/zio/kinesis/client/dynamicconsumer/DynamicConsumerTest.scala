@@ -57,7 +57,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                          streamName,
                          applicationName = applicationName,
                          deserializer = Serde.asciiString,
-                         isEnhancedFanOut = false
+                         configureKcl = _.withPolling
                        )
                        .flatMapPar(Int.MaxValue) {
                          case (shardId @ _, shardStream, checkpointer) =>
@@ -92,7 +92,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                               applicationName = applicationName,
                               deserializer = Serde.asciiString,
                               workerIdentifier = applicationName + "-" + workerIdentifier,
-                              isEnhancedFanOut = false
+                              configureKcl = _.withPolling
                             )
                             .flatMapPar(Int.MaxValue) {
                               case (shardId, shardStream, checkpointer @ _) =>
@@ -148,7 +148,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                           streamName,
                           applicationName = applicationName,
                           deserializer = Serde.asciiString,
-                          isEnhancedFanOut = false,
+                          configureKcl = _.withPolling,
                           requestShutdown = interrupted.await *> UIO(println("Interrupting shardedStream"))
                         )
                         .flatMapPar(Int.MaxValue) {
@@ -226,7 +226,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                           streamName,
                           applicationName = applicationName,
                           deserializer = Serde.asciiString,
-                          isEnhancedFanOut = false,
+                          configureKcl = _.withPolling,
                           requestShutdown = requestShutdown.await *> UIO(println("Interrupting shardedStream"))
                         )
                         .tap(_ => newShardDetected.offer(()))
