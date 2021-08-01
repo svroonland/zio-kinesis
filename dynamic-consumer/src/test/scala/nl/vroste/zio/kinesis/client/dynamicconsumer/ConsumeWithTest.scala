@@ -139,6 +139,6 @@ object ConsumeWithTest extends DefaultRunnableSpec {
     suite("ConsumeWithTest")(
       testConsume1,
       testConsume2
-    ).provideLayer(env.orDie) @@ timeout(7.minutes) @@ sequential
+    ).provideLayer(env.orDie) @@ timeout(7.minutes)
 
 }
