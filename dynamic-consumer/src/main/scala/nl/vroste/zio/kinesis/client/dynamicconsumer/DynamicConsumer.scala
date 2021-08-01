@@ -8,13 +8,12 @@ import nl.vroste.zio.kinesis.client.serde.Deserializer
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import software.amazon.kinesis.common.{ InitialPositionInStream, InitialPositionInStreamExtended }
 import software.amazon.kinesis.exceptions.ShutdownException
-import software.amazon.kinesis.processor.RecordProcessorCheckpointer
+import zio._
 import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.duration.{ durationInt, Duration }
 import zio.logging.{ Logger, Logging }
 import zio.stream.{ ZStream, ZTransducer }
-import zio._
 
 import java.time.Instant
 import java.util.UUID
@@ -234,7 +233,7 @@ object DynamicConsumer {
     /*
      * Helper method that returns current state - useful for debugging
      */
-    private[client] def peek: UIO[Option[Record[_]]]
+    private[client] def peek: UIO[Option[ExtendedSequenceNumber]]
 
     /**
      * Stages a record for checkpointing
@@ -303,30 +302,5 @@ object DynamicConsumer {
           case e                    =>
             ZStream.fail(e)
         }
-  }
-
-  object Checkpointer {
-    private[client] def make(kclCheckpointer: RecordProcessorCheckpointer, logger: Logger[String]): UIO[Checkpointer] =
-      for {
-        latestStaged <- Ref.make[Option[Record[_]]](None)
-      } yield new Checkpointer {
-        override def stage(r: Record[_]): UIO[Unit] =
-          latestStaged.set(Some(r))
-
-        override def checkpoint: ZIO[Blocking, Throwable, Unit] =
-          latestStaged.get.flatMap {
-            case Some(record) =>
-              logger.info(s"about to checkpoint: shardId=${record.shardId} partitionKey=${record.partitionKey}") *>
-                zio.blocking.blocking {
-                  Task(kclCheckpointer.checkpoint(record.sequenceNumber, record.subSequenceNumber.getOrElse(0L)))
-                } *> latestStaged.update {
-                case Some(r) if r == record => None
-                case r                      => r // A newer record may have been staged by now
-              }
-            case None         => UIO.unit
-          }
-
-        override private[client] def peek: UIO[Option[Record[_]]] = latestStaged.get
-      }
   }
 }
