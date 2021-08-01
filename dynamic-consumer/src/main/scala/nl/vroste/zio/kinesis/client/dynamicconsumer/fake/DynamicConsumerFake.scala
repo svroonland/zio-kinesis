@@ -1,6 +1,6 @@
 package nl.vroste.zio.kinesis.client.dynamicconsumer.fake
 
-import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer
+import nl.vroste.zio.kinesis.client.dynamicconsumer.{ DynamicConsumer, ExtendedSequenceNumber }
 import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.{ Checkpointer, Record }
 import nl.vroste.zio.kinesis.client.serde.{ Deserializer, Serializer }
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
@@ -72,7 +72,9 @@ object CheckpointerFake {
     for {
       latestStaged <- Ref.make[Option[Record[_]]](None)
     } yield new DynamicConsumer.Checkpointer {
-      override private[client] def peek: UIO[Option[Record[_]]] = latestStaged.get
+      override private[client] def peek: UIO[Option[ExtendedSequenceNumber]] =
+        latestStaged.get
+          .map(_.map(r => ExtendedSequenceNumber(r.sequenceNumber, r.subSequenceNumber)))
 
       override def stage(r: Record[_]): UIO[Unit] = latestStaged.set(Some(r))
 

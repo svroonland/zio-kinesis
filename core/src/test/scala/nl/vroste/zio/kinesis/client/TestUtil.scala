@@ -1,6 +1,8 @@
 package nl.vroste.zio.kinesis.client
 
-import io.github.vigoo.zioaws.kinesis
+import io.github.vigoo.zioaws.dynamodb.DynamoDb
+import io.github.vigoo.zioaws.dynamodb.model.DeleteTableRequest
+import io.github.vigoo.zioaws.{ dynamodb, kinesis }
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model._
 import nl.vroste.zio.kinesis.client.producer.ProducerMetrics
@@ -26,6 +28,19 @@ object TestUtil {
       .tapM(_ => getShards(name))
       .use_(f)
 
+  def withRandomStreamEnv[R, A](shards: Int = 2)(
+    f: (String, String) => ZIO[R, Throwable, A]
+  ): ZIO[Kinesis with DynamoDb with Clock with Console with Random with R, Throwable, A] =
+    (for {
+      streamName      <- random.nextUUID.map("zio-test-stream-" + _.toString).toManaged_
+      applicationName <- random.nextUUID.map("zio-test-" + _.toString).toManaged_
+      _               <- createStream(streamName, shards)
+      _               <- getShards(streamName).toManaged_
+      _               <- ZManaged.finalizer(dynamodb.deleteTable(DeleteTableRequest(applicationName)).ignore)
+    } yield (streamName, applicationName)).use {
+      case (streamName, applicationName) => f(streamName, applicationName).fork.flatMap(_.join)
+    }
+
   def getShards(name: String): ZIO[Kinesis with Clock, Throwable, Chunk[Shard.ReadOnly]]                          =
     kinesis
       .listShards(ListShardsRequest(streamName = Some(name)))
@@ -50,6 +65,10 @@ object TestUtil {
     kinesis
       .describeStream(DescribeStreamRequest(streamName))
       .mapError(_.toThrowable)
+      .retryWhile {
+        case _: ResourceNotFoundException => true
+        case _                            => false
+      }
       .flatMap(_.streamDescription)
       .flatMap(_.streamStatus)
       .delay(500.millis)
