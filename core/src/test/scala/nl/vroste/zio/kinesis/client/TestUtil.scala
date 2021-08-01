@@ -37,8 +37,9 @@ object TestUtil {
       _               <- createStream(streamName, shards)
       _               <- getShards(streamName).toManaged_
       _               <- ZManaged.finalizer(dynamodb.deleteTable(DeleteTableRequest(applicationName)).ignore)
-    } yield (streamName, applicationName))
-      .use(f.tupled)
+    } yield (streamName, applicationName)).use {
+      case (streamName, applicationName) => f(streamName, applicationName).fork.flatMap(_.join)
+    }
 
   def getShards(name: String): ZIO[Kinesis with Clock, Throwable, Chunk[Shard.ReadOnly]]                          =
     kinesis
