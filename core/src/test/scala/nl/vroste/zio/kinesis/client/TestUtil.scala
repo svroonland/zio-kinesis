@@ -65,6 +65,10 @@ object TestUtil {
     kinesis
       .describeStream(DescribeStreamRequest(streamName))
       .mapError(_.toThrowable)
+      .retryWhile {
+        case _: ResourceNotFoundException => true
+        case _                            => false
+      }
       .flatMap(_.streamDescription)
       .flatMap(_.streamStatus)
       .delay(500.millis)
