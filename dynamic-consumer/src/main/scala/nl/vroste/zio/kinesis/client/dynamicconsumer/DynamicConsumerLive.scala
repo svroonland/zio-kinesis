@@ -14,8 +14,6 @@ import software.amazon.kinesis.processor.{
   ShardRecordProcessorFactory
 }
 import software.amazon.kinesis.retrieval.KinesisClientRecord
-import software.amazon.kinesis.retrieval.fanout.FanOutConfig
-import software.amazon.kinesis.retrieval.polling.PollingConfig
 import zio._
 import zio.blocking.Blocking
 import zio.logging.Logger
@@ -35,10 +33,11 @@ private[client] class DynamicConsumerLive(
     deserializer: Deserializer[R, T],
     requestShutdown: UIO[Unit],
     initialPosition: InitialPositionInStreamExtended,
-    isEnhancedFanOut: Boolean,
-    leaseTableName: Option[String],
+    leaseTableName: Option[String] = None,
+    metricsNamespace: Option[String] = None,
     workerIdentifier: String,
-    maxShardBufferSize: Int
+    maxShardBufferSize: Int,
+    configureKcl: SchedulerConfig => SchedulerConfig
   ): ZStream[
     Blocking with R,
     Throwable,
@@ -176,14 +175,6 @@ private[client] class DynamicConsumerLive(
         } yield new Queues(runtime, q)
     }
 
-    def retrievalConfig(kinesisClient: KinesisAsyncClient) =
-      if (isEnhancedFanOut)
-        new FanOutConfig(kinesisClient)
-          .streamName(streamName)
-          .applicationName(applicationName)
-      else
-        new PollingConfig(streamName, kinesisClient)
-
     def toRecord(
       shardId: String,
       r: KinesisClientRecord
@@ -218,23 +209,22 @@ private[client] class DynamicConsumerLive(
             new ZioShardProcessorFactory(queues)
           )
           leaseTableName.fold(configsBuilder)(configsBuilder.tableName)
+          metricsNamespace.fold(configsBuilder)(configsBuilder.namespace)
         }
+        config         = configureKcl(
+                   SchedulerConfig.makeDefault(configsBuilder, kinesisAsyncClient, initialPosition, streamName)
+                 )
         env           <- ZIO.environment[R].toManaged_
 
         scheduler <- Task(
                        new Scheduler(
-                         configsBuilder.checkpointConfig(),
-                         configsBuilder.coordinatorConfig(),
-                         configsBuilder
-                           .leaseManagementConfig()
-                           .initialPositionInStream(initialPosition),
-                         configsBuilder.lifecycleConfig(),
-                         configsBuilder.metricsConfig(),
-                         configsBuilder.processorConfig(),
-                         configsBuilder
-                           .retrievalConfig()
-                           .initialPositionInStreamExtended(initialPosition)
-                           .retrievalSpecificConfig(retrievalConfig(kinesisAsyncClient))
+                         config.checkpoint,
+                         config.coordinator,
+                         config.leaseManagement,
+                         config.lifecycle,
+                         config.metrics,
+                         config.processor,
+                         config.retrieval
                        )
                      ).toManaged_
         doShutdown = logger.debug("Starting graceful shutdown") *>
