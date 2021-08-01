@@ -37,9 +37,10 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
   ] = (if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()) >+> loggingLayer >+>
     (DynamicConsumer.live ++ Clock.live ++ Blocking.live ++ Random.live ++ Console.live ++ zio.system.System.live)
 
-  def testConsume1 =
+  def testConsumePolling =
     testM("consume records produced on all shards produced on the stream") {
-      withRandomStreamEnv(2) { (streamName, applicationName) =>
+      val nrShards = 2
+      withRandomStreamEnv(nrShards) { (streamName, applicationName) =>
         for {
           _       <- putStrLn("Putting records").orDie
           _       <- TestUtil
@@ -61,16 +62,57 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                        )
                        .flatMapPar(Int.MaxValue) {
                          case (shardId @ _, shardStream, checkpointer) =>
-                           shardStream.tap(r =>
-                             putStrLn(s"Got record $r").orDie *> checkpointer
-                               .checkpointNow(r)
-                               .retry(Schedule.exponential(100.millis))
-                           )
+                           shardStream
+                             .tap(r =>
+                               putStrLn(s"Got record $r").orDie *> checkpointer
+                                 .checkpointNow(r)
+                                 .retry(Schedule.exponential(100.millis))
+                             )
+                             .take(2)
                        }
-                       .take(2)
+                       .take(nrShards * 2.toLong)
                        .runCollect
 
-        } yield assert(records)(hasSize(equalTo(2)))
+        } yield assert(records)(hasSize(equalTo(nrShards * 2)))
+      }
+    }
+
+  def testConsumeEnhancedFanOut =
+    testM("consume records produced on all shards produced on the stream with enhanced fanout") {
+      val nrShards = 2
+      withRandomStreamEnv(nrShards) { (streamName, applicationName) =>
+        for {
+          _       <- putStrLn("Putting records").orDie
+          _       <- TestUtil
+                 .produceRecords(
+                   streamName,
+                   1000,
+                   10,
+                   10
+                 )
+                 .fork
+
+          service <- ZIO.service[DynamicConsumer.Service]
+          records <- service
+                       .shardedStream(
+                         streamName,
+                         applicationName = applicationName,
+                         deserializer = Serde.asciiString
+                       )
+                       .flatMapPar(Int.MaxValue) {
+                         case (shardId @ _, shardStream, checkpointer) =>
+                           shardStream
+                             .tap(r =>
+                               putStrLn(s"Got record $r").orDie *> checkpointer
+                                 .checkpointNow(r)
+                                 .retry(Schedule.exponential(100.millis))
+                             )
+                             .take(2)
+                       }
+                       .take(nrShards * 2.toLong)
+                       .runCollect
+
+        } yield assert(records)(hasSize(equalTo(nrShards * 2)))
       }
     }
 
@@ -288,7 +330,8 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
   override def spec =
     suite("DynamicConsumer")(
-      testConsume1,
+      testConsumePolling,
+      testConsumeEnhancedFanOut,
       testConsume2,
       testCheckpointAtShutdown,
       testShardEnd
