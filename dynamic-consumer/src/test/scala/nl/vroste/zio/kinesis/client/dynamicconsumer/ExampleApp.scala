@@ -173,9 +173,9 @@ object ExampleApp extends zio.App {
         streamName,
         applicationName = applicationName,
         deserializer = Serde.asciiString,
-        isEnhancedFanOut = enhancedFanout,
         workerIdentifier = id,
-        requestShutdown = requestShutdown.await
+        requestShutdown = requestShutdown.await,
+        configureKcl = config => if (enhancedFanout) config.withEnhancedFanOut else config.withPolling
       )
       .flatMapPar(Int.MaxValue) {
         case (shardID, shardStream, checkpointer) =>

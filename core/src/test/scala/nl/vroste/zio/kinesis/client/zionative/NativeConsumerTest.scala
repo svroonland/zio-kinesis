@@ -448,8 +448,8 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                          shard
                                      }
 
-            } yield assert(worker1Released.map(_._2))(
-              hasIntersection(acquiredAfterRelease)(hasSameElements(worker1Released.map(_._2)))
+            } yield assert(worker1Released.map(_._2).toSet)(
+              hasIntersection(acquiredAfterRelease.toSet)(hasSameElements(worker1Released.map(_._2).toSet))
             )
         }
       },

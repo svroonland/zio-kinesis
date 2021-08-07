@@ -127,7 +127,7 @@ object TestUtil {
       }
       .use(massProduceRecords(_, nrRecords, produceRate = Some(produceRate), maxRecordSize))
 
-  val chunkSize = 1000
+  val defaultChunkSize = 1000
 
   def putRecords[R, T](
     streamName: String,
@@ -162,8 +162,11 @@ object TestUtil {
     produceRate: Option[Int] = None,
     maxRecordSize: Int
   ): ZIO[Logging with Clock with Random, Throwable, Unit] = {
-    val value = Chunk.fill(maxRecordSize)(0x01.toByte)
-    val chunk = Chunk.fill(chunkSize)(ProducerRecord(UUID.randomUUID().toString, value))
+    val value     = Chunk.fill(maxRecordSize)(0x01.toByte)
+    val chunkSize = produceRate.fold(defaultChunkSize)(Math.min(_, defaultChunkSize))
+    val chunk     = Chunk.fill(chunkSize)(
+      ProducerRecord(UUID.randomUUID().toString, value)
+    )
 
     val records = ZStream
       .repeatEffectChunk(UIO(chunk))
@@ -206,10 +209,10 @@ object TestUtil {
                    .nextIntBetween(1, maxRecordSize)
                    .map(valueLength => Chunk.fromIterable(List.fill(valueLength)(0x01.toByte)))
       } yield ProducerRecord(key, value)
-    }.chunkN(chunkSize)
+    }.chunkN(defaultChunkSize)
       .take(nrRecords.toLong)
       .via(stream => throttle[Random with Clock, Throwable, ProducerRecord[Chunk[Byte]]](produceRate, stream))
-      .buffer(chunkSize)
+      .buffer(defaultChunkSize)
     massProduceRecords(producer, records)
   }
 

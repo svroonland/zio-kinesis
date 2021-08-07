@@ -1,6 +1,6 @@
 package nl.vroste.zio.kinesis.client.dynamicconsumer.fake
 
-import nl.vroste.zio.kinesis.client.dynamicconsumer.{ DynamicConsumer, ExtendedSequenceNumber }
+import nl.vroste.zio.kinesis.client.dynamicconsumer.{ DynamicConsumer, ExtendedSequenceNumber, SchedulerConfig }
 import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.{ Checkpointer, Record }
 import nl.vroste.zio.kinesis.client.serde.{ Deserializer, Serializer }
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
@@ -21,10 +21,11 @@ private[client] class DynamicConsumerFake(
     deserializer: Deserializer[R, T],
     requestShutdown: UIO[Unit],
     initialPosition: InitialPositionInStreamExtended,
-    isEnhancedFanOut: Boolean,
     leaseTableName: Option[String],
+    metricsNamespace: Option[String],
     workerIdentifier: String,
-    maxShardBufferSize: Int
+    maxShardBufferSize: Int,
+    configureKcl: SchedulerConfig => SchedulerConfig
   ): ZStream[
     Blocking with R,
     Throwable,
