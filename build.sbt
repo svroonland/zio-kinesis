@@ -39,7 +39,6 @@ inThisBuild(
 )
 
 val zioVersion    = "1.0.10"
-val zioAwsVersion = "3.17.8.1"
 val zioAwsVersion = "3.17.12.2"
 
 lazy val root = project
@@ -50,6 +49,7 @@ lazy val root = project
     )
   )
   .settings(stdSettings: _*)
+  .settings(Seq(publish / skip := true))
   .aggregate(core, interopFutures, dynamicConsumer)
   .dependsOn(core, interopFutures, dynamicConsumer)
 
@@ -89,16 +89,15 @@ lazy val stdSettings: Seq[sbt.Def.SettingsDefinition] = Seq(
     "dev.zio"                %% "zio-test"                    % zioVersion % "test",
     "dev.zio"                %% "zio-test-sbt"                % zioVersion % "test",
     "dev.zio"                %% "zio-interop-reactivestreams" % "1.3.5",
-    "dev.zio"                %% "izumi-reflect"               % "1.1.3", // Temporarily to fix issue with Tag in zio 1.0.8
-    "dev.zio"                %% "zio-logging"                 % "0.5.11",
+    "dev.zio"                %% "zio-logging"                 % "0.5.11" exclude ("org.scala-lang.modules", "scala-collection-compat_2.13"),
     "ch.qos.logback"          % "logback-classic"             % "1.2.5",
     "org.scala-lang.modules" %% "scala-collection-compat"     % "2.5.0",
     "org.hdrhistogram"        % "HdrHistogram"                % "2.1.12",
-    "io.github.vigoo"        %% "zio-aws-core"                % zioAwsVersion,
-    "io.github.vigoo"        %% "zio-aws-kinesis"             % zioAwsVersion,
-    "io.github.vigoo"        %% "zio-aws-dynamodb"            % zioAwsVersion,
-    "io.github.vigoo"        %% "zio-aws-cloudwatch"          % zioAwsVersion,
-    "io.github.vigoo"        %% "zio-aws-netty"               % zioAwsVersion,
+    "io.github.vigoo"        %% "zio-aws-core"                % zioAwsVersion exclude ("org.scala-lang.modules", "scala-collection-compat_2.13"),
+    "io.github.vigoo"        %% "zio-aws-kinesis"             % zioAwsVersion exclude ("org.scala-lang.modules", "scala-collection-compat_2.13"),
+    "io.github.vigoo"        %% "zio-aws-dynamodb"            % zioAwsVersion exclude ("org.scala-lang.modules", "scala-collection-compat_2.13"),
+    "io.github.vigoo"        %% "zio-aws-cloudwatch"          % zioAwsVersion exclude ("org.scala-lang.modules", "scala-collection-compat_2.13"),
+    "io.github.vigoo"        %% "zio-aws-netty"               % zioAwsVersion exclude ("org.scala-lang.modules", "scala-collection-compat_2.13"),
     "javax.xml.bind"          % "jaxb-api"                    % "2.3.1"
   )
 )
