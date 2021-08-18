@@ -38,7 +38,7 @@ inThisBuild(
   )
 )
 
-val zioVersion    = "1.0.10"
+val zioVersion    = "1.0.10+54-908f32c1-SNAPSHOT"
 val zioAwsVersion = "3.17.19.1"
 
 lazy val root = project
@@ -89,7 +89,7 @@ lazy val stdSettings: Seq[sbt.Def.SettingsDefinition] = Seq(
     "dev.zio"                %% "zio-test"                    % zioVersion % "test",
     "dev.zio"                %% "zio-test-sbt"                % zioVersion % "test",
     "dev.zio"                %% "zio-interop-reactivestreams" % "1.3.5",
-    "dev.zio"                %% "izumi-reflect"               % "1.1.3", // Temporarily to fix issue with Tag in zio 1.0.8
+    "dev.zio"                %% "izumi-reflect"               % "2.0.0", // Temporarily to fix issue with Tag in zio 1.0.10
     "dev.zio"                %% "zio-logging"                 % "0.5.11" exclude ("org.scala-lang.modules", "scala-collection-compat_2.13"),
     "ch.qos.logback"          % "logback-classic"             % "1.2.5",
     "org.scala-lang.modules" %% "scala-collection-compat"     % "2.5.0",
