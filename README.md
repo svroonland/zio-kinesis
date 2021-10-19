@@ -234,7 +234,7 @@ The following parameters can be customized:
 
 A KCL compatible CloudWatch metrics publisher is included, which can optionally be hooked on to these diagnostic events.
 
-See `src/test/nl/vroste/zio/kinesis/client/examples/NativeConsumerWithMetricsExample.scala` for an example.
+See [core/src/test/scala/nl/vroste/zio/kinesis/client/examples/NativeConsumerWithMetricsExample.scala](core/src/test/scala/nl/vroste/zio/kinesis/client/examples/NativeConsumerWithMetricsExample.scala) for an example.
 
 ### KCL compatibility
 Lease coordination and metrics are fully compatible for running along other KCL workers.
@@ -558,7 +558,7 @@ DynamicConsumer is built on `ZManaged` and therefore resource-safe: after stream
 
 ## Running tests and more usage examples 
 
-See [src/test/nl/vroste/zio/kinesis/client/examples](src/test/nl/vroste/zio/kinesis/client/examples) for some examples. The [integration tests](src/test/scala/nl/vroste/zio/kinesis/client) are also good usage examples.
+See [core/src/test/scala/nl/vroste/zio/kinesis/client/examples](core/src/test/scala/nl/vroste/zio/kinesis/client/examples) for some examples. The [integration tests](core/src/test/scala/nl/vroste/zio/kinesis/client) are also good usage examples.
 
 The tests run against a [`localstack`](https://github.com/localstack/localstack) docker image to access 
 `kinesis`, `dynamoDb` and `cloudwatch` endpoints locally. In order to run the tests you need to have `docker` and `docker-compose` 
