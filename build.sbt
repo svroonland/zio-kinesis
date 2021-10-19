@@ -38,7 +38,7 @@ inThisBuild(
 )
 
 val zioVersion    = "1.0.12"
-val zioAwsVersion = "3.17.42.5"
+val zioAwsVersion = "3.17.57.2"
 
 lazy val root = project
   .in(file("."))
@@ -86,7 +86,7 @@ lazy val stdSettings: Seq[sbt.Def.SettingsDefinition] = Seq(
     "dev.zio"                %% "zio-streams"                 % zioVersion,
     "dev.zio"                %% "zio-test"                    % zioVersion % "test",
     "dev.zio"                %% "zio-test-sbt"                % zioVersion % "test",
-    "dev.zio"                %% "zio-interop-reactivestreams" % "1.3.7",
+    "dev.zio"                %% "zio-interop-reactivestreams" % "1.3.8",
     "dev.zio"                %% "izumi-reflect"               % "2.0.1", // Temporarily to fix issue with Tag in zio 1.0.8
     "dev.zio"                %% "zio-logging"                 % "0.5.12",
     "ch.qos.logback"          % "logback-classic"             % "1.2.6",
@@ -121,7 +121,7 @@ lazy val dynamicConsumer = (project in file("dynamic-consumer"))
     name := "zio-kinesis-dynamic-consumer",
     assembly / assemblyJarName := "zio-kinesis-dynamic-consumer" + version.value + ".jar",
     libraryDependencies ++= Seq(
-      "software.amazon.kinesis" % "amazon-kinesis-client" % "2.3.6"
+      "software.amazon.kinesis" % "amazon-kinesis-client" % "2.3.7"
     )
   )
   .dependsOn(core % "compile->compile;test->test")
