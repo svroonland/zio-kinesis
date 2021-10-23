@@ -19,7 +19,9 @@ object ZioExtensions {
   def foreachParNUninterrupted_[R, E, A, B](
     n: Int
   )(as: Iterable[A])(fn: A => ZIO[R, E, B]): ZIO[R, E, Unit] =
-    ZIO.foreachPar(as)(fn(_).cause).withParallelism(n)
+    ZIO
+      .foreachPar(as)(fn(_).cause)
+      .withParallelism(n)
       .map(_.reduceOption(_ && _).getOrElse(Cause.empty))
       .uncause
 }

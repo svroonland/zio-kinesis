@@ -107,7 +107,8 @@ trait Checkpointer {
   def checkpointBatched[R](
     nr: Long,
     interval: Duration,
-    retrySchedule: Schedule[Has[Clock], Throwable, Any] = Util.exponentialBackoff(1.second, 1.minute, maxRecurs = Some(5))
+    retrySchedule: Schedule[Has[Clock], Throwable, Any] =
+      Util.exponentialBackoff(1.second, 1.minute, maxRecurs = Some(5))
   ): ZStream[R, Throwable, Any] => ZStream[R with Has[Clock], Throwable, Unit] =
     _.aggregateAsyncWithin(ZTransducer.foldUntil((), nr)((_, _) => ()), Schedule.fixed(interval))
       .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))

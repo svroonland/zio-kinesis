@@ -32,7 +32,9 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
   private val env: ZLayer[
     Any,
     Throwable,
-    CloudWatch with Kinesis with DynamoDb with Logging with DynamicConsumer with Has[Clock] with Any with Has[Random] with Has[Console] with Has[System]
+    CloudWatch with Kinesis with DynamoDb with Logging with DynamicConsumer with Has[Clock] with Any with Has[
+      Random
+    ] with Has[Console] with Has[System]
   ] = (if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()) >+> loggingLayer >+>
     (DynamicConsumer.live ++ Clock.live ++ Blocking.live ++ Random.live ++ Console.live ++ zio.system.System.live)
 

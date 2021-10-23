@@ -71,9 +71,7 @@ private[client] final class ProducerLive[R, R1, T](
       .aggregateAsync(batcher)
       .filter(_.nonEmpty)                             // TODO why would this be necessary?
       // Several putRecords requests in parallel
-      .flatMapPar(settings.maxParallelRequests, chunkBufferSize)(b =>
-        ZStream.fromZIO(countInFlight(processBatch(b)))
-      )
+      .flatMapPar(settings.maxParallelRequests, chunkBufferSize)(b => ZStream.fromZIO(countInFlight(processBatch(b))))
       .collect { case (Some(response), requests) => (response, requests) }
       .mapZIO((processBatchResponse _).tupled)
       .tap(metrics => currentMetrics.update(_ append metrics))

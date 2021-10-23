@@ -29,7 +29,9 @@ object ConsumeWithTest extends DefaultRunnableSpec {
   private val env: ZLayer[
     Any,
     Throwable,
-    Has[Console] with Has[Clock] with Any with Has[Random] with Logging with CloudWatch with Kinesis with DynamoDb with DynamicConsumer
+    Has[Console] with Has[Clock] with Any with Has[
+      Random
+    ] with Logging with CloudWatch with Kinesis with DynamoDb with DynamicConsumer
   ] =
     (Console.live ++ Clock.live ++ Blocking.live ++ Random.live) >+> loggingLayer >+> LocalStackServices
       .localStackAwsLayer() >+> DynamicConsumer.live

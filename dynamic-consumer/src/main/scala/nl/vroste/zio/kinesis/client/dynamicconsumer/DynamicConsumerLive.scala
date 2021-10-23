@@ -171,8 +171,9 @@ private[client] class DynamicConsumerLive(
       def make: ZManaged[Any, Nothing, Queues] =
         for {
           runtime <- ZIO.runtime[Any].toManaged
-          q       <-
-            Queue.unbounded[Exit[Option[Throwable], (String, ShardQueue, CheckpointerInternal)]].toManagedWith(_.shutdown)
+          q       <- Queue
+                 .unbounded[Exit[Option[Throwable], (String, ShardQueue, CheckpointerInternal)]]
+                 .toManagedWith(_.shutdown)
         } yield new Queues(runtime, q)
     }
 

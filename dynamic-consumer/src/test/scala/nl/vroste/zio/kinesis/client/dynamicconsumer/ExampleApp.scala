@@ -49,9 +49,10 @@ object ExampleApp extends zio.ZIOAppDefault {
     maxParallelRequests = 10
   )
 
-  val program: ZIO[Logging with Has[Clock] with Any with Has[Random] with Has[Console] with Kinesis with CloudWatch with Has[
-    CloudWatchMetricsPublisherConfig
-  ] with DynamicConsumer with LeaseRepository, Throwable, ExitCode] = {
+  val program
+    : ZIO[Logging with Has[Clock] with Any with Has[Random] with Has[Console] with Kinesis with CloudWatch with Has[
+      CloudWatchMetricsPublisherConfig
+    ] with DynamicConsumer with LeaseRepository, Throwable, ExitCode] = {
     for {
       _          <- TestUtil.createStreamUnmanaged(streamName, nrShards)
       _          <- TestUtil.getShards(streamName)

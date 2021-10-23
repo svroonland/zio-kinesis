@@ -1,6 +1,5 @@
 package nl.vroste.zio.kinesis.client
 
-
 import zio.test.Assertion._
 import zio.test._
 import zio._

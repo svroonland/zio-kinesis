@@ -17,7 +17,9 @@ private[zionative] trait LeaseCoordinator {
 
   def updateShards(shards: Map[String, Shard.ReadOnly]): UIO[Unit]
 
-  def childShardsDetected(childShards: Seq[Shard.ReadOnly]): ZIO[Has[Clock] with Logging with Has[Random], Throwable, Unit]
+  def childShardsDetected(
+    childShards: Seq[Shard.ReadOnly]
+  ): ZIO[Has[Clock] with Logging with Has[Random], Throwable, Unit]
 }
 
 private[zionative] object LeaseCoordinator {
