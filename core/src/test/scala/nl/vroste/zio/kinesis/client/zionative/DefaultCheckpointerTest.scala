@@ -18,7 +18,7 @@ object DefaultCheckpointerTest extends DefaultRunnableSpec {
 
   override def spec =
     suite("DefaultCheckpointer")(
-      testM("checkpoints the last staged record") {
+      test("checkpoints the last staged record") {
         for {
           checkpoints  <- Ref.make(List.empty[Checkpoint])
           checkpointer <- {
@@ -33,7 +33,7 @@ object DefaultCheckpointerTest extends DefaultRunnableSpec {
           values       <- checkpoints.get
         } yield assert(values.map(_.toOption.get.sequenceNumber))(equalTo(List("1")))
       },
-      testM("does not checkpoint the same staged checkpoint twice") {
+      test("does not checkpoint the same staged checkpoint twice") {
         for {
           checkpoints  <- Ref.make(List.empty[Checkpoint])
           checkpointer <- {
@@ -48,7 +48,7 @@ object DefaultCheckpointerTest extends DefaultRunnableSpec {
           values       <- checkpoints.get
         } yield assert(values.map(_.toOption.get.sequenceNumber))(equalTo(List("0")))
       },
-      testM("does not reset the last staged checkpoitn when checkpointing fails") {
+      test("does not reset the last staged checkpoitn when checkpointing fails") {
         for {
           checkpoints       <- Ref.make(List.empty[Checkpoint])
           checkpointAttempt <- Ref.make(0)
@@ -70,7 +70,7 @@ object DefaultCheckpointerTest extends DefaultRunnableSpec {
           values            <- checkpoints.get
         } yield assert(values.map(_.toOption.get.sequenceNumber))(equalTo(List("0")))
       },
-      testM("preserves the last staged checkpoint while checkpointing") {
+      test("preserves the last staged checkpoint while checkpointing") {
         for {
           checkpoints  <- Ref.make(List.empty[Checkpoint])
           latch1       <- Promise.make[Nothing, Unit]
@@ -88,7 +88,7 @@ object DefaultCheckpointerTest extends DefaultRunnableSpec {
           values       <- checkpoints.get
         } yield assert(values.map(_.toOption.get.sequenceNumber))(equalTo(List("0", "1")))
       },
-      testM("checkpoints ShardEnd when the last sequence number is checkpointed after seeing the shard's end") {
+      test("checkpoints ShardEnd when the last sequence number is checkpointed after seeing the shard's end") {
         for {
           checkpoints  <- Ref.make(List.empty[Checkpoint])
           checkpointer <- {
@@ -105,7 +105,7 @@ object DefaultCheckpointerTest extends DefaultRunnableSpec {
           values       <- checkpoints.get
         } yield assert(values)(equalTo(List(Left(SpecialCheckpoint.ShardEnd))))
       },
-      testM("checkpoints ShardEnd after the last sequence number is checkpointed when seeing the shard's end") {
+      test("checkpoints ShardEnd after the last sequence number is checkpointed when seeing the shard's end") {
         for {
           checkpoints  <- Ref.make(List.empty[Checkpoint])
           checkpointer <- {
@@ -125,7 +125,7 @@ object DefaultCheckpointerTest extends DefaultRunnableSpec {
           equalTo(List(Right(ExtendedSequenceNumber(record2.sequenceNumber, 0)), Left(SpecialCheckpoint.ShardEnd)))
         )
       },
-      testM("does not checkpoint ShardEnd when the last record has not yet been staged after seeing the shard's end") {
+      test("does not checkpoint ShardEnd when the last record has not yet been staged after seeing the shard's end") {
         for {
           checkpoints  <- Ref.make(List.empty[Checkpoint])
           checkpointer <- {
@@ -141,7 +141,7 @@ object DefaultCheckpointerTest extends DefaultRunnableSpec {
           values       <- checkpoints.get
         } yield assert(values)(equalTo(List(Right(ExtendedSequenceNumber(record1.sequenceNumber, 0)))))
       },
-      testM("checkpoints ShardEnd on releasing when the last record is staged after seeing the shard's end") {
+      test("checkpoints ShardEnd on releasing when the last record is staged after seeing the shard's end") {
         for {
           checkpoints  <- Ref.make(List.empty[Checkpoint])
           checkpointer <- {
@@ -158,7 +158,7 @@ object DefaultCheckpointerTest extends DefaultRunnableSpec {
           values       <- checkpoints.get
         } yield assert(values)(equalTo(List(Left(SpecialCheckpoint.ShardEnd))))
       },
-      testM("checkpoints ShardEnd on releasing after an empty poll") {
+      test("checkpoints ShardEnd on releasing after an empty poll") {
         for {
           checkpoints  <- Ref.make(List.empty[Checkpoint])
           checkpointer <- {

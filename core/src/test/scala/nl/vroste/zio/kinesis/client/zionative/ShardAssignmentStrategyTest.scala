@@ -5,16 +5,16 @@ import zio.test._
 import zio.test.Assertion._
 import zio.test.Gen
 import zio.test.DefaultRunnableSpec
-import zio.random.Random
 import ShardAssignmentStrategy.leasesToTake
 import zio.logging.Logging
+import zio.{ Has, Random }
 
 object ShardAssignmentStrategyTest extends DefaultRunnableSpec {
   val leaseDistributionGen = leases(Gen.int(2, 100), Gen.int(2, 10))
 
   def workerId(w: Int): String = s"worker-${w}"
 
-  def leases(nrShards: Gen[Random, Int], nrWorkers: Gen[Random, Int], allOwned: Boolean = true) =
+  def leases(nrShards: Gen[Has[Random], Int], nrWorkers: Gen[Has[Random], Int], allOwned: Boolean = true) =
     for {
       nrShards    <- nrShards
       nrWorkers   <- nrWorkers
@@ -32,18 +32,18 @@ object ShardAssignmentStrategyTest extends DefaultRunnableSpec {
 
   override def spec =
     suite("Lease coordinator")(
-      testM("does not want to steal leases if its the only worker") {
-        checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.const(1))) { leases =>
+      test("does not want to steal leases if its the only worker") {
+        check(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.const(1))) { leases =>
           assertM(leasesToTake(leases, workerId(1)))(isEmpty)
         }
       },
-      testM("steals some leases when its not the only worker") {
-        checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.const(1))) { leases =>
+      test("steals some leases when its not the only worker") {
+        check(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.const(1))) { leases =>
           assertM(leasesToTake(leases, workerId(2)))(isNonEmpty)
         }
       },
-      testM("takes leases if it has less than its equal share") {
-        checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10), allOwned = false)) {
+      test("takes leases if it has less than its equal share") {
+        check(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10), allOwned = false)) {
           leases =>
             val workers          = leases.map(_.owner).collect { case Some(owner) => owner }.toSet
             val nrWorkers        = (workers + workerId(1)).size
@@ -64,24 +64,24 @@ object ShardAssignmentStrategyTest extends DefaultRunnableSpec {
             } yield assert(toSteal.size)(isWithin(minExpectedToSteal, maxExpectedToSteal))
         }
       },
-      testM("takes unclaimed leases first") {
-        checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10), allOwned = false)) { leases =>
+      test("takes unclaimed leases first") {
+        check(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10), allOwned = false)) { leases =>
           for {
             toTake          <- leasesToTake(leases, workerId(1))
             fromOtherWorkers = toTake.map(shard => leases.find(_.key == shard).get).dropWhile(_.owner.isEmpty)
           } yield assert(fromOtherWorkers)(forall(hasField("owner", _.owner, isNone)))
         }
       },
-      testM("steals leases randomly to reduce contention for the same lease") {
-        checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10), allOwned = true)) { leases =>
+      test("steals leases randomly to reduce contention for the same lease") {
+        check(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10), allOwned = true)) { leases =>
           for {
             toSteal1 <- leasesToTake(leases, workerId(1))
             toSteal2 <- leasesToTake(leases, workerId(1))
           } yield assert(toSteal1)(not(equalTo(toSteal2))) || assert(toSteal1)(hasSize(isLessThanEqualTo(1)))
         }
       } @@ TestAspect.flaky(3), // Randomness is randomly not-random
-      testM("steals from the busiest workers first") {
-        checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10))) {
+      test("steals from the busiest workers first") {
+        check(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10))) {
           leases =>
             val leasesByWorker = leases
               .groupBy(_.owner)

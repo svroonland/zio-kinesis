@@ -12,15 +12,14 @@ import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio._
 import zio.blocking.Blocking
-import zio.clock.Clock
-import zio.console.{ putStrLn, Console }
 import zio.duration.{ durationInt, Duration }
 import zio.logging.{ LogLevel, Logging }
-import zio.random.Random
 import zio.stream.{ SubscriptionRef, ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test.TestAspect.timeout
 import zio.test._
+import zio.{ Clock, Console, Has, Random, System, System }
+import zio.Console.printLine
 
 object DynamicConsumerTest extends DefaultRunnableSpec {
   import TestUtil._
@@ -28,21 +27,21 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
   val loggingLayer: ZLayer[Any, Nothing, Logging] =
     (Console.live ++ Clock.live) >>> Logging.console(LogLevel.Trace) >>> Logging.withRootLoggerName(getClass.getName)
 
-  val useAws = Runtime.default.unsafeRun(system.envOrElse("ENABLE_AWS", "0")).toInt == 1
+  val useAws = Runtime.default.unsafeRun(System.envOrElse("ENABLE_AWS", "0")).toInt == 1
 
   private val env: ZLayer[
     Any,
     Throwable,
-    CloudWatch with Kinesis with DynamoDb with Logging with DynamicConsumer with Clock with Blocking with Random with Console with system.System
+    CloudWatch with Kinesis with DynamoDb with Logging with DynamicConsumer with Has[Clock] with Any with Has[Random] with Has[Console] with Has[System]
   ] = (if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()) >+> loggingLayer >+>
     (DynamicConsumer.live ++ Clock.live ++ Blocking.live ++ Random.live ++ Console.live ++ zio.system.System.live)
 
   def testConsumePolling =
-    testM("consume records produced on all shards produced on the stream") {
+    test("consume records produced on all shards produced on the stream") {
       val nrShards = 2
       withRandomStreamEnv(nrShards) { (streamName, applicationName) =>
         for {
-          _       <- putStrLn("Putting records").orDie
+          _       <- printLine("Putting records").orDie
           _       <- TestUtil
                  .produceRecords(
                    streamName,
@@ -64,7 +63,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                          case (shardId @ _, shardStream, checkpointer) =>
                            shardStream
                              .tap(r =>
-                               putStrLn(s"Got record $r").orDie *> checkpointer
+                               printLine(s"Got record $r").orDie *> checkpointer
                                  .checkpointNow(r)
                                  .retry(Schedule.exponential(100.millis))
                              )
@@ -78,11 +77,11 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
     }
 
   def testConsumeEnhancedFanOut =
-    testM("consume records produced on all shards produced on the stream with enhanced fanout") {
+    test("consume records produced on all shards produced on the stream with enhanced fanout") {
       val nrShards = 2
       withRandomStreamEnv(nrShards) { (streamName, applicationName) =>
         for {
-          _       <- putStrLn("Putting records").orDie
+          _       <- printLine("Putting records").orDie
           _       <- TestUtil
                  .produceRecords(
                    streamName,
@@ -103,7 +102,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                          case (shardId @ _, shardStream, checkpointer) =>
                            shardStream
                              .tap(r =>
-                               putStrLn(s"Got record $r").orDie *> checkpointer
+                               printLine(s"Got record $r").orDie *> checkpointer
                                  .checkpointNow(r)
                                  .retry(Schedule.exponential(100.millis))
                              )
@@ -117,16 +116,16 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
     }
 
   def testConsume2 =
-    testM("support multiple parallel consumers on the same Kinesis stream") {
+    test("support multiple parallel consumers on the same Kinesis stream") {
       withRandomStreamEnv(10) { (streamName, applicationName) =>
         def streamConsumer(
           workerIdentifier: String,
           activeConsumers: RefM[Set[String]]
-        ): ZStream[Console with Blocking with DynamicConsumer with Clock, Throwable, (String, String)] =
+        ): ZStream[Has[Console] with Any with DynamicConsumer with Has[Clock], Throwable, (String, String)] =
           for {
             service <- ZStream.service[DynamicConsumer.Service]
             stream  <- ZStream
-                        .fromEffect(putStrLn(s"Starting consumer $workerIdentifier").orDie)
+                        .fromZIO(printLine(s"Starting consumer $workerIdentifier").orDie)
                         .flatMap(_ =>
                           service
                             .shardedStream(
@@ -139,11 +138,11 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                             .flatMapPar(Int.MaxValue) {
                               case (shardId, shardStream, checkpointer @ _) =>
                                 shardStream
-                                  .via(checkpointer.checkpointBatched[Blocking with Clock](1000, 1.second))
+                                  .via(checkpointer.checkpointBatched[Any with Has[Clock]](1000, 1.second))
                                   .as((workerIdentifier, shardId))
                                   // Background and a bit delayed so we get a chance to actually emit some records
                                   .tap(_ => activeConsumers.update(s => ZIO(s + workerIdentifier)).delay(1.second).fork)
-                                  .ensuring(putStrLn(s"Shard $shardId completed for consumer $workerIdentifier").orDie)
+                                  .ensuring(printLine(s"Shard $shardId completed for consumer $workerIdentifier").orDie)
                                   .catchSome {
                                     case _: ShutdownException => // This will be thrown when the shard lease has been stolen
                                       // Abort the stream when we no longer have the lease
@@ -155,9 +154,9 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
           } yield stream
 
         for {
-          _                     <- putStrLn("Putting records").orDie
+          _                     <- printLine("Putting records").orDie
           _                     <- TestUtil.produceRecords(streamName, 20000, 80, 10).fork
-          _                     <- putStrLn("Starting dynamic consumers").orDie
+          _                     <- printLine("Starting dynamic consumers").orDie
           activeConsumers       <- SubscriptionRef.make(Set.empty[String])
           allConsumersGotAShard <- activeConsumers.changes.takeUntil(_ == Set("1", "2")).runDrain.fork
           _                     <- (streamConsumer("1", activeConsumers.ref)
@@ -169,7 +168,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
     }
 
   def testCheckpointAtShutdown =
-    testM("checkpoint for the last processed record at stream shutdown") {
+    test("checkpoint for the last processed record at stream shutdown") {
       withRandomStreamEnv(2) { (streamName, applicationName) =>
         def streamConsumer(
           interrupted: Promise[Nothing, Unit],
@@ -177,7 +176,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
           lastProcessedRecords: Ref[Map[String, String]],
           lastCheckpointedRecords: Ref[Map[String, String]]
         ): ZStream[
-          Console with Blocking with Clock with DynamicConsumer with Kinesis,
+          Has[Console] with Any with Has[Clock] with DynamicConsumer with Kinesis,
           Throwable,
           DynamicConsumer.Record[
             String
@@ -200,8 +199,8 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                               .tap(checkpointer.stage)
                               .tap(_ => nrRecordsSeen.update(_ + 1))
                               .tap(record =>
-                                ZIO.whenM(nrRecordsSeen.get.map(_ == 500))(
-                                  putStrLn(s"Interrupting for partition key ${record.partitionKey}").orDie
+                                ZIO.whenZIO(nrRecordsSeen.get.map(_ == 500))(
+                                  printLine(s"Interrupting for partition key ${record.partitionKey}").orDie
                                     *> interrupted.succeed(())
                                 )
                               )
@@ -215,9 +214,9 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                               )
                               .mapConcat(_.toList)
                               .tap { r =>
-                                (putStrLn(s"Shard ${r.shardId}: checkpointing for record $r $interrupted").orDie *>
+                                (printLine(s"Shard ${r.shardId}: checkpointing for record $r $interrupted").orDie *>
                                   checkpointer.checkpoint)
-                                  .unlessM(interrupted.isDone)
+                                  .unlessZIO(interrupted.isDone)
                                   .tapError(e => ZIO(println(s"Checkpointing failed: ${e}")))
                                   .tap(_ => lastCheckpointedRecords.update(_ + (shardId -> r.sequenceNumber)))
                                   .tap(_ => ZIO(println(s"Checkpointing for shard ${r.shardId} done")))
@@ -246,7 +245,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
     } @@ TestAspect.timeout(5.minutes)
 
   def testShardEnd =
-    testM("checkpoint for the last processed record at shard end") {
+    test("checkpoint for the last processed record at shard end") {
       val nrShards = 2
 
       withRandomStreamEnv(nrShards) { (streamName, applicationName) =>
@@ -255,7 +254,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
           firstRecordProcessed: Promise[Nothing, Unit],
           newShardDetected: Queue[Unit]
         ): ZStream[
-          Console with Blocking with Clock with DynamicConsumer with Kinesis,
+          Has[Console] with Any with Has[Clock] with DynamicConsumer with Kinesis,
           Throwable,
           DynamicConsumer.Record[
             String
@@ -283,7 +282,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                               )
                               .mapConcat(_.toList)
                               .tap { r =>
-                                putStrLn(s"Shard ${r.shardId}: checkpointing for record $r").orDie *>
+                                printLine(s"Shard ${r.shardId}: checkpointing for record $r").orDie *>
                                   checkpointer.checkpoint
                                     .tapError(e => ZIO(println(s"Checkpointing failed: ${e}")))
                                     .tap(_ =>
@@ -338,13 +337,13 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
     ).provideCustomLayer(env.orDie) @@ timeout(10.minutes)
 
   def delayStream[R, E, O](s: ZStream[R, E, O], delay: Duration) =
-    ZStream.fromEffect(ZIO.sleep(delay)).flatMap(_ => s)
+    ZStream.fromZIO(ZIO.sleep(delay)).flatMap(_ => s)
 
   def awaitRefPredicate[T](ref: Ref[T])(predicate: T => Boolean) =
     (for {
       p <- Promise.make[Nothing, Unit]
       _ <- ZIO
-             .whenM(ref.get.map(predicate))(p.succeed(()))
+             .whenZIO(ref.get.map(predicate))(p.succeed(()))
              .repeat(Schedule.fixed(1.second))
              .fork
       _ <- p.await

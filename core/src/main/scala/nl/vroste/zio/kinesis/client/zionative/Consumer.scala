@@ -20,13 +20,12 @@ import software.amazon.awssdk.services.kinesis.model.{
   ProvisionedThroughputExceededException
 }
 import zio._
-import zio.clock.Clock
-import zio.duration._
+
 import zio.logging.{ log, Logging }
-import zio.random.Random
 import zio.stream.ZStream
 
 import scala.jdk.CollectionConverters._
+import zio.{ Clock, Has, Random }
 
 final case class ExtendedSequenceNumber(sequenceNumber: String, subSequenceNumber: Long)
 
@@ -52,9 +51,9 @@ object FetchMode {
    */
   final case class Polling(
     batchSize: Int = 1000,
-    pollSchedule: Schedule[Clock, GetRecordsResponse.ReadOnly, Any] = Polling.dynamicSchedule(1.second),
-    throttlingBackoff: Schedule[Clock, Any, (Duration, Long)] = Util.exponentialBackoff(5.seconds, 30.seconds),
-    retrySchedule: Schedule[Clock, Any, (Duration, Long)] = Util.exponentialBackoff(1.second, 1.minute),
+    pollSchedule: Schedule[Has[Clock], GetRecordsResponse.ReadOnly, Any] = Polling.dynamicSchedule(1.second),
+    throttlingBackoff: Schedule[Has[Clock], Any, (Duration, Long)] = Util.exponentialBackoff(5.seconds, 30.seconds),
+    retrySchedule: Schedule[Has[Clock], Any, (Duration, Long)] = Util.exponentialBackoff(1.second, 1.minute),
     bufferNrBatches: Int = 2
   ) extends FetchMode
 
@@ -66,7 +65,7 @@ object FetchMode {
      *
      * @param interval Fixed interval for polling when no more records are currently available
      */
-    def dynamicSchedule(interval: Duration): Schedule[Clock, GetRecordsResponse.ReadOnly, Any] =
+    def dynamicSchedule(interval: Duration): Schedule[Has[Clock], GetRecordsResponse.ReadOnly, Any] =
       (Schedule.recurWhile[Boolean](_ == true) || Schedule.fixed(interval))
         .contramap((_: GetRecordsResponse.ReadOnly).millisBehindLatestValue.getOrElse(0) != 0)
   }
@@ -79,7 +78,7 @@ object FetchMode {
   final case class EnhancedFanOut(
     deregisterConsumerAtShutdown: Boolean = false, // TODO
     maxSubscriptionsPerSecond: Int = 10,
-    retrySchedule: Schedule[Clock, Any, (Duration, Long)] = Util.exponentialBackoff(5.second, 1.minute)
+    retrySchedule: Schedule[Has[Clock], Any, (Duration, Long)] = Util.exponentialBackoff(5.second, 1.minute)
   ) extends FetchMode
 }
 
@@ -157,7 +156,7 @@ object Consumer {
     emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit,
     shardAssignmentStrategy: ShardAssignmentStrategy = ShardAssignmentStrategy.balanced()
   ): ZStream[
-    Clock with Random with Kinesis with LeaseRepository with Logging with R,
+    Has[Clock] with Has[Random] with Kinesis with LeaseRepository with Logging with R,
     Throwable,
     (
       String,
@@ -223,7 +222,7 @@ object Consumer {
 
     def makeFetcher(
       streamDescription: StreamDescription.ReadOnly
-    ): ZManaged[Clock with Kinesis with Logging, Throwable, Fetcher] =
+    ): ZManaged[Has[Clock] with Kinesis with Logging, Throwable, Fetcher] =
       fetchMode match {
         case c: Polling        => PollingFetcher.make(streamDescription.streamNameValue, c, emitDiagnostic)
         case c: EnhancedFanOut => EnhancedFanOutFetcher.make(streamDescription, workerIdentifier, c, emitDiagnostic)
@@ -241,7 +240,7 @@ object Consumer {
 
     def createDependencies =
       ZManaged
-        .fromEffect(
+        .fromZIO(
           kinesis
             .describeStream(DescribeStreamRequest(streamName))
             .mapError(_.toThrowable)
@@ -269,7 +268,7 @@ object Consumer {
               // additional information to the lease coordinator, and the list of leases is used
               // as the list of shards.
               for {
-                env              <- ZIO.environment[Clock with Kinesis].toManaged_
+                env              <- ZIO.environment[Has[Clock] with Kinesis].toManaged
                 leaseCoordinator <- DefaultLeaseCoordinator
                                       .make(
                                         applicationName,
@@ -280,7 +279,7 @@ object Consumer {
                                         shardAssignmentStrategy,
                                         initialPosition
                                       )
-                _                <- log.info("Lease coordinator created").toManaged_
+                _                <- log.info("Lease coordinator created").toManaged
                 // Periodically refresh shards
                 _                <- (listShards >>= leaseCoordinator.updateShards)
                        .repeat(Schedule.spaced(leaseCoordinationSettings.shardRefreshInterval))
@@ -296,24 +295,24 @@ object Consumer {
           leaseCoordinator.acquiredLeases.collect {
             case AcquiredLease(shardId, leaseLost) =>
               (shardId, leaseLost)
-          }.mapMParUnordered(leaseCoordinationSettings.maxParallelLeaseAcquisitions) {
+          }.mapZIOParUnordered(leaseCoordinationSettings.maxParallelLeaseAcquisitions) {
             case (shardId, leaseLost) =>
               for {
                 checkpointer    <- leaseCoordinator.makeCheckpointer(shardId)
-                env             <- ZIO.environment[Logging with Clock with Random with R]
+                env             <- ZIO.environment[Logging with Has[Clock] with Has[Random] with R]
                 checkpointOpt   <- leaseCoordinator.getCheckpointForShard(shardId)
                 startingPosition = checkpointOpt
                                      .map(checkpointToStartingPosition(_, initialPosition))
                                      .getOrElse(InitialPosition.toStartingPosition(initialPosition))
-                stop             = ZStream.fromEffect(leaseLost.await).as(Exit.fail(None))
+                stop             = ZStream.fromZIO(leaseLost.await).as(Exit.fail(None))
                 shardStream      = (stop mergeTerminateEither fetcher
                                   .shardRecordStream(shardId, startingPosition)
                                   .catchAll {
                                     case Left(e)                            =>
-                                      ZStream.fromEffect(log.error(s"Shard stream ${shardId} failed", Cause.fail(e))) *>
+                                      ZStream.fromZIO(log.error(s"Shard stream ${shardId} failed", Cause.fail(e))) *>
                                         ZStream.fail(e)
                                     case Right(EndOfShard(childShards @ _)) =>
-                                      ZStream.fromEffect(
+                                      ZStream.fromZIO(
                                         log.debug(
                                           s"Found end of shard for ${shardId}. " +
                                             s"Child shards are ${childShards.map(_.shardId).mkString(", ")}"
@@ -385,7 +384,7 @@ object Consumer {
   )(
     recordProcessor: Record[T] => RIO[RC, Unit]
   ): ZIO[
-    R with RC with Clock with Random with Kinesis with LeaseRepository with Logging,
+    R with RC with Has[Clock] with Has[Random] with Kinesis with LeaseRepository with Logging,
     Throwable,
     Unit
   ] =

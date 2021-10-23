@@ -18,13 +18,13 @@ import software.amazon.awssdk.services.dynamodb.model.{
   ResourceNotFoundException
 }
 import zio._
-import zio.clock.Clock
-import zio.duration._
+
 import zio.logging._
 import zio.stream.ZStream
 
 import scala.util.{ Failure, Try }
 import scala.collection.compat._
+import zio.{ Clock, Has }
 
 // TODO this thing should have a global throttling / backoff
 // via a Tap that tries to find the optimal maximal throughput
@@ -34,7 +34,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb.Service, timeout: Duratio
   /**
    * Returns whether the table already existed
    */
-  override def createLeaseTableIfNotExists(tableName: String): ZIO[Clock with Logging, Throwable, Boolean] = {
+  override def createLeaseTableIfNotExists(tableName: String): ZIO[Has[Clock] with Logging, Throwable, Boolean] = {
     val keySchema            = List(keySchemaElement("leaseKey", KeyType.HASH))
     val attributeDefinitions = List(attributeDefinition("leaseKey", ScalarAttributeType.S))
 
@@ -66,9 +66,10 @@ private class DynamoDbLeaseRepository(client: DynamoDb.Service, timeout: Duratio
           .tap(exists => log.info(s"Lease table ${tableName} exists? ${exists}"))
 
     // recursion, yeah!
-    def awaitTableActive: ZIO[Clock with Logging, Throwable, Unit] =
+    def awaitTableActive: ZIO[Has[Clock] with Logging, Throwable, Unit] =
       leaseTableExists
         .flatMap(awaitTableActive.delay(1.seconds).unless(_))
+        .unit
 
     // Optimistically assume the table already exists
     log.debug(s"Checking if lease table '${tableName}' exists") *>
@@ -95,7 +96,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb.Service, timeout: Duratio
     client
       .scan(ScanRequest(tableName))
       .mapError(_.toThrowable)
-      .mapM(item => ZIO.fromTry(toLease(item.view.mapValues(_.editable).toMap)))
+      .mapZIO(item => ZIO.fromTry(toLease(item.view.mapValues(_.editable).toMap)))
 
   /**
    * Removes the leaseOwner property
@@ -131,7 +132,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb.Service, timeout: Duratio
   override def claimLease(
     tableName: String,
     lease: Lease
-  ): ZIO[Logging with Clock, Either[Throwable, UnableToClaimLease.type], Unit] = {
+  ): ZIO[Logging with Has[Clock], Either[Throwable, UnableToClaimLease.type], Unit] = {
     val request = baseUpdateItemRequestForLease(tableName, lease).copy(
       attributeUpdates = Some(
         Map(
@@ -172,7 +173,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb.Service, timeout: Duratio
   override def updateCheckpoint(
     tableName: String,
     lease: Lease
-  ): ZIO[Logging with Clock, Either[Throwable, LeaseObsolete.type], Unit] = {
+  ): ZIO[Logging with Has[Clock], Either[Throwable, LeaseObsolete.type], Unit] = {
     require(lease.checkpoint.isDefined, "Cannot update checkpoint without Lease.checkpoint property set")
 
     val request = baseUpdateItemRequestForLease(tableName, lease).copy(
@@ -210,7 +211,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb.Service, timeout: Duratio
   override def renewLease(
     tableName: String,
     lease: Lease
-  ): ZIO[Logging with Clock, Either[Throwable, LeaseObsolete.type], Unit] = {
+  ): ZIO[Logging with Has[Clock], Either[Throwable, LeaseObsolete.type], Unit] = {
 
     val request = baseUpdateItemRequestForLease(tableName, lease)
       .copy(attributeUpdates = Some(Map("leaseCounter" -> putAttributeValueUpdate(lease.counter))))
@@ -232,7 +233,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb.Service, timeout: Duratio
   override def createLease(
     tableName: String,
     lease: Lease
-  ): ZIO[Logging with Clock, Either[Throwable, LeaseAlreadyExists.type], Unit] = {
+  ): ZIO[Logging with Has[Clock], Either[Throwable, LeaseAlreadyExists.type], Unit] = {
     val request =
       PutItemRequest(tableName, toDynamoItem(lease), conditionExpression = Some("attribute_not_exists(leaseKey)"))
 
@@ -251,7 +252,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb.Service, timeout: Duratio
 
   override def deleteTable(
     tableName: String
-  ): ZIO[Clock with Logging, Throwable, Unit] = {
+  ): ZIO[Has[Clock] with Logging, Throwable, Unit] = {
     val request = DeleteTableRequest(tableName)
     client
       .deleteTable(request)

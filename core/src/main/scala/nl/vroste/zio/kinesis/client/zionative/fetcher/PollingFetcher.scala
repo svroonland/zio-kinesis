@@ -7,10 +7,10 @@ import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
 import nl.vroste.zio.kinesis.client.zionative.{ Consumer, DiagnosticEvent, FetchMode, Fetcher }
 import nl.vroste.zio.kinesis.client.Util
 import zio._
-import zio.clock.Clock
-import zio.duration._
+
 import zio.logging.{ log, Logging }
 import zio.stream.ZStream
+import zio.{ Clock, Has }
 
 /**
  * Fetcher that uses GetRecords
@@ -32,16 +32,16 @@ object PollingFetcher {
     streamName: String,
     config: FetchMode.Polling,
     emitDiagnostic: DiagnosticEvent => UIO[Unit]
-  ): ZManaged[Clock with Kinesis with Logging, Throwable, Fetcher] =
+  ): ZManaged[Has[Clock] with Kinesis with Logging, Throwable, Fetcher] =
     for {
-      env              <- ZIO.environment[Kinesis with Clock with Logging].toManaged_
+      env              <- ZIO.environment[Kinesis with Has[Clock] with Logging].toManaged
       getShardIterator <- throttledFunction(getShardIteratorRateLimit, 1.second)(kinesis.getShardIterator)
     } yield Fetcher { (shardId, startingPosition: StartingPosition) =>
       ZStream.unwrapManaged {
         for {
           _                    <- log
                  .info(s"Creating PollingFetcher for shard ${shardId} with starting position ${startingPosition}")
-                 .toManaged_
+                 .toManaged
           initialShardIterator <-
             getShardIterator(
               GetShardIteratorRequest(streamName, shardId, startingPosition.`type`, startingPosition.sequenceNumber)
@@ -49,9 +49,9 @@ object PollingFetcher {
               .mapError(_.toThrowable)
               .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
               .mapError(Left(_): Either[Throwable, EndOfShard])
-              .toManaged_
+              .toManaged
           getRecordsThrottled  <- throttledFunction(getRecordsRateLimit, 1.second)(kinesis.getRecords)
-          shardIterator        <- Ref.make[Option[String]](Some(initialShardIterator)).toManaged_
+          shardIterator        <- Ref.make[Option[String]](Some(initialShardIterator)).toManaged
 
           // Failure with None indicates that there's no next shard iterator and the shard has ended
           doPoll      = for {
@@ -89,12 +89,12 @@ object PollingFetcher {
                    } yield response
 
           shardStream = ZStream
-                          .repeatEffectWith(doPoll, config.pollSchedule)
+                          .repeatZIOWithSchedule(doPoll, config.pollSchedule)
                           .catchAll {
                             case None    => // TODO do we still need the None in combination with nextShardIterator?
                               ZStream.empty
                             case Some(e) =>
-                              ZStream.fromEffect(
+                              ZStream.fromZIO(
                                 log.warn(s"Error in PollingFetcher for shard ${shardId}: ${e}")
                               ) *> ZStream.fail(e)
                           }
@@ -105,7 +105,7 @@ object PollingFetcher {
                             if (
                               response.childShardsValue.toList.flatten.nonEmpty && response.nextShardIteratorValue.isEmpty
                             )
-                              ZStream.succeed(response) ++ (ZStream.fromEffect(
+                              ZStream.succeed(response) ++ (ZStream.fromZIO(
                                 log.debug(s"PollingFetcher found end of shard for ${shardId}")
                               ) *>
                                 ZStream.fail(

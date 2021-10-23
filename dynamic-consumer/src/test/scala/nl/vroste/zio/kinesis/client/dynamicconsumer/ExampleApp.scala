@@ -17,18 +17,16 @@ import software.amazon.awssdk.http.SdkHttpConfigurationOption
 import software.amazon.awssdk.utils.AttributeMap
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio.blocking.Blocking
-import zio.clock.Clock
-import zio.console.Console
-import zio.duration._
+
 import zio.logging.{ log, Logging }
-import zio.random.Random
 import zio.stream.{ ZStream, ZTransducer }
 import zio._
+import zio.{ Clock, Console, Has, Random }
 
 /**
  * Runnable used for manually testing various features
  */
-object ExampleApp extends zio.App {
+object ExampleApp extends zio.ZIOAppDefault {
   val streamName                      = "zio-test-stream-6" // + java.util.UUID.randomUUID().toString
   val applicationName                 = "testApp-10"        // + java.util.UUID.randomUUID().toString(),
   val nrRecords                       = 300000
@@ -51,7 +49,7 @@ object ExampleApp extends zio.App {
     maxParallelRequests = 10
   )
 
-  val program: ZIO[Logging with Clock with Blocking with Random with Console with Kinesis with CloudWatch with Has[
+  val program: ZIO[Logging with Has[Clock] with Any with Has[Random] with Has[Console] with Kinesis with CloudWatch with Has[
     CloudWatchMetricsPublisherConfig
   ] with DynamicConsumer with LeaseRepository, Throwable, ExitCode] = {
     for {
@@ -88,11 +86,11 @@ object ExampleApp extends zio.App {
              )
              .getOrElse(ZIO.unit)
              .fork
-      _          <- ZIO.sleep(runtime) raceFirst ZIO.foreachPar_(kclWorkers ++ workers)(_.join) raceFirst producer.join
+      _          <- ZIO.sleep(runtime) raceFirst ZIO.foreachParDiscard(kclWorkers ++ workers)(_.join) raceFirst producer.join
       _           = println("Interrupting app")
       _          <- producer.interruptFork
-      _          <- ZIO.foreachPar_(kclWorkers)(_.interrupt)
-      _          <- ZIO.foreachPar_(workers)(_.interrupt.map { exit =>
+      _          <- ZIO.foreachParDiscard(kclWorkers)(_.interrupt)
+      _          <- ZIO.foreachParDiscard(workers)(_.interrupt.map { exit =>
              exit.fold(_ => (), nrRecordsProcessed => println(s"Worker processed ${nrRecordsProcessed}"))
 
            })
@@ -102,16 +100,16 @@ object ExampleApp extends zio.App {
     args: List[String]
   ): ZIO[zio.ZEnv, Nothing, ExitCode] =
     program
-      .foldCauseM(e => log.error(s"Program failed: ${e.prettyPrint}", e).exitCode, ZIO.succeed(_))
+      .foldCauseZIO(e => log.error(s"Program failed: ${e.prettyPrint}", e).exitCode, ZIO.succeed(_))
       .provideCustomLayer(awsEnv)
 
   def worker(id: String) =
     ZStream.unwrapManaged {
       for {
         metrics <- CloudWatchMetricsPublisher.make(applicationName, id)
-        delay   <- zio.random.nextIntBetween(0, maxRandomWorkerStartDelayMillis).map(_.millis).toManaged_
-        _       <- log.info(s"Waiting ${delay.toMillis} ms to start worker ${id}").toManaged_
-      } yield ZStream.fromEffect(ZIO.sleep(delay)) *> Consumer
+        delay   <- zio.Random.nextIntBetween(0, maxRandomWorkerStartDelayMillis).map(_.millis).toManaged
+        _       <- log.info(s"Waiting ${delay.toMillis} ms to start worker ${id}").toManaged
+      } yield ZStream.fromZIO(ZIO.sleep(delay)) *> Consumer
         .shardedStream(
           streamName,
           applicationName = applicationName,
@@ -147,11 +145,11 @@ object ExampleApp extends zio.App {
               .tap(_ => checkpointer.checkpoint())
               .catchAll {
                 case Right(ShardLeaseLost) =>
-                  ZStream.fromEffect(log.info(s"${id} Doing checkpoint for ${shardID}: shard lease lost")) *>
+                  ZStream.fromZIO(log.info(s"${id} Doing checkpoint for ${shardID}: shard lease lost")) *>
                     ZStream.empty
 
                 case Left(e)               =>
-                  ZStream.fromEffect(
+                  ZStream.fromZIO(
                     log.error(s"${id} shard ${shardID} stream failed with " + e + ": " + e.getStackTrace)
                   ) *> ZStream.fail(e)
               }
@@ -163,11 +161,11 @@ object ExampleApp extends zio.App {
   def kclWorker(
     id: String,
     requestShutdown: Promise[Nothing, Unit]
-  ): ZStream[DynamicConsumer with Blocking with Logging with Clock with Random, Throwable, DynamicConsumer.Record[
+  ): ZStream[DynamicConsumer with Any with Logging with Has[Clock] with Has[Random], Throwable, DynamicConsumer.Record[
     String
   ]] =
-    ZStream.fromEffect(
-      zio.random.nextIntBetween(0, 1000).flatMap(d => ZIO.sleep(d.millis))
+    ZStream.fromZIO(
+      zio.Random.nextIntBetween(0, 1000).flatMap(d => ZIO.sleep(d.millis))
     ) *> DynamicConsumer
       .shardedStream(
         streamName,
@@ -191,9 +189,9 @@ object ExampleApp extends zio.App {
               case _: ShutdownException => // This will be thrown when the shard lease has been stolen
                 // Abort the stream when we no longer have the lease
 
-                ZStream.fromEffect(log.error(s"${id} shard ${shardID} lost")) *> ZStream.empty
+                ZStream.fromZIO(log.error(s"${id} shard ${shardID} lost")) *> ZStream.empty
               case e                    =>
-                ZStream.fromEffect(
+                ZStream.fromZIO(
                   log.error(s"${id} shard ${shardID} stream failed with" + e + ": " + e.getStackTrace)
                 ) *> ZStream.fail(e)
             }

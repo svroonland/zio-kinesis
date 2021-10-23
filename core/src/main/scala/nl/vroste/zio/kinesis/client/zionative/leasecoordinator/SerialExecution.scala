@@ -16,12 +16,12 @@ object SerialExecution {
     for {
       queue <- Queue
                  .bounded[(K, UIO[Unit])](queueSize)
-                 .toManaged_
+                 .toManaged
       _     <- ZStream
              .fromQueue(queue)
              .groupByKey(_._1) {
                case (key @ _, actions) =>
-                 actions.mapM { case (_, action) => action }
+                 actions.mapZIO { case (_, action) => action }
              }
              .runDrain
              .forkManaged
@@ -30,7 +30,7 @@ object SerialExecution {
         for {
           p      <- Promise.make[E, A]
           env    <- ZIO.environment[R]
-          action  = f.provide(env).foldM(p.fail, p.succeed).unit
+          action  = f.provide(env).foldZIO(p.fail, p.succeed).unit
           _      <- queue.offer((key, action))
           result <- p.await
         } yield result

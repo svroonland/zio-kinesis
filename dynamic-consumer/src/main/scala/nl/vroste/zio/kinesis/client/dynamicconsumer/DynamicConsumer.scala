@@ -10,13 +10,13 @@ import software.amazon.kinesis.common.{ InitialPositionInStream, InitialPosition
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio._
 import zio.blocking.Blocking
-import zio.clock.Clock
 import zio.duration.{ durationInt, Duration }
 import zio.logging.{ Logger, Logging }
 import zio.stream.{ ZStream, ZTransducer }
 
 import java.time.Instant
 import java.util.UUID
+import zio.{ Clock, Has, Random }
 
 /**
  * Offers a ZStream based interface to the Amazon Kinesis Client Library (KCL)
@@ -54,8 +54,8 @@ object DynamicConsumer {
   def fake(
     shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, Chunk[Byte]])],
     refCheckpointedList: Ref[Seq[Record[Any]]]
-  ): ZLayer[Clock, Nothing, Has[Service]] =
-    ZLayer.fromService[Clock.Service, DynamicConsumer.Service] { clock =>
+  ): ZLayer[Has[Clock], Nothing, Has[Service]] =
+    ZLayer.fromService[Clock, DynamicConsumer.Service] { clock =>
       new DynamicConsumerFake(shards, refCheckpointedList, clock)
     }
 
@@ -67,8 +67,8 @@ object DynamicConsumer {
    */
   def fake(
     shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, Chunk[Byte]])]
-  ): ZLayer[Clock, Nothing, Has[Service]] =
-    ZLayer.fromServiceM[Clock.Service, Any, Nothing, DynamicConsumer.Service] { clock =>
+  ): ZLayer[Has[Clock], Nothing, Has[Service]] =
+    ZLayer.fromServiceM[Clock, Any, Nothing, DynamicConsumer.Service] { clock =>
       Ref.make[Seq[Record[Any]]](Seq.empty).map { refCheckpointedList =>
         new DynamicConsumerFake(shards, refCheckpointedList, clock)
       }
@@ -114,9 +114,9 @@ object DynamicConsumer {
       maxShardBufferSize: Int = 1024, // Prefer powers of 2
       configureKcl: SchedulerConfig => SchedulerConfig = identity
     ): ZStream[
-      Blocking with R,
+      Any with R,
       Throwable,
-      (String, ZStream[Blocking, Throwable, Record[T]], Checkpointer)
+      (String, ZStream[Any, Throwable, Record[T]], Checkpointer)
     ]
   }
 
@@ -134,9 +134,9 @@ object DynamicConsumer {
     maxShardBufferSize: Int = 1024, // Prefer powers of 2
     configureKcl: SchedulerConfig => SchedulerConfig = identity
   ): ZStream[
-    DynamicConsumer with Blocking with R,
+    DynamicConsumer with Any with R,
     Throwable,
-    (String, ZStream[Blocking, Throwable, Record[T]], Checkpointer)
+    (String, ZStream[Any, Throwable, Record[T]], Checkpointer)
   ] =
     ZStream.unwrap(
       ZIO
@@ -199,7 +199,7 @@ object DynamicConsumer {
     configureKcl: SchedulerConfig => SchedulerConfig = identity
   )(
     recordProcessor: Record[T] => RIO[RC, Unit]
-  ): ZIO[R with RC with Blocking with Logging with Clock with DynamicConsumer, Throwable, Unit] =
+  ): ZIO[R with RC with Any with Logging with Has[Clock] with DynamicConsumer, Throwable, Unit] =
     for {
       consumer <- ZIO.service[DynamicConsumer.Service]
       _        <- consumer
@@ -221,7 +221,7 @@ object DynamicConsumer {
                    .tap(record => recordProcessor(record) *> checkpointer.stage(record))
                    .via(
                      checkpointer
-                       .checkpointBatched[Blocking with Logging with RC](
+                       .checkpointBatched[Any with Logging with RC](
                          nr = checkpointBatchSize,
                          interval = checkpointDuration
                        )
@@ -277,12 +277,12 @@ object DynamicConsumer {
      *
      * See also `software.amazon.kinesis.processor.RecordProcessorCheckpointer`
      */
-    def checkpoint: ZIO[Blocking, Throwable, Unit]
+    def checkpoint: ZIO[Any, Throwable, Unit]
 
     /**
      * Immediately checkpoint this record
      */
-    def checkpointNow(r: Record[_]): ZIO[Blocking, Throwable, Unit] =
+    def checkpointNow(r: Record[_]): ZIO[Any, Throwable, Unit] =
       stage(r) *> checkpoint
 
     /**
@@ -300,7 +300,7 @@ object DynamicConsumer {
     def checkpointBatched[R](
       nr: Long,
       interval: Duration
-    ): ZStream[R, Throwable, Any] => ZStream[R with Clock with Blocking, Throwable, Unit] =
+    ): ZStream[R, Throwable, Any] => ZStream[R with Has[Clock] with Any, Throwable, Unit] =
       _.aggregateAsyncWithin(ZTransducer.foldUntil((), nr)((_, _) => ()), Schedule.fixed(interval))
         .tap(_ => checkpoint)
         .catchAll {

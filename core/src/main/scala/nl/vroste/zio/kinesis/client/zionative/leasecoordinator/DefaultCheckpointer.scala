@@ -2,9 +2,9 @@ package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
 import nl.vroste.zio.kinesis.client.Record
 import nl.vroste.zio.kinesis.client.zionative._
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultCheckpointer.{ State, UpdateCheckpoint }
-import zio.clock.Clock
 import zio.logging.{ log, Logging }
 import zio._
+import zio.{ Clock, Has }
 
 private[zionative] class DefaultCheckpointer(
   shardId: String,
@@ -16,8 +16,8 @@ private[zionative] class DefaultCheckpointer(
 ) extends Checkpointer
     with CheckpointerInternal {
   def checkpoint[R](
-    retrySchedule: Schedule[Clock with R, Throwable, Any]
-  ): ZIO[Clock with R, Either[Throwable, ShardLeaseLost.type], Unit] =
+    retrySchedule: Schedule[Has[Clock] with R, Throwable, Any]
+  ): ZIO[Has[Clock] with R, Either[Throwable, ShardLeaseLost.type], Unit] =
     doCheckpoint(false)
       .retry(retrySchedule +++ Schedule.stop) // Only retry Left[Throwable]
 

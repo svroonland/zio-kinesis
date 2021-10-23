@@ -19,9 +19,9 @@ import software.amazon.awssdk.http.SdkHttpConfigurationOption
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.utils.AttributeMap
 import zio.ZLayer
-import zio.duration._
 
 import java.net.URI
+import zio._
 
 /**
  * Layers for connecting to a LocalStack (https://localstack.cloud/) environment on a local docker host
@@ -78,7 +78,7 @@ object LocalStackServices {
 
     val kinesisAsyncClientLayer: ZLayer[AwsConfig, Throwable, Kinesis] =
       kinesis.customized { builder =>
-        System.setProperty(SdkSystemSetting.CBOR_ENABLED.property, "false")
+        java.lang.System.setProperty(SdkSystemSetting.CBOR_ENABLED.property, "false")
 
         builder
           .endpointOverride(kinesisUri)

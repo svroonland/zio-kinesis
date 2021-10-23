@@ -1,9 +1,9 @@
 package nl.vroste.zio.kinesis.client
 
 import zio._
-import zio.clock.Clock
-import zio.duration._
+
 import zio.stream.ZStream
+import zio.{ Clock, Has }
 
 object Util {
   implicit class ZStreamExtensions[-R, +E, +O](val stream: ZStream[R, E, O]) extends AnyVal {
@@ -19,8 +19,8 @@ object Util {
         for {
           substreamsQueue     <- Queue
                                .unbounded[Exit[Option[E], (K, Queue[GroupQueueValues])]]
-                               .toManaged(_.shutdown)
-          substreamsQueuesMap <- Ref.make(Map.empty[K, Queue[GroupQueueValues]]).toManaged_
+                               .toManagedWith(_.shutdown)
+          substreamsQueuesMap <- Ref.make(Map.empty[K, Queue[GroupQueueValues]]).toManaged
           _                   <- {
             val addToSubStream: (K, Chunk[O]) => ZIO[Any, Nothing, Unit] = (key: K, values: Chunk[O]) => {
               for {
@@ -37,7 +37,7 @@ object Util {
               } yield ()
             }
             (stream.foreachChunk { chunk =>
-              ZIO.foreach_(chunk.groupBy(getKey))(addToSubStream.tupled)
+              ZIO.foreachDiscard(chunk.groupBy(getKey))(addToSubStream.tupled)
             } *> substreamsQueue.offer(Exit.fail(None))).catchSome {
               case e =>
                 substreamsQueue.offer(Exit.fail(Some(e)))
@@ -68,7 +68,7 @@ object Util {
     max: Duration,
     factor: Double = 2.0,
     maxRecurs: Option[Int] = None
-  ): Schedule[Clock, A, (Duration, Long)] =
+  ): Schedule[Has[Clock], A, (Duration, Long)] =
     (Schedule.exponential(min, factor).whileOutput(_ <= max) andThen Schedule.fixed(max).as(max)) &&
       maxRecurs.map(Schedule.recurs).getOrElse(Schedule.forever)
 
@@ -83,13 +83,13 @@ object Util {
    */
   def throttledFunction[R, I, E, A](units: Int, duration: Duration)(
     f: I => ZIO[R, E, A]
-  ): ZManaged[Clock, Nothing, I => ZIO[R, E, A]] =
+  ): ZManaged[Has[Clock], Nothing, I => ZIO[R, E, A]] =
     for {
-      requestsQueue <- Queue.bounded[(IO[E, A], Promise[E, A])](units / 2 * 2).toManaged_
+      requestsQueue <- Queue.bounded[(IO[E, A], Promise[E, A])](units / 2 * 2).toManaged
       _             <- ZStream
              .fromQueueWithShutdown(requestsQueue)
              .throttleShape(units.toLong, duration, units.toLong)(_ => 1)
-             .mapM { case (effect, promise) => promise.completeWith(effect) }
+             .mapZIO { case (effect, promise) => promise.completeWith(effect) }
              .runDrain
              .forkManaged
     } yield (input: I) =>
@@ -104,14 +104,14 @@ object Util {
     ThrottledFunctionPartial(units, duration)
 
   final case class ThrottledFunctionPartial(units: Int, duration: Duration) {
-    def apply[R, I0, I1, E, A](f: (I0, I1) => ZIO[R, E, A]): ZManaged[Clock, Nothing, (I0, I1) => ZIO[R, E, A]] =
+    def apply[R, I0, I1, E, A](f: (I0, I1) => ZIO[R, E, A]): ZManaged[Has[Clock], Nothing, (I0, I1) => ZIO[R, E, A]] =
       throttledFunction[R, (I0, I1), E, A](units, duration) {
         case (i0, i1) => f(i0, i1)
       }.map(Function.untupled(_))
 
     def apply[R, I0, I1, I2, E, A](
       f: (I0, I1, I2) => ZIO[R, E, A]
-    ): ZManaged[Clock, Nothing, (I0, I1, I2) => ZIO[R, E, A]] =
+    ): ZManaged[Has[Clock], Nothing, (I0, I1, I2) => ZIO[R, E, A]] =
       throttledFunction[R, (I0, I1, I2), E, A](units, duration) {
         case (i0, i1, i2) => f(i0, i1, i2)
       }.map(Function.untupled(_))
@@ -128,9 +128,9 @@ object Util {
   def periodicAndTriggerableOperation[R, A](
     effect: ZIO[R, Nothing, A],
     period: Duration
-  ): ZManaged[R with Clock, Nothing, UIO[Unit]] =
+  ): ZManaged[R with Has[Clock], Nothing, UIO[Unit]] =
     for {
-      queue <- Queue.dropping[Unit](1).toManaged(_.shutdown)
+      queue <- Queue.dropping[Unit](1).toManagedWith(_.shutdown)
       _     <- ((queue.take raceFirst ZIO.sleep(period)) *> effect *> queue.takeAll).forever.forkManaged
     } yield queue.offer(()).unit
 }

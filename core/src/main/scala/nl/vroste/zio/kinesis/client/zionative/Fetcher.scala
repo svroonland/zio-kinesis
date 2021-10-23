@@ -2,8 +2,8 @@ package nl.vroste.zio.kinesis.client.zionative
 
 import io.github.vigoo.zioaws.kinesis.model.{ Record, Shard, StartingPosition }
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
-import zio.clock.Clock
 import zio.stream.ZStream
+import zio.{ Clock, Has }
 
 // TODO make all private stuff private
 private[zionative] trait Fetcher {
@@ -18,7 +18,7 @@ private[zionative] trait Fetcher {
   def shardRecordStream(
     shardId: String,
     startingPosition: StartingPosition
-  ): ZStream[Clock, Either[Throwable, EndOfShard], Record.ReadOnly]
+  ): ZStream[Has[Clock], Either[Throwable, EndOfShard], Record.ReadOnly]
 }
 
 private[zionative] object Fetcher {
@@ -28,7 +28,7 @@ private[zionative] object Fetcher {
     f: (
       String,
       StartingPosition
-    ) => ZStream[Clock, Either[Throwable, EndOfShard], Record.ReadOnly]
+    ) => ZStream[Has[Clock], Either[Throwable, EndOfShard], Record.ReadOnly]
   ): Fetcher =
     (shard, startingPosition) => f(shard, startingPosition)
 }

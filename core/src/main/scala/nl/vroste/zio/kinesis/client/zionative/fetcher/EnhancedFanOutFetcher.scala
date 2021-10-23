@@ -9,12 +9,12 @@ import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
 import nl.vroste.zio.kinesis.client.zionative.{ DiagnosticEvent, FetchMode, Fetcher }
 import software.amazon.awssdk.services.kinesis.model.ResourceInUseException
 import zio._
-import zio.clock.Clock
-import zio.duration._
+
 import zio.logging.{ log, Logging }
 import zio.stream.ZStream
 
 import scala.util.control.NonFatal
+import zio.{ Clock, Has }
 
 object EnhancedFanOutFetcher {
   import FetchUtil.repeatWhileNotNone
@@ -24,10 +24,10 @@ object EnhancedFanOutFetcher {
     workerId: String,
     config: FetchMode.EnhancedFanOut,
     emitDiagnostic: DiagnosticEvent => UIO[Unit]
-  ): ZManaged[Clock with Kinesis with Logging, Throwable, Fetcher] =
+  ): ZManaged[Has[Clock] with Kinesis with Logging, Throwable, Fetcher] =
     for {
-      env                <- ZIO.environment[Logging with Clock with Kinesis].toManaged_
-      consumerARN        <- registerConsumerIfNotExists(streamDescription.streamARNValue, workerId).toManaged_
+      env                <- ZIO.environment[Logging with Has[Clock] with Kinesis].toManaged
+      consumerARN        <- registerConsumerIfNotExists(streamDescription.streamARNValue, workerId).toManaged
       subscribeThrottled <- Util.throttledFunctionN(config.maxSubscriptionsPerSecond, 1.second) {
                               (pos: StartingPosition, shardId: String) =>
                                 ZIO.succeed(
@@ -96,7 +96,7 @@ object EnhancedFanOutFetcher {
             )
             .mapError(_.toThrowable)
             .map(_.consumerDescriptionValue)
-            .filterOrElse(_.consumerStatusValue != ConsumerStatus.DELETING)(_ => ZIO.fail(e))
+            .filterOrElseWith(_.consumerStatusValue != ConsumerStatus.DELETING)(_ => ZIO.fail(e))
             .map(_.consumerARNValue)
       }
 }

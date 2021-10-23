@@ -1,8 +1,8 @@
 package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
-import zio.duration._
+
 import nl.vroste.zio.kinesis.client.Util
 import zio.Schedule
-import zio.clock.Clock
+import zio.{ Clock, Has, _ }
 
 /**
  * Settings affecting lease taking, renewing and refreshing
@@ -28,7 +28,7 @@ final case class LeaseCoordinationSettings(
   maxParallelLeaseAcquisitions: Int = 10,
   maxParallelLeaseRenewals: Int = 10,
   releaseLeaseTimeout: Duration = 10.seconds,
-  renewRetrySchedule: Schedule[Clock, Throwable, Any] =
+  renewRetrySchedule: Schedule[Has[Clock], Throwable, Any] =
     Util.exponentialBackoff(3.second, 30.seconds, maxRecurs = Some(3)),
   shardRefreshInterval: Duration = 30.seconds
 )

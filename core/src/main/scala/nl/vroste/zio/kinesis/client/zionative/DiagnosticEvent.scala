@@ -1,6 +1,6 @@
 package nl.vroste.zio.kinesis.client.zionative
 
-import zio.duration.Duration
+import zio._
 
 /**
  * Events for diagnostics of Kinesis streaming

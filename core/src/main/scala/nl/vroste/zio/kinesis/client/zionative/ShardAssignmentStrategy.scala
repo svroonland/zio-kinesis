@@ -4,10 +4,10 @@ import scala.collection.compat._
 import java.time.Instant
 import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.Lease
 import zio.ZIO
-import zio.clock.Clock
-import zio.duration._
+
 import zio.logging._
-import zio.random._
+import zio.{ Clock, Has, Random, _ }
+import zio.Random.shuffle
 
 /**
  * Decides which shards this worker would like to have
@@ -33,7 +33,7 @@ trait ShardAssignmentStrategy {
     leases: Set[(Lease, Instant)],
     shards: Set[String],
     workerId: String
-  ): ZIO[Random with Clock with Logging, Nothing, Set[String]]
+  ): ZIO[Has[Random] with Has[Clock] with Logging, Nothing, Set[String]]
 }
 
 object ShardAssignmentStrategy {
@@ -55,7 +55,7 @@ object ShardAssignmentStrategy {
         leases: Set[(Lease, Instant)],
         shards: Set[String],
         workerId: String
-      ): ZIO[Random with Clock with Logging, Nothing, Set[String]] =
+      ): ZIO[Has[Random] with Has[Clock] with Logging, Nothing, Set[String]] =
         ZIO.succeed(shardAssignment intersect shards)
     }
 
@@ -81,9 +81,9 @@ object ShardAssignmentStrategy {
         leases: Set[(Lease, Instant)],
         shards: Set[String],
         workerId: String
-      ): ZIO[zio.random.Random with zio.clock.Clock with Logging, Nothing, Set[String]] =
+      ): ZIO[Has[Random] with Has[Clock] with Logging, Nothing, Set[String]] =
         for {
-          now          <- zio.clock.currentDateTime.map(_.toInstant()).orDie
+          now          <- zio.Clock.currentDateTime.map(_.toInstant())
           expiredLeases = leases.collect {
                             case (lease, lastUpdated)
                                 if lastUpdated.isBefore(now.minusMillis(expirationTime.toMillis)) &&
@@ -115,7 +115,7 @@ object ShardAssignmentStrategy {
     allLeases: List[Lease],
     workerId: String,
     expiredLeases: List[Lease] = List.empty
-  ): ZIO[Random with Logging, Nothing, Set[String]] = {
+  ): ZIO[Has[Random] with Logging, Nothing, Set[String]] = {
     val allWorkers    = allLeases.map(_.owner).collect { case Some(owner) => owner }.toSet + workerId
     val activeWorkers =
       (allLeases.toSet -- expiredLeases).map(_.owner).collect { case Some(owner) => owner } + workerId
@@ -149,7 +149,7 @@ object ShardAssignmentStrategy {
               _         = println(s"Remaining: ${remaining}, ${minNrLeasesToTake} to ${maxNrLeasesToTake}")
               toSteal  <- leasesToSteal(allLeases, workerId, target, nrLeasesToSteal = remaining)
             } yield (leasesWithoutOwnerOrExpired ++ toSteal).map(_.key).toSet
-          else ZIO.succeed(Set.empty))
+          else ZIO.succeed(Set.empty[String]))
   }
 
   /**
@@ -166,7 +166,7 @@ object ShardAssignmentStrategy {
     workerId: String,
     target: Int,
     nrLeasesToSteal: Int
-  ): ZIO[Random with Logging, Nothing, List[Lease]] = {
+  ): ZIO[Has[Random] with Logging, Nothing, List[Lease]] = {
     val leasesByWorker =
       allLeases.groupBy(_.owner).collect { case (Some(owner), leases) => owner -> leases }
     val allWorkers     = allLeases.map(_.owner).collect { case Some(owner) => owner }.toSet ++ Set(workerId)

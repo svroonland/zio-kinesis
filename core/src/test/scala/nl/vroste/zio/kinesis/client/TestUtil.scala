@@ -10,47 +10,49 @@ import nl.vroste.zio.kinesis.client.serde.{ Serde, Serializer }
 import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException }
 import zio._
 import zio.blocking.Blocking
-import zio.clock.Clock
-import zio.random.Random
-import zio.console.{ putStrLn, Console }
-import zio.duration._
+
 import zio.logging.{ log, Logging }
 import zio.stream.ZStream
 
 import java.util.UUID
+import zio.{ Clock, Console, Has, Random, Random }
+import zio.Console.printLine
 
 object TestUtil {
 
   def withStream[R, A](name: String, shards: Int)(
     f: ZIO[R, Throwable, A]
-  ): ZIO[Kinesis with Clock with Console with R, Throwable, A] =
+  ): ZIO[Kinesis with Has[Clock] with Has[Console] with R, Throwable, A] =
     createStream(name, shards)
-      .tapM(_ => getShards(name))
-      .use_(f)
+      .tapZIO(_ => getShards(name))
+      .useDiscard(f)
 
   def withRandomStreamEnv[R, A](shards: Int = 2)(
     f: (String, String) => ZIO[R, Throwable, A]
-  ): ZIO[Kinesis with DynamoDb with Clock with Console with Random with R, Throwable, A] =
+  ): ZIO[Kinesis with DynamoDb with Has[Clock] with Has[Console] with Has[Random] with R, Throwable, A] =
     (for {
-      streamName      <- random.nextUUID.map("zio-test-stream-" + _.toString).toManaged_
-      applicationName <- random.nextUUID.map("zio-test-" + _.toString).toManaged_
+      streamName      <- Random.nextUUID.map("zio-test-stream-" + _.toString).toManaged
+      applicationName <- Random.nextUUID.map("zio-test-" + _.toString).toManaged
       _               <- createStream(streamName, shards)
-      _               <- getShards(streamName).toManaged_
+      _               <- getShards(streamName).toManaged
       _               <- ZManaged.finalizer(dynamodb.deleteTable(DeleteTableRequest(applicationName)).ignore)
     } yield (streamName, applicationName)).use {
       case (streamName, applicationName) => f(streamName, applicationName).fork.flatMap(_.join)
     }
 
-  def getShards(name: String): ZIO[Kinesis with Clock, Throwable, Chunk[Shard.ReadOnly]]                          =
+  def getShards(name: String): ZIO[Kinesis with Has[Clock], Throwable, Chunk[Shard.ReadOnly]] =
     kinesis
       .listShards(ListShardsRequest(streamName = Some(name)))
       .mapError(_.toThrowable)
       .runCollect
-      .filterOrElse(_.nonEmpty)(_ => getShards(name).delay(1.second))
+      .filterOrElseWith(_.nonEmpty)(_ => getShards(name).delay(1.second))
       .catchSome { case _: ResourceInUseException => getShards(name).delay(1.second) }
 
-  def createStream(streamName: String, nrShards: Int): ZManaged[Console with Clock with Kinesis, Throwable, Unit] = {
-    createStreamUnmanaged(streamName, nrShards).toManaged(_ =>
+  def createStream(
+    streamName: String,
+    nrShards: Int
+  ): ZManaged[Has[Console] with Has[Clock] with Kinesis, Throwable, Unit]                     = {
+    createStreamUnmanaged(streamName, nrShards).toManagedWith(_ =>
       kinesis
         .deleteStream(DeleteStreamRequest(streamName, enforceConsumerDeletion = Some(true)))
         .mapError(_.toThrowable)
@@ -59,9 +61,9 @@ object TestUtil {
         }
         .orDie
     )
-  } <* ZManaged.fromEffect(waitForStreamActive(streamName))
+  } <* ZManaged.fromZIO(waitForStreamActive(streamName))
 
-  def waitForStreamActive(streamName: String): ZIO[Kinesis with Clock, Throwable, Unit] =
+  def waitForStreamActive(streamName: String): ZIO[Kinesis with Has[Clock], Throwable, Unit] =
     kinesis
       .describeStream(DescribeStreamRequest(streamName))
       .mapError(_.toThrowable)
@@ -78,17 +80,17 @@ object TestUtil {
   def createStreamUnmanaged(
     streamName: String,
     nrShards: Int
-  ): ZIO[Console with Clock with Kinesis, Throwable, Unit] =
+  ): ZIO[Has[Console] with Has[Clock] with Kinesis, Throwable, Unit] =
     kinesis
       .createStream(CreateStreamRequest(streamName, nrShards))
       .mapError(_.toThrowable)
       .catchSome {
         case _: ResourceInUseException =>
-          putStrLn("Stream already exists").orDie
+          printLine("Stream already exists").orDie
       }
       .retry(Schedule.exponential(1.second) && Schedule.recurs(10))
 
-  val retryOnResourceNotFound: Schedule[Clock, Throwable, ((Throwable, Long), Duration)] =
+  val retryOnResourceNotFound: Schedule[Has[Clock], Throwable, ((Throwable, Long), Duration)] =
     Schedule.recurWhile[Throwable] {
       case _: ResourceNotFoundException => true
       case _                            => false
@@ -108,10 +110,10 @@ object TestUtil {
     produceRate: Int,
     maxRecordSize: Int,
     producerSettings: ProducerSettings = ProducerSettings()
-  ): ZIO[Random with Console with Clock with Kinesis with Logging with Blocking, Throwable, Unit] =
+  ): ZIO[Has[Random] with Has[Console] with Has[Clock] with Kinesis with Logging with Any, Throwable, Unit] =
     Ref
       .make(ProducerMetrics.empty)
-      .toManaged_
+      .toManaged
       .flatMap { totalMetrics =>
         Producer
           .make(
@@ -121,8 +123,8 @@ object TestUtil {
             metrics =>
               totalMetrics
                 .updateAndGet(_ + metrics)
-                .flatMap(m => putStrLn(s"""${metrics.toString}
-                                          |Total metrics: ${m.toString}""".stripMargin).orDie)
+                .flatMap(m => printLine(s"""${metrics.toString}
+                                           |Total metrics: ${m.toString}""".stripMargin).orDie)
           )
       }
       .use(massProduceRecords(_, nrRecords, produceRate = Some(produceRate), maxRecordSize))
@@ -161,7 +163,7 @@ object TestUtil {
     nrRecords: Int,
     produceRate: Option[Int] = None,
     maxRecordSize: Int
-  ): ZIO[Logging with Clock with Random, Throwable, Unit] = {
+  ): ZIO[Logging with Has[Clock] with Has[Random], Throwable, Unit] = {
     val value     = Chunk.fill(maxRecordSize)(0x01.toByte)
     val chunkSize = produceRate.fold(defaultChunkSize)(Math.min(_, defaultChunkSize))
     val chunk     = Chunk.fill(chunkSize)(
@@ -169,7 +171,7 @@ object TestUtil {
     )
 
     val records = ZStream
-      .repeatEffectChunk(UIO(chunk))
+      .repeatZIOChunk(UIO(chunk))
       .take(nrRecords.toLong)
       .via(throttle(produceRate, _))
     massProduceRecords(producer, records)
@@ -177,8 +179,8 @@ object TestUtil {
 
   private def throttle[R, E, A](
     produceRate: Option[Int],
-    s: ZStream[R with Clock, E, A]
-  ): ZStream[R with Clock, E, A] = {
+    s: ZStream[R with Has[Clock], E, A]
+  ): ZStream[R with Has[Clock], E, A] = {
     val intervals = 10
     produceRate.fold(s) { produceRate =>
       s.throttleShape(
@@ -197,15 +199,15 @@ object TestUtil {
     nrRecords: Int,
     produceRate: Option[Int] = None,
     maxRecordSize: Int
-  ): ZIO[Logging with Clock with Random, Throwable, Unit] = {
-    val records = ZStream.repeatEffect {
+  ): ZIO[Logging with Has[Clock] with Has[Random], Throwable, Unit] = {
+    val records = ZStream.repeatZIO {
       for {
-        key   <- random
+        key   <- Random
                  .nextIntBetween(1, 256)
                  .flatMap(keyLength =>
-                   ZIO.replicateM(keyLength)(random.nextIntBetween('\u0000', '\uD7FF').map(_.toChar)).map(_.mkString)
+                   ZIO.replicateZIO(keyLength)(Random.nextIntBetween('\u0000', '\uD7FF').map(_.toChar)).map(_.mkString)
                  )
-        value <- random
+        value <- Random
                    .nextIntBetween(1, maxRecordSize)
                    .map(valueLength => Chunk.fromIterable(List.fill(valueLength)(0x01.toByte)))
       } yield ProducerRecord(key, value)
@@ -216,10 +218,10 @@ object TestUtil {
   def massProduceRecords[R, T](
     producer: Producer[T],
     records: ZStream[R, Nothing, ProducerRecord[T]]
-  ): ZIO[Logging with Clock with R, Throwable, Unit] =
+  ): ZIO[Logging with Has[Clock] with R, Throwable, Unit] =
     records
       .mapChunks(Chunk.single)
-      .mapMParUnordered(50) { chunk =>
+      .mapZIOParUnordered(50) { chunk =>
         producer
           .produceChunk(chunk)
           .tapError(e => log.error(s"Producing records chunk failed, will retry: ${e}"))
@@ -228,6 +230,6 @@ object TestUtil {
           .retry(Schedule.exponential(1.second))
       }
       .runDrain
-      .tapCause(e => log.error("Producing records chunk failed", e)) *>
+      .tapErrorCause(e => log.error("Producing records chunk failed", e)) *>
       log.info("Producing records is done!")
 }

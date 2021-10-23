@@ -8,10 +8,10 @@ import nl.vroste.zio.kinesis.client.Util
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent._
 import zio._
-import zio.clock.Clock
-import zio.duration._
+
 import zio.logging.{ log, Logging }
 import zio.stream.{ ZStream, ZTransducer }
+import zio.{ Clock, Has }
 
 /**
  * Configuration for CloudWatch metrics publishing
@@ -26,7 +26,7 @@ final case class CloudWatchMetricsPublisherConfig(
   maxFlushInterval: Duration = 20.seconds,
   maxBatchSize: Int = 20,
   periodicMetricInterval: Duration = 30.seconds,
-  retrySchedule: Schedule[Clock, Any, (Duration, Long)] = Util.exponentialBackoff(1.second, 1.minute),
+  retrySchedule: Schedule[Has[Clock], Any, (Duration, Long)] = Util.exponentialBackoff(1.second, 1.minute),
   maxParallelUploads: Int = 3
 ) {
   require(maxBatchSize <= 20, "maxBatchSize must be <= 20 (AWS SDK limit)")
@@ -124,7 +124,7 @@ private class CloudWatchMetricsPublisher(
       )
     )
 
-  val now = zio.clock.currentDateTime.map(_.toInstant())
+  val now = zio.Clock.currentDateTime.map(_.toInstant())
 
   def collectPeriodicMetrics(event: DiagnosticEvent): UIO[Unit] =
     event match {
@@ -145,21 +145,21 @@ private class CloudWatchMetricsPublisher(
   val processQueue =
     (ZStream
       .fromQueue(eventQueue)
-      .mapM(event => now.map((event, _)))
+      .mapZIO(event => now.map((event, _)))
       .tap { case (e, _) => collectPeriodicMetrics(e) }
       .mapConcat(Function.tupled(toMetrics)) merge ZStream.fromQueue(periodicMetricsQueue))
       .aggregateAsyncWithin(
         ZTransducer.collectAllN(config.maxBatchSize),
         Schedule.fixed(config.maxFlushInterval)
       )
-      .mapMParUnordered(config.maxParallelUploads) { metrics =>
+      .mapZIOParUnordered(config.maxParallelUploads) { metrics =>
         putMetricData(metrics)
           .tapError(e => log.warn(s"Failed to upload metrics, will retry: ${e}"))
           .retry(config.retrySchedule)
           .orDie // orDie because schedule has Any as error type?
       }
       .runDrain
-      .tapCause(e => log.error("Metrics uploading has stopped with error", e))
+      .tapErrorCause(e => log.error("Metrics uploading has stopped with error", e))
 
   val generatePeriodicMetrics =
     (for {
@@ -209,14 +209,14 @@ object CloudWatchMetricsPublisher {
   def make(
     applicationName: String,
     workerId: String
-  ): ZManaged[Clock with Logging with CloudWatch with Has[CloudWatchMetricsPublisherConfig], Nothing, Service] =
+  ): ZManaged[Has[Clock] with Logging with CloudWatch with Has[CloudWatchMetricsPublisherConfig], Nothing, Service] =
     for {
       client  <- ZManaged.service[CloudWatch.Service]
       config  <- ZManaged.service[CloudWatchMetricsPublisherConfig]
-      q       <- Queue.bounded[DiagnosticEvent](1000).toManaged_
-      q2      <- Queue.bounded[MetricDatum](1000).toManaged_
-      leases  <- Ref.make[Set[String]](Set.empty).toManaged_
-      workers <- Ref.make[Set[String]](Set.empty).toManaged_
+      q       <- Queue.bounded[DiagnosticEvent](1000).toManaged
+      q2      <- Queue.bounded[MetricDatum](1000).toManaged
+      leases  <- Ref.make[Set[String]](Set.empty).toManaged
+      workers <- Ref.make[Set[String]](Set.empty).toManaged
       c        = new CloudWatchMetricsPublisher(client, q, q2, applicationName, workerId, leases, workers, config)
       _       <- c.processQueue.forkManaged
       _       <- c.generatePeriodicMetrics.forkManaged

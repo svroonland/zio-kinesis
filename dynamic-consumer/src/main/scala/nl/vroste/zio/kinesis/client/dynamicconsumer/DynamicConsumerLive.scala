@@ -20,6 +20,7 @@ import zio.logging.Logger
 import zio.stream.ZStream
 
 import scala.jdk.CollectionConverters._
+import zio.Random
 
 private[client] class DynamicConsumerLive(
   logger: Logger[String],
@@ -39,9 +40,9 @@ private[client] class DynamicConsumerLive(
     maxShardBufferSize: Int,
     configureKcl: SchedulerConfig => SchedulerConfig
   ): ZStream[
-    Blocking with R,
+    Any with R,
     Throwable,
-    (String, ZStream[Blocking, Throwable, DynamicConsumer.Record[T]], DynamicConsumer.Checkpointer)
+    (String, ZStream[Any, Throwable, DynamicConsumer.Record[T]], DynamicConsumer.Checkpointer)
   ] = {
     sealed trait ShardQueueStopReason
     object ShardQueueStopReason {
@@ -169,9 +170,9 @@ private[client] class DynamicConsumerLive(
     object Queues {
       def make: ZManaged[Any, Nothing, Queues] =
         for {
-          runtime <- ZIO.runtime[Any].toManaged_
+          runtime <- ZIO.runtime[Any].toManaged
           q       <-
-            Queue.unbounded[Exit[Option[Throwable], (String, ShardQueue, CheckpointerInternal)]].toManaged(_.shutdown)
+            Queue.unbounded[Exit[Option[Throwable], (String, ShardQueue, CheckpointerInternal)]].toManagedWith(_.shutdown)
         } yield new Queues(runtime, q)
     }
 
@@ -214,7 +215,7 @@ private[client] class DynamicConsumerLive(
         config         = configureKcl(
                    SchedulerConfig.makeDefault(configsBuilder, kinesisAsyncClient, initialPosition, streamName)
                  )
-        env           <- ZIO.environment[R].toManaged_
+        env           <- ZIO.environment[R].toManaged
 
         scheduler <- Task(
                        new Scheduler(
@@ -226,11 +227,11 @@ private[client] class DynamicConsumerLive(
                          config.processor,
                          config.retrieval
                        )
-                     ).toManaged_
+                     ).toManaged
         doShutdown = logger.debug("Starting graceful shutdown") *>
                        ZIO.fromFutureJava(scheduler.startGracefulShutdown()).unit.orDie <*
                        queues.shutdown
-        _         <- zio.blocking
+        _         <- zio.ZIO
                .blocking(ZIO(scheduler.run()))
                .fork
                .flatMap(_.join)

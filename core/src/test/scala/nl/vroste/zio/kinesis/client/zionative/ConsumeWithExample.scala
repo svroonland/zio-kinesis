@@ -2,15 +2,14 @@ package nl.vroste.zio.kinesis.client.zionative
 
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio._
-import zio.clock.Clock
-import zio.console.{ putStrLn, Console }
-import zio.duration._
+
 import zio.logging.Logging
+import zio.Console.printLine
 
 /**
  * Basic usage example for `Consumer.consumeWith` convenience method
  */
-object ConsumeWithExample extends zio.App {
+object ConsumeWithExample extends zio.ZIOAppDefault {
   val loggingLayer: ZLayer[Any, Nothing, Logging] =
     (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
@@ -23,7 +22,7 @@ object ConsumeWithExample extends zio.App {
         workerIdentifier = "worker1",
         checkpointBatchSize = 1000L,
         checkpointDuration = 5.minutes
-      )(record => putStrLn(s"Processing record $record"))
+      )(record => printLine(s"Processing record $record"))
       .provideCustomLayer(Consumer.defaultEnvironment ++ loggingLayer)
       .exitCode
 }

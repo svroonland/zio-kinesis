@@ -5,11 +5,10 @@ import nl.vroste.zio.kinesis.client.producer.ProducerMetrics
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.{ Producer, ProducerRecord, ProducerSettings }
 import zio._
-import zio.clock.Clock
-import zio.console.{ putStrLn, Console }
 import zio.logging.Logging
+import zio.Console.printLine
 
-object ProducerWithMetricsExample extends zio.App {
+object ProducerWithMetricsExample extends zio.ZIOAppDefault {
   val streamName      = "my_stream"
   val applicationName = "my_awesome_zio_application"
 
@@ -19,13 +18,13 @@ object ProducerWithMetricsExample extends zio.App {
   val env = client.defaultAwsLayer ++ loggingLayer
 
   val program = (for {
-    totalMetrics <- Ref.make(ProducerMetrics.empty).toManaged_
+    totalMetrics <- Ref.make(ProducerMetrics.empty).toManaged
     producer     <- Producer
                   .make(
                     streamName,
                     Serde.asciiString,
                     ProducerSettings(),
-                    metrics => totalMetrics.updateAndGet(_ + metrics).flatMap(m => putStrLn(m.toString).orDie)
+                    metrics => totalMetrics.updateAndGet(_ + metrics).flatMap(m => printLine(m.toString).orDie)
                   )
   } yield (producer, totalMetrics)).use {
     case (producer, totalMetrics) =>
@@ -33,9 +32,9 @@ object ProducerWithMetricsExample extends zio.App {
 
       for {
         _ <- producer.produceChunk(Chunk.fromIterable(records))
-        _ <- putStrLn(s"All records in the chunk were produced").orDie
+        _ <- printLine(s"All records in the chunk were produced").orDie
         m <- totalMetrics.get
-        _ <- putStrLn(s"Metrics after producing: ${m}").orDie
+        _ <- printLine(s"Metrics after producing: ${m}").orDie
       } yield ()
   }
 

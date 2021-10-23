@@ -12,19 +12,18 @@ import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClientBuilder
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClientBuilder
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClientBuilder
-import zio.clock.Clock
 import zio.logging.Logging
-import zio.random.Random
 import zio.{ CancelableFuture, ZIO }
 
 import scala.concurrent.duration._
 import scala.concurrent.{ ExecutionContext, Future }
+import zio.{ Clock, Has, Random }
 
 /**
  * A scala-native Future based interface to the zio-kinesis Consumer
  */
 class Consumer private (
-  runtime: zio.Runtime.Managed[Clock with Random with Kinesis with LeaseRepository with Logging]
+  runtime: zio.Runtime.Managed[Has[Clock] with Has[Random] with Kinesis with LeaseRepository with Logging]
 ) {
 
   /**

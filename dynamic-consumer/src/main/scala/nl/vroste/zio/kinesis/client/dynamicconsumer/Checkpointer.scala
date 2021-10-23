@@ -5,6 +5,7 @@ import software.amazon.kinesis.processor.RecordProcessorCheckpointer
 import zio.{ Ref, Task, UIO, ZIO }
 import zio.blocking.Blocking
 import zio.logging.Logger
+import zio.Random
 
 case object LastRecordMustBeCheckpointedException
     extends Exception("Record at end of shard must be checkpointed before checkpointer shutdown")
@@ -33,12 +34,12 @@ private[dynamicconsumer] object Checkpointer {
       override def stage(r: Record[_]): UIO[Unit] =
         state.update(_.copy(latestStaged = Some(ExtendedSequenceNumber(r.sequenceNumber, r.subSequenceNumber))))
 
-      override def checkpoint: ZIO[Blocking, Throwable, Unit] =
+      override def checkpoint: ZIO[Any, Throwable, Unit] =
         state.get.flatMap {
           case State(Some(sequenceNumber), _, _, _) =>
             for {
               _ <- logger.trace(s"about to checkpoint ${sequenceNumber}")
-              _ <- zio.blocking.blocking {
+              _ <- zio.ZIO.blocking {
                      Task(
                        kclCheckpointer
                          .checkpoint(sequenceNumber.sequenceNumber, sequenceNumber.subSequenceNumber.getOrElse(0L))
@@ -68,7 +69,7 @@ private[dynamicconsumer] object Checkpointer {
       override def checkEndOfShardCheckpointed: Task[Unit] =
         ZIO
           .fail(LastRecordMustBeCheckpointedException)
-          .whenM(state.get.tap(s => UIO(println(s"State at check end of shard: ${s}"))).map {
+          .whenZIO(state.get.tap(s => UIO(println(s"State at check end of shard: ${s}"))).map {
             case State(_, _, None, _)                                                  => false
             case State(_, None, Some(maxSequenceNumber @ _), endOfShard) if endOfShard => true
             case State(_, Some(lastCheckpointed), Some(maxSequenceNumber), endOfShard)

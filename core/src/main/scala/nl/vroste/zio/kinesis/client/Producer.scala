@@ -8,10 +8,10 @@ import nl.vroste.zio.kinesis.client.producer.ProducerLive.ProduceRequest
 import nl.vroste.zio.kinesis.client.producer._
 import nl.vroste.zio.kinesis.client.serde.Serializer
 import zio._
-import zio.clock.{ instant, Clock }
-import zio.duration.{ Duration, _ }
 import zio.logging._
 import zio.stream.ZSink
+import zio.{ Clock, Has }
+import zio.Clock.instant
 
 /**
  * Producer for Kinesis records
@@ -65,7 +65,7 @@ trait Producer[T] {
    * ZSink interface to the Producer
    */
   def sinkChunked: ZSink[Any, Throwable, Chunk[ProducerRecord[T]], Nothing, Unit] =
-    ZSink.drain.contramapM(produceChunk)
+    ZSink.drain.contramapZIO(produceChunk)
 }
 
 /**
@@ -85,7 +85,7 @@ trait Producer[T] {
 final case class ProducerSettings(
   bufferSize: Int = 8192,
   maxParallelRequests: Int = 24,
-  backoffRequests: Schedule[Clock, Throwable, Any] = Schedule.exponential(500.millis) && Schedule.recurs(5),
+  backoffRequests: Schedule[Has[Clock], Throwable, Any] = Schedule.exponential(500.millis) && Schedule.recurs(5),
   failedDelay: Duration = 100.millis,
   metricsInterval: Duration = 30.seconds,
   updateShardInterval: Duration = 30.seconds,
@@ -115,16 +115,16 @@ object Producer {
     serializer: Serializer[R, T],
     settings: ProducerSettings = ProducerSettings(),
     metricsCollector: ProducerMetrics => ZIO[R1, Nothing, Unit] = (_: ProducerMetrics) => ZIO.unit
-  ): ZManaged[R with R1 with Clock with Kinesis with Logging, Throwable, Producer[T]] =
+  ): ZManaged[R with R1 with Has[Clock] with Kinesis with Logging, Throwable, Producer[T]] =
     for {
       client          <- ZManaged.service[Kinesis.Service]
-      env             <- ZIO.environment[R with Clock].toManaged_
-      queue           <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
-      currentMetrics  <- instant.map(CurrentMetrics.empty).flatMap(Ref.make).toManaged_
-      shardMap        <- getShardMap(streamName).toManaged_
-      currentShardMap <- Ref.make(shardMap).toManaged_
-      inFlightCalls   <- Ref.make(0).toManaged_
-      failedQueue     <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManaged(_.shutdown)
+      env             <- ZIO.environment[R with Has[Clock]].toManaged
+      queue           <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManagedWith(_.shutdown)
+      currentMetrics  <- instant.map(CurrentMetrics.empty).flatMap(Ref.make).toManaged
+      shardMap        <- getShardMap(streamName).toManaged
+      currentShardMap <- Ref.make(shardMap).toManaged
+      inFlightCalls   <- Ref.make(0).toManaged
+      failedQueue     <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManagedWith(_.shutdown)
 
       triggerUpdateShards <- Util.periodicAndTriggerableOperation(
                                (log.debug("Refreshing shard map") *>
@@ -156,7 +156,7 @@ object Producer {
       _       <- producer.metricsCollection.forkManaged.ensuring(producer.collectMetrics)
     } yield producer
 
-  private def getShardMap(streamName: String): ZIO[Clock with Kinesis, Throwable, ShardMap] = {
+  private def getShardMap(streamName: String): ZIO[Has[Clock] with Kinesis, Throwable, ShardMap] = {
     val shardFilter = ShardFilter(ShardFilterType.AT_LATEST) // Currently open shards
     kinesis
       .listShards(ListShardsRequest(Some(streamName), shardFilter = Some(shardFilter)))

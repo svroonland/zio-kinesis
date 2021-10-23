@@ -4,8 +4,6 @@ import nl.vroste.zio.kinesis.client.dynamicconsumer.fake.DynamicConsumerFake
 import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.Record
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
-import zio.clock.Clock
-import zio.console.Console
 import zio.duration.durationInt
 import zio.logging.Logging
 import zio.stream.ZStream
@@ -88,7 +86,7 @@ object DynamicConsumerFakeTest extends DefaultRunnableSpec {
   override def spec =
     suite("DynamicConsumerFake should")(
       suite("when checkpointed")(
-        testM("read from iterables when using shardsFromIterables") {
+        test("read from iterables when using shardsFromIterables") {
           for {
             t <- programCheckpointed(shardsFromIterables)
           } yield assert(t._1)(
@@ -100,7 +98,7 @@ object DynamicConsumerFakeTest extends DefaultRunnableSpec {
             )
           ) && assert(t._2)(Assertion.hasSameElementsDistinct(expectedRecords))
         },
-        testM("read from streams when using shardsFromStreams") {
+        test("read from streams when using shardsFromStreams") {
           for {
             t <- programCheckpointed(shardsFromStreams)
           } yield assert(t._1)(
@@ -114,12 +112,12 @@ object DynamicConsumerFakeTest extends DefaultRunnableSpec {
         }
       ),
       suite("when not checkpointed")(
-        testM("read from iterables when using shardsFromIterables") {
+        test("read from iterables when using shardsFromIterables") {
           for {
             xs <- program(shardsFromIterables)
           } yield assert(xs)(Assertion.hasSameElementsDistinct(expectedRecords))
         },
-        testM("read from streams when using shardsFromStreams") {
+        test("read from streams when using shardsFromStreams") {
           for {
             xs <- program(shardsFromStreams)
           } yield assert(xs)(Assertion.hasSameElementsDistinct(expectedRecords))

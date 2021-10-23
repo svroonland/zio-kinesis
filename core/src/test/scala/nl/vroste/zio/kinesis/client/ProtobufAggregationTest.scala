@@ -11,7 +11,7 @@ import java.security.MessageDigest
 object ProtobufAggregationTest extends DefaultRunnableSpec {
   override def spec =
     suite("ProtobufAggregation")(
-      testM("roundtrip encoding") {
+      test("roundtrip encoding") {
         val payload      = "this is the payload"
         val partitionKey = "key1"
 

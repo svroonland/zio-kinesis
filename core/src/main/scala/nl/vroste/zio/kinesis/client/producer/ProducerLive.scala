@@ -15,8 +15,7 @@ import nl.vroste.zio.kinesis.client.serde.Serializer
 import software.amazon.awssdk.core.exception.SdkException
 import software.amazon.awssdk.services.kinesis.model.{ KinesisException, ResourceInUseException }
 import zio._
-import zio.clock.{ instant, Clock }
-import zio.duration._
+
 import zio.logging.{ log, Logging }
 import zio.stream.ZTransducer.Push
 import zio.stream.{ ZStream, ZTransducer }
@@ -26,10 +25,12 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.time.Instant
 import scala.util.control.NonFatal
+import zio.{ Clock, Has }
+import zio.Clock.instant
 
 private[client] final class ProducerLive[R, R1, T](
   client: Kinesis.Service,
-  env: R with Clock,
+  env: R with Has[Clock],
   queue: Queue[ProduceRequest],
   failedQueue: Queue[ProduceRequest],
   serializer: Serializer[R, T],
@@ -46,7 +47,7 @@ private[client] final class ProducerLive[R, R1, T](
   import ProducerLive._
   import Util.ZStreamExtensions
 
-  val runloop: ZIO[Logging with Clock, Nothing, Unit] = {
+  val runloop: ZIO[Logging with Has[Clock], Nothing, Unit] = {
     val retries         = ZStream.fromQueue(failedQueue, maxChunkSize = maxChunkSize)
     val chunkBufferSize = Math.ceil(settings.bufferSize * 1.0 / maxChunkSize).toInt
 
@@ -71,16 +72,16 @@ private[client] final class ProducerLive[R, R1, T](
       .filter(_.nonEmpty)                             // TODO why would this be necessary?
       // Several putRecords requests in parallel
       .flatMapPar(settings.maxParallelRequests, chunkBufferSize)(b =>
-        ZStream.fromEffect(countInFlight(processBatch(b)))
+        ZStream.fromZIO(countInFlight(processBatch(b)))
       )
       .collect { case (Some(response), requests) => (response, requests) }
-      .mapM((processBatchResponse _).tupled)
+      .mapZIO((processBatchResponse _).tupled)
       .tap(metrics => currentMetrics.update(_ append metrics))
       .runDrain
   }
 
   private def throttleShardRequests(shardId: ShardId, requests: ZStream[Any, Nothing, ProduceRequest]) =
-    ZStream.fromEffect(throttler.getForShard(shardId)).flatMap { throttlerForShard =>
+    ZStream.fromZIO(throttler.getForShard(shardId)).flatMap { throttlerForShard =>
       requests
         .mapChunks(
           _.map { request =>
@@ -100,7 +101,7 @@ private[client] final class ProducerLive[R, R1, T](
 
   private def processBatch(
     batch: Chunk[ProduceRequest]
-  ): ZIO[Clock with Logging, Nothing, (Option[PutRecordsResponse.ReadOnly], Chunk[ProduceRequest])] = {
+  ): ZIO[Has[Clock] with Logging, Nothing, (Option[PutRecordsResponse.ReadOnly], Chunk[ProduceRequest])] = {
     val totalPayload = batch.map(_.data.length).sum
     (for {
       _        <- log.info(
@@ -118,14 +119,14 @@ private[client] final class ProducerLive[R, R1, T](
     } yield (Some(response), batch)).catchSome {
       case NonFatal(e) =>
         log.warn("Failed to process batch") *>
-          ZIO.foreach_(batch)(_.complete(ZIO.fail(e))).as((None, batch))
+          ZIO.foreachDiscard(batch)(_.complete(ZIO.fail(e))).as((None, batch))
     }.orDie
   }
 
   private def processBatchResponse(
     response: PutRecordsResponse.ReadOnly,
     batch: Chunk[ProduceRequest]
-  ): ZIO[Logging with Clock, Nothing, CurrentMetrics] = {
+  ): ZIO[Logging with Has[Clock], Nothing, CurrentMetrics] = {
     val totalPayload = batch.map(_.data.length).sum
 
     val responseAndRequests    = Chunk.fromIterable(response.recordsValue).zip(batch)
@@ -144,7 +145,7 @@ private[client] final class ProducerLive[R, R1, T](
       r                             <- checkShardPredictionErrors(responseAndRequests, m1)
       (hasShardPredictionErrors, m2) = r
       m3                            <- handleFailures(newFailed, repredict = hasShardPredictionErrors, m2)
-      _                             <- ZIO.foreach_(succeeded) {
+      _                             <- ZIO.foreachDiscard(succeeded) {
              case (response, request) =>
                request.complete(
                  ZIO.succeed(
@@ -171,7 +172,7 @@ private[client] final class ProducerLive[R, R1, T](
     val failedCount = requests.map(_.aggregateCount).sum
 
     for {
-      _ <- ZIO.foreach_(requests)(r => throttler.addFailure(r.predictedShard))
+      _ <- ZIO.foreachDiscard(requests)(r => throttler.addFailure(r.predictedShard))
       _ <- log.warn(s"Failed to produce ${failedCount} records").when(newFailed.nonEmpty)
       _ <- log.warn(responses.take(10).flatMap(_.errorCodeValue).mkString(", ")).when(newFailed.nonEmpty)
 
@@ -218,7 +219,7 @@ private[client] final class ProducerLive[R, R1, T](
               s"on a different shard than expected and/or " +
               s"${failed.map(_._2.aggregateCount).sum} records (aggregated as ${failed.size}) would end up " +
               s"on a different shard than expected if they had succeeded. This may happen after a reshard."
-          ) *> triggerUpdateShards.fork.whenM {
+          ) *> triggerUpdateShards.fork.whenZIO {
           shards
             .getAndUpdate(_.invalidate)
             .map(shardMap => !shardMap.invalid && shardMap.lastUpdated.toEpochMilli < maxProduceRequestTimestamp)
@@ -231,14 +232,14 @@ private[client] final class ProducerLive[R, R1, T](
     inFlightCalls
       .updateAndGet(_ + 1)
       .tap(inFlightCalls => log.debug(s"${inFlightCalls} PutRecords calls in flight"))
-      .toManaged(_ =>
+      .toManagedWith(_ =>
         inFlightCalls
           .updateAndGet(_ - 1)
           .tap(inFlightCalls => log.debug(s"${inFlightCalls} PutRecords calls in flight"))
       )
-      .use_(e)
+      .useDiscard(e)
 
-  val collectMetrics: ZIO[R1 with Clock, Nothing, Unit] = for {
+  val collectMetrics: ZIO[R1 with Has[Clock], Nothing, Unit] = for {
     now    <- instant
     m      <- currentMetrics.getAndUpdate(_ => CurrentMetrics.empty(now))
     metrics = ProducerMetrics(
@@ -254,7 +255,7 @@ private[client] final class ProducerLive[R, R1, T](
   } yield ()
 
 // Repeatedly produce metrics
-  val metricsCollection: ZIO[R1 with Clock, Nothing, Long] = collectMetrics
+  val metricsCollection: ZIO[R1 with Has[Clock], Nothing, Long] = collectMetrics
     .delay(settings.metricsInterval)
     .repeat(Schedule.fixed(settings.metricsInterval))
 
@@ -280,7 +281,7 @@ private[client] final class ProducerLive[R, R1, T](
       nrRequests         = chunk.size
       onDone             = (response: Task[ProduceResponse]) =>
                  response
-                   .foldM(
+                   .foldZIO(
                      done.fail,
                      response =>
                        for {
@@ -415,5 +416,5 @@ private[client] object ProducerLive {
   def aggregator(digest: MessageDigest): ZTransducer[Any, Nothing, ProduceRequest, ProduceRequest] =
     foldWhile(PutRecordsAggregatedBatchForShard.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
       batch.add(record)
-    }.mapM(_.toProduceRequest(digest))
+    }.mapZIO(_.toProduceRequest(digest))
 }

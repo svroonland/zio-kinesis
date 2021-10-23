@@ -4,11 +4,10 @@ import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.{ Producer, ProducerRecord }
 import zio._
-import zio.clock.Clock
-import zio.console.{ putStrLn, Console }
 import zio.logging.Logging
+import zio.Console.printLine
 
-object ProducerExample extends zio.App {
+object ProducerExample extends zio.ZIOAppDefault {
   val streamName      = "my_stream"
   val applicationName = "my_awesome_zio_application"
 
@@ -22,7 +21,7 @@ object ProducerExample extends zio.App {
 
     for {
       _ <- producer.produce(record)
-      _ <- putStrLn(s"All records in the chunk were produced")
+      _ <- printLine(s"All records in the chunk were produced")
     } yield ()
   }
 

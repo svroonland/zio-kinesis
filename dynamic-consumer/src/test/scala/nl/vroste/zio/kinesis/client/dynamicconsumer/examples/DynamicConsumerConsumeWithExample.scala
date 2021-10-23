@@ -3,16 +3,15 @@ package nl.vroste.zio.kinesis.client.dynamicconsumer.examples
 import nl.vroste.zio.kinesis.client.defaultAwsLayer
 import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer
 import nl.vroste.zio.kinesis.client.serde.Serde
-import zio.clock.Clock
-import zio.console.{ putStrLn, Console }
 import zio.duration.durationInt
 import zio.logging.Logging
 import zio.{ ExitCode, URIO, ZLayer }
+import zio.Console.printLine
 
 /**
  * Basic usage example for `DynamicConsumer.consumeWith` convenience method
  */
-object DynamicConsumerConsumeWithExample extends zio.App {
+object DynamicConsumerConsumeWithExample extends zio.ZIOAppDefault {
   val loggingLayer: ZLayer[Any, Nothing, Logging] =
     (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
@@ -25,7 +24,7 @@ object DynamicConsumerConsumeWithExample extends zio.App {
         workerIdentifier = "worker1",
         checkpointBatchSize = 1000L,
         checkpointDuration = 5.minutes
-      )(record => putStrLn(s"Processing record $record"))
+      )(record => printLine(s"Processing record $record"))
       .provideCustomLayer((loggingLayer ++ defaultAwsLayer) >+> DynamicConsumer.live)
       .exitCode
 }

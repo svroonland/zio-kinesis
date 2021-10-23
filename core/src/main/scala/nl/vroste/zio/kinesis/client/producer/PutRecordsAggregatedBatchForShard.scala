@@ -54,7 +54,7 @@ final case class PutRecordsAggregatedBatchForShard(
       ProduceRequest(
         data = ProtobufAggregation.encodeAggregatedRecord(digest, builtAggregate),
         partitionKey = entries.head.partitionKey, // First one?
-        complete = result => ZIO.foreach_(completes)(_(result)),
+        complete = result => ZIO.foreachDiscard(completes)(_(result)),
         timestamp = entries.head.timestamp,
         isAggregated = true,
         aggregateCount = entries.size,
