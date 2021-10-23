@@ -67,7 +67,7 @@ class Consumer private (
         emitDiagnostic = e => ZIO(emitDiagnostic(e)).orDie,
         shardAssignmentStrategy,
         checkpointBatchSize,
-        zio.duration.Duration.fromScala(checkpointDuration)
+        zio.Duration.fromScala(checkpointDuration)
       )(record => ZIO.fromFuture(recordProcessor(record)))
     }
 
