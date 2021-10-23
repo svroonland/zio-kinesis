@@ -8,15 +8,12 @@ import nl.vroste.zio.kinesis.client.serde.Deserializer
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import software.amazon.kinesis.common.{ InitialPositionInStream, InitialPositionInStreamExtended }
 import software.amazon.kinesis.exceptions.ShutdownException
-import zio._
-import zio.blocking.Blocking
-import zio.duration.{ durationInt, Duration }
 import zio.logging.{ Logger, Logging }
 import zio.stream.{ ZStream, ZTransducer }
+import zio._
 
 import java.time.Instant
 import java.util.UUID
-import zio.{ Clock, Has, Random }
 
 /**
  * Offers a ZStream based interface to the Amazon Kinesis Client Library (KCL)

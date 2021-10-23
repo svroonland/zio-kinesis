@@ -1,14 +1,12 @@
 package nl.vroste.zio.kinesis.client.dynamicconsumer.fake
 
-import nl.vroste.zio.kinesis.client.dynamicconsumer.{ DynamicConsumer, ExtendedSequenceNumber, SchedulerConfig }
 import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.{ Checkpointer, Record }
+import nl.vroste.zio.kinesis.client.dynamicconsumer.{ DynamicConsumer, ExtendedSequenceNumber, SchedulerConfig }
 import nl.vroste.zio.kinesis.client.serde.{ Deserializer, Serializer }
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import software.amazon.kinesis.common.InitialPositionInStreamExtended
-import zio._
-import zio.blocking.Blocking
+import zio.{ Clock, _ }
 import zio.stream.ZStream
-import zio.{ Clock, Random }
 
 private[client] class DynamicConsumerFake(
   shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, Chunk[Byte]])],
@@ -32,7 +30,7 @@ private[client] class DynamicConsumerFake(
     (String, ZStream[Any, Throwable, Record[T]], DynamicConsumer.Checkpointer)
   ] = {
     def record(shardName: String, i: Long, recData: T): UIO[Record[T]] =
-      (for {
+      for {
         dateTime <- clock.currentDateTime
       } yield new Record[T](
         sequenceNumber = s"$i",
@@ -44,7 +42,7 @@ private[client] class DynamicConsumerFake(
         explicitHashKey = None,
         aggregated = false,
         shardId = shardName
-      )).orDie
+      )
 
     shards.flatMap {
       case (shardName, stream) =>

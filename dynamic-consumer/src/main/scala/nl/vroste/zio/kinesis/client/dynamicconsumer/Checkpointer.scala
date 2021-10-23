@@ -3,9 +3,7 @@ package nl.vroste.zio.kinesis.client.dynamicconsumer
 import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.{ Checkpointer, Record }
 import software.amazon.kinesis.processor.RecordProcessorCheckpointer
 import zio.{ Ref, Task, UIO, ZIO }
-import zio.blocking.Blocking
 import zio.logging.Logger
-import zio.Random
 
 case object LastRecordMustBeCheckpointedException
     extends Exception("Record at end of shard must be checkpointed before checkpointer shutdown")
@@ -77,5 +75,6 @@ private[dynamicconsumer] object Checkpointer {
               true
             case _                                                                     => false
           })
+          .unit
     }
 }

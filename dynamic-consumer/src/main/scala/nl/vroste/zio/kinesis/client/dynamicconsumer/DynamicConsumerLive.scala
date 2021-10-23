@@ -15,12 +15,10 @@ import software.amazon.kinesis.processor.{
 }
 import software.amazon.kinesis.retrieval.KinesisClientRecord
 import zio._
-import zio.blocking.Blocking
 import zio.logging.Logger
 import zio.stream.ZStream
 
 import scala.jdk.CollectionConverters._
-import zio.Random
 
 private[client] class DynamicConsumerLive(
   logger: Logger[String],
@@ -248,7 +246,7 @@ private[client] class DynamicConsumerLive(
               .fromQueue(shardQueue.q)
               .ensuringFirst(shardQueue.shutdownQueue)
               .flattenExitOption
-              .mapChunksM(_.mapM(toRecord(shardId, _)))
+              .mapChunksZIO(_.mapZIO(toRecord(shardId, _)))
               .provide(env)
               .ensuringFirst((checkpointer.checkEndOfShardCheckpointed *> checkpointer.checkpoint).catchSome {
                 case _: ShutdownException => UIO.unit
