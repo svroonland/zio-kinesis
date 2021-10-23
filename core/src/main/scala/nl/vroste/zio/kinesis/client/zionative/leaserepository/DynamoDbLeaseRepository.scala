@@ -75,8 +75,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb.Service, timeout: Duratio
     log.debug(s"Checking if lease table '${tableName}' exists") *>
       describeTable.flatMap {
         case TableStatus.ACTIVE | TableStatus.UPDATING =>
-          log.debug(s"Lease table '${tableName}' exists and is active") *>
-            ZIO.succeed(true)
+          log.debug(s"Lease table '${tableName}' exists and is active").as(true)
         case TableStatus.CREATING                      =>
           log.debug(s"Lease table '${tableName}' has CREATING status") *>
             awaitTableActive.delay(1.seconds).as(true)
@@ -313,6 +312,6 @@ object DynamoDbLeaseRepository {
   val live: ZLayer[DynamoDb, Nothing, LeaseRepository] = make(defaultTimeout)
 
   def make(timeout: Duration = defaultTimeout): ZLayer[DynamoDb, Nothing, LeaseRepository] =
-    ZLayer.fromService(new DynamoDbLeaseRepository(_, timeout))
+    (new DynamoDbLeaseRepository(_, timeout)).toLayer
 
 }

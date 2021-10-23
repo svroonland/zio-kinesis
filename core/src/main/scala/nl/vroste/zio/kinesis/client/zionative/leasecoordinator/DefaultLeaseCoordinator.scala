@@ -201,7 +201,7 @@ private class DefaultLeaseCoordinator(
       _        <- log.info("Refreshing leases")
       duration <- table
                     .getLeases(applicationName)
-                    .mapChunksM(
+                    .mapChunksZIO(
                       ZIO
                         .foreachParDiscard(_) { lease =>
                           log.info(s"RefreshLeases: ${lease}") *>
@@ -449,7 +449,7 @@ private[zionative] object DefaultLeaseCoordinator {
                         ZIO
                           .service[LeaseRepository.Service]
                           .flatMap(_.createLeaseTableIfNotExists(applicationName)) *>
-                          (shards >>= c.updateShards)
+                          (shards flatMap c.updateShards)
                     }.toManaged
                // Initialization. If it fails, we will try in the loop
                _ <- (c.takeLeases.ignore *>

@@ -256,37 +256,35 @@ object Consumer {
           }
 
           ZManaged
-            .mapParN(
-              ZManaged
-                .unwrap(streamDescriptionFib.join.map(makeFetcher))
-                .ensuring(log.debug("Fetcher shut down")),
-              // Fetch shards and initialize the lease coordinator at the same time
-              // When we have the shards, we inform the lease coordinator. When the lease table
-              // still has to be created, we have the shards in time for lease claiming begins.
-              // If not in time, the next cycle of takeLeases will take care of it
-              // When the lease table already exists, the updateShards call will not provide
-              // additional information to the lease coordinator, and the list of leases is used
-              // as the list of shards.
-              for {
-                env              <- ZIO.environment[Has[Clock] with Kinesis].toManaged
-                leaseCoordinator <- DefaultLeaseCoordinator
-                                      .make(
-                                        applicationName,
-                                        workerIdentifier,
-                                        emitDiagnostic,
-                                        leaseCoordinationSettings,
-                                        fetchShards.provide(env),
-                                        shardAssignmentStrategy,
-                                        initialPosition
-                                      )
-                _                <- log.info("Lease coordinator created").toManaged
-                // Periodically refresh shards
-                _                <- (listShards >>= leaseCoordinator.updateShards)
-                       .repeat(Schedule.spaced(leaseCoordinationSettings.shardRefreshInterval))
-                       .delay(leaseCoordinationSettings.shardRefreshInterval)
-                       .forkManaged
-              } yield leaseCoordinator
-            )(_ -> _)
+            .unwrap(streamDescriptionFib.join.map(makeFetcher))
+            .ensuring(log.debug("Fetcher shut down")) zipPar (
+            // Fetch shards and initialize the lease coordinator at the same time
+            // When we have the shards, we inform the lease coordinator. When the lease table
+            // still has to be created, we have the shards in time for lease claiming begins.
+            // If not in time, the next cycle of takeLeases will take care of it
+            // When the lease table already exists, the updateShards call will not provide
+            // additional information to the lease coordinator, and the list of leases is used
+            // as the list of shards.
+            for {
+              env              <- ZIO.environment[Has[Clock] with Kinesis].toManaged
+              leaseCoordinator <- DefaultLeaseCoordinator
+                                    .make(
+                                      applicationName,
+                                      workerIdentifier,
+                                      emitDiagnostic,
+                                      leaseCoordinationSettings,
+                                      fetchShards.provide(env),
+                                      shardAssignmentStrategy,
+                                      initialPosition
+                                    )
+              _                <- log.info("Lease coordinator created").toManaged
+              // Periodically refresh shards
+              _                <- (listShards flatMap leaseCoordinator.updateShards)
+                     .repeat(Schedule.spaced(leaseCoordinationSettings.shardRefreshInterval))
+                     .delay(leaseCoordinationSettings.shardRefreshInterval)
+                     .forkManaged
+            } yield leaseCoordinator
+          )
         }
 
     ZStream.unwrapManaged {
@@ -321,9 +319,9 @@ object Consumer {
                                           leaseCoordinator.childShardsDetected(childShards)
                                       ) *> ZStream.empty
                                   }
-                                  .mapChunksM { chunk => // mapM is slow
+                                  .mapChunksZIO { chunk => // mapM is slow
                                     chunk
-                                      .mapM(record => toRecords(shardId, record))
+                                      .mapZIO(record => toRecords(shardId, record))
                                       .map(_.flatten)
                                       .tap { records =>
                                         records.lastOption.fold(ZIO.unit) { r =>

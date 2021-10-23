@@ -54,7 +54,7 @@ private[client] final class ProducerLive[R, R1, T](
     // Failed records get precedence
     (retries merge ZStream
       .fromQueue(queue, maxChunkSize)
-      .mapChunksM(chunk => log.trace(s"Dequeued chunk of size ${chunk.size}").as(chunk))
+      .mapChunksZIO(chunk => log.trace(s"Dequeued chunk of size ${chunk.size}").as(chunk))
       // Aggregate records per shard
       .groupByKey2(_.predictedShard, chunkBufferSize)
       .flatMapPar(Int.MaxValue, chunkBufferSize) {
@@ -89,10 +89,10 @@ private[client] final class ProducerLive[R, R1, T](
               )
           }
         )
-        .throttleShapeM(maxRecordsPerShardPerSecond.toLong, 1.second)(chunk =>
+        .throttleShapeZIO(maxRecordsPerShardPerSecond.toLong, 1.second)(chunk =>
           throttlerForShard.throughputFactor.map(c => (chunk.size * 1.0 / c).toLong)
         )
-        .throttleShapeM(maxIngestionPerShardPerSecond.toLong, 1.second)(chunk =>
+        .throttleShapeZIO(maxIngestionPerShardPerSecond.toLong, 1.second)(chunk =>
           throttlerForShard.throughputFactor.map(c => (chunk.map(_.payloadSize).sum * 1.0 / c).toLong)
         )
     }
