@@ -9,7 +9,7 @@ import zio.{ Console, Has }
 import zio.Console.printLine
 
 object NativeConsumerBasicUsageExample extends zio.ZIOAppDefault {
-  override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
+  override def run: ZIO[zio.ZEnv with Has[ZIOAppArgs], Any, Any] =
     Consumer
       .shardedStream(
         streamName = "my-stream",

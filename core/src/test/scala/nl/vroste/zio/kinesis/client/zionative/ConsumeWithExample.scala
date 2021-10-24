@@ -13,7 +13,7 @@ object ConsumeWithExample extends zio.ZIOAppDefault {
   val loggingLayer: ZLayer[Any, Nothing, Logging] =
     (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
-  override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
+  override def run: ZIO[zio.ZEnv with Has[ZIOAppArgs], Any, Any] =
     Consumer
       .consumeWith(
         streamName = "my-stream",

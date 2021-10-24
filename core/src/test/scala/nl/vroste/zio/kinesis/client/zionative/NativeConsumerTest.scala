@@ -16,19 +16,14 @@ import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.LeaseCoordination
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
 import nl.vroste.zio.kinesis.client._
 import zio._
-import zio.blocking.Blocking
 
 import zio.logging.{ log, _ }
 import zio.stream.{ ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test._
 
-import java.time.Instant
-import java.{ util => ju }
-
-import scala.collection.compat._
-import zio.{ Clock, Console, Has, Random, System }
-import zio.Console.{ printLine, _ }
+import zio.{ Clock, Console, Has, System }
+import zio.Console._
 
 object NativeConsumerTest extends DefaultRunnableSpec {
   /*
@@ -374,7 +369,6 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                    onDiagnostic(workerId)(event) *>
                                      zio.Clock.currentDateTime
                                        .map(_.toInstant())
-                                       .orDie
                                        .flatMap(time => events.update(_ :+ ((workerId, time, event))))
                                        .provideLayer(Clock.live)
 
@@ -522,11 +516,9 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                 onDiagnostic(workerId)(event) *>
                                   zio.Clock.currentDateTime
                                     .map(_.toInstant())
-                                    .orDie
                                     .flatMap(time => events.update(_ :+ ((workerId, time, event))))
-                                    .provideLayer(Clock.live) *> events.get.flatMap(events =>
-                                  done.succeed(()).when(testIsComplete(events))
-                                )
+                                    .provideLayer(Clock.live) *>
+                                  events.get.flatMap(events => done.succeed(()).when(testIsComplete(events))).unit
 
               _          <- ZManaged.finalizer {
                      events.get
@@ -618,6 +610,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                        .whenZIO(events.get.map(_.collect {
                                          case _: DiagnosticEvent.LeaseAcquired => 1
                                        }.sum == nrShards + 1))
+                                       .unit
 
               stream        <- consumer("worker1", emitDiagnostic("worker1")).runDrain.fork
               _             <- done.await

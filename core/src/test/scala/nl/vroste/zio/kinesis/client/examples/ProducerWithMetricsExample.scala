@@ -38,6 +38,6 @@ object ProducerWithMetricsExample extends zio.ZIOAppDefault {
       } yield ()
   }
 
-  override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
+  override def run: ZIO[zio.ZEnv with Has[ZIOAppArgs], Any, Any] =
     program.provideCustomLayer(env).exitCode
 }

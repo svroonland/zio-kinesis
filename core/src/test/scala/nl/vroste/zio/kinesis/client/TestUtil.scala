@@ -9,14 +9,13 @@ import nl.vroste.zio.kinesis.client.producer.ProducerMetrics
 import nl.vroste.zio.kinesis.client.serde.{ Serde, Serializer }
 import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException }
 import zio._
-import zio.blocking.Blocking
-
 import zio.logging.{ log, Logging }
 import zio.stream.ZStream
 
 import java.util.UUID
-import zio.{ Clock, Console, Has, Random, Random }
+import zio.{ Clock, Console, Has, Random }
 import zio.Console.printLine
+import zio.Schedule.WithState
 
 object TestUtil {
 
@@ -90,7 +89,7 @@ object TestUtil {
       }
       .retry(Schedule.exponential(1.second) && Schedule.recurs(10))
 
-  val retryOnResourceNotFound: Schedule[Has[Clock], Throwable, ((Throwable, Long), Duration)] =
+  val retryOnResourceNotFound: WithState[((Unit, Long), Long), Any, Throwable, (Throwable, Long, zio.Duration)] =
     Schedule.recurWhile[Throwable] {
       case _: ResourceNotFoundException => true
       case _                            => false
@@ -211,7 +210,7 @@ object TestUtil {
                    .nextIntBetween(1, maxRecordSize)
                    .map(valueLength => Chunk.fromIterable(List.fill(valueLength)(0x01.toByte)))
       } yield ProducerRecord(key, value)
-    }.chunkN(defaultChunkSize).take(nrRecords.toLong).via(throttle(produceRate, _)).buffer(defaultChunkSize)
+    }.rechunk(defaultChunkSize).take(nrRecords.toLong).via(throttle(produceRate, _)).buffer(defaultChunkSize)
     massProduceRecords(producer, records)
   }
 

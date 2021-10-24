@@ -17,7 +17,7 @@ object NativeConsumerWithMetricsExample extends zio.ZIOAppDefault {
 
   val metricsConfig = CloudWatchMetricsPublisherConfig()
 
-  override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
+  override def run: ZIO[zio.ZEnv with Has[ZIOAppArgs], Any, Any] =
     CloudWatchMetricsPublisher
       .make(applicationName, workerIdentifier)
       .use { metrics =>

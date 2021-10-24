@@ -11,14 +11,13 @@ import nl.vroste.zio.kinesis.client.producer.ProducerLive.ProduceRequest
 import nl.vroste.zio.kinesis.client.producer.{ ProducerLive, ProducerMetrics, ShardMap }
 import nl.vroste.zio.kinesis.client.serde.{ Serde, Serializer }
 import software.amazon.awssdk.services.kinesis.model.KinesisException
-import zio.blocking.Blocking
 
 import zio.logging.{ Logger, Logging }
 import zio.stream.{ ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test._
-import zio.{ system, Chunk, Queue, Ref, Runtime, ZIO, ZLayer, ZManaged }
+import zio.{ Chunk, Queue, Ref, Runtime, ZIO, ZLayer, ZManaged }
 
 import java.security.MessageDigest
 import java.time.Instant
@@ -40,7 +39,7 @@ object ProducerTest extends DefaultRunnableSpec {
     CloudWatch with Kinesis with DynamoDb with Has[Clock] with Has[Console] with Logging with Has[Random] with Any
   ] =
     ((if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()).orDie) >+>
-      (Clock.live ++ zio.console.Console.live ++ Random.live ++ Blocking.live >+> loggingLayer)
+      (Clock.live ++ zio.Console.live ++ Random.live >+> loggingLayer)
 
   def spec =
     suite("Producer")(
