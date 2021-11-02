@@ -1,6 +1,6 @@
 import xerial.sbt.Sonatype.GitHubHosting
 
-val mainScala = "2.13.6"
+val mainScala = "2.13.7"
 val allScala  = Seq("2.12.15", mainScala)
 
 inThisBuild(
