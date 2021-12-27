@@ -33,7 +33,16 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
   private val env: ZLayer[
     Any,
     Throwable,
-    CloudWatch with Kinesis with DynamoDb with Logging with DynamicConsumer with Clock with Blocking with Random with Console with system.System
+    CloudWatch
+      with Kinesis
+      with DynamoDb
+      with Logging
+      with DynamicConsumer
+      with Clock
+      with Blocking
+      with Random
+      with Console
+      with system.System
   ] = (if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()) >+> loggingLayer >+>
     (DynamicConsumer.live ++ Clock.live ++ Blocking.live ++ Random.live ++ Console.live ++ zio.system.System.live)
 
@@ -230,8 +239,8 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
           interrupted               <- Promise
                                          .make[Nothing, Unit]
           nrRecordsSeen             <- Ref.make(0)
-          lastProcessedRecords <- Ref.make[Map[String, String]](Map.empty)    // Shard -> Sequence Nr
-          lastCheckpointedRecords <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
+          lastProcessedRecords      <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
+          lastCheckpointedRecords   <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
           consumer                  <-
             streamConsumer(interrupted, nrRecordsSeen, lastProcessedRecords, lastCheckpointedRecords).runCollect.fork
           _                         <- interrupted.await

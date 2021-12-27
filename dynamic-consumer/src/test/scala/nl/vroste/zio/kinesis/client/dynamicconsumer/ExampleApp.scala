@@ -51,9 +51,22 @@ object ExampleApp extends zio.App {
     maxParallelRequests = 10
   )
 
-  val program: ZIO[Logging with Clock with Blocking with Random with Console with Kinesis with CloudWatch with Has[
-    CloudWatchMetricsPublisherConfig
-  ] with DynamicConsumer with LeaseRepository, Throwable, ExitCode] = {
+  val program: ZIO[
+    Logging
+      with Clock
+      with Blocking
+      with Random
+      with Console
+      with Kinesis
+      with CloudWatch
+      with Has[
+        CloudWatchMetricsPublisherConfig
+      ]
+      with DynamicConsumer
+      with LeaseRepository,
+    Throwable,
+    ExitCode
+  ] = {
     for {
       _          <- TestUtil.createStreamUnmanaged(streamName, nrShards)
       _          <- TestUtil.getShards(streamName)
@@ -206,9 +219,15 @@ object ExampleApp extends zio.App {
   val awsEnv: ZLayer[
     Any,
     Nothing,
-    Kinesis with CloudWatch with dynamodb.DynamoDb with Logging with DynamicConsumer with LeaseRepository with Has[
-      CloudWatchMetricsPublisherConfig
-    ]
+    Kinesis
+      with CloudWatch
+      with dynamodb.DynamoDb
+      with Logging
+      with DynamicConsumer
+      with LeaseRepository
+      with Has[
+        CloudWatchMetricsPublisherConfig
+      ]
   ] = {
     val httpClient = HttpClientBuilder.make(
       maxConcurrency = 100,
