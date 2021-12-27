@@ -16,11 +16,16 @@ import zio.stream.{ ZStream, ZTransducer }
 /**
  * Configuration for CloudWatch metrics publishing
  *
-  * @param maxFlushInterval Collected metrics will be uploaded to CloudWatch at most this interval
- * @param maxBatchSize Collected metrics will be uploaded to CloudWatch at most this number of metrics. Must be <= 20 (AWS SDK limit)
- * @param periodicMetricInterval Periodic metrics (nr leases / nr workers) are collected at this interval
- * @param retrySchedule Transient upload failures are retried according to this schedule
- * @param maxParallelUploads The maximum number of in-flight requests with batches of metric data to CloudWatch
+ * @param maxFlushInterval
+ *   Collected metrics will be uploaded to CloudWatch at most this interval
+ * @param maxBatchSize
+ *   Collected metrics will be uploaded to CloudWatch at most this number of metrics. Must be <= 20 (AWS SDK limit)
+ * @param periodicMetricInterval
+ *   Periodic metrics (nr leases / nr workers) are collected at this interval
+ * @param retrySchedule
+ *   Transient upload failures are retried according to this schedule
+ * @param maxParallelUploads
+ *   The maximum number of in-flight requests with batches of metric data to CloudWatch
  */
 final case class CloudWatchMetricsPublisherConfig(
   maxFlushInterval: Duration = 20.seconds,
@@ -55,8 +60,8 @@ private class CloudWatchMetricsPublisher(
         shardFetchMetrics(shardId, nrRecords, behindLatest, duration, timestamp)
       case SubscribeToShardEvent(shardId, nrRecords, behindLatest)  =>
         shardFetchMetrics(shardId, nrRecords, behindLatest, 0.millis, timestamp) // TODO what to do with duration
-      case LeaseAcquired(shardId @ _, checkpoint @ _)               => List.empty // Processed in periodic metrics
-      case ShardLeaseLost(shardId @ _)                              =>
+      case LeaseAcquired(shardId @ _, checkpoint @ _) => List.empty // Processed in periodic metrics
+      case ShardLeaseLost(shardId @ _)                =>
         List(
           metric(
             "LostLeases",
@@ -66,7 +71,7 @@ private class CloudWatchMetricsPublisher(
             StandardUnit.Count
           )
         )
-      case LeaseRenewed(shardId @ _, duration)                      =>
+      case LeaseRenewed(shardId @ _, duration)        =>
         List(
           metric(
             "RenewLease.Time",
@@ -83,12 +88,12 @@ private class CloudWatchMetricsPublisher(
             StandardUnit.Count
           )
         )
-      case LeaseReleased(shardId @ _)                               => List.empty // Processed in periodic metrics
-      case NewShardDetected(shardId @ _)                            => List.empty
-      case ShardEnded(shard @ _)                                    => List.empty
-      case Checkpoint(shardId @ _, checkpoint @ _)                  => List.empty
-      case WorkerJoined(workerId @ _)                               => List.empty // Processed in periodic metrics
-      case WorkerLeft(workerId @ _)                                 => List.empty // Processed in periodic metrics
+      case LeaseReleased(shardId @ _)                 => List.empty // Processed in periodic metrics
+      case NewShardDetected(shardId @ _)              => List.empty
+      case ShardEnded(shard @ _)                      => List.empty
+      case Checkpoint(shardId @ _, checkpoint @ _)    => List.empty
+      case WorkerJoined(workerId @ _)                 => List.empty // Processed in periodic metrics
+      case WorkerLeft(workerId @ _)                   => List.empty // Processed in periodic metrics
       // TODO LeaseCreated (for new leases)
       // TODO lease taken
     }
@@ -175,12 +180,12 @@ private class CloudWatchMetricsPublisher(
                           StandardUnit.Count
                         )
       nrLeasesMetric  = metric(
-                         "TotalLeases",
-                         nrLeases.toDouble,
-                         now,
-                         Seq("Operation" -> "TakeLeases", "WorkerIdentifier" -> workerId),
-                         StandardUnit.Count
-                       )
+                          "TotalLeases",
+                          nrLeases.toDouble,
+                          now,
+                          Seq("Operation" -> "TakeLeases", "WorkerIdentifier" -> workerId),
+                          StandardUnit.Count
+                        )
       nrLeasesMetric2 = metric(
                           "CurrentLeases",
                           nrLeases.toDouble,

@@ -28,12 +28,11 @@ object NativeConsumerWithMetricsExample extends zio.App {
             workerIdentifier = workerIdentifier,
             emitDiagnostic = metrics.processEvent
           )
-          .flatMapPar(Int.MaxValue) {
-            case (shardId, shardStream, checkpointer) =>
-              shardStream
-                .tap(record => putStrLn(s"Processing record ${record} on shard ${shardId}"))
-                .tap(checkpointer.stage(_))
-                .via(checkpointer.checkpointBatched[Console](nr = 1000, interval = 5.minutes))
+          .flatMapPar(Int.MaxValue) { case (shardId, shardStream, checkpointer) =>
+            shardStream
+              .tap(record => putStrLn(s"Processing record ${record} on shard ${shardId}"))
+              .tap(checkpointer.stage(_))
+              .via(checkpointer.checkpointBatched[Console](nr = 1000, interval = 5.minutes))
           }
           .runDrain
       }

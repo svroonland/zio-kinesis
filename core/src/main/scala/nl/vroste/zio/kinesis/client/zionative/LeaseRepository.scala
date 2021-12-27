@@ -45,8 +45,7 @@ object LeaseRepository {
   }
 
   /**
-   * Service for storage and retrieval of leases
-   * TODO cleanup
+   * Service for storage and retrieval of leases TODO cleanup
    */
   trait Service {
 
@@ -62,9 +61,9 @@ object LeaseRepository {
     /**
      * Removes the leaseOwner property
      *
-   * Expects the given lease's counter - 1
+     * Expects the given lease's counter - 1
      *
-   * @param lease
+     * @param lease
      * @return
      */
     def releaseLease(

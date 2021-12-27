@@ -46,22 +46,20 @@ private[client] class DynamicConsumerFake(
         shardId = shardName
       )).orDie
 
-    shards.flatMap {
-      case (shardName, stream) =>
-        ZStream.fromEffect {
-          ZIO.environment[R with Blocking].flatMap { env =>
-            CheckpointerFake.make(refCheckpointedList).map { checkpointer =>
-              (
-                shardName,
-                stream.zipWithIndex.mapM {
-                  case (byteBuffer, i) =>
-                    deserializer.deserialize(byteBuffer).flatMap(record(shardName, i, _)).provide(env)
-                },
-                checkpointer
-              )
-            }
+    shards.flatMap { case (shardName, stream) =>
+      ZStream.fromEffect {
+        ZIO.environment[R with Blocking].flatMap { env =>
+          CheckpointerFake.make(refCheckpointedList).map { checkpointer =>
+            (
+              shardName,
+              stream.zipWithIndex.mapM { case (byteBuffer, i) =>
+                deserializer.deserialize(byteBuffer).flatMap(record(shardName, i, _)).provide(env)
+              },
+              checkpointer
+            )
           }
         }
+      }
     }
 
   }
@@ -95,41 +93,53 @@ object CheckpointerFake {
 object DynamicConsumerFake {
 
   /**
-   * A constructor for a fake shard, for use with the `DynamicConsumer.fake` ZLayer function. It takes a list of `List[T]` and produces
-   * a ZStream of fake shards from it.
-   * @param serializer A `Serializer` used to convert elements to the Chunk[Byte] type expected by `DynamicConsumer`
-   * @param lists list of shards - each shard is represented by a List of `T`
-   * @tparam R Environment for `Serializer`
-   * @tparam T Type of the list element
-   * @return A ZStream of fake shard with a generated shard name of the form `shardN`, where `N` is a zero based index
-   * @see `DynamicConsumer.fake`
+   * A constructor for a fake shard, for use with the `DynamicConsumer.fake` ZLayer function. It takes a list of
+   * `List[T]` and produces a ZStream of fake shards from it.
+   * @param serializer
+   *   A `Serializer` used to convert elements to the Chunk[Byte] type expected by `DynamicConsumer`
+   * @param lists
+   *   list of shards - each shard is represented by a List of `T`
+   * @tparam R
+   *   Environment for `Serializer`
+   * @tparam T
+   *   Type of the list element
+   * @return
+   *   A ZStream of fake shard with a generated shard name of the form `shardN`, where `N` is a zero based index
+   * @see
+   *   `DynamicConsumer.fake`
    */
   def shardsFromIterables[R, T](
     serializer: Serializer[R, T],
     lists: List[T]*
   ): ZStream[Any, Nothing, (String, ZStream[R, Throwable, Chunk[Byte]])] = {
-    val listOfShards = lists.zipWithIndex.map {
-      case (xs, i) => (s"shard$i", ZStream.fromIterable(xs).mapM(serializer.serialize))
+    val listOfShards = lists.zipWithIndex.map { case (xs, i) =>
+      (s"shard$i", ZStream.fromIterable(xs).mapM(serializer.serialize))
     }
     ZStream.fromIterable(listOfShards)
   }
 
   /**
-   * A constructor for a fake shard, for use with the `DynamicConsumer.fake` ZLayer function. It takes a list ZStream of type `T` and produces
-   * a ZStream of fake shards from it.
-   * @param serializer A `Serializer` used to convert elements to the Chunk[Byte] type expected by `DynamicConsumer`
-   * @param streams list of shards - each shard is represented by a ZStream of `T`
-   * @tparam R Environment for `Serializer`
-   * @tparam T Type of the ZStream element
-   * @return A ZStream of fake shard with a generated shard name of the form `shardN`, where `N` is a zero based index
-   * @see `DynamicConsumer.fake`
+   * A constructor for a fake shard, for use with the `DynamicConsumer.fake` ZLayer function. It takes a list ZStream of
+   * type `T` and produces a ZStream of fake shards from it.
+   * @param serializer
+   *   A `Serializer` used to convert elements to the Chunk[Byte] type expected by `DynamicConsumer`
+   * @param streams
+   *   list of shards - each shard is represented by a ZStream of `T`
+   * @tparam R
+   *   Environment for `Serializer`
+   * @tparam T
+   *   Type of the ZStream element
+   * @return
+   *   A ZStream of fake shard with a generated shard name of the form `shardN`, where `N` is a zero based index
+   * @see
+   *   `DynamicConsumer.fake`
    */
   def shardsFromStreams[R, T](
     serializer: Serializer[R, T],
     streams: ZStream[R, Throwable, T]*
   ): ZStream[Any, Nothing, (String, ZStream[R, Throwable, Chunk[Byte]])] = {
-    val listOfShards = streams.zipWithIndex.map {
-      case (stream, i) => (s"shard$i", stream.mapM(serializer.serialize))
+    val listOfShards = streams.zipWithIndex.map { case (stream, i) =>
+      (s"shard$i", stream.mapM(serializer.serialize))
     }
     ZStream.fromIterable(listOfShards)
   }

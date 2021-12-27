@@ -81,13 +81,12 @@ private class DynamoDbLeaseRepository(client: DynamoDb.Service, timeout: Duratio
             awaitTableActive.delay(1.seconds).as(true)
         case s @ _                                     =>
           ZIO.fail(new Exception(s"Could not create lease table '${tableName}'. Invalid table status: ${s}"))
-      }.catchSome {
-        case _: ResourceNotFoundException =>
-          createTable.catchSome {
-            // Race condition: another worker is creating the table at the same time as we are, we lose
-            case _: ResourceInUseException =>
-              ZIO.unit
-          } *> awaitTableActive.delay(1.second).as(false)
+      }.catchSome { case _: ResourceNotFoundException =>
+        createTable.catchSome {
+          // Race condition: another worker is creating the table at the same time as we are, we lose
+          case _: ResourceInUseException =>
+            ZIO.unit
+        } *> awaitTableActive.delay(1.second).as(false)
       }.timeoutFail(new Exception("Timeout creating lease table"))(1.minute)
   }
 
@@ -275,10 +274,9 @@ private class DynamoDbLeaseRepository(client: DynamoDb.Service, timeout: Duratio
           ),
         parentShardIds = item.get("parentShardIds").map(_.ss.toList.flatten).getOrElse(List.empty)
       )
-    }.recoverWith {
-      case e =>
-        println(s"Error deserializing lease: ${item} ${e}")
-        Failure(e)
+    }.recoverWith { case e =>
+      println(s"Error deserializing lease: ${item} ${e}")
+      Failure(e)
     }
 
   private def toSequenceNumberOrSpecialCheckpoint(

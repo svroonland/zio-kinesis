@@ -20,14 +20,14 @@ object ShardAssignmentStrategyTest extends DefaultRunnableSpec {
       nrWorkers   <- nrWorkers
       randomWorker = Gen.int(1, nrWorkers)
       leases      <- genTraverse(0 until nrShards) { shard =>
-                  for {
-                    worker     <-
-                      (if (allOwned) randomWorker.map(Some(_)) else Gen.option(randomWorker)).map(_.map(workerId))
-                    counter    <- Gen.long(1, 1000)
-                    sequenceNr <-
-                      Gen.option(Gen.int(0, Int.MaxValue / 2).map(_.toString).map(ExtendedSequenceNumber(_, 0L)))
-                  } yield Lease(s"shard-${shard}", worker, counter, sequenceNr.map(Right(_)), Seq.empty)
-                }
+                       for {
+                         worker     <-
+                           (if (allOwned) randomWorker.map(Some(_)) else Gen.option(randomWorker)).map(_.map(workerId))
+                         counter    <- Gen.long(1, 1000)
+                         sequenceNr <-
+                           Gen.option(Gen.int(0, Int.MaxValue / 2).map(_.toString).map(ExtendedSequenceNumber(_, 0L)))
+                       } yield Lease(s"shard-${shard}", worker, counter, sequenceNr.map(Right(_)), Seq.empty)
+                     }
     } yield leases
 
   override def spec =
@@ -43,25 +43,24 @@ object ShardAssignmentStrategyTest extends DefaultRunnableSpec {
         }
       },
       testM("takes leases if it has less than its equal share") {
-        checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10), allOwned = false)) {
-          leases =>
-            val workers          = leases.map(_.owner).collect { case Some(owner) => owner }.toSet
-            val nrWorkers        = (workers + workerId(1)).size
-            val nrOwnedLeases    = leases.map(_.owner).collect { case Some(owner) if owner == workerId(1) => 1 }.size
-            val minExpectedShare = Math.floor(leases.size * 1.0 / nrWorkers).toInt
-            val maxExpectedShare = minExpectedShare + (leases.size % nrWorkers)
-            println(
-              s"For ${leases.size} leases, ${nrWorkers} workers, nr owned leases ${nrOwnedLeases}: expecting share between ${minExpectedShare} and ${maxExpectedShare}"
-            )
+        checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10), allOwned = false)) { leases =>
+          val workers          = leases.map(_.owner).collect { case Some(owner) => owner }.toSet
+          val nrWorkers        = (workers + workerId(1)).size
+          val nrOwnedLeases    = leases.map(_.owner).collect { case Some(owner) if owner == workerId(1) => 1 }.size
+          val minExpectedShare = Math.floor(leases.size * 1.0 / nrWorkers).toInt
+          val maxExpectedShare = minExpectedShare + (leases.size % nrWorkers)
+          println(
+            s"For ${leases.size} leases, ${nrWorkers} workers, nr owned leases ${nrOwnedLeases}: expecting share between ${minExpectedShare} and ${maxExpectedShare}"
+          )
 
-            val minExpectedToSteal =
-              Math.max(0, minExpectedShare - nrOwnedLeases) // We could own more than our fair share
-            val maxExpectedToSteal =
-              Math.max(0, maxExpectedShare - nrOwnedLeases) // We could own more than our fair share
+          val minExpectedToSteal =
+            Math.max(0, minExpectedShare - nrOwnedLeases) // We could own more than our fair share
+          val maxExpectedToSteal =
+            Math.max(0, maxExpectedShare - nrOwnedLeases) // We could own more than our fair share
 
-            for {
-              toSteal <- leasesToTake(leases, workerId(1))
-            } yield assert(toSteal.size)(isWithin(minExpectedToSteal, maxExpectedToSteal))
+          for {
+            toSteal <- leasesToTake(leases, workerId(1))
+          } yield assert(toSteal.size)(isWithin(minExpectedToSteal, maxExpectedToSteal))
         }
       },
       testM("takes unclaimed leases first") {
@@ -81,21 +80,20 @@ object ShardAssignmentStrategyTest extends DefaultRunnableSpec {
         }
       } @@ TestAspect.flaky(3), // Randomness is randomly not-random
       testM("steals from the busiest workers first") {
-        checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10))) {
-          leases =>
-            val leasesByWorker = leases
-              .groupBy(_.owner)
-              .collect { case (Some(owner), leases) => owner -> leases }
-              .toList
-              .sortBy { case (worker, leases) => (leases.size * -1, worker) }
-            val busiestWorkers = leasesByWorker.map(_._1)
+        checkM(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10))) { leases =>
+          val leasesByWorker = leases
+            .groupBy(_.owner)
+            .collect { case (Some(owner), leases) => owner -> leases }
+            .toList
+            .sortBy { case (worker, leases) => (leases.size * -1, worker) }
+          val busiestWorkers = leasesByWorker.map(_._1)
 
-            for {
-              toSteal       <- leasesToTake(leases, workerId(1))
-              // The order of workers should be equal to the order of busiest workers
-              toStealWorkers =
-                changedElements(toSteal.map(shard => leases.find(_.key == shard).get).map(_.owner.get).toList)
-            } yield assert(toStealWorkers)(equalTo(busiestWorkers.take(toStealWorkers.size)))
+          for {
+            toSteal       <- leasesToTake(leases, workerId(1))
+            // The order of workers should be equal to the order of busiest workers
+            toStealWorkers =
+              changedElements(toSteal.map(shard => leases.find(_.key == shard).get).map(_.owner.get).toList)
+          } yield assert(toStealWorkers)(equalTo(busiestWorkers.take(toStealWorkers.size)))
         }
       }
     ).provideCustomLayer(loggingLayer)
@@ -103,7 +101,7 @@ object ShardAssignmentStrategyTest extends DefaultRunnableSpec {
   def changedElements[A](as: List[A]): List[A] =
     as.foldLeft(List.empty[A]) { case (acc, a) => if (acc.lastOption.contains(a)) acc else acc :+ a }
 
-  val loggingLayer                             = Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
+  val loggingLayer = Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   def genTraverse[R, A, B](elems: Iterable[A])(f: A => Gen[R, B]): Gen[R, List[B]] =
     Gen.crossAll(elems.map(f))

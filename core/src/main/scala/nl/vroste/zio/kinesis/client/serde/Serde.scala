@@ -7,8 +7,10 @@ import scala.util.Try
 /**
  * A serializer and deserializer for values of type T
  *
- * @tparam R Environment available to the deserializer
- * @tparam T Value type
+ * @tparam R
+ *   Environment available to the deserializer
+ * @tparam T
+ *   Value type
  */
 trait Serde[-R, T] extends Deserializer[R, T] with Serializer[R, T] {
 
