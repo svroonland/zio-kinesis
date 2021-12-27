@@ -798,11 +798,10 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     Nothing,
     Kinesis with CloudWatch with DynamoDb with LeaseRepository with TestEnvironment with Clock with Logging
   ] =
-    ((if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()).orDie >+>
-      DynamoDbLeaseRepository.live ++
-      zio.test.environment.testEnvironment ++
-      Clock.live) >>>
-      (ZLayer.identity ++ loggingLayer)
+    (if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()).orDie >+>
+      (DynamoDbLeaseRepository.live ++
+        zio.test.environment.testEnvironment ++
+        Clock.live ++ loggingLayer)
 
   def produceSampleRecords(
     streamName: String,
