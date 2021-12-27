@@ -5,27 +5,27 @@ val allScala  = Seq("2.12.15", mainScala)
 
 inThisBuild(
   List(
-    organization := "nl.vroste",
-    homepage := Some(url("https://github.com/svroonland/zio-kinesis")),
-    licenses := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
-    scalaVersion := mainScala,
-    crossScalaVersions := allScala,
-    Test / parallelExecution := false,
-    Global / cancelable := true,
-    Test / fork := true,
-    Test / fork := true,
+    organization                     := "nl.vroste",
+    homepage                         := Some(url("https://github.com/svroonland/zio-kinesis")),
+    licenses                         := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
+    scalaVersion                     := mainScala,
+    crossScalaVersions               := allScala,
+    Test / parallelExecution         := false,
+    Global / cancelable              := true,
+    Test / fork                      := true,
+    Test / fork                      := true,
     assembly / assemblyMergeStrategy := {
       case PathList("META-INF", xs @ _*)       => MergeStrategy.discard
       case n if n.startsWith("reference.conf") => MergeStrategy.concat
       case _                                   => MergeStrategy.first
     },
-    scmInfo := Some(
+    scmInfo                          := Some(
       ScmInfo(url("https://github.com/svroonland/zio-kinesis/"), "scm:git:git@github.com:svroonland/zio-kinesis.git")
     ),
-    sonatypeProjectHosting := Some(
+    sonatypeProjectHosting           := Some(
       GitHubHosting("svroonland", "zio-kinesis", "info@vroste.nl")
     ),
-    developers := List(
+    developers                       := List(
       Developer(
         "svroonland",
         "Vroste",
@@ -106,7 +106,7 @@ addCommandAlias("check", "all scalafmtSbtCheck scalafmtCheck test:scalafmtCheck"
 lazy val interopFutures = (project in file("interop-futures"))
   .settings(stdSettings: _*)
   .settings(
-    name := "zio-kinesis-future",
+    name                       := "zio-kinesis-future",
     assembly / assemblyJarName := "zio-kinesis-future" + version.value + ".jar",
     libraryDependencies ++= Seq(
       "dev.zio" %% "zio-interop-reactivestreams" % "1.3.4"
@@ -117,7 +117,7 @@ lazy val interopFutures = (project in file("interop-futures"))
 lazy val dynamicConsumer = (project in file("dynamic-consumer"))
   .settings(stdSettings: _*)
   .settings(
-    name := "zio-kinesis-dynamic-consumer",
+    name                       := "zio-kinesis-dynamic-consumer",
     assembly / assemblyJarName := "zio-kinesis-dynamic-consumer" + version.value + ".jar",
     libraryDependencies ++= Seq(
       "software.amazon.kinesis" % "amazon-kinesis-client" % "2.3.9"
