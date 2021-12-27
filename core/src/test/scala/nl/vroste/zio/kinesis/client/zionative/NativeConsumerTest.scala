@@ -891,9 +891,19 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
   def withRandomStreamAndApplicationName[R, A](nrShards: Int)(
     f: (String, String) => ZIO[R, Throwable, A]
-  ): ZIO[Kinesis with Clock with Console with Logging with Console with Has[
-    LeaseRepository.Service
-  ] with R, Throwable, A] =
+  ): ZIO[
+    Kinesis
+      with Clock
+      with Console
+      with Logging
+      with Console
+      with Has[
+        LeaseRepository.Service
+      ]
+      with R,
+    Throwable,
+    A
+  ] =
     ZIO.effectTotal((streamPrefix + "testStream", streamPrefix + "testApplication")).flatMap {
       case (streamName, applicationName) =>
         withStream(streamName, shards = nrShards) {
