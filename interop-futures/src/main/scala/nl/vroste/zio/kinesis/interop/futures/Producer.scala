@@ -32,7 +32,8 @@ class Producer[T] private (
    * Backpressures when too many requests are in flight
    *
    * @param r
-   * @return Task that fails if the records fail to be produced with a non-recoverable error
+   * @return
+   *   Task that fails if the records fail to be produced with a non-recoverable error
    */
   def produce(r: ProducerRecord[T]): CancelableFuture[ProduceResponse] =
     runtime.unsafeRunToFuture(producer.produce(r))
@@ -40,7 +41,8 @@ class Producer[T] private (
   /**
    * Backpressures when too many requests are in flight
    *
-   * @return Task that fails if any of the records fail to be produced with a non-recoverable error
+   * @return
+   *   Task that fails if any of the records fail to be produced with a non-recoverable error
    */
   def produceMany(records: Iterable[ProducerRecord[T]]): CancelableFuture[Seq[ProduceResponse]] =
     runtime.unsafeRunToFuture(producer.produceChunk(Chunk.fromIterable(records)))
@@ -56,12 +58,17 @@ object Producer {
   /**
    * Create a Producer of `T` values to stream `streamName`
    *
-   * @param streamName Stream to produce to
-   * @param serializer Serializer for values of type T
+   * @param streamName
+   *   Stream to produce to
+   * @param serializer
+   *   Serializer for values of type T
    * @param settings
-   * @param metricsCollector Periodically called with producer metrics
-   * @tparam T Type of values to produce
-   * @return A Managed Producer
+   * @param metricsCollector
+   *   Periodically called with producer metrics
+   * @tparam T
+   *   Type of values to produce
+   * @return
+   *   A Managed Producer
    */
   @nowarn("cat=unused-params") // Scala warns that Tag is unused, but removing it gives missing implicits errors
   def make[T: Tag](

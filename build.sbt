@@ -1,32 +1,32 @@
 import xerial.sbt.Sonatype.GitHubHosting
 
-val mainScala = "2.13.6"
-val allScala  = Seq("2.12.14", mainScala, "3.0.0")
+val mainScala = "2.13.7"
+val allScala  = Seq("2.12.15", mainScala, "3.1.0")
 
 inThisBuild(
   List(
-    organization := "nl.vroste",
-    homepage := Some(url("https://github.com/svroonland/zio-kinesis")),
-    licenses := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
-    scalaVersion := mainScala,
-    crossScalaVersions := allScala,
-    compileOrder := CompileOrder.JavaThenScala,
-    Test / parallelExecution := false,
-    Global / cancelable := true,
-    Test / fork := true,
-    Test / fork := true,
+    organization                     := "nl.vroste",
+    homepage                         := Some(url("https://github.com/svroonland/zio-kinesis")),
+    licenses                         := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
+    scalaVersion                     := mainScala,
+    crossScalaVersions               := allScala,
+    compileOrder                     := CompileOrder.JavaThenScala,
+    Test / parallelExecution         := false,
+    Global / cancelable              := true,
+    Test / fork                      := true,
+    Test / fork                      := true,
     assembly / assemblyMergeStrategy := {
       case PathList("META-INF", xs @ _*)       => MergeStrategy.discard
       case n if n.startsWith("reference.conf") => MergeStrategy.concat
       case _                                   => MergeStrategy.first
     },
-    scmInfo := Some(
+    scmInfo                          := Some(
       ScmInfo(url("https://github.com/svroonland/zio-kinesis/"), "scm:git:git@github.com:svroonland/zio-kinesis.git")
     ),
-    sonatypeProjectHosting := Some(
+    sonatypeProjectHosting           := Some(
       GitHubHosting("svroonland", "zio-kinesis", "info@vroste.nl")
     ),
-    developers := List(
+    developers                       := List(
       Developer(
         "svroonland",
         "Vroste",
@@ -38,8 +38,8 @@ inThisBuild(
   )
 )
 
-val zioVersion    = "1.0.10+54-908f32c1-SNAPSHOT"
-val zioAwsVersion = "3.17.19.1"
+val zioVersion    = "1.0.13"
+val zioAwsVersion = "3.17.101.1"
 
 lazy val root = project
   .in(file("."))
@@ -49,13 +49,13 @@ lazy val root = project
     )
   )
   .settings(stdSettings: _*)
-  .settings(Seq(publish / skip := true))
   .aggregate(core, interopFutures, dynamicConsumer)
   .dependsOn(core, interopFutures, dynamicConsumer)
 
 lazy val core = (project in file("core"))
   .enablePlugins(ProtobufPlugin)
   .settings(stdSettings: _*)
+  .settings(Seq(publish / skip := true))
   .settings(
     Seq(
       name := "zio-kinesis"
@@ -88,17 +88,16 @@ lazy val stdSettings: Seq[sbt.Def.SettingsDefinition] = Seq(
     "dev.zio"                %% "zio-streams"                 % zioVersion,
     "dev.zio"                %% "zio-test"                    % zioVersion % "test",
     "dev.zio"                %% "zio-test-sbt"                % zioVersion % "test",
-    "dev.zio"                %% "zio-interop-reactivestreams" % "1.3.5",
-    "dev.zio"                %% "izumi-reflect"               % "2.0.0", // Temporarily to fix issue with Tag in zio 1.0.10
-    "dev.zio"                %% "zio-logging"                 % "0.5.11" exclude ("org.scala-lang.modules", "scala-collection-compat_2.13"),
-    "ch.qos.logback"          % "logback-classic"             % "1.2.5",
-    "org.scala-lang.modules" %% "scala-collection-compat"     % "2.5.0",
+    "dev.zio"                %% "zio-interop-reactivestreams" % "1.3.8",
+    "dev.zio"                %% "zio-logging"                 % "0.5.14",
+    "ch.qos.logback"          % "logback-classic"             % "1.2.10",
+    "org.scala-lang.modules" %% "scala-collection-compat"     % "2.6.0",
     "org.hdrhistogram"        % "HdrHistogram"                % "2.1.12",
-    "io.github.vigoo"        %% "zio-aws-core"                % zioAwsVersion exclude ("org.scala-lang.modules", "scala-collection-compat_2.13"),
-    "io.github.vigoo"        %% "zio-aws-kinesis"             % zioAwsVersion exclude ("org.scala-lang.modules", "scala-collection-compat_2.13"),
-    "io.github.vigoo"        %% "zio-aws-dynamodb"            % zioAwsVersion exclude ("org.scala-lang.modules", "scala-collection-compat_2.13"),
-    "io.github.vigoo"        %% "zio-aws-cloudwatch"          % zioAwsVersion exclude ("org.scala-lang.modules", "scala-collection-compat_2.13"),
-    "io.github.vigoo"        %% "zio-aws-netty"               % zioAwsVersion exclude ("org.scala-lang.modules", "scala-collection-compat_2.13"),
+    "io.github.vigoo"        %% "zio-aws-core"                % zioAwsVersion,
+    "io.github.vigoo"        %% "zio-aws-kinesis"             % zioAwsVersion,
+    "io.github.vigoo"        %% "zio-aws-dynamodb"            % zioAwsVersion,
+    "io.github.vigoo"        %% "zio-aws-cloudwatch"          % zioAwsVersion,
+    "io.github.vigoo"        %% "zio-aws-netty"               % zioAwsVersion,
     "javax.xml.bind"          % "jaxb-api"                    % "2.3.1"
   )
 )
@@ -109,7 +108,7 @@ addCommandAlias("check", "all scalafmtSbtCheck scalafmtCheck test:scalafmtCheck"
 lazy val interopFutures = (project in file("interop-futures"))
   .settings(stdSettings: _*)
   .settings(
-    name := "zio-kinesis-future",
+    name                       := "zio-kinesis-future",
     assembly / assemblyJarName := "zio-kinesis-future" + version.value + ".jar",
     libraryDependencies ++= Seq(
       "dev.zio" %% "zio-interop-reactivestreams" % "1.3.4"
@@ -120,10 +119,10 @@ lazy val interopFutures = (project in file("interop-futures"))
 lazy val dynamicConsumer = (project in file("dynamic-consumer"))
   .settings(stdSettings: _*)
   .settings(
-    name := "zio-kinesis-dynamic-consumer",
+    name                       := "zio-kinesis-dynamic-consumer",
     assembly / assemblyJarName := "zio-kinesis-dynamic-consumer" + version.value + ".jar",
     libraryDependencies ++= Seq(
-      "software.amazon.kinesis" % "amazon-kinesis-client" % "2.3.6"
+      "software.amazon.kinesis" % "amazon-kinesis-client" % "2.3.9"
     )
   )
   .dependsOn(core % "compile->compile;test->test")

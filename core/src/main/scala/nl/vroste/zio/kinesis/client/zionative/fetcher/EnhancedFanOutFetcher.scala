@@ -58,13 +58,12 @@ object EnhancedFanOutFetcher {
                   .SubscribeToShardEvent(shardId, e.recordsValue.size, e.millisBehindLatestValue.millis)
               )
             }
-            .catchSome {
-              case NonFatal(e) =>
-                ZStream.unwrap(
-                  log
-                    .warn(s"Error in EnhancedFanOutFetcher for shard ${shardId}, will retry. ${e}")
-                    .as(ZStream.fail(e))
-                )
+            .catchSome { case NonFatal(e) =>
+              ZStream.unwrap(
+                log
+                  .warn(s"Error in EnhancedFanOutFetcher for shard ${shardId}, will retry. ${e}")
+                  .as(ZStream.fail(e))
+              )
             }
             // Retry on connection loss, throttling exception, etc.
             // Note that retry has to be at this level, not the outermost ZStream because that reinitializes the start position
@@ -87,17 +86,16 @@ object EnhancedFanOutFetcher {
       .registerStreamConsumer(RegisterStreamConsumerRequest(streamARN, consumerName))
       .mapError(_.toThrowable)
       .map(_.consumerValue.consumerARNValue)
-      .catchSome {
-        case e: ResourceInUseException =>
-          // Consumer already exists, retrieve it
-          kinesis
-            .describeStreamConsumer(
-              DescribeStreamConsumerRequest(streamARN = Some(streamARN), consumerName = Some(consumerName))
-            )
-            .mapError(_.toThrowable)
-            .map(_.consumerDescriptionValue)
-            .filterOrElse(_.consumerStatusValue != ConsumerStatus.DELETING)(_ => ZIO.fail(e))
-            .map(_.consumerARNValue)
+      .catchSome { case e: ResourceInUseException =>
+        // Consumer already exists, retrieve it
+        kinesis
+          .describeStreamConsumer(
+            DescribeStreamConsumerRequest(streamARN = Some(streamARN), consumerName = Some(consumerName))
+          )
+          .mapError(_.toThrowable)
+          .map(_.consumerDescriptionValue)
+          .filterOrElse(_.consumerStatusValue != ConsumerStatus.DELETING)(_ => ZIO.fail(e))
+          .map(_.consumerARNValue)
       }
 }
 

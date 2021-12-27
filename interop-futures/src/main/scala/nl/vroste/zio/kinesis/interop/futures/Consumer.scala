@@ -30,16 +30,22 @@ class Consumer private (
   /**
    * Apply an effectful function to each record in a stream
    *
-   * This is the easiest way to consume Kinesis records from a stream, while benefiting from all of
-   * Consumer's features like parallel streaming, checkpointing and resharding.
+   * This is the easiest way to consume Kinesis records from a stream, while benefiting from all of Consumer's features
+   * like parallel streaming, checkpointing and resharding.
    *
    * Simply provide an asynchronous function that is applied to each record and the rest is taken care of. The function
    * will be called for every record in the stream, with a parallelism.
-   * @param checkpointBatchSize Maximum number of records before checkpointing
-   * @param checkpointDuration Maximum interval before checkpointing
-   * @param recordProcessor A function for processing a `Record[T]`
-   * @tparam T Type of record values
-   * @return A cancelable future that completes with Unit when record processing is stopped or fails when the consumer stream fails
+   * @param checkpointBatchSize
+   *   Maximum number of records before checkpointing
+   * @param checkpointDuration
+   *   Maximum interval before checkpointing
+   * @param recordProcessor
+   *   A function for processing a `Record[T]`
+   * @tparam T
+   *   Type of record values
+   * @return
+   *   A cancelable future that completes with Unit when record processing is stopped or fails when the consumer stream
+   *   fails
    */
   def consumeWith[T](
     streamName: String,
