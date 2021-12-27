@@ -80,7 +80,7 @@ object TestUtil {
     nrShards: Int
   ): ZIO[Console with Clock with Kinesis, Throwable, Unit] =
     kinesis
-      .createStream(CreateStreamRequest(streamName, nrShards))
+      .createStream(CreateStreamRequest(streamName, Some(nrShards)))
       .mapError(_.toThrowable)
       .catchSome {
         case _: ResourceInUseException =>

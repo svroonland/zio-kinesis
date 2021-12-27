@@ -62,4 +62,6 @@ class StubClient extends Kinesis.Service { self =>
   ): ZStream[Any, AwsError, SubscribeToShardEvent.ReadOnly]                                                           = ???
 
   override def getRecords(request: model.GetRecordsRequest): IO[AwsError, GetRecordsResponse.ReadOnly] = ???
+
+  override def updateStreamMode(request: UpdateStreamModeRequest): IO[AwsError, Unit] = ???
 }
