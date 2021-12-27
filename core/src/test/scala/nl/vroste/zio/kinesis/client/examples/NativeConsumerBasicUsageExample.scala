@@ -16,12 +16,11 @@ object NativeConsumerBasicUsageExample extends zio.App {
         deserializer = Serde.asciiString,
         workerIdentifier = "worker1"
       )
-      .flatMapPar(Int.MaxValue) {
-        case (shardId, shardStream, checkpointer) =>
-          shardStream
-            .tap(record => putStrLn(s"Processing record ${record} on shard ${shardId}"))
-            .tap(checkpointer.stage(_))
-            .via(checkpointer.checkpointBatched[Console](nr = 1000, interval = 5.minutes))
+      .flatMapPar(Int.MaxValue) { case (shardId, shardStream, checkpointer) =>
+        shardStream
+          .tap(record => putStrLn(s"Processing record ${record} on shard ${shardId}"))
+          .tap(checkpointer.stage(_))
+          .via(checkpointer.checkpointBatched[Console](nr = 1000, interval = 5.minutes))
       }
       .runDrain
       .provideCustomLayer(Consumer.defaultEnvironment ++ loggingLayer)

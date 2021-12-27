@@ -22,8 +22,8 @@ object DefaultCheckpointerTest extends DefaultRunnableSpec {
         for {
           checkpoints  <- Ref.make(List.empty[Checkpoint])
           checkpointer <- {
-            val updateCheckpoint: UpdateCheckpoint = {
-              case (seqNr, _) => checkpoints.update(_ :+ seqNr)
+            val updateCheckpoint: UpdateCheckpoint = { case (seqNr, _) =>
+              checkpoints.update(_ :+ seqNr)
             }
             makeCheckpointer(updateCheckpoint)
           }
@@ -37,8 +37,8 @@ object DefaultCheckpointerTest extends DefaultRunnableSpec {
         for {
           checkpoints  <- Ref.make(List.empty[Checkpoint])
           checkpointer <- {
-            val updateCheckpoint: UpdateCheckpoint = {
-              case (seqNr, _) => checkpoints.update(_ :+ seqNr)
+            val updateCheckpoint: UpdateCheckpoint = { case (seqNr, _) =>
+              checkpoints.update(_ :+ seqNr)
             }
             makeCheckpointer(updateCheckpoint)
           }
@@ -53,14 +53,13 @@ object DefaultCheckpointerTest extends DefaultRunnableSpec {
           checkpoints       <- Ref.make(List.empty[Checkpoint])
           checkpointAttempt <- Ref.make(0)
           checkpointer      <- {
-            val updateCheckpoint: UpdateCheckpoint = {
-              case (seqNr, _) =>
-                checkpointAttempt.getAndUpdate(_ + 1).flatMap { attempt =>
-                  if (attempt == 0)
-                    ZIO.fail(Left(new TimeoutException("Checkpoint failed")))
-                  else
-                    checkpoints.update(_ :+ seqNr)
-                }
+            val updateCheckpoint: UpdateCheckpoint = { case (seqNr, _) =>
+              checkpointAttempt.getAndUpdate(_ + 1).flatMap { attempt =>
+                if (attempt == 0)
+                  ZIO.fail(Left(new TimeoutException("Checkpoint failed")))
+                else
+                  checkpoints.update(_ :+ seqNr)
+              }
             }
             makeCheckpointer(updateCheckpoint)
           }
@@ -76,14 +75,14 @@ object DefaultCheckpointerTest extends DefaultRunnableSpec {
           latch1       <- Promise.make[Nothing, Unit]
           latch2       <- Promise.make[Nothing, Unit]
           checkpointer <- {
-            val updateCheckpoint: UpdateCheckpoint = {
-              case (seqNr, _) => latch1.succeed(()) *> latch2.await *> checkpoints.update(_ :+ seqNr)
+            val updateCheckpoint: UpdateCheckpoint = { case (seqNr, _) =>
+              latch1.succeed(()) *> latch2.await *> checkpoints.update(_ :+ seqNr)
             }
             makeCheckpointer(updateCheckpoint)
           }
           _            <- checkpointer.stage(record1)
           _            <- checkpointer.checkpoint() <&
-                 (latch1.await *> checkpointer.stage(record2) *> latch2.succeed(()))
+                            (latch1.await *> checkpointer.stage(record2) *> latch2.succeed(()))
           _            <- checkpointer.checkpoint()
           values       <- checkpoints.get
         } yield assert(values.map(_.toOption.get.sequenceNumber))(equalTo(List("0", "1")))
@@ -92,8 +91,8 @@ object DefaultCheckpointerTest extends DefaultRunnableSpec {
         for {
           checkpoints  <- Ref.make(List.empty[Checkpoint])
           checkpointer <- {
-            val updateCheckpoint: UpdateCheckpoint = {
-              case (seqNr, _) => checkpoints.update(_ :+ seqNr)
+            val updateCheckpoint: UpdateCheckpoint = { case (seqNr, _) =>
+              checkpoints.update(_ :+ seqNr)
             }
             makeCheckpointer(updateCheckpoint)
           }
@@ -109,8 +108,8 @@ object DefaultCheckpointerTest extends DefaultRunnableSpec {
         for {
           checkpoints  <- Ref.make(List.empty[Checkpoint])
           checkpointer <- {
-            val updateCheckpoint: UpdateCheckpoint = {
-              case (seqNr, _) => checkpoints.update(_ :+ seqNr)
+            val updateCheckpoint: UpdateCheckpoint = { case (seqNr, _) =>
+              checkpoints.update(_ :+ seqNr)
             }
             makeCheckpointer(updateCheckpoint)
           }
@@ -129,8 +128,8 @@ object DefaultCheckpointerTest extends DefaultRunnableSpec {
         for {
           checkpoints  <- Ref.make(List.empty[Checkpoint])
           checkpointer <- {
-            val updateCheckpoint: UpdateCheckpoint = {
-              case (seqNr, _) => checkpoints.update(_ :+ seqNr)
+            val updateCheckpoint: UpdateCheckpoint = { case (seqNr, _) =>
+              checkpoints.update(_ :+ seqNr)
             }
             makeCheckpointer(updateCheckpoint)
           }
@@ -145,8 +144,8 @@ object DefaultCheckpointerTest extends DefaultRunnableSpec {
         for {
           checkpoints  <- Ref.make(List.empty[Checkpoint])
           checkpointer <- {
-            val updateCheckpoint: UpdateCheckpoint = {
-              case (seqNr, _) => checkpoints.update(_ :+ seqNr)
+            val updateCheckpoint: UpdateCheckpoint = { case (seqNr, _) =>
+              checkpoints.update(_ :+ seqNr)
             }
             makeCheckpointer(updateCheckpoint)
           }
@@ -162,8 +161,8 @@ object DefaultCheckpointerTest extends DefaultRunnableSpec {
         for {
           checkpoints  <- Ref.make(List.empty[Checkpoint])
           checkpointer <- {
-            val updateCheckpoint: UpdateCheckpoint = {
-              case (seqNr, _) => checkpoints.update(_ :+ seqNr)
+            val updateCheckpoint: UpdateCheckpoint = { case (seqNr, _) =>
+              checkpoints.update(_ :+ seqNr)
             }
             makeCheckpointer(updateCheckpoint)
           }

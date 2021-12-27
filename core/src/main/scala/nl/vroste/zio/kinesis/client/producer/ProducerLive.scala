@@ -56,11 +56,10 @@ private[client] final class ProducerLive[R, R1, T](
       .mapChunksM(chunk => log.trace(s"Dequeued chunk of size ${chunk.size}").as(chunk))
       // Aggregate records per shard
       .groupByKey2(_.predictedShard, chunkBufferSize)
-      .flatMapPar(Int.MaxValue, chunkBufferSize) {
-        case (shardId @ _, requests) =>
-          ZStream.managed(ShardMap.md5.orDie).flatMap { digest =>
-            requests.aggregateAsync(if (aggregate) aggregator(digest) else ZTransducer.identity)
-          }
+      .flatMapPar(Int.MaxValue, chunkBufferSize) { case (shardId @ _, requests) =>
+        ZStream.managed(ShardMap.md5.orDie).flatMap { digest =>
+          requests.aggregateAsync(if (aggregate) aggregator(digest) else ZTransducer.identity)
+        }
       })
       .groupByKey2(_.predictedShard, chunkBufferSize) // TODO can we avoid this second group by?
       .flatMapPar(Int.MaxValue, chunkBufferSize)(
@@ -104,10 +103,10 @@ private[client] final class ProducerLive[R, R1, T](
     val totalPayload = batch.map(_.data.length).sum
     (for {
       _        <- log.info(
-             s"PutRecords for batch of size ${batch.map(_.aggregateCount).sum} (${batch.size} aggregated). " +
+                    s"PutRecords for batch of size ${batch.map(_.aggregateCount).sum} (${batch.size} aggregated). " +
 //               s"Payload sizes: ${batch.map(_.data.asByteArrayUnsafe().length).mkString(",")} " +
-               s"(total = ${totalPayload} = ${totalPayload * 100.0 / maxPayloadSizePerRequest}%)."
-           )
+                      s"(total = ${totalPayload} = ${totalPayload * 100.0 / maxPayloadSizePerRequest}%)."
+                  )
 
       // Avoid an allocation
       response <- client
@@ -115,10 +114,9 @@ private[client] final class ProducerLive[R, R1, T](
                     .mapError(_.toThrowable)
                     .tapError(e => log.warn(s"Error producing records, will retry if recoverable: $e"))
                     .retry(scheduleCatchRecoverable && settings.backoffRequests)
-    } yield (Some(response), batch)).catchSome {
-      case NonFatal(e) =>
-        log.warn("Failed to process batch") *>
-          ZIO.foreach_(batch)(_.complete(ZIO.fail(e))).as((None, batch))
+    } yield (Some(response), batch)).catchSome { case NonFatal(e) =>
+      log.warn("Failed to process batch") *>
+        ZIO.foreach_(batch)(_.complete(ZIO.fail(e))).as((None, batch))
     }.orDie
   }
 
@@ -131,32 +129,30 @@ private[client] final class ProducerLive[R, R1, T](
     val responseAndRequests    = Chunk.fromIterable(response.recordsValue).zip(batch)
     val (newFailed, succeeded) =
       if (response.failedRecordCountValue.getOrElse(0) > 0)
-        responseAndRequests.partition {
-          case (result, _) =>
-            result.errorCodeValue.exists(recoverableErrorCodes.contains)
+        responseAndRequests.partition { case (result, _) =>
+          result.errorCodeValue.exists(recoverableErrorCodes.contains)
         }
       else
         (Chunk.empty, responseAndRequests)
     for {
 
-      now <- instant
+      now                           <- instant
       m1                             = CurrentMetrics.empty(now).addPayloadSize(totalPayload).addRecordSizes(batch.map(_.payloadSize))
       r                             <- checkShardPredictionErrors(responseAndRequests, m1)
       (hasShardPredictionErrors, m2) = r
       m3                            <- handleFailures(newFailed, repredict = hasShardPredictionErrors, m2)
-      _                             <- ZIO.foreach_(succeeded) {
-             case (response, request) =>
-               request.complete(
-                 ZIO.succeed(
-                   ProduceResponse(
-                     response.shardIdValue.get,
-                     response.sequenceNumberValue.get,
-                     request.attemptNumber,
-                     completed = now
-                   )
-                 )
-               )
-           }
+      _                             <- ZIO.foreach_(succeeded) { case (response, request) =>
+                                         request.complete(
+                                           ZIO.succeed(
+                                             ProduceResponse(
+                                               response.shardIdValue.get,
+                                               response.sequenceNumberValue.get,
+                                               request.attemptNumber,
+                                               completed = now
+                                             )
+                                           )
+                                         )
+                                       }
       // TODO handle connection failure
     } yield m3
   }
@@ -188,9 +184,9 @@ private[client] final class ProducerLive[R, R1, T](
                          ZIO.succeed(requests.map(_.newAttempt))
 
       // TODO backoff for shard limit stuff
-      _ <- failedQueue
-             .offerAll(updatedFailed)
-             .when(newFailed.nonEmpty)
+      _             <- failedQueue
+                         .offerAll(updatedFailed)
+                         .when(newFailed.nonEmpty)
     } yield metrics.addFailures(failedCount)
   }
 
@@ -198,8 +194,8 @@ private[client] final class ProducerLive[R, R1, T](
     responseAndRequests: Chunk[(PutRecordsResultEntry.ReadOnly, ProduceRequest)],
     metrics: CurrentMetrics
   ): ZIO[Logging, Nothing, (Boolean, CurrentMetrics)] = {
-    val shardPredictionErrors = responseAndRequests.filter {
-      case (result, request) => result.shardIdValue.exists(_ != request.predictedShard)
+    val shardPredictionErrors = responseAndRequests.filter { case (result, request) =>
+      result.shardIdValue.exists(_ != request.predictedShard)
     }
 
     val (succeeded, failed) = shardPredictionErrors.partition(_._1.errorCodeValue.isEmpty)
@@ -279,24 +275,24 @@ private[client] final class ProducerLive[R, R1, T](
       resultsCollection <- Ref.make[Chunk[ProduceResponse]](Chunk.empty)
       nrRequests         = chunk.size
       onDone             = (response: Task[ProduceResponse]) =>
-                 response
-                   .foldM(
-                     done.fail,
-                     response =>
-                       for {
-                         responses <- resultsCollection.updateAndGet(_ :+ response)
-                         _         <- ZIO.when(responses.size == nrRequests)(done.succeed(responses))
-                       } yield ()
-                   )
-                   .unit
+                             response
+                               .foldM(
+                                 done.fail,
+                                 response =>
+                                   for {
+                                     responses <- resultsCollection.updateAndGet(_ :+ response)
+                                     _         <- ZIO.when(responses.size == nrRequests)(done.succeed(responses))
+                                   } yield ()
+                               )
+                               .unit
       requests          <- ShardMap.md5.use { digest =>
-                    ZIO.foreach(chunk) { r =>
-                      for {
-                        data          <- serializer.serialize(r.data)
-                        predictedShard = shardMap.shardForPartitionKey(digest, r.partitionKey)
-                      } yield (done.await, ProduceRequest(data, r.partitionKey, onDone, now, predictedShard))
-                    }
-                  }
+                             ZIO.foreach(chunk) { r =>
+                               for {
+                                 data          <- serializer.serialize(r.data)
+                                 predictedShard = shardMap.shardForPartitionKey(digest, r.partitionKey)
+                               } yield (done.await, ProduceRequest(data, r.partitionKey, onDone, now, predictedShard))
+                             }
+                           }
       _                 <- queue.offerAll(requests.map(_._2))
       results           <- done.await
       latencies          = results.map(r => java.time.Duration.between(now, r.completed))
@@ -361,8 +357,8 @@ private[client] object ProducerLive {
       case _: IOException                                   => true
       case _: ResourceInUseException                        =>
         true // Also covers DELETING, but will result in ResourceNotFoundException on a subsequent attempt
-      case e: SdkException if Option(e.getCause).isDefined  => isRecoverableException(e.getCause)
-      case _                                                => false
+      case e: SdkException if Option(e.getCause).isDefined => isRecoverableException(e.getCause)
+      case _                                               => false
     }
 
   def payloadSizeForEntry(entry: PutRecordsRequestEntry): Int =
@@ -385,21 +381,19 @@ private[client] object ProducerLive {
       val initial = Some(z)
 
       def go(in: Chunk[I], state: O): (Chunk[O], O) =
-        in.foldLeft[(Chunk[O], O)]((Chunk.empty, state)) {
-          case ((os0, state), i) =>
-            val o = f(state, i)
-            if (contFn(o))
-              (os0, o)
-            else
-              (os0 :+ state, f(z, i))
+        in.foldLeft[(Chunk[O], O)]((Chunk.empty, state)) { case ((os0, state), i) =>
+          val o = f(state, i)
+          if (contFn(o))
+            (os0, o)
+          else
+            (os0 :+ state, f(z, i))
         }
 
       ZRef.makeManaged[Option[O]](initial).map { state =>
         {
           case Some(in) =>
-            state.get.map(s => go(in, s.getOrElse(z))).flatMap {
-              case (os, s) =>
-                state.set(Some(s)) *> Push.emit(os)
+            state.get.map(s => go(in, s.getOrElse(z))).flatMap { case (os, s) =>
+              state.set(Some(s)) *> Push.emit(os)
             }
           case None     =>
             state.getAndSet(None).map(_.fold[Chunk[O]](Chunk.empty)(Chunk.single(_)))

@@ -46,8 +46,8 @@ object FakeRecordProcessor {
                    sizeAfter <- updateRefProcessed
                    _         <- info(s"processed $sizeAfter, expected $expectedCount")
                    _         <- ZIO.when(sizeAfter == expectedCount)(
-                          info(s"about to call promise.succeed on processed count $sizeAfter") *> promise.succeed(())
-                        )
+                                  info(s"about to call promise.succeed on processed count $sizeAfter") *> promise.succeed(())
+                                )
                  } yield ()
              )
       } yield ()

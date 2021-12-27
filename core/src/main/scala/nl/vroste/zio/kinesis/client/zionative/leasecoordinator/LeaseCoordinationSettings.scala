@@ -9,18 +9,23 @@ import zio.clock.Clock
  *
  * Default values are compatible with KCL defaults (TODO not quite yet)
  *
- * @param refreshAndTakeInterval Interval at which leases are refreshed and possibly new leases taken
- * @param renewInterval Interval at which leases are renewed to prevent them expiring
- * @param maxParallelLeaseAcquisitions Maximum parallel calls to DynamoDB to claim a lease.
- *                                     This is not the maximum number of leases to steal in one iteration
- *                                     of `refreshAndTakeInterval`.
- * @param maxParallelLeaseRenewals Maximum parallel calls to DynamoDB to claim a lease.
- *                                     This is not the maximum number of leases to steal in one iteration
- *                                     of `refreshAndTakeInterval`.
- * @param releaseLeaseTimeout Time after which releasing a lease is silently aborted.
- * @param renewRetrySchedule Schedule that controls retries when exceptions occur when renewing a
- *                           lease. The lease is released (internally only) when the schedule fails.
- * @param shardRefreshInterval Interval at which the stream's shards are refreshed
+ * @param refreshAndTakeInterval
+ *   Interval at which leases are refreshed and possibly new leases taken
+ * @param renewInterval
+ *   Interval at which leases are renewed to prevent them expiring
+ * @param maxParallelLeaseAcquisitions
+ *   Maximum parallel calls to DynamoDB to claim a lease. This is not the maximum number of leases to steal in one
+ *   iteration of `refreshAndTakeInterval`.
+ * @param maxParallelLeaseRenewals
+ *   Maximum parallel calls to DynamoDB to claim a lease. This is not the maximum number of leases to steal in one
+ *   iteration of `refreshAndTakeInterval`.
+ * @param releaseLeaseTimeout
+ *   Time after which releasing a lease is silently aborted.
+ * @param renewRetrySchedule
+ *   Schedule that controls retries when exceptions occur when renewing a lease. The lease is released (internally only)
+ *   when the schedule fails.
+ * @param shardRefreshInterval
+ *   Interval at which the stream's shards are refreshed
  */
 final case class LeaseCoordinationSettings(
   renewInterval: Duration = 3.seconds,

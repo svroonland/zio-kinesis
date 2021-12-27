@@ -37,11 +37,11 @@ object TestUtil {
       _               <- createStream(streamName, shards)
       _               <- getShards(streamName).toManaged_
       _               <- ZManaged.finalizer(dynamodb.deleteTable(DeleteTableRequest(applicationName)).ignore)
-    } yield (streamName, applicationName)).use {
-      case (streamName, applicationName) => f(streamName, applicationName).fork.flatMap(_.join)
+    } yield (streamName, applicationName)).use { case (streamName, applicationName) =>
+      f(streamName, applicationName).fork.flatMap(_.join)
     }
 
-  def getShards(name: String): ZIO[Kinesis with Clock, Throwable, Chunk[Shard.ReadOnly]]                          =
+  def getShards(name: String): ZIO[Kinesis with Clock, Throwable, Chunk[Shard.ReadOnly]] =
     kinesis
       .listShards(ListShardsRequest(streamName = Some(name)))
       .mapError(_.toThrowable)
@@ -54,8 +54,8 @@ object TestUtil {
       kinesis
         .deleteStream(DeleteStreamRequest(streamName, enforceConsumerDeletion = Some(true)))
         .mapError(_.toThrowable)
-        .catchSome {
-          case _: ResourceNotFoundException => ZIO.unit
+        .catchSome { case _: ResourceNotFoundException =>
+          ZIO.unit
         }
         .orDie
     )
@@ -82,9 +82,8 @@ object TestUtil {
     kinesis
       .createStream(CreateStreamRequest(streamName, Some(nrShards)))
       .mapError(_.toThrowable)
-      .catchSome {
-        case _: ResourceInUseException =>
-          putStrLn("Stream already exists").orDie
+      .catchSome { case _: ResourceInUseException =>
+        putStrLn("Stream already exists").orDie
       }
       .retry(Schedule.exponential(1.second) && Schedule.recurs(10))
 
@@ -136,13 +135,12 @@ object TestUtil {
   ): ZIO[Kinesis with R, Throwable, PutRecordsResponse.ReadOnly] =
     for {
       recordsAndBytes <- ZIO.foreach(records)(r => serializer.serialize(r.data).map((_, r.partitionKey)))
-      entries          = recordsAndBytes.map {
-                  case (data, partitionKey) =>
-                    PutRecordsRequestEntry(data, partitionKey = partitionKey)
-                }
+      entries          = recordsAndBytes.map { case (data, partitionKey) =>
+                           PutRecordsRequestEntry(data, partitionKey = partitionKey)
+                         }
       response        <- kinesis
-                    .putRecords(PutRecordsRequest(entries.toList, streamName))
-                    .mapError(_.toThrowable)
+                           .putRecords(PutRecordsRequest(entries.toList, streamName))
+                           .mapError(_.toThrowable)
     } yield response
 
   /**
@@ -182,13 +180,12 @@ object TestUtil {
     val intervals = 10
     produceRate.fold(s) { produceRate =>
       s.throttleShape(
-          produceRate.toLong / intervals,
-          1000.millis * (1.0 / intervals),
-          produceRate.toLong / intervals
-        )(
-          _.size.toLong
-        )
-        .buffer(produceRate * 10)
+        produceRate.toLong / intervals,
+        1000.millis * (1.0 / intervals),
+        produceRate.toLong / intervals
+      )(
+        _.size.toLong
+      ).buffer(produceRate * 10)
     }
   }
 
@@ -201,10 +198,10 @@ object TestUtil {
     val records = ZStream.repeatEffect {
       for {
         key   <- random
-                 .nextIntBetween(1, 256)
-                 .flatMap(keyLength =>
-                   ZIO.replicateM(keyLength)(random.nextIntBetween('\u0000', '\uD7FF').map(_.toChar)).map(_.mkString)
-                 )
+                   .nextIntBetween(1, 256)
+                   .flatMap(keyLength =>
+                     ZIO.replicateM(keyLength)(random.nextIntBetween('\u0000', '\uD7FF').map(_.toChar)).map(_.mkString)
+                   )
         value <- random
                    .nextIntBetween(1, maxRecordSize)
                    .map(valueLength => Chunk.fromIterable(List.fill(valueLength)(0x01.toByte)))

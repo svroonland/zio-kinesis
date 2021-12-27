@@ -49,23 +49,23 @@ object ConsumeWithTest extends DefaultRunnableSpec {
             (for {
               _                <- putStrLn("Putting records")
               _                <- putRecords(streamName, Serde.asciiString, records)
-                     .tapError(e => putStrLn(s"error1: $e").provideLayer(Console.live))
-                     .retry(retryOnResourceNotFound)
+                                    .tapError(e => putStrLn(s"error1: $e").provideLayer(Console.live))
+                                    .retry(retryOnResourceNotFound)
               _                <- putStrLn("Starting dynamic consumer")
               consumerFiber    <- consumeWith[Any, Logging, String](
-                                 streamName,
-                                 applicationName = applicationName,
-                                 deserializer = Serde.asciiString,
-                                 checkpointBatchSize = 2,
-                                 configureKcl = _.withPolling
-                               ) {
-                                 FakeRecordProcessor
-                                   .make(
-                                     refProcessed,
-                                     finishedConsuming,
-                                     expectedCount = nrRecords
-                                   )
-                               }.fork
+                                    streamName,
+                                    applicationName = applicationName,
+                                    deserializer = Serde.asciiString,
+                                    checkpointBatchSize = 2,
+                                    configureKcl = _.withPolling
+                                  ) {
+                                    FakeRecordProcessor
+                                      .make(
+                                        refProcessed,
+                                        finishedConsuming,
+                                        expectedCount = nrRecords
+                                      )
+                                  }.fork
               _                <- finishedConsuming.await
               _                <- consumerFiber.interrupt
               processedRecords <- refProcessed.get
@@ -93,38 +93,38 @@ object ConsumeWithTest extends DefaultRunnableSpec {
             (for {
               _                <- putStrLn("Putting records")
               _                <- putRecords(streamName, Serde.asciiString, records)
-                     .tapError(e => putStrLn(s"error1: $e").provideLayer(Console.live))
-                     .retry(retryOnResourceNotFound)
+                                    .tapError(e => putStrLn(s"error1: $e").provideLayer(Console.live))
+                                    .retry(retryOnResourceNotFound)
               _                <- putStrLn("Starting dynamic consumer - about to fail")
               _                <- consumeWith[Any, Logging, String](
-                     streamName,
-                     applicationName = applicationName,
-                     deserializer = Serde.asciiString,
-                     checkpointBatchSize = batchSize,
-                     configureKcl = _.withPolling
-                   ) {
-                     FakeRecordProcessor
-                       .makeFailing(
-                         refProcessed,
-                         finishedConsuming,
-                         failFunction = (_: Any) == "msg31"
-                       )
-                   }.ignore
+                                    streamName,
+                                    applicationName = applicationName,
+                                    deserializer = Serde.asciiString,
+                                    checkpointBatchSize = batchSize,
+                                    configureKcl = _.withPolling
+                                  ) {
+                                    FakeRecordProcessor
+                                      .makeFailing(
+                                        refProcessed,
+                                        finishedConsuming,
+                                        failFunction = (_: Any) == "msg31"
+                                      )
+                                  }.ignore
               _                <- putStrLn("Starting dynamic consumer - about to succeed")
               consumerFiber    <- consumeWith[Any, Logging, String](
-                                 streamName,
-                                 applicationName = applicationName,
-                                 deserializer = Serde.asciiString,
-                                 checkpointBatchSize = batchSize,
-                                 configureKcl = _.withPolling
-                               ) {
-                                 FakeRecordProcessor
-                                   .make(
-                                     refProcessed,
-                                     finishedConsuming,
-                                     expectedCount = nrRecords
-                                   )
-                               }.fork
+                                    streamName,
+                                    applicationName = applicationName,
+                                    deserializer = Serde.asciiString,
+                                    checkpointBatchSize = batchSize,
+                                    configureKcl = _.withPolling
+                                  ) {
+                                    FakeRecordProcessor
+                                      .make(
+                                        refProcessed,
+                                        finishedConsuming,
+                                        expectedCount = nrRecords
+                                      )
+                                  }.fork
               _                <- finishedConsuming.await
               _                <- consumerFiber.interrupt
               processedRecords <- refProcessed.get

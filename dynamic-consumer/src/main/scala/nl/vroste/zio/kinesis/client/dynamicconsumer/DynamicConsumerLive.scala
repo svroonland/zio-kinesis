@@ -92,9 +92,8 @@ private[client] class DynamicConsumerLive(
       /**
        * Shutdown processing for this shard
        *
-       * Clear everything that is still in the queue, offer a completion signal for the queue,
-       * set an interrupt signal and await stream completion (in-flight messages processed)
-       *
+       * Clear everything that is still in the queue, offer a completion signal for the queue, set an interrupt signal
+       * and await stream completion (in-flight messages processed)
        */
       def stop(reason: ShardQueueStopReason): Unit =
         runtime.unsafeRun {
@@ -106,8 +105,8 @@ private[client] class DynamicConsumerLive(
             _ <- logger.debug(s"stop() for ${shardId} because of ${reason}")
             _ <- checkpointerInternal.markEndOfShard.when(reason == ShardQueueStopReason.ShardEnded)
             _ <- (drainQueueUnlessShardEnded *>
-                     q.offer(Exit.fail(None)).unit <* // Pass an exit signal in the queue to stop the stream
-                     q.awaitShutdown).race(q.awaitShutdown)
+                   q.offer(Exit.fail(None)).unit <* // Pass an exit signal in the queue to stop the stream
+                   q.awaitShutdown).race(q.awaitShutdown)
             _ <- logger.trace(s"stop() for ${shardId} because of ${reason} - COMPLETE")
           } yield ()
 
@@ -154,10 +153,10 @@ private[client] class DynamicConsumerLive(
           for {
             checkpointer <- Checkpointer.make(checkpointer, logger)
             queue        <- Queue
-                       .bounded[Exit[Option[Throwable], KinesisClientRecord]](
-                         maxShardBufferSize
-                       )
-                       .map(new ShardQueue(shard, runtime, _, checkpointer))
+                              .bounded[Exit[Option[Throwable], KinesisClientRecord]](
+                                maxShardBufferSize
+                              )
+                              .map(new ShardQueue(shard, runtime, _, checkpointer))
             _            <- shards.offer(Exit.succeed((shard, queue, checkpointer))).unit
           } yield queue
         }
@@ -212,8 +211,8 @@ private[client] class DynamicConsumerLive(
           metricsNamespace.fold(configsBuilder)(configsBuilder.namespace)
         }
         config         = configureKcl(
-                   SchedulerConfig.makeDefault(configsBuilder, kinesisAsyncClient, initialPosition, streamName)
-                 )
+                           SchedulerConfig.makeDefault(configsBuilder, kinesisAsyncClient, initialPosition, streamName)
+                         )
         env           <- ZIO.environment[R].toManaged_
 
         scheduler <- Task(
@@ -231,28 +230,27 @@ private[client] class DynamicConsumerLive(
                        ZIO.fromFutureJava(scheduler.startGracefulShutdown()).unit.orDie <*
                        queues.shutdown
         _         <- zio.blocking
-               .blocking(ZIO(scheduler.run()))
-               .fork
-               .flatMap(_.join)
-               .onInterrupt(doShutdown)
-               .forkManaged
+                       .blocking(ZIO(scheduler.run()))
+                       .fork
+                       .flatMap(_.join)
+                       .onInterrupt(doShutdown)
+                       .forkManaged
         _         <- (requestShutdown *> doShutdown).forkManaged
       } yield ZStream
         .fromQueue(queues.shards)
         .flattenExitOption
-        .map {
-          case (shardId, shardQueue, checkpointer) =>
-            val stream = ZStream
-              .fromQueue(shardQueue.q)
-              .ensuringFirst(shardQueue.shutdownQueue)
-              .flattenExitOption
-              .mapChunksM(_.mapM(toRecord(shardId, _)))
-              .provide(env)
-              .ensuringFirst((checkpointer.checkEndOfShardCheckpointed *> checkpointer.checkpoint).catchSome {
-                case _: ShutdownException => UIO.unit
-              }.orDie)
+        .map { case (shardId, shardQueue, checkpointer) =>
+          val stream = ZStream
+            .fromQueue(shardQueue.q)
+            .ensuringFirst(shardQueue.shutdownQueue)
+            .flattenExitOption
+            .mapChunksM(_.mapM(toRecord(shardId, _)))
+            .provide(env)
+            .ensuringFirst((checkpointer.checkEndOfShardCheckpointed *> checkpointer.checkpoint).catchSome {
+              case _: ShutdownException => UIO.unit
+            }.orDie)
 
-            (shardId, stream, checkpointer)
+          (shardId, stream, checkpointer)
         }
 
     ZStream.unwrapManaged(schedulerM)
