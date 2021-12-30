@@ -8,6 +8,7 @@ import software.amazon.kinesis.common.InitialPositionInStreamExtended
 import zio._
 import zio.blocking.Blocking
 import zio.clock.Clock
+import zio.duration.Duration
 import zio.stream.ZStream
 
 private[client] class DynamicConsumerFake(
@@ -25,11 +26,12 @@ private[client] class DynamicConsumerFake(
     metricsNamespace: Option[String],
     workerIdentifier: String,
     maxShardBufferSize: Int,
-    configureKcl: SchedulerConfig => SchedulerConfig
+    configureKcl: SchedulerConfig => SchedulerConfig,
+    bufferOfferTimeout: Duration
   ): ZStream[
-    Blocking with R,
+    R,
     Throwable,
-    (String, ZStream[Blocking, Throwable, Record[T]], DynamicConsumer.Checkpointer)
+    (String, ZStream[Any, Throwable, Record[T]], DynamicConsumer.Checkpointer)
   ] = {
     def record(shardName: String, i: Long, recData: T): UIO[Record[T]] =
       (for {
@@ -48,7 +50,7 @@ private[client] class DynamicConsumerFake(
 
     shards.flatMap { case (shardName, stream) =>
       ZStream.fromEffect {
-        ZIO.environment[R with Blocking].flatMap { env =>
+        ZIO.environment[R].flatMap { env =>
           CheckpointerFake.make(refCheckpointedList).map { checkpointer =>
             (
               shardName,

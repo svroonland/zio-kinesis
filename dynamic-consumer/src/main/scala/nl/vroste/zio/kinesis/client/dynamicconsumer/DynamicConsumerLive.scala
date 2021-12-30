@@ -16,6 +16,8 @@ import software.amazon.kinesis.processor.{
 import software.amazon.kinesis.retrieval.KinesisClientRecord
 import zio._
 import zio.blocking.Blocking
+import zio.clock.Clock
+import zio.duration.Duration
 import zio.logging.Logger
 import zio.stream.ZStream
 
@@ -23,6 +25,8 @@ import scala.jdk.CollectionConverters._
 
 private[client] class DynamicConsumerLive(
   logger: Logger[String],
+  blocking: Blocking.Service,
+  clock: Clock.Service,
   kinesisAsyncClient: KinesisAsyncClient,
   cloudWatchAsyncClient: CloudWatchAsyncClient,
   dynamoDbAsyncClient: DynamoDbAsyncClient
@@ -37,11 +41,12 @@ private[client] class DynamicConsumerLive(
     metricsNamespace: Option[String] = None,
     workerIdentifier: String,
     maxShardBufferSize: Int,
-    configureKcl: SchedulerConfig => SchedulerConfig
+    configureKcl: SchedulerConfig => SchedulerConfig,
+    bufferOfferTimeout: Duration
   ): ZStream[
-    Blocking with R,
+    R,
     Throwable,
-    (String, ZStream[Blocking, Throwable, DynamicConsumer.Record[T]], DynamicConsumer.Checkpointer)
+    (String, ZStream[Any, Throwable, DynamicConsumer.Record[T]], DynamicConsumer.Checkpointer)
   ] = {
     sealed trait ShardQueueStopReason
     object ShardQueueStopReason {
@@ -60,7 +65,7 @@ private[client] class DynamicConsumerLive(
      */
     class ShardQueue(
       val shardId: String,
-      runtime: zio.Runtime[Any],
+      runtime: zio.Runtime[Clock],
       val q: Queue[Exit[Option[Throwable], KinesisClientRecord]],
       checkpointerInternal: CheckpointerInternal
     ) {
@@ -78,11 +83,24 @@ private[client] class DynamicConsumerLive(
                      Option(records.last.subSequenceNumber()).filter(_ != 0L)
                    )
                  )
-            _ <- q.offerAll(records.map(Exit.succeed)).unit.catchSomeCause { case c if c.interrupted => ZIO.unit }
-            _ <- logger.trace(s"offerRecords for ${shardId} COMPLETE")
+            _ <-
+              logger
+                .warn(s"Shard ${shardId} buffer full. Are records being processed downstream (fast enough)?")
+                .delay(bufferOfferTimeout)
+                .forkManaged
+                .use_ {
+                  q.offerAll(records.map(Exit.succeed)).unit.catchSomeCause {
+                    case c if c.interrupted =>
+                      // offerAll fails immediately with interrupted when the queue was already shutdown.
+                      // This happens when the main ZStream or one of the shard's ZStreams completes, in which
+                      // case getting more records may simply be a race condition. When only the shard's stream is
+                      // completed but the main stream keeps running, the KCL will keep offering us records to process.
+                      // At some point the queue will be full and backpressure will bubble up to the KCL.
+                      logger.warn(s"Shard ${shardId} buffer interrupted")
+                  }
+                }
+            _ <- logger.info(s"offerRecords for ${shardId} COMPLETE")
           } yield ()
-
-          // TODO what behavior do we want if the queue + substream are already shutdown for some reason..?
         }
 
       def shutdownQueue: UIO[Unit] =
@@ -145,7 +163,7 @@ private[client] class DynamicConsumerLive(
     }
 
     class Queues(
-      private val runtime: zio.Runtime[Any],
+      private val runtime: zio.Runtime[Clock],
       val shards: Queue[Exit[Option[Throwable], (String, ShardQueue, CheckpointerInternal)]]
     ) {
       def newShard(shard: String, checkpointer: RecordProcessorCheckpointer): ShardQueue =
@@ -166,9 +184,9 @@ private[client] class DynamicConsumerLive(
     }
 
     object Queues {
-      def make: ZManaged[Any, Nothing, Queues] =
+      def make: ZManaged[Clock, Nothing, Queues] =
         for {
-          runtime <- ZIO.runtime[Any].toManaged_
+          runtime <- ZIO.runtime[Clock].toManaged_
           q       <-
             Queue.unbounded[Exit[Option[Throwable], (String, ShardQueue, CheckpointerInternal)]].toManaged(_.shutdown)
         } yield new Queues(runtime, q)
@@ -195,7 +213,7 @@ private[client] class DynamicConsumerLive(
     // Run the scheduler
     val schedulerM =
       for {
-        queues <- Queues.make
+        queues <- Queues.make.provide(Has(clock))
 
         configsBuilder = {
           val configsBuilder = new ConfigsBuilder(
@@ -227,9 +245,9 @@ private[client] class DynamicConsumerLive(
                        )
                      ).toManaged_
         doShutdown = logger.debug("Starting graceful shutdown") *>
-                       ZIO.fromFutureJava(scheduler.startGracefulShutdown()).unit.orDie <*
+                       ZIO.fromFutureJava(scheduler.startGracefulShutdown()).provide(Has(blocking)).unit.orDie <*
                        queues.shutdown
-        _         <- zio.blocking
+        _         <- blocking
                        .blocking(ZIO(scheduler.run()))
                        .fork
                        .flatMap(_.join)
@@ -246,9 +264,11 @@ private[client] class DynamicConsumerLive(
             .flattenExitOption
             .mapChunksM(_.mapM(toRecord(shardId, _)))
             .provide(env)
-            .ensuringFirst((checkpointer.checkEndOfShardCheckpointed *> checkpointer.checkpoint).catchSome {
-              case _: ShutdownException => UIO.unit
-            }.orDie)
+            .ensuringFirst(
+              (checkpointer.checkEndOfShardCheckpointed *> checkpointer.checkpoint.provide(Has(blocking))).catchSome {
+                case _: ShutdownException => UIO.unit
+              }.orDie
+            )
 
           (shardId, stream, checkpointer)
         }

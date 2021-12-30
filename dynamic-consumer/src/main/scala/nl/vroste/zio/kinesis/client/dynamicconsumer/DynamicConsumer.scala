@@ -36,11 +36,14 @@ object DynamicConsumer {
     aggregated: Boolean
   )
 
-  val live: ZLayer[Logging with Kinesis with CloudWatch with DynamoDb, Nothing, DynamicConsumer] =
+  val live
+    : ZLayer[Logging with Blocking with Clock with Kinesis with CloudWatch with DynamoDb, Nothing, DynamicConsumer] =
     ZLayer
-      .fromServices[Logger[String], Kinesis.Service, CloudWatch.Service, DynamoDb.Service, DynamicConsumer.Service] {
-        case (logger, kinesis, cloudwatch, dynamodb) =>
-          new DynamicConsumerLive(logger, kinesis.api, cloudwatch.api, dynamodb.api)
+      .fromServices[Logger[
+        String
+      ], Blocking.Service, Clock.Service, Kinesis.Service, CloudWatch.Service, DynamoDb.Service, DynamicConsumer.Service] {
+        case (logger, blocking, clock, kinesis, cloudwatch, dynamodb) =>
+          new DynamicConsumerLive(logger, blocking, clock, kinesis.api, cloudwatch.api, dynamodb.api)
       }
 
   /**
@@ -108,9 +111,11 @@ object DynamicConsumer {
      * @param maxShardBufferSize
      *   The maximum number of records per shard to store in a queue before blocking the KCL record processor until
      *   records have been dequeued. Note that the stream returned from this method will have internal chunk buffers as
-     *   well.
+     *   well. Prefer powers of 2 for efficiency.
      * @param configureKcl
      *   Make additional KCL Scheduler configurations
+     * @param bufferOfferTimeout
+     *   Timeout before logging a warning when the KCL offers a shard's records but the buffer is full
      * @tparam R
      *   ZIO environment type required by the `deserializer`
      * @tparam T
@@ -130,11 +135,12 @@ object DynamicConsumer {
       metricsNamespace: Option[String] = None,
       workerIdentifier: String = UUID.randomUUID().toString,
       maxShardBufferSize: Int = 1024, // Prefer powers of 2
-      configureKcl: SchedulerConfig => SchedulerConfig = identity
+      configureKcl: SchedulerConfig => SchedulerConfig = identity,
+      bufferOfferTimeout: Duration = 10.seconds
     ): ZStream[
-      Blocking with R,
+      R,
       Throwable,
-      (String, ZStream[Blocking, Throwable, Record[T]], Checkpointer)
+      (String, ZStream[Any, Throwable, Record[T]], Checkpointer)
     ]
   }
 
@@ -152,9 +158,9 @@ object DynamicConsumer {
     maxShardBufferSize: Int = 1024, // Prefer powers of 2
     configureKcl: SchedulerConfig => SchedulerConfig = identity
   ): ZStream[
-    DynamicConsumer with Blocking with R,
+    DynamicConsumer with R,
     Throwable,
-    (String, ZStream[Blocking, Throwable, Record[T]], Checkpointer)
+    (String, ZStream[Any, Throwable, Record[T]], Checkpointer)
   ] =
     ZStream.unwrap(
       ZIO
