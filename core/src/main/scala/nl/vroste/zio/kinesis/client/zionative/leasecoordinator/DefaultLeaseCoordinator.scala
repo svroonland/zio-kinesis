@@ -293,7 +293,7 @@ private class DefaultLeaseCoordinator(
    *
    * The effect fails with a Throwable when having failed to take one or more leases
    */
-  val takeLeases: ZIO[Clock with Logging with Random, Throwable, Unit] = {
+  val takeLeases: ZIO[Clock with Logging with Random, Throwable, Unit] =
     for {
       leases          <- state.get.map(_.currentLeases.values.toSet)
       shards          <- state.get.map(_.shards)
@@ -324,7 +324,6 @@ private class DefaultLeaseCoordinator(
                            }
                          }
     } yield ()
-  }
 
   override def acquiredLeases: ZStream[zio.clock.Clock, Throwable, AcquiredLease] =
     ZStream
