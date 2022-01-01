@@ -66,7 +66,7 @@ object ExampleApp extends zio.App {
       with LeaseRepository,
     Throwable,
     ExitCode
-  ] = {
+  ] =
     for {
       _          <- TestUtil.createStreamUnmanaged(streamName, nrShards)
       _          <- TestUtil.getShards(streamName)
@@ -110,7 +110,6 @@ object ExampleApp extends zio.App {
 
                     })
     } yield ExitCode.success
-  }
   override def run(
     args: List[String]
   ): ZIO[zio.ZEnv, Nothing, ExitCode] =
