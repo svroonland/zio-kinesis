@@ -496,7 +496,7 @@ object Consumer {
       case (Left(_), _)                                                                                      => true
       case (Right(ExtendedSequenceNumber(sequenceNumber, subSequenceNumber)), Some(recordSubSequenceNumber)) =>
         (BigInt(record.sequenceNumber) > BigInt(sequenceNumber)) ||
-          (BigInt(record.sequenceNumber) == BigInt(sequenceNumber) && recordSubSequenceNumber > subSequenceNumber)
+        (BigInt(record.sequenceNumber) == BigInt(sequenceNumber) && recordSubSequenceNumber > subSequenceNumber)
       case (Right(ExtendedSequenceNumber(sequenceNumber, _)), None)                                          =>
         BigInt(record.sequenceNumber) > BigInt(sequenceNumber)
     }
