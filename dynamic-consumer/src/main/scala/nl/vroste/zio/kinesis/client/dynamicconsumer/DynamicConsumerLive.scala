@@ -76,14 +76,22 @@ private[client] class DynamicConsumerLive(
         runtime.unsafeRun {
           val records = r.asScala
           for {
-            _ <- logger.debug(s"offerRecords for ${shardId} got ${records.size} records")
-            _ <- checkpointerInternal.setMaxSequenceNumber(
-                   ExtendedSequenceNumber(
-                     records.last.sequenceNumber(),
-                     Option(records.last.subSequenceNumber()).filter(_ != 0L)
-                   )
-                 )
-            _ <-
+            queueShutdown <- q.isShutdown
+            _             <-
+              if (queueShutdown)
+                logger.warn(
+                  s"offerRecords for ${shardId} got ${records.size} records after queue shutdown. " +
+                    s"The shard stream may have ended prematurely."
+                )
+              else
+                logger.debug(s"offerRecords for ${shardId} got ${records.size} records")
+            _             <- checkpointerInternal.setMaxSequenceNumber(
+                               ExtendedSequenceNumber(
+                                 records.last.sequenceNumber(),
+                                 Option(records.last.subSequenceNumber()).filter(_ != 0L)
+                               )
+                             )
+            _             <-
               logger
                 .warn(s"Shard ${shardId} buffer full. Are records being processed downstream (fast enough)?")
                 .delay(bufferOfferTimeout)
@@ -99,7 +107,7 @@ private[client] class DynamicConsumerLive(
                       logger.warn(s"Shard ${shardId} buffer interrupted")
                   }
                 }
-            _ <- logger.info(s"offerRecords for ${shardId} COMPLETE")
+            _             <- logger.info(s"offerRecords for ${shardId} COMPLETE")
           } yield ()
         }
 
