@@ -70,7 +70,6 @@ private[client] class DynamicConsumerLive(
       checkpointerInternal: CheckpointerInternal
     ) {
       def offerRecords(r: java.util.List[KinesisClientRecord]): Unit =
-        // Calls to q.offer will fail with an interruption error after the queue has been shutdown
         // We must make sure never to throw an exception here, because KCL will consider the records processed
         // See https://github.com/awslabs/amazon-kinesis-client/issues/10
         runtime.unsafeRun {
@@ -135,8 +134,6 @@ private[client] class DynamicConsumerLive(
                    q.awaitShutdown).race(q.awaitShutdown)
             _ <- logger.trace(s"stop() for ${shardId} because of ${reason} - COMPLETE")
           } yield ()
-
-          // TODO maybe we want to only do this when the main stream's completion has bubbled up..?
         }
     }
 
