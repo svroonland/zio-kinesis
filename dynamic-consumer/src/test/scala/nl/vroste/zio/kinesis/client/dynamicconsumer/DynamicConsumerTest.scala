@@ -330,44 +330,6 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
       }
     } @@ TestAspect.timeout(5.minutes) @@ TestAspect.ifEnvSet("ENABLE_AWS")
 
-  def testShardRestartedAfterStreamErrors =
-    testM("shard stream is restarted from last checkpoint after the stream errors") {
-      val nrShards = 2
-      withRandomStreamEnv(nrShards) { (streamName, applicationName) =>
-        for {
-          _ <- putStrLn("Putting records").orDie
-          _ <- TestUtil
-                 .produceRecords(
-                   streamName,
-                   1000,
-                   10,
-                   10
-                 )
-                 .fork
-
-          service <- ZIO.service[DynamicConsumer.Service]
-          records <- service
-                       .shardedStream(
-                         streamName,
-                         applicationName = applicationName,
-                         deserializer = Serde.asciiString,
-                         configureKcl = _.withPolling,
-                         maxShardBufferSize = 200
-                       )
-                       .flatMapPar(Int.MaxValue) { case (shardId @ _, shardStream, checkpointer) =>
-                         shardStream
-                           .tap(r =>
-                             putStrLn(s"Got record $r").orDie *> checkpointer
-                               .checkpointNow(r)
-                               .retry(Schedule.exponential(100.millis))
-                               *> ZIO.sleep(30.seconds)
-                           )
-                       }
-                       .runCollect // TODO needs test end condition
-
-        } yield assert(records)(hasSize(equalTo(nrShards * 2)))
-      }
-    }
   // TODO check the order of received records is correct
 
   override def spec =
@@ -376,8 +338,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
       testConsumeEnhancedFanOut,
       testConsume2,
       testCheckpointAtShutdown,
-      testShardEnd,
-      testShardRestartedAfterStreamErrors
+      testShardEnd
     ).provideCustomLayer(env.orDie) @@ timeout(10.minutes)
 
   def delayStream[R, E, O](s: ZStream[R, E, O], delay: Duration) =
