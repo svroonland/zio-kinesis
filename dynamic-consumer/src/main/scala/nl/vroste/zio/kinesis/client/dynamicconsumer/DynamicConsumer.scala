@@ -114,8 +114,6 @@ object DynamicConsumer {
      *   well. Prefer powers of 2 for efficiency.
      * @param configureKcl
      *   Make additional KCL Scheduler configurations
-     * @param bufferOfferTimeout
-     *   Timeout before logging a warning when the KCL offers a shard's records but the buffer is full
      * @tparam R
      *   ZIO environment type required by the `deserializer`
      * @tparam T
@@ -135,8 +133,7 @@ object DynamicConsumer {
       metricsNamespace: Option[String] = None,
       workerIdentifier: String = UUID.randomUUID().toString,
       maxShardBufferSize: Int = 1024, // Prefer powers of 2
-      configureKcl: SchedulerConfig => SchedulerConfig = identity,
-      bufferOfferTimeout: Duration = 10.seconds
+      configureKcl: SchedulerConfig => SchedulerConfig = identity
     ): ZStream[
       R,
       Throwable,

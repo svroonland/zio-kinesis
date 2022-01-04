@@ -26,8 +26,7 @@ private[client] class DynamicConsumerFake(
     metricsNamespace: Option[String],
     workerIdentifier: String,
     maxShardBufferSize: Int,
-    configureKcl: SchedulerConfig => SchedulerConfig,
-    bufferOfferTimeout: Duration
+    configureKcl: SchedulerConfig => SchedulerConfig
   ): ZStream[
     R,
     Throwable,

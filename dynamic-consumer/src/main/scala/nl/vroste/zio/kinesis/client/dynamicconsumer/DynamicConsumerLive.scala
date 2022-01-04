@@ -41,8 +41,7 @@ private[client] class DynamicConsumerLive(
     metricsNamespace: Option[String] = None,
     workerIdentifier: String,
     maxShardBufferSize: Int,
-    configureKcl: SchedulerConfig => SchedulerConfig,
-    bufferOfferTimeout: Duration
+    configureKcl: SchedulerConfig => SchedulerConfig
   ): ZStream[
     R,
     Throwable,
@@ -90,22 +89,15 @@ private[client] class DynamicConsumerLive(
                                  Option(records.last.subSequenceNumber()).filter(_ != 0L)
                                )
                              )
-            _             <-
-              logger
-                .warn(s"Shard ${shardId} buffer full. Are records being processed downstream (fast enough)?")
-                .delay(bufferOfferTimeout)
-                .forkManaged
-                .use_ {
-                  q.offerAll(records.map(Exit.succeed)).unit.catchSomeCause {
-                    case c if c.interrupted =>
-                      // offerAll fails immediately with interrupted when the queue was already shutdown.
-                      // This happens when the main ZStream or one of the shard's ZStreams completes, in which
-                      // case getting more records may simply be a race condition. When only the shard's stream is
-                      // completed but the main stream keeps running, the KCL will keep offering us records to process.
-                      // At some point the queue will be full and backpressure will bubble up to the KCL.
-                      logger.warn(s"Shard ${shardId} buffer interrupted")
-                  }
-                }
+            _             <- q.offerAll(records.map(Exit.succeed)).unit.catchSomeCause {
+                               case c if c.interrupted =>
+                                 // offerAll fails immediately with interrupted when the queue was already shutdown.
+                                 // This happens when the main ZStream or one of the shard's ZStreams completes, in which
+                                 // case getting more records may simply be a race condition. When only the shard's stream is
+                                 // completed but the main stream keeps running, the KCL will keep offering us records to process.
+                                 // At some point the queue will be full and backpressure will bubble up to the KCL.
+                                 logger.warn(s"Shard ${shardId} buffer interrupted")
+                             }
             _             <- logger.info(s"offerRecords for ${shardId} COMPLETE")
           } yield ()
         }
@@ -256,9 +248,10 @@ private[client] class DynamicConsumerLive(
                        .blocking(ZIO(scheduler.run()))
                        .fork
                        .flatMap(_.join)
-                       .onInterrupt(doShutdown)
+                       .onInterrupt(logger.warn("Scheduler was interrupted") *> doShutdown)
                        .forkManaged
         _         <- (requestShutdown *> doShutdown).forkManaged
+        _         <- ZManaged.finalizer(logger.info("Shutting down shardedStream"))
       } yield ZStream
         .fromQueue(queues.shards)
         .flattenExitOption
