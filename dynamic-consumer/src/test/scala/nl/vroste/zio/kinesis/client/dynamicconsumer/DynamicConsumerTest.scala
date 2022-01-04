@@ -47,39 +47,31 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
     (Clock.live ++ Blocking.live ++ Random.live ++ Console.live ++ zio.system.System.live) >+> DynamicConsumer.live
 
   def testConsumePolling =
-    testM("consume records produced on all shards produced on the stream") {
+    testM("consume records produced on all shards produced on the stream with polling") {
       val nrShards = 2
       withRandomStreamEnv(nrShards) { (streamName, applicationName) =>
         for {
-          _ <- putStrLn("Putting records").orDie
-          _ <- TestUtil
-                 .produceRecords(
-                   streamName,
-                   1000,
-                   10,
-                   10
-                 )
-                 .fork
-
+          _       <- putStrLn("Putting records").orDie
           service <- ZIO.service[DynamicConsumer.Service]
-          records <- service
-                       .shardedStream(
-                         streamName,
-                         applicationName = applicationName,
-                         deserializer = Serde.asciiString,
-                         configureKcl = _.withPolling
-                       )
-                       .flatMapPar(Int.MaxValue) { case (shardId @ _, shardStream, checkpointer) =>
-                         shardStream
-                           .tap(r =>
-                             putStrLn(s"Got record $r").orDie *> checkpointer
-                               .checkpointNow(r)
-                               .retry(Schedule.exponential(100.millis))
-                           )
-                           .take(2)
-                       }
-                       .take(nrShards * 2.toLong)
-                       .runCollect
+          records <- TestUtil.produceRecords(streamName, 10000, 10, 10) &>
+                       service
+                         .shardedStream(
+                           streamName,
+                           applicationName = applicationName,
+                           deserializer = Serde.asciiString,
+                           configureKcl = _.withPolling,
+                           maxShardBufferSize = 32
+                         )
+                         .flatMapPar(1) { case (shardId @ _, shardStream, checkpointer) =>
+                           shardStream
+                             .tap(r =>
+                               putStrLn(s"Got record $r").orDie *> checkpointer
+                                 .checkpointNow(r)
+                                 .retry(Schedule.exponential(100.millis))
+                             )
+                         }
+                         .runCollect
+                         .tapCause(c => logging.log.warn("Failure in consumer!", c))
 
         } yield assert(records)(hasSize(equalTo(nrShards * 2)))
       }

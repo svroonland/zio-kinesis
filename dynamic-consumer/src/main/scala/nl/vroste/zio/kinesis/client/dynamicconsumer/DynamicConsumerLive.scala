@@ -76,7 +76,7 @@ private[client] class DynamicConsumerLive(
               if (queueShutdown)
                 logger.warn(
                   s"offerRecords for ${shardId} got ${records.size} records after queue shutdown. " +
-                    s"The shard stream may have ended prematurely."
+                    s"The shard stream may have ended prematurely. Records are discarded. "
                 )
               else
                 logger.debug(s"offerRecords for ${shardId} got ${records.size} records")
@@ -92,8 +92,7 @@ private[client] class DynamicConsumerLive(
                                  // This happens when the main ZStream or one of the shard's ZStreams completes, in which
                                  // case getting more records may simply be a race condition. When only the shard's stream is
                                  // completed but the main stream keeps running, the KCL will keep offering us records to process.
-                                 // At some point the queue will be full and backpressure will bubble up to the KCL.
-                                 logger.warn(s"Shard ${shardId} buffer interrupted")
+                                 ZIO.unit
                              }
             _             <- logger.info(s"offerRecords for ${shardId} COMPLETE")
           } yield ()
