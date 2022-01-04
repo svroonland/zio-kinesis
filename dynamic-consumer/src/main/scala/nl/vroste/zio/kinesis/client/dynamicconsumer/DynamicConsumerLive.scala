@@ -94,7 +94,7 @@ private[client] class DynamicConsumerLive(
                                  // completed but the main stream keeps running, the KCL will keep offering us records to process.
                                  ZIO.unit
                              }
-            _             <- logger.info(s"offerRecords for ${shardId} COMPLETE")
+            _             <- logger.trace(s"offerRecords for ${shardId} COMPLETE")
           } yield ()
         }
 
