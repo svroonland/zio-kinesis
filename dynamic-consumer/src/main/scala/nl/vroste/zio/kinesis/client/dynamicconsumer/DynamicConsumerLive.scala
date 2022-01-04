@@ -16,8 +16,6 @@ import software.amazon.kinesis.processor.{
 import software.amazon.kinesis.retrieval.KinesisClientRecord
 import zio._
 import zio.blocking.Blocking
-import zio.clock.Clock
-import zio.duration.Duration
 import zio.logging.Logger
 import zio.stream.ZStream
 
@@ -26,7 +24,6 @@ import scala.jdk.CollectionConverters._
 private[client] class DynamicConsumerLive(
   logger: Logger[String],
   blocking: Blocking.Service,
-  clock: Clock.Service,
   kinesisAsyncClient: KinesisAsyncClient,
   cloudWatchAsyncClient: CloudWatchAsyncClient,
   dynamoDbAsyncClient: DynamoDbAsyncClient
@@ -64,7 +61,7 @@ private[client] class DynamicConsumerLive(
      */
     class ShardQueue(
       val shardId: String,
-      runtime: zio.Runtime[Clock],
+      runtime: zio.Runtime[Any],
       val q: Queue[Exit[Option[Throwable], KinesisClientRecord]],
       checkpointerInternal: CheckpointerInternal
     ) {
@@ -160,7 +157,7 @@ private[client] class DynamicConsumerLive(
     }
 
     class Queues(
-      private val runtime: zio.Runtime[Clock],
+      private val runtime: zio.Runtime[Any],
       val shards: Queue[Exit[Option[Throwable], (String, ShardQueue, CheckpointerInternal)]]
     ) {
       def newShard(shard: String, checkpointer: RecordProcessorCheckpointer): ShardQueue =
@@ -181,9 +178,9 @@ private[client] class DynamicConsumerLive(
     }
 
     object Queues {
-      def make: ZManaged[Clock, Nothing, Queues] =
+      def make: ZManaged[Any, Nothing, Queues] =
         for {
-          runtime <- ZIO.runtime[Clock].toManaged_
+          runtime <- ZIO.runtime[Any].toManaged_
           q       <-
             Queue.unbounded[Exit[Option[Throwable], (String, ShardQueue, CheckpointerInternal)]].toManaged(_.shutdown)
         } yield new Queues(runtime, q)
@@ -210,7 +207,7 @@ private[client] class DynamicConsumerLive(
     // Run the scheduler
     val schedulerM =
       for {
-        queues <- Queues.make.provide(Has(clock))
+        queues <- Queues.make
 
         configsBuilder = {
           val configsBuilder = new ConfigsBuilder(
