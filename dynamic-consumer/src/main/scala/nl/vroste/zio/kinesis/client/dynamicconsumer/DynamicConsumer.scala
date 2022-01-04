@@ -36,14 +36,13 @@ object DynamicConsumer {
     aggregated: Boolean
   )
 
-  val live
-    : ZLayer[Logging with Blocking with Clock with Kinesis with CloudWatch with DynamoDb, Nothing, DynamicConsumer] =
+  val live: ZLayer[Logging with Blocking with Kinesis with CloudWatch with DynamoDb, Nothing, DynamicConsumer] =
     ZLayer
       .fromServices[Logger[
         String
-      ], Blocking.Service, Clock.Service, Kinesis.Service, CloudWatch.Service, DynamoDb.Service, DynamicConsumer.Service] {
-        case (logger, blocking, clock, kinesis, cloudwatch, dynamodb) =>
-          new DynamicConsumerLive(logger, blocking, clock, kinesis.api, cloudwatch.api, dynamodb.api)
+      ], Blocking.Service, Kinesis.Service, CloudWatch.Service, DynamoDb.Service, DynamicConsumer.Service] {
+        case (logger, blocking, kinesis, cloudwatch, dynamodb) =>
+          new DynamicConsumerLive(logger, blocking, kinesis.api, cloudwatch.api, dynamodb.api)
       }
 
   /**
