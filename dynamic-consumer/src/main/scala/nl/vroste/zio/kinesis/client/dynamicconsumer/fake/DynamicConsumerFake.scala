@@ -8,7 +8,6 @@ import software.amazon.kinesis.common.InitialPositionInStreamExtended
 import zio._
 import zio.blocking.Blocking
 import zio.clock.Clock
-import zio.duration.Duration
 import zio.stream.ZStream
 
 private[client] class DynamicConsumerFake(

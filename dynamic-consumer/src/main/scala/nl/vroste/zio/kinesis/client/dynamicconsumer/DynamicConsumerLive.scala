@@ -258,10 +258,11 @@ private[client] class DynamicConsumerLive(
             .mapChunksM(_.mapM(toRecord(shardId, _)))
             .provide(env)
             .ensuringFirst(
-              (checkpointer.checkEndOfShardCheckpointed *> checkpointer.checkpoint.provide(Has(blocking))).catchSome {
+              (checkpointer.checkEndOfShardCheckpointed *> checkpointer.checkpoint).catchSome {
                 case _: ShutdownException => UIO.unit
               }.orDie
             )
+            .provide(Has(blocking))
 
           (shardId, stream, checkpointer)
         }

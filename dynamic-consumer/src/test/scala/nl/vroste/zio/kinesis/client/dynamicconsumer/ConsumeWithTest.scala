@@ -3,23 +3,20 @@ package nl.vroste.zio.kinesis.client.dynamicconsumer
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.dynamodb.DynamoDb
 import io.github.vigoo.zioaws.kinesis.Kinesis
+import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.consumeWith
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.{ ProducerRecord, TestUtil }
 import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.console.{ putStrLn, Console }
-import zio.logging.Logging
-import zio.test.Assertion.equalTo
-import zio.test.TestAspect.{ sequential, timeout }
-import zio.test.{ assert, DefaultRunnableSpec }
-import zio.{ Has, Promise, Ref, ZLayer }
-import DynamicConsumer.consumeWith
 import zio.duration.durationInt
+import zio.logging.Logging
 import zio.random.Random
-import zio.test.mock.MockRandom
-
-import java.util.UUID
+import zio.test.Assertion.equalTo
+import zio.test.TestAspect.timeout
+import zio.test.{ assert, DefaultRunnableSpec }
+import zio.{ Promise, Ref, ZLayer }
 
 object ConsumeWithTest extends DefaultRunnableSpec {
   import TestUtil._
