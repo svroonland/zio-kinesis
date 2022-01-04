@@ -244,10 +244,9 @@ private[client] class DynamicConsumerLive(
                        .blocking(ZIO(scheduler.run()))
                        .fork
                        .flatMap(_.join)
-                       .onInterrupt(logger.warn("Scheduler was interrupted") *> doShutdown)
+                       .onInterrupt(doShutdown)
                        .forkManaged
         _         <- (requestShutdown *> doShutdown).forkManaged
-        _         <- ZManaged.finalizer(logger.info("Shutting down shardedStream"))
       } yield ZStream
         .fromQueue(queues.shards)
         .flattenExitOption

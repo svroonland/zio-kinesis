@@ -59,10 +59,9 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                            streamName,
                            applicationName = applicationName,
                            deserializer = Serde.asciiString,
-                           configureKcl = _.withPolling,
-                           maxShardBufferSize = 32
+                           configureKcl = _.withPolling
                          )
-                         .flatMapPar(1) { case (shardId @ _, shardStream, checkpointer) =>
+                         .flatMapPar(Int.MaxValue) { case (shardId @ _, shardStream, checkpointer) =>
                            shardStream
                              .tap(r =>
                                putStrLn(s"Got record $r").orDie *> checkpointer
@@ -71,7 +70,6 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                              )
                          }
                          .runCollect
-                         .tapCause(c => logging.log.warn("Failure in consumer!", c))
 
         } yield assert(records)(hasSize(equalTo(nrShards * 2)))
       }
