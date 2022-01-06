@@ -52,24 +52,32 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
       withRandomStreamEnv(nrShards) { (streamName, applicationName) =>
         for {
           _       <- putStrLn("Putting records").orDie
+          _       <- TestUtil
+                       .produceRecords(
+                         streamName,
+                         1000,
+                         10,
+                         10
+                       )
+                       .fork
           service <- ZIO.service[DynamicConsumer.Service]
-          records <- TestUtil.produceRecords(streamName, 10000, 10, 10) &>
-                       service
-                         .shardedStream(
-                           streamName,
-                           applicationName = applicationName,
-                           deserializer = Serde.asciiString,
-                           configureKcl = _.withPolling
-                         )
-                         .flatMapPar(Int.MaxValue) { case (shardId @ _, shardStream, checkpointer) =>
-                           shardStream
-                             .tap(r =>
-                               putStrLn(s"Got record $r").orDie *> checkpointer
-                                 .checkpointNow(r)
-                                 .retry(Schedule.exponential(100.millis))
-                             )
-                         }
-                         .runCollect
+          records <- service
+                       .shardedStream(
+                         streamName,
+                         applicationName = applicationName,
+                         deserializer = Serde.asciiString,
+                         configureKcl = _.withPolling
+                       )
+                       .flatMapPar(Int.MaxValue) { case (shardId @ _, shardStream, checkpointer) =>
+                         shardStream
+                           .tap(r =>
+                             putStrLn(s"Got record $r").orDie *> checkpointer
+                               .checkpointNow(r)
+                               .retry(Schedule.exponential(100.millis))
+                           )
+                       }
+                       .take(nrShards * 2.toLong)
+                       .runCollect
 
         } yield assert(records)(hasSize(equalTo(nrShards * 2)))
       }
