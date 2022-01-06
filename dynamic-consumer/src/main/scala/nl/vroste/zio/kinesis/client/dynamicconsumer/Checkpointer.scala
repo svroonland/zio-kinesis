@@ -68,7 +68,7 @@ private[dynamicconsumer] object Checkpointer {
       override def checkEndOfShardCheckpointed: Task[Unit] =
         ZIO
           .fail(LastRecordMustBeCheckpointedException)
-          .whenM(state.get.tap(s => UIO(println(s"State at check end of shard: ${s}"))).map {
+          .whenM(state.get.map {
             case State(_, _, None, _)                                                  => false
             case State(_, None, Some(maxSequenceNumber @ _), endOfShard) if endOfShard => true
             case State(_, Some(lastCheckpointed), Some(maxSequenceNumber), endOfShard)

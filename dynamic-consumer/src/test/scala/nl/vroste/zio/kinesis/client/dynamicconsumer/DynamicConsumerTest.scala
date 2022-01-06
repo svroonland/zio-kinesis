@@ -26,7 +26,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
   import TestUtil._
 
   val loggingLayer: ZLayer[Any, Nothing, Logging] =
-    (Console.live ++ Clock.live) >>> Logging.console(LogLevel.Trace) >>> Logging.withRootLoggerName(getClass.getName)
+    (Console.live ++ Clock.live) >>> Logging.console(LogLevel.Debug) >>> Logging.withRootLoggerName(getClass.getName)
 
   val useAws = Runtime.default.unsafeRun(system.envOrElse("ENABLE_AWS", "0")).toInt == 1
 
@@ -44,23 +44,22 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
       with Console
       with system.System
   ] = (if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()) >+> loggingLayer >+>
-    (DynamicConsumer.live ++ Clock.live ++ Blocking.live ++ Random.live ++ Console.live ++ zio.system.System.live)
+    (Clock.live ++ Blocking.live ++ Random.live ++ Console.live ++ zio.system.System.live) >+> DynamicConsumer.live
 
   def testConsumePolling =
-    testM("consume records produced on all shards produced on the stream") {
+    testM("consume records produced on all shards produced on the stream with polling") {
       val nrShards = 2
       withRandomStreamEnv(nrShards) { (streamName, applicationName) =>
         for {
-          _ <- putStrLn("Putting records").orDie
-          _ <- TestUtil
-                 .produceRecords(
-                   streamName,
-                   1000,
-                   10,
-                   10
-                 )
-                 .fork
-
+          _       <- putStrLn("Putting records").orDie
+          _       <- TestUtil
+                       .produceRecords(
+                         streamName,
+                         1000,
+                         10,
+                         10
+                       )
+                       .fork
           service <- ZIO.service[DynamicConsumer.Service]
           records <- service
                        .shardedStream(
@@ -76,7 +75,6 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                                .checkpointNow(r)
                                .retry(Schedule.exponential(100.millis))
                            )
-                           .take(2)
                        }
                        .take(nrShards * 2.toLong)
                        .runCollect

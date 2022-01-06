@@ -260,6 +260,6 @@ object ExampleApp extends zio.App {
 
     val metricsPublisherConfig = ZLayer.succeed(CloudWatchMetricsPublisherConfig())
 
-    logging >+> awsClients >+> (dynamicConsumer ++ leaseRepo ++ metricsPublisherConfig)
+    logging >+> awsClients >+> (Blocking.live ++ Clock.live) >+> dynamicConsumer ++ leaseRepo ++ metricsPublisherConfig
   }
 }

@@ -3,6 +3,7 @@ package nl.vroste.zio.kinesis.client.dynamicconsumer.examples
 import nl.vroste.zio.kinesis.client.defaultAwsLayer
 import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer
 import nl.vroste.zio.kinesis.client.serde.Serde
+import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.console.{ putStrLn, Console }
 import zio.duration.durationInt
@@ -26,6 +27,6 @@ object DynamicConsumerConsumeWithExample extends zio.App {
         checkpointBatchSize = 1000L,
         checkpointDuration = 5.minutes
       )(record => putStrLn(s"Processing record $record"))
-      .provideCustomLayer((loggingLayer ++ defaultAwsLayer) >+> DynamicConsumer.live)
+      .provideCustomLayer((loggingLayer ++ defaultAwsLayer ++ Blocking.any ++ Clock.any) >+> DynamicConsumer.live)
       .exitCode
 }
