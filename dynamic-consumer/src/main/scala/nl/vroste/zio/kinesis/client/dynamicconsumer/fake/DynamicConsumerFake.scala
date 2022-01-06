@@ -25,7 +25,7 @@ private[client] class DynamicConsumerFake(
     maxShardBufferSize: Int,
     configureKcl: SchedulerConfig => SchedulerConfig
   ): ZStream[
-    Any with R,
+    R,
     Throwable,
     (String, ZStream[Any, Throwable, Record[T]], DynamicConsumer.Checkpointer)
   ] = {
@@ -47,7 +47,7 @@ private[client] class DynamicConsumerFake(
     shards.flatMap {
       case (shardName, stream) =>
         ZStream.fromZIO {
-          ZIO.environment[R with Any].flatMap { env =>
+          ZIO.environment[R].flatMap { env =>
             CheckpointerFake.make(refCheckpointedList).map { checkpointer =>
               (
                 shardName,

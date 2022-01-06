@@ -30,7 +30,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
     (DynamicConsumer.live ++ Clock.live ++ Random.live ++ Console.live ++ zio.System.live)
 
   def testConsumePolling =
-    test("consume records produced on all shards produced on the stream") {
+    test("consume records produced on all shards produced on the stream with polling") {
       val nrShards = 2
       withRandomStreamEnv(nrShards) { (streamName, applicationName) =>
         for {

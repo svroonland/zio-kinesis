@@ -108,7 +108,7 @@ object DynamicConsumer {
       maxShardBufferSize: Int = 1024, // Prefer powers of 2
       configureKcl: SchedulerConfig => SchedulerConfig = identity
     ): ZStream[
-      Any with R,
+      R,
       Throwable,
       (String, ZStream[Any, Throwable, Record[T]], Checkpointer)
     ]
@@ -128,7 +128,7 @@ object DynamicConsumer {
     maxShardBufferSize: Int = 1024, // Prefer powers of 2
     configureKcl: SchedulerConfig => SchedulerConfig = identity
   ): ZStream[
-    DynamicConsumer with Any with R,
+    DynamicConsumer with R,
     Throwable,
     (String, ZStream[Any, Throwable, Record[T]], Checkpointer)
   ] =
