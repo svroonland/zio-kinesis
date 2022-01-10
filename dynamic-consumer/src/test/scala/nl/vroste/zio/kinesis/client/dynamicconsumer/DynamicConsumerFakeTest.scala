@@ -5,7 +5,6 @@ import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.Record
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import zio.duration.durationInt
-import zio.logging.Logging
 import zio.stream.ZStream
 import zio.test._
 import zio.{ Chunk, Queue, Ref, ZLayer }

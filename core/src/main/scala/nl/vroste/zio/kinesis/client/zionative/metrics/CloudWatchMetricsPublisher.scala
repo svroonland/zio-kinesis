@@ -1,17 +1,15 @@
 package nl.vroste.zio.kinesis.client.zionative.metrics
 
-import java.time.Instant
-
-import io.github.vigoo.zioaws.cloudwatch.CloudWatch
-import io.github.vigoo.zioaws.cloudwatch.model.{ Dimension, MetricDatum, PutMetricDataRequest, StandardUnit }
 import nl.vroste.zio.kinesis.client.Util
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent._
-import zio._
+import zio.aws.cloudwatch.CloudWatch
+import zio.aws.cloudwatch.model.primitives._
+import zio.aws.cloudwatch.model.{ Dimension, MetricDatum, PutMetricDataRequest, StandardUnit }
+import zio.stream.{ ZSink, ZStream }
+import zio.{ Clock, _ }
 
-import zio.logging.{ log, Logging }
-import zio.stream.{ ZStream, ZTransducer }
-import zio.{ Clock, Has }
+import java.time.Instant
 
 /**
  * Configuration for CloudWatch metrics publishing
@@ -26,7 +24,7 @@ final case class CloudWatchMetricsPublisherConfig(
   maxFlushInterval: Duration = 20.seconds,
   maxBatchSize: Int = 20,
   periodicMetricInterval: Duration = 30.seconds,
-  retrySchedule: Schedule[Has[Clock], Any, (Duration, Long)] = Util.exponentialBackoff(1.second, 1.minute),
+  retrySchedule: Schedule[Clock, Any, (Duration, Long)] = Util.exponentialBackoff(1.second, 1.minute),
   maxParallelUploads: Int = 3
 ) {
   require(maxBatchSize <= 20, "maxBatchSize must be <= 20 (AWS SDK limit)")
@@ -36,7 +34,7 @@ final case class CloudWatchMetricsPublisherConfig(
  * Publishes KCL compatible metrics to CloudWatch
  */
 private class CloudWatchMetricsPublisher(
-  client: CloudWatch.Service,
+  client: CloudWatch,
   eventQueue: Queue[DiagnosticEvent],
   periodicMetricsQueue: Queue[MetricDatum],
   namespace: String,
@@ -149,17 +147,17 @@ private class CloudWatchMetricsPublisher(
       .tap { case (e, _) => collectPeriodicMetrics(e) }
       .mapConcat(Function.tupled(toMetrics)) merge ZStream.fromQueue(periodicMetricsQueue))
       .aggregateAsyncWithin(
-        ZTransducer.collectAllN(config.maxBatchSize),
+        ZSink.collectAllN[MetricDatum](config.maxBatchSize),
         Schedule.fixed(config.maxFlushInterval)
       )
       .mapZIOParUnordered(config.maxParallelUploads) { metrics =>
         putMetricData(metrics)
-          .tapError(e => log.warn(s"Failed to upload metrics, will retry: ${e}"))
+          .tapError(e => ZIO.logWarning(s"Failed to upload metrics, will retry: ${e}"))
           .retry(config.retrySchedule)
           .orDie // orDie because schedule has Any as error type?
       }
       .runDrain
-      .tapErrorCause(e => log.error("Metrics uploading has stopped with error", e))
+      .tapErrorCause(e => ZIO.logSpan("Metrics uploading has stopped with error")(ZIO.logErrorCause(e)))
 
   val generatePeriodicMetrics =
     (for {
@@ -191,8 +189,8 @@ private class CloudWatchMetricsPublisher(
       _              <- periodicMetricsQueue.offerAll(List(nrWorkersMetric, nrLeasesMetric, nrLeasesMetric2))
     } yield ()).repeat(Schedule.fixed(config.periodicMetricInterval))
 
-  private def putMetricData(metricData: Seq[MetricDatum]): ZIO[Logging, Throwable, Unit] = {
-    val request = PutMetricDataRequest(namespace, metricData.toList)
+  private def putMetricData(metricData: Seq[MetricDatum]): ZIO[Any, Throwable, Unit] = {
+    val request = PutMetricDataRequest(Namespace(namespace), metricData.toList)
 
     client
       .putMetricData(request)
@@ -209,9 +207,9 @@ object CloudWatchMetricsPublisher {
   def make(
     applicationName: String,
     workerId: String
-  ): ZManaged[Has[Clock] with Logging with CloudWatch with Has[CloudWatchMetricsPublisherConfig], Nothing, Service] =
+  ): ZManaged[Clock with CloudWatch with CloudWatchMetricsPublisherConfig, Nothing, Service] =
     for {
-      client  <- ZManaged.service[CloudWatch.Service]
+      client  <- ZManaged.service[CloudWatch]
       config  <- ZManaged.service[CloudWatchMetricsPublisherConfig]
       q       <- Queue.bounded[DiagnosticEvent](1000).toManaged
       q2      <- Queue.bounded[MetricDatum](1000).toManaged
@@ -233,10 +231,10 @@ object CloudWatchMetricsPublisher {
     unit: StandardUnit
   ): MetricDatum =
     MetricDatum(
-      name,
-      Some(dimensions.map(Function.tupled(Dimension.apply)).toList),
-      Some(timestamp),
-      Some(value),
+      MetricName(name),
+      Some(dimensions.map { case (name, value) => Dimension(DimensionName(name), DimensionValue(value)) }.toList),
+      Some(Timestamp(timestamp)),
+      Some(DatapointValue(value)),
       unit = Some(unit)
     )
 }

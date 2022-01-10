@@ -4,7 +4,6 @@ import java.time.Instant
 import nl.vroste.zio.kinesis.client.Record
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultCheckpointer
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultCheckpointer.UpdateCheckpoint
-import zio.logging.Logging
 import zio.{ Promise, Ref, Schedule, Semaphore, Task, ZIO }
 import zio.test._
 import zio.test.Assertion._

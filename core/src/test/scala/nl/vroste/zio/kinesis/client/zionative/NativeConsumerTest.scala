@@ -3,9 +3,9 @@ package nl.vroste.zio.kinesis.client.zionative
 import java.time.Instant
 import java.{ util => ju }
 import scala.collection.compat._
-import io.github.vigoo.zioaws.kinesis
-import io.github.vigoo.zioaws.kinesis.Kinesis
-import io.github.vigoo.zioaws.kinesis.model.{ DescribeStreamRequest, ScalingType, UpdateShardCountRequest }
+import zio.aws.kinesis
+import zio.aws.kinesis.Kinesis
+import zio.aws.kinesis.model.{ DescribeStreamRequest, ScalingType, UpdateShardCountRequest }
 import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.TestUtil.{ retryOnResourceNotFound, withStream }
@@ -17,7 +17,6 @@ import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepos
 import nl.vroste.zio.kinesis.client._
 import zio._
 
-import zio.logging.{ log, _ }
 import zio.stream.{ ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test._
@@ -55,9 +54,9 @@ object NativeConsumerTest extends DefaultRunnableSpec {
         withRandomStreamAndApplicationName(nrShards) {
           (streamName, applicationName) =>
             for {
-              _        <- log.info("Starting producer")
+              _        <- ZIO.logInfo("Starting producer")
               producer <- produceSampleRecords(streamName, nrRecords, chunkSize = 500).fork
-              _        <- log.info("Starting consumer")
+              _        <- ZIO.logInfo("Starting consumer")
               records  <- Consumer
                            .shardedStream(
                              streamName,
@@ -230,16 +229,16 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                               workerIdentifier = "worker2",
                               emitDiagnostic = onDiagnostic("worker2")
                             )
-                            .tap(tp => log.info(s"Got tuple ${tp}"))
+                            .tap(tp => ZIO.logInfo(s"Got tuple ${tp}"))
                             .take(2) // 5 shards, so we expect 2
                             .updateService[Logger[String]](_.named("worker2"))
-              worker1          <- consumer1.runDrain.tapError(e => log.error(s"Worker1 failed: ${e}")).fork
+              worker1          <- consumer1.runDrain.tapError(e => ZIO.logError(s"Worker1 failed: ${e}")).fork
               _                <- consumer1Started.await
-              _                <- log.info("Consumer 1 has started, starting consumer 2")
+              _                <- ZIO.logInfo("Consumer 1 has started, starting consumer 2")
               _                <- consumer2.runDrain
-              _                <- log.info("Shutting down worker 1")
+              _                <- ZIO.logInfo("Shutting down worker 1")
               _                <- worker1.interrupt
-              _                <- log.info("Shutting down producer")
+              _                <- ZIO.logInfo("Shutting down producer")
               _                <- producer.interrupt
 
             } yield assertCompletes
@@ -280,7 +279,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                   }
                                   .ensuring(UIO(println(s"Shard stream worker 1 ${shard} completed")))
                             }
-                            .tap(_ => log.info("WORKER1 GOT A BATCH"))
+                            .tap(_ => ZIO.logInfo("WORKER1 GOT A BATCH"))
                             .take(10)
               consumer2 = Consumer
                             .shardedStream(
@@ -306,7 +305,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                     }
                                     .ensuring(UIO(println(s"Shard stream worker 2 ${shard} completed")))
                             }
-                            .tap(_ => log.info("WORKER2 GOT A BATCH"))
+                            .tap(_ => ZIO.logInfo("WORKER2 GOT A BATCH"))
                             .take(10)
 
               _        <- consumer1.merge(consumer2).runCollect
@@ -352,7 +351,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                   }
             }
             .catchAll {
-              case e => ZStream.unwrap(log.error(e.toString).as(ZStream.fail(e)))
+              case e => ZStream.unwrap(ZIO.logError(e.toString).as(ZStream.fail(e)))
             }
             .updateService[Logger[String]](_.named(s"worker-${workerId}"))
 
@@ -378,20 +377,20 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                   worker1 <- (consumer(streamName, applicationName, "worker1", emitDiagnostic("worker1"))
                                  .take(10) // Such that it has had time to claim some leases
                                  .runDrain
-                                 .tapError(e => log.error(s"Worker1 failed with error: ${e}"))
+                                 .tapError(e => ZIO.logError(s"Worker1 failed with error: ${e}"))
                                  .tapError(consumer1Done.fail(_))
-                                 *> log.warn("worker1 done") *> consumer1Done.succeed(())).fork
+                                 *> ZIO.logWarning("worker1 done") *> consumer1Done.succeed(())).fork
 
                   worker2 <- consumer(streamName, applicationName, "worker2", emitDiagnostic("worker2"))
                                .ensuringFirst(
-                                 log.warn("worker2 DONE")
+                                 ZIO.logWarning("worker2 DONE")
                                )
                                .runDrain
                                .delay(5.seconds)
                                .fork
                   worker3 <- consumer(streamName, applicationName, "worker3", emitDiagnostic("worker3"))
                                .ensuringFirst(
-                                 log.warn("worker3 DONE")
+                                 ZIO.logWarning("worker3 DONE")
                                )
                                .runDrain
                                .delay(5.seconds)
@@ -404,14 +403,14 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                   _       <- producer.interrupt
                   _       <- log.debug("Interrupting streams")
                   _       <- worker2.interrupt
-                         .tap(_ => log.info("Done interrupting worker 2"))
-                         .tapErrorCause(e => log.error("Error interrupting worker 2:", e))
+                         .tap(_ => ZIO.logInfo("Done interrupting worker 2"))
+                         .tapErrorCause(e => ZIO.logError("Error interrupting worker 2:", e))
                          .ignore zipPar worker3.interrupt
-                         .tap(_ => log.info("Done interrupting worker 3"))
-                         .tapErrorCause(e => log.error("Error interrupting worker 3:", e))
+                         .tap(_ => ZIO.logInfo("Done interrupting worker 3"))
+                         .tapErrorCause(e => ZIO.logError("Error interrupting worker 3:", e))
                          .ignore zipPar worker1.join
-                         .tap(_ => log.info("Done interrupting worker 1"))
-                         .tapErrorCause(e => log.error("Error joining worker 1:", e))
+                         .tap(_ => ZIO.logInfo("Done interrupting worker 1"))
+                         .tapErrorCause(e => ZIO.logError("Error joining worker 1:", e))
                          .ignore
                 } yield ()
               }.onInterrupt(
@@ -543,10 +542,10 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                      ),
                                      ZStream.fromZIO(ZIO.sleep(5.seconds)) *> // Give worker1 the first lease
                                        consumer(streamName, applicationName, "worker2", handleEvent("worker2"))
-                                         .ensuringFirst(log.warn("worker2 DONE")),
+                                         .ensuringFirst(ZIO.logWarning("worker2 DONE")),
                                      ZStream.fromZIO(ZIO.sleep(5.seconds)) *> // Give worker1 the first lease
                                        consumer(streamName, applicationName, "worker3", handleEvent("worker3"))
-                                         .ensuringFirst(log.warn("Worker3 DONE"))
+                                         .ensuringFirst(ZIO.logWarning("Worker3 DONE"))
                                    )
                                    .runDrain
                                    .fork
@@ -820,7 +819,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     throttle: Option[Duration] = None,
     indexStart: Int = 1,
     aggregated: Boolean = false
-  ): ZIO[Kinesis with Has[Clock] with Logging with Any, Throwable, Chunk[ProduceResponse]] =
+  ): ZIO[Kinesis with Clock with Any, Throwable, Chunk[ProduceResponse]] =
     Producer
       .make(streamName, Serde.asciiString, ProducerSettings(maxParallelRequests = 1, aggregate = aggregated))
       .use { producer =>
@@ -846,7 +845,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     nrRecords: Int,
     chunkSize: Int = 100,
     indexStart: Int = 1
-  ): ZIO[Kinesis with Has[Clock] with Logging with Any, Throwable, Chunk[ProduceResponse]] =
+  ): ZIO[Kinesis with Clock with Any, Throwable, Chunk[ProduceResponse]] =
     Producer.make(streamName, Serde.asciiString).use { producer =>
       val records =
         (indexStart until (nrRecords + indexStart)).map(i => ProducerRecord(s"key$i", s"msg$i"))
@@ -869,7 +868,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
   def onDiagnostic(worker: String): DiagnosticEvent => UIO[Unit] = {
     case _: PollComplete => UIO.unit
-    case ev              => log.info(s"${worker}: ${ev}").provideLayer(loggingLayer)
+    case ev              => ZIO.logInfo(s"${worker}: ${ev}").provideLayer(loggingLayer)
   }
 
   def assertAllLeasesReleased(applicationName: String) =
@@ -880,7 +879,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
   def getCheckpoints(
     applicationName: String
-  ): ZIO[Has[Clock] with Has[LeaseRepository.Service], Throwable, Map[String, String]] =
+  ): ZIO[Clock with Has[LeaseRepository.Service], Throwable, Map[String, String]] =
     for {
       table      <- ZIO.service[LeaseRepository.Service]
       leases     <- table.getLeases(applicationName).runCollect
@@ -900,7 +899,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
   def withRandomStreamAndApplicationName[R, A](nrShards: Int)(
     f: (String, String) => ZIO[R, Throwable, A]
-  ): ZIO[Kinesis with Has[Clock] with Has[Console] with Logging with Has[Console] with Has[
+  ): ZIO[Kinesis with Clock with Has[Console] with Has[Console] with Has[
     LeaseRepository.Service
   ] with R, Throwable, A] =
     ZIO.succeed((streamPrefix + "testStream", streamPrefix + "testApplication")).flatMap {

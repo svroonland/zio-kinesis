@@ -4,11 +4,8 @@ import nl.vroste.zio.kinesis.client.HttpClientBuilder
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.Consumer
 import nl.vroste.zio.kinesis.client.zionative.metrics.{ CloudWatchMetricsPublisher, CloudWatchMetricsPublisherConfig }
-import zio._
-
-import zio.logging.Logging
-import zio.{ Console, Has }
 import zio.Console.printLine
+import zio.{ Console, _ }
 
 object NativeConsumerWithMetricsExample extends zio.ZIOAppDefault {
 
@@ -17,7 +14,7 @@ object NativeConsumerWithMetricsExample extends zio.ZIOAppDefault {
 
   val metricsConfig = CloudWatchMetricsPublisherConfig()
 
-  override def run: ZIO[zio.ZEnv with Has[ZIOAppArgs], Any, Any] =
+  override def run: ZIO[zio.ZEnv with ZIOAppArgs, Any, Any] =
     CloudWatchMetricsPublisher
       .make(applicationName, workerIdentifier)
       .use { metrics =>
@@ -34,15 +31,14 @@ object NativeConsumerWithMetricsExample extends zio.ZIOAppDefault {
               shardStream
                 .tap(record => printLine(s"Processing record ${record} on shard ${shardId}"))
                 .tap(checkpointer.stage(_))
-                .via(checkpointer.checkpointBatched[Has[Console]](nr = 1000, interval = 5.minutes))
+                .viaFunction(checkpointer.checkpointBatched[Console](nr = 1000, interval = 5.minutes))
           }
           .runDrain
       }
       .provideCustomLayer(
-        (HttpClientBuilder.make() >>> Consumer.defaultEnvironment) ++ loggingLayer ++ ZLayer
+        (HttpClientBuilder.make() >>> Consumer.defaultEnvironment) ++ ZLayer
           .succeed(metricsConfig)
       )
       .exitCode
 
-  val loggingLayer = Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 }

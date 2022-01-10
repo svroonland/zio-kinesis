@@ -1,10 +1,10 @@
 package nl.vroste.zio.kinesis.client.dynamicconsumer
 
-import io.github.vigoo.zioaws.cloudwatch.CloudWatch
-import io.github.vigoo.zioaws.dynamodb.DynamoDb
-import io.github.vigoo.zioaws.kinesis
-import io.github.vigoo.zioaws.kinesis.model.ScalingType
-import io.github.vigoo.zioaws.kinesis.{ model, Kinesis }
+import zio.aws.cloudwatch.CloudWatch
+import zio.aws.dynamodb.DynamoDb
+import zio.aws.kinesis
+import zio.aws.kinesis.model.ScalingType
+import zio.aws.kinesis.{ model, Kinesis }
 import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.TestUtil
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
@@ -13,7 +13,6 @@ import software.amazon.kinesis.exceptions.ShutdownException
 import zio._
 import zio.blocking.Blocking
 import zio.duration.{ durationInt, Duration }
-import zio.logging.{ LogLevel, Logging }
 import zio.stream.{ SubscriptionRef, ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test.TestAspect.timeout
@@ -32,7 +31,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
   private val env: ZLayer[
     Any,
     Throwable,
-    CloudWatch with Kinesis with DynamoDb with Logging with DynamicConsumer with Has[Clock] with Any with Has[
+    CloudWatch with Kinesis with DynamoDb with DynamicConsumer with Clock with Any with Has[
       Random
     ] with Has[Console] with Has[System]
   ] = (if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()) >+> loggingLayer >+>
@@ -123,7 +122,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
         def streamConsumer(
           workerIdentifier: String,
           activeConsumers: RefM[Set[String]]
-        ): ZStream[Has[Console] with Any with DynamicConsumer with Has[Clock], Throwable, (String, String)] =
+        ): ZStream[Has[Console] with Any with DynamicConsumer with Clock, Throwable, (String, String)] =
           for {
             service <- ZStream.service[DynamicConsumer.Service]
             stream  <- ZStream
@@ -140,7 +139,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                             .flatMapPar(Int.MaxValue) {
                               case (shardId, shardStream, checkpointer @ _) =>
                                 shardStream
-                                  .via(checkpointer.checkpointBatched[Any with Has[Clock]](1000, 1.second))
+                                  .viaFunction(checkpointer.checkpointBatched[Any with Has[Clock]](1000, 1.second))
                                   .as((workerIdentifier, shardId))
                                   // Background and a bit delayed so we get a chance to actually emit some records
                                   .tap(_ => activeConsumers.update(s => ZIO(s + workerIdentifier)).delay(1.second).fork)
@@ -178,7 +177,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
           lastProcessedRecords: Ref[Map[String, String]],
           lastCheckpointedRecords: Ref[Map[String, String]]
         ): ZStream[
-          Has[Console] with Any with Has[Clock] with DynamicConsumer with Kinesis,
+          Has[Console] with Any with Clock with DynamicConsumer with Kinesis,
           Throwable,
           DynamicConsumer.Record[
             String
@@ -256,7 +255,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
           firstRecordProcessed: Promise[Nothing, Unit],
           newShardDetected: Queue[Unit]
         ): ZStream[
-          Has[Console] with Any with Has[Clock] with DynamicConsumer with Kinesis,
+          Has[Console] with Any with Clock with DynamicConsumer with Kinesis,
           Throwable,
           DynamicConsumer.Record[
             String
@@ -308,7 +307,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                         firstRecordProcessed,
                         newShards
                       ).runCollect
-                        .tapError(e => zio.logging.log.error(s"Error in stream consumer,: ${e}"))
+                        .tapError(e => zio.logging.ZIO.logError(s"Error in stream consumer,: ${e}"))
                         .fork
           _        <- firstRecordProcessed.await
           _         = println("Resharding")

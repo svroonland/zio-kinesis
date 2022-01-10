@@ -4,17 +4,13 @@ import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.{ Producer, ProducerRecord }
 import zio._
-import zio.logging.Logging
 import zio.Console.printLine
 
 object ProducerExample extends zio.ZIOAppDefault {
   val streamName      = "my_stream"
   val applicationName = "my_awesome_zio_application"
 
-  val loggingLayer: ZLayer[Any, Nothing, Logging] =
-    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
-
-  val env = client.defaultAwsLayer ++ loggingLayer
+  val env = client.defaultAwsLayer
 
   val program = Producer.make(streamName, Serde.asciiString).use { producer =>
     val record = ProducerRecord("key1", "message1")
@@ -25,6 +21,6 @@ object ProducerExample extends zio.ZIOAppDefault {
     } yield ()
   }
 
-  override def run: ZIO[zio.ZEnv with Has[ZIOAppArgs], Any, Any] =
+  override def run: ZIO[zio.ZEnv with ZIOAppArgs, Any, Any] =
     program.provideCustomLayer(env).exitCode
 }

@@ -5,7 +5,6 @@ import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.Record
 import nl.vroste.zio.kinesis.client.dynamicconsumer.fake.DynamicConsumerFake
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio.duration.durationInt
-import zio.logging.Logging
 import zio.stream.ZStream
 import zio.{ Chunk, ExitCode, Ref, URIO, ZLayer }
 import zio.Console.printLine

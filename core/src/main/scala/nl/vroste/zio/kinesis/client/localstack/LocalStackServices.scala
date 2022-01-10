@@ -1,12 +1,12 @@
 package nl.vroste.zio.kinesis.client.localstack
 
-import io.github.vigoo.zioaws.cloudwatch.CloudWatch
-import io.github.vigoo.zioaws.core.config
-import io.github.vigoo.zioaws.core.config.AwsConfig
-import io.github.vigoo.zioaws.core.httpclient.HttpClient
-import io.github.vigoo.zioaws.dynamodb.DynamoDb
-import io.github.vigoo.zioaws.kinesis.Kinesis
-import io.github.vigoo.zioaws.{ cloudwatch, dynamodb, kinesis }
+import zio.aws.cloudwatch.CloudWatch
+import zio.aws.core.config
+import zio.aws.core.config.AwsConfig
+import zio.aws.core.httpclient.HttpClient
+import zio.aws.dynamodb.DynamoDb
+import zio.aws.kinesis.Kinesis
+import zio.aws.{ cloudwatch, dynamodb, kinesis }
 import nl.vroste.zio.kinesis.client.HttpClientBuilder
 import software.amazon.awssdk.auth.credentials.{
   AwsBasicCredentials,
@@ -69,7 +69,7 @@ object LocalStackServices {
         )
 
     val awsConfig: ZLayer[HttpClient, Throwable, AwsConfig] =
-      config.customized(new config.ClientCustomization {
+      AwsConfig.customized(new config.ClientCustomization {
         override def customize[Client, Builder <: AwsClientBuilder[Builder, Client]](builder: Builder): Builder =
           builder
             .credentialsProvider(credsProvider)
@@ -77,7 +77,7 @@ object LocalStackServices {
       })
 
     val kinesisAsyncClientLayer: ZLayer[AwsConfig, Throwable, Kinesis] =
-      kinesis.customized { builder =>
+      Kinesis.customized { builder =>
         java.lang.System.setProperty(SdkSystemSetting.CBOR_ENABLED.property, "false")
 
         builder
@@ -85,10 +85,10 @@ object LocalStackServices {
       }
 
     val dynamoDbClientLayer: ZLayer[AwsConfig, Throwable, DynamoDb] =
-      dynamodb.customized(_.endpointOverride(dynamoDbUri))
+      DynamoDb.customized(_.endpointOverride(dynamoDbUri))
 
     val cloudWatchClientLayer: ZLayer[AwsConfig, Throwable, CloudWatch] =
-      cloudwatch.customized(_.endpointOverride(cloudwatchUri))
+      CloudWatch.customized(_.endpointOverride(cloudwatchUri))
 
     localHttpClient >>> awsConfig >>> (cloudWatchClientLayer ++ kinesisAsyncClientLayer ++ dynamoDbClientLayer)
   }

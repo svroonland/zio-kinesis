@@ -1,8 +1,8 @@
 package nl.vroste.zio.kinesis.client.zionative
-import io.github.vigoo.zioaws.core.AwsError
-import io.github.vigoo.zioaws.core.aspects.AwsCallAspect
-import io.github.vigoo.zioaws.kinesis.model._
-import io.github.vigoo.zioaws.kinesis.{ model, Kinesis }
+import zio.aws.core.AwsError
+import zio.aws.core.aspects.AwsCallAspect
+import zio.aws.kinesis.model._
+import zio.aws.kinesis.{ model, Kinesis }
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import zio.IO
 import zio.stream.ZStream
@@ -22,7 +22,7 @@ class StubClient extends Kinesis.Service { self =>
 
   override def listStreamConsumers(
     request: ListStreamConsumersRequest
-  ): ZStream[Any, AwsError, io.github.vigoo.zioaws.kinesis.model.Consumer.ReadOnly]                                   = ???
+  ): ZStream[Any, AwsError, zio.aws.kinesis.model.Consumer.ReadOnly]                                                  = ???
   override def addTagsToStream(request: model.AddTagsToStreamRequest): IO[AwsError, Unit]                             = ???
   override def mergeShards(request: model.MergeShardsRequest): IO[AwsError, Unit]                                     = ???
   override def describeStreamSummary(

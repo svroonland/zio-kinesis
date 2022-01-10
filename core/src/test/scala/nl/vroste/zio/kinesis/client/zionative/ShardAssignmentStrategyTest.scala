@@ -6,7 +6,6 @@ import zio.test.Assertion._
 import zio.test.Gen
 import zio.test.DefaultRunnableSpec
 import ShardAssignmentStrategy.leasesToTake
-import zio.logging.Logging
 import zio.{ Has, Random }
 
 object ShardAssignmentStrategyTest extends DefaultRunnableSpec {
@@ -14,7 +13,7 @@ object ShardAssignmentStrategyTest extends DefaultRunnableSpec {
 
   def workerId(w: Int): String = s"worker-${w}"
 
-  def leases(nrShards: Gen[Has[Random], Int], nrWorkers: Gen[Has[Random], Int], allOwned: Boolean = true) =
+  def leases(nrShards: Gen[Random, Int], nrWorkers: Gen[Random, Int], allOwned: Boolean = true) =
     for {
       nrShards    <- nrShards
       nrWorkers   <- nrWorkers

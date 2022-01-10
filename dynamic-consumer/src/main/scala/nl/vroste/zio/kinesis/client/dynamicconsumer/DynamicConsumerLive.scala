@@ -15,7 +15,6 @@ import software.amazon.kinesis.processor.{
 }
 import software.amazon.kinesis.retrieval.KinesisClientRecord
 import zio._
-import zio.logging.Logger
 import zio.stream.ZStream
 
 import scala.jdk.CollectionConverters._

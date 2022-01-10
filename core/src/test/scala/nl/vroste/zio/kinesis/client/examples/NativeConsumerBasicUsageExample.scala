@@ -2,14 +2,11 @@ package nl.vroste.zio.kinesis.client.examples
 
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.Consumer
-import zio._
-
-import zio.logging.Logging
-import zio.{ Console, Has }
 import zio.Console.printLine
+import zio.{ Console, _ }
 
 object NativeConsumerBasicUsageExample extends zio.ZIOAppDefault {
-  override def run: ZIO[zio.ZEnv with Has[ZIOAppArgs], Any, Any] =
+  override def run: ZIO[zio.ZEnv with ZIOAppArgs, Any, Any] =
     Consumer
       .shardedStream(
         streamName = "my-stream",
@@ -22,11 +19,9 @@ object NativeConsumerBasicUsageExample extends zio.ZIOAppDefault {
           shardStream
             .tap(record => printLine(s"Processing record ${record} on shard ${shardId}"))
             .tap(checkpointer.stage(_))
-            .via(checkpointer.checkpointBatched[Has[Console]](nr = 1000, interval = 5.minutes))
+            .viaFunction(checkpointer.checkpointBatched[Console](nr = 1000, interval = 5.minutes))
       }
       .runDrain
-      .provideCustomLayer(Consumer.defaultEnvironment ++ loggingLayer)
+      .provideCustomLayer(Consumer.defaultEnvironment)
       .exitCode
-
-  val loggingLayer = Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 }

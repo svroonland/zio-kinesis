@@ -1,6 +1,6 @@
 package nl.vroste.zio.kinesis.interop.futures
 
-import io.github.vigoo.zioaws.core.config
+import zio.aws.core.config
 import izumi.reflect.Tag
 import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
@@ -12,7 +12,6 @@ import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClientBuilder
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClientBuilder
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClientBuilder
-import zio.logging.Logging
 import zio._
 
 import scala.annotation.nowarn

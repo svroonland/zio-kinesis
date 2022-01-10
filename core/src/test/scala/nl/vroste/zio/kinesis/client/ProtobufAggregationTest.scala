@@ -1,5 +1,5 @@
 package nl.vroste.zio.kinesis.client
-import io.github.vigoo.zioaws.kinesis.model.PutRecordsRequestEntry
+import zio.aws.kinesis.model.PutRecordsRequestEntry
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.protobuf.Messages
 import zio.ZIO

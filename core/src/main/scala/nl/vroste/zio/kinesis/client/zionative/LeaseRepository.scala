@@ -1,9 +1,7 @@
 package nl.vroste.zio.kinesis.client.zionative
 
-import zio.ZIO
-import zio.logging.Logging
+import zio.{ Clock, ZIO }
 import zio.stream.ZStream
-import zio.{ Clock, Has }
 
 sealed trait SpecialCheckpoint {
   val stringValue: String
@@ -53,11 +51,11 @@ object LeaseRepository {
     /**
      * Returns whether the table already existed
      */
-    def createLeaseTableIfNotExists(tableName: String): ZIO[Has[Clock] with Logging, Throwable, Boolean]
+    def createLeaseTableIfNotExists(tableName: String): ZIO[Clock, Throwable, Boolean]
 
-    def deleteTable(tableName: String): ZIO[Has[Clock] with Logging, Throwable, Unit]
+    def deleteTable(tableName: String): ZIO[Clock, Throwable, Unit]
 
-    def getLeases(tableName: String): ZStream[Has[Clock], Throwable, Lease]
+    def getLeases(tableName: String): ZStream[Clock, Throwable, Lease]
 
     /**
      * Removes the leaseOwner property
@@ -70,29 +68,29 @@ object LeaseRepository {
     def releaseLease(
       tableName: String,
       lease: Lease
-    ): ZIO[Logging with Has[Clock], Either[Throwable, LeaseObsolete.type], Unit]
+    ): ZIO[Clock, Either[Throwable, LeaseObsolete.type], Unit]
 
 // Returns the updated lease
     def claimLease(
       tableName: String,
       lease: Lease
-    ): ZIO[Logging with Has[Clock], Either[Throwable, UnableToClaimLease.type], Unit]
+    ): ZIO[Clock, Either[Throwable, UnableToClaimLease.type], Unit]
 
 // Puts the lease counter to the given lease's counter and expects counter - 1
     def updateCheckpoint(
       tableName: String,
       lease: Lease
-    ): ZIO[Logging with Has[Clock], Either[Throwable, LeaseObsolete.type], Unit]
+    ): ZIO[Clock, Either[Throwable, LeaseObsolete.type], Unit]
 
     def renewLease(
       tableName: String,
       lease: Lease
-    ): ZIO[Logging with Has[Clock], Either[Throwable, LeaseObsolete.type], Unit]
+    ): ZIO[Clock, Either[Throwable, LeaseObsolete.type], Unit]
 
     def createLease(
       tableName: String,
       lease: Lease
-    ): ZIO[Logging with Has[Clock], Either[Throwable, LeaseAlreadyExists.type], Unit]
+    ): ZIO[Clock, Either[Throwable, LeaseAlreadyExists.type], Unit]
   }
 
   case object LeaseAlreadyExists

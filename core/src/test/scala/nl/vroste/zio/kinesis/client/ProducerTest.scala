@@ -1,10 +1,10 @@
 package nl.vroste.zio.kinesis.client
 
-import io.github.vigoo.zioaws.cloudwatch.CloudWatch
-import io.github.vigoo.zioaws.dynamodb.DynamoDb
-import io.github.vigoo.zioaws.kinesis
-import io.github.vigoo.zioaws.kinesis.Kinesis
-import io.github.vigoo.zioaws.kinesis.model.{ ScalingType, UpdateShardCountRequest }
+import zio.aws.cloudwatch.CloudWatch
+import zio.aws.dynamodb.DynamoDb
+import zio.aws.kinesis
+import zio.aws.kinesis.Kinesis
+import zio.aws.kinesis.model.{ ScalingType, UpdateShardCountRequest }
 import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.producer.ProducerLive.ProduceRequest
@@ -36,7 +36,7 @@ object ProducerTest extends DefaultRunnableSpec {
   val env: ZLayer[
     Any,
     Nothing,
-    CloudWatch with Kinesis with DynamoDb with Has[Clock] with Has[Console] with Logging with Has[Random] with Any
+    CloudWatch with Kinesis with DynamoDb with Clock with Has[Console] with Random with Any
   ] =
     ((if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()).orDie) >+>
       (Clock.live ++ zio.Console.live ++ Random.live >+> loggingLayer)
@@ -261,7 +261,7 @@ object ProducerTest extends DefaultRunnableSpec {
         def makeProducer(
           workerId: String,
           totalMetrics: Ref[ProducerMetrics]
-        ): ZManaged[Any with Has[Console] with Has[Clock] with Kinesis with Logging with Any, Throwable, Producer[
+        ): ZManaged[Any with Has[Console] with Clock with Kinesis with Any, Throwable, Producer[
           Chunk[Byte]
         ]] =
           Producer
@@ -358,7 +358,7 @@ object ProducerTest extends DefaultRunnableSpec {
   def aggregatingBatcherForProducerRecord[R, T](
     shardMap: ShardMap,
     serializer: Serializer[R, T]
-  ): ZTransducer[R with Logging, Throwable, ProducerRecord[T], Seq[ProduceRequest]] =
+  ): ZTransducer[R, Throwable, ProducerRecord[T], Seq[ProduceRequest]] =
     ProducerLive
       .aggregator(MessageDigest.getInstance("MD5"))
       .contramapZIO((r: ProducerRecord[T]) =>

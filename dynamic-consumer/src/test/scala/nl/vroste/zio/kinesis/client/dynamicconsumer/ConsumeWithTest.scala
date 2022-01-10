@@ -1,13 +1,11 @@
 package nl.vroste.zio.kinesis.client.dynamicconsumer
 
-import io.github.vigoo.zioaws.cloudwatch.CloudWatch
-import io.github.vigoo.zioaws.dynamodb.DynamoDb
-import io.github.vigoo.zioaws.kinesis.Kinesis
+import zio.aws.cloudwatch.CloudWatch
+import zio.aws.dynamodb.DynamoDb
+import zio.aws.kinesis.Kinesis
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.{ ProducerRecord, TestUtil }
-import zio.blocking.Blocking
-import zio.logging.Logging
 import zio.test.Assertion.equalTo
 import zio.test.TestAspect.{ sequential, timeout }
 import zio.test.{ assert, DefaultRunnableSpec }
@@ -23,15 +21,15 @@ import zio.Console.printLine
 object ConsumeWithTest extends DefaultRunnableSpec {
   import TestUtil._
 
-  val loggingLayer: ZLayer[Has[Console] with Has[Clock], Nothing, Logging] =
+  val loggingLayer: ZLayer[Has[Console] with Clock, Nothing, Logging] =
     Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   private val env: ZLayer[
     Any,
     Throwable,
-    Has[Console] with Has[Clock] with Any with Has[
+    Has[Console] with Clock with Any with Has[
       Random
-    ] with Logging with CloudWatch with Kinesis with DynamoDb with DynamicConsumer
+    ] with CloudWatch with Kinesis with DynamoDb with DynamicConsumer
   ] =
     (Console.live ++ Clock.live ++ Blocking.live ++ Random.live) >+> loggingLayer >+> LocalStackServices
       .localStackAwsLayer() >+> DynamicConsumer.live

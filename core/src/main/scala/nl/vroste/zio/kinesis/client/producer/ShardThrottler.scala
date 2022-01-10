@@ -2,7 +2,7 @@ package nl.vroste.zio.kinesis.client.producer
 import nl.vroste.zio.kinesis.client.producer.ShardThrottler.DynamicThrottler
 import zio.{ UIO, _ }
 
-import zio.{ Clock, Has, _ }
+import zio.Clock
 
 private[client] trait ShardThrottler {
   // TODO deprecate
@@ -16,10 +16,10 @@ private[client] object ShardThrottler {
   def make(
     updatePeriod: Duration = 5.seconds,
     allowedError: Double = 0.02
-  ): ZManaged[Has[Clock], Nothing, ShardThrottler] =
+  ): ZManaged[Clock, Nothing, ShardThrottler] =
     for {
       scope  <- ZManaged.scope
-      clock  <- ZManaged.environment[Has[Clock]]
+      clock  <- ZManaged.environment[Clock]
       shards <- Ref.make(Map.empty[String, DynamicThrottler]).toManaged
     } yield new ShardThrottler {
       override def throughputFactor(shard: String): UIO[Double] = withShard(shard, _.throughputFactor)
@@ -39,7 +39,7 @@ private[client] object ShardThrottler {
               throttler              = throttlerAndFinalizer._2
               _                     <- shards.update(_ + (shardId -> throttler))
             } yield throttler
-        }.provide(clock)
+        }.provideEnvironment(clock)
     }
 
   trait DynamicThrottler {
@@ -54,7 +54,7 @@ private[client] object ShardThrottler {
     def make(
       updatePeriod: Duration = 5.seconds,
       allowedError: Double = 0.1
-    ): ZManaged[Has[Clock], Nothing, DynamicThrottler] =
+    ): ZManaged[Clock, Nothing, DynamicThrottler] =
       for {
         counter          <- Ref.make[(Long, Long)]((0, 0)).toManaged
         successRate      <- Ref.make(1.0d).toManaged

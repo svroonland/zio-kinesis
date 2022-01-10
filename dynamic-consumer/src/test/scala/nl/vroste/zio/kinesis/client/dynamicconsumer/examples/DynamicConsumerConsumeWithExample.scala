@@ -4,7 +4,6 @@ import nl.vroste.zio.kinesis.client.defaultAwsLayer
 import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio.duration.durationInt
-import zio.logging.Logging
 import zio.{ ExitCode, URIO, ZLayer }
 import zio.Console.printLine
 

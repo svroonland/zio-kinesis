@@ -1,12 +1,20 @@
 package nl.vroste.zio.kinesis.client.zionative.leaserepository
 
-import io.github.vigoo.zioaws.dynamodb.model._
+import zio.aws.dynamodb.model._
+import zio.aws.dynamodb.model.primitives.{
+  AttributeName,
+  KeySchemaAttributeName,
+  NullAttributeValue,
+  NumberAttributeValue,
+  StringAttributeValue
+}
 
 object DynamoDbUtil {
-  type DynamoDbItem = Map[String, AttributeValue]
+  type DynamoDbItem = Map[AttributeName, AttributeValue]
 
   object DynamoDbItem {
-    def apply(items: (String, AttributeValue)*): DynamoDbItem = Map(items: _*)
+    def apply(items: (String, AttributeValue)*): DynamoDbItem =
+      Map(items.map { case (name, value) => AttributeName(name) -> value }: _*)
     val empty                                                 = apply()
   }
 
@@ -26,19 +34,19 @@ object DynamoDbUtil {
 
   def attributeValue[T](value: T): AttributeValue =
     value match {
-      case null       => AttributeValue(nul = Some(true))
-      case v: String  => AttributeValue(s = Some(v))
-      case v: Long    => AttributeValue(n = Some(v.toString))
-      case v: List[_] => AttributeValue(ss = Some(v.map(_.toString)))
-      case v: Seq[_]  => AttributeValue(ss = Some(v.map(_.toString).toList))
+      case null       => AttributeValue(nul = Some(NullAttributeValue(true)))
+      case v: String  => AttributeValue(s = Some(StringAttributeValue(v)))
+      case v: Long    => AttributeValue(n = Some(NumberAttributeValue(v.toString)))
+      case v: List[_] => AttributeValue(ss = Some(v.map(_.toString).map(StringAttributeValue(_))))
+      case v: Seq[_]  => AttributeValue(ss = Some(v.map(_.toString).map(StringAttributeValue(_)).toList))
       case v          =>
         throw new Exception(s"Could not convert value ${v} to attribute!")
     }
 
   def keySchemaElement(name: String, keyType: KeyType) =
-    KeySchemaElement(name, keyType)
+    KeySchemaElement(KeySchemaAttributeName(name), keyType)
 
   def attributeDefinition(name: String, attrType: ScalarAttributeType) =
-    AttributeDefinition(name, attrType)
+    AttributeDefinition(KeySchemaAttributeName(name), attrType)
 
 }

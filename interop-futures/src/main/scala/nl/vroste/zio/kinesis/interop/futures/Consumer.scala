@@ -1,6 +1,6 @@
 package nl.vroste.zio.kinesis.interop.futures
-import io.github.vigoo.zioaws.core.config
-import io.github.vigoo.zioaws.kinesis.Kinesis
+import zio.aws.core.config
+import zio.aws.kinesis.Kinesis
 import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import nl.vroste.zio.kinesis.client.zionative.Consumer.InitialPosition
@@ -12,7 +12,6 @@ import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClientBuilder
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClientBuilder
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClientBuilder
-import zio.logging.Logging
 import zio.{ CancelableFuture, ZIO }
 
 import scala.concurrent.duration._
@@ -23,7 +22,7 @@ import zio.{ Clock, Has, Random }
  * A scala-native Future based interface to the zio-kinesis Consumer
  */
 class Consumer private (
-  runtime: zio.Runtime.Managed[Has[Clock] with Has[Random] with Kinesis with LeaseRepository with Logging]
+  runtime: zio.Runtime.Managed[Clock with Random with Kinesis with LeaseRepository]
 ) {
 
   /**

@@ -3,7 +3,7 @@ package nl.vroste.zio.kinesis.client.zionative
 import nl.vroste.zio.kinesis.client.zionative.Consumer.InitialPosition
 import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.Lease
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator
-import io.github.vigoo.zioaws.kinesis.model.{ HashKeyRange, SequenceNumberRange, Shard }
+import zio.aws.kinesis.model.{ HashKeyRange, SequenceNumberRange, Shard }
 import zio.test.Assertion._
 import zio.test._
 

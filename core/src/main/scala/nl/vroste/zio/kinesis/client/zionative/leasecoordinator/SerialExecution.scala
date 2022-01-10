@@ -30,7 +30,7 @@ object SerialExecution {
         for {
           p      <- Promise.make[E, A]
           env    <- ZIO.environment[R]
-          action  = f.provide(env).foldZIO(p.fail, p.succeed).unit
+          action  = f.provideEnvironment(env).foldZIO(p.fail, p.succeed).unit
           _      <- queue.offer((key, action))
           result <- p.await
         } yield result

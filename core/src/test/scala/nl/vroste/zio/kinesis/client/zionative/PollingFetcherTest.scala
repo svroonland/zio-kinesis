@@ -1,8 +1,8 @@
 package nl.vroste.zio.kinesis.client.zionative
 import java.nio.charset.Charset
-import io.github.vigoo.zioaws.core.AwsError
-import io.github.vigoo.zioaws.core.aspects.AwsCallAspect
-import io.github.vigoo.zioaws.kinesis.model.{
+import zio.aws.core.AwsError
+import zio.aws.core.aspects.AwsCallAspect
+import zio.aws.kinesis.model.{
   ChildShard,
   GetRecordsResponse,
   GetShardIteratorResponse,
@@ -11,14 +11,13 @@ import io.github.vigoo.zioaws.kinesis.model.{
   ShardIteratorType,
   StartingPosition
 }
-import io.github.vigoo.zioaws.kinesis.{ model, Kinesis }
+import zio.aws.kinesis.{ model, Kinesis }
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.Polling
 import nl.vroste.zio.kinesis.client.zionative.fetcher.PollingFetcher
 import software.amazon.awssdk.services.kinesis.model.ProvisionedThroughputExceededException
 import zio._
 
-import zio.logging.Logging
 import zio.stream.ZStream
 import zio.test.Assertion._
 import zio.test._
@@ -64,7 +63,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
                          .fork
           chunks    <- chunksFib.join
         } yield assert(chunks.headOption)(isSome(hasSize(equalTo(batchSize)))))
-          .provideSomeLayer[ZEnv with Logging](ZLayer.succeed(stubClient(records)))
+          .provideSomeLayer[ZEnv](ZLayer.succeed(stubClient(records)))
       },
       test("immediately polls again when there are more records available") {
         val batchSize = 10
@@ -85,7 +84,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
                          .fork
           _         <- chunksFib.join
         } yield assertCompletes // The fact that we don't have to adjust our test clock suffices
-        ).provideSomeLayer[ZEnv with Logging](ZLayer.succeed(stubClient(records)))
+        ).provideSomeLayer[ZEnv](ZLayer.succeed(stubClient(records)))
       },
       test("delay polling when there are no more records available") {
         val batchSize    = 10
@@ -115,7 +114,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
           _                         <- chunksFib.join
         } yield assert(chunksReceivedImmediately)(equalTo(nrBatches)) && assert(chunksReceivedLater)(
           equalTo(nrBatches + 1)
-        )).provideSomeLayer[ZEnv with Logging with Has[TestClock]](ZLayer.succeed(stubClient(records)))
+        )).provideSomeLayer[ZEnv with Has[TestClock]](ZLayer.succeed(stubClient(records)))
       },
       test("make no more than 5 calls per second per shard to GetRecords") {
         val batchSize    = 10
@@ -145,7 +144,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
           _                         <- chunksFib.join
         } yield assert(chunksReceivedImmediately)(equalTo(5L)) && assert(chunksReceivedLater)(
           equalTo(nrBatches)
-        )).provideSomeLayer[ZEnv with Logging with Has[TestClock]](ZLayer.succeed(stubClient(records)))
+        )).provideSomeLayer[ZEnv with Has[TestClock]](ZLayer.succeed(stubClient(records)))
       },
       test("make the next call with the previous response's nextShardIterator") {
         val batchSize = 10
@@ -166,7 +165,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
                        }
           partitionKeys = fetched.map(_.partitionKeyValue)
         } yield assert(partitionKeys)(equalTo(records.map(_.partitionKey))))
-          .provideSomeLayer[ZEnv with Logging](ZLayer.succeed(stubClient(records)))
+          .provideSomeLayer[ZEnv](ZLayer.succeed(stubClient(records)))
       },
       test("end the shard stream when the shard has ended") {
         val batchSize = 10
@@ -187,7 +186,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
                      .runCollect
                  }
         } yield assertCompletes)
-          .provideSomeLayer[ZEnv with Logging](
+          .provideSomeLayer[ZEnv](
             ZLayer.succeed(stubClient(records, endAfterRecords = true))
           )
       },
@@ -211,7 +210,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
                  }
           emittedEvents <- events.get
         } yield assert(emittedEvents)(forall(isSubtype[PollComplete](anything))))
-          .provideSomeLayer[ZEnv with Logging](ZLayer.succeed(stubClient(records)))
+          .provideSomeLayer[ZEnv](ZLayer.succeed(stubClient(records)))
       },
       test("retry after some time when throttled") {
         val batchSize    = 10
@@ -235,7 +234,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
                   .take(nrBatches)
                   .runDrain
               }
-              .provideSomeLayer[ZEnv with Logging with Has[TestClock]](
+              .provideSomeLayer[ZEnv with Has[TestClock]](
                 ZLayer.succeed(stubClient(records, doThrottle = doThrottle))
               )
               .fork

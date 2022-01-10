@@ -5,8 +5,7 @@ import java.time.Instant
 import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.Lease
 import zio.ZIO
 
-import zio.logging._
-import zio.{ Clock, Has, Random, _ }
+import zio.{ Clock, _ }
 import zio.Random.shuffle
 
 /**
@@ -33,7 +32,7 @@ trait ShardAssignmentStrategy {
     leases: Set[(Lease, Instant)],
     shards: Set[String],
     workerId: String
-  ): ZIO[Has[Random] with Has[Clock] with Logging, Nothing, Set[String]]
+  ): ZIO[Random with Clock, Nothing, Set[String]]
 }
 
 object ShardAssignmentStrategy {
@@ -55,7 +54,7 @@ object ShardAssignmentStrategy {
         leases: Set[(Lease, Instant)],
         shards: Set[String],
         workerId: String
-      ): ZIO[Has[Random] with Has[Clock] with Logging, Nothing, Set[String]] =
+      ): ZIO[Random with Clock, Nothing, Set[String]] =
         ZIO.succeed(shardAssignment intersect shards)
     }
 
@@ -81,16 +80,17 @@ object ShardAssignmentStrategy {
         leases: Set[(Lease, Instant)],
         shards: Set[String],
         workerId: String
-      ): ZIO[Has[Random] with Has[Clock] with Logging, Nothing, Set[String]] =
+      ): ZIO[Random with Clock, Nothing, Set[String]] =
         for {
-          now          <- zio.Clock.currentDateTime.map(_.toInstant())
-          expiredLeases = leases.collect {
+          now               <- zio.Clock.currentDateTime.map(_.toInstant())
+          expiredLeases      = leases.collect {
                             case (lease, lastUpdated)
                                 if lastUpdated.isBefore(now.minusMillis(expirationTime.toMillis)) &&
                                   !lease.checkpoint.contains(Left(SpecialCheckpoint.ShardEnd)) =>
                               lease
                           }
-          _            <- log.info(s"Found expired leases: ${expiredLeases.map(_.key).mkString(",")}").when(expiredLeases.nonEmpty)
+          _                 <-
+            ZIO.logInfo(s"Found expired leases: ${expiredLeases.map(_.key).mkString(",")}").when(expiredLeases.nonEmpty)
 
           shardsWithoutLease = shards.filterNot(shard => leases.map(_._1.key).toList.contains(shard))
 
@@ -115,7 +115,7 @@ object ShardAssignmentStrategy {
     allLeases: List[Lease],
     workerId: String,
     expiredLeases: List[Lease] = List.empty
-  ): ZIO[Has[Random] with Logging, Nothing, Set[String]] = {
+  ): ZIO[Random, Nothing, Set[String]] = {
     val allWorkers    = allLeases.map(_.owner).collect { case Some(owner) => owner }.toSet + workerId
     val activeWorkers =
       (allLeases.toSet -- expiredLeases).map(_.owner).collect { case Some(owner) => owner } + workerId
@@ -135,7 +135,7 @@ object ShardAssignmentStrategy {
     val maxNrLeasesToTake = Math.max(0, target + optional - ourLeases.size)
 
     // We may already own some leases
-    log.info(
+    ZIO.logInfo(
       s"We have ${ourLeases.size}, we would like to have at least ${target}/${allLeases.size} leases (${activeWorkers.size} active workers, " +
         s"${zombieWorkers.size} zombie workers), we need ${minNrLeasesToTake} more with an optional ${optional}"
     ) *> (if (minNrLeasesToTake > 0)
@@ -166,7 +166,7 @@ object ShardAssignmentStrategy {
     workerId: String,
     target: Int,
     nrLeasesToSteal: Int
-  ): ZIO[Has[Random] with Logging, Nothing, List[Lease]] = {
+  ): ZIO[Random, Nothing, List[Lease]] = {
     val leasesByWorker =
       allLeases.groupBy(_.owner).collect { case (Some(owner), leases) => owner -> leases }
     val allWorkers     = allLeases.map(_.owner).collect { case Some(owner) => owner }.toSet ++ Set(workerId)
