@@ -1,6 +1,5 @@
 package nl.vroste.zio.kinesis.client.zionative
 import java.time.Instant
-
 import nl.vroste.zio.kinesis.client.Record
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultCheckpointer
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultCheckpointer.UpdateCheckpoint
@@ -8,8 +7,10 @@ import zio.{ Promise, Ref, Schedule, Semaphore, Task, ZIO }
 import zio.test._
 import zio.test.Assertion._
 
+import scala.annotation.nowarn
 import scala.concurrent.TimeoutException
 
+@nowarn("msg=a type was inferred to be `Any`")
 object DefaultCheckpointerTest extends DefaultRunnableSpec {
   type Checkpoint = Either[SpecialCheckpoint, ExtendedSequenceNumber]
   val record1 = Record("shard1", "0", Instant.now, "bla", "bla", None, None, None, false)
@@ -172,13 +173,12 @@ object DefaultCheckpointerTest extends DefaultRunnableSpec {
           values       <- checkpoints.get
         } yield assert(values)(equalTo(List(Left(SpecialCheckpoint.ShardEnd))))
       }
-    ).provideCustomLayerShared(Logging.ignore)
+    ) //.provideCustomLayerShared(Logging.ignore)
 
-  private def makeCheckpointer(updateCheckpoint: UpdateCheckpoint): ZIO[Logging, Nothing, DefaultCheckpointer] =
+  private def makeCheckpointer(updateCheckpoint: UpdateCheckpoint): ZIO[Any, Nothing, DefaultCheckpointer] =
     for {
       state       <- Ref.make(DefaultCheckpointer.State.empty)
       permit      <- Semaphore.make(1)
-      env         <- ZIO.environment[Logging]
-      checkpointer = new DefaultCheckpointer("shard1", env, state, permit, updateCheckpoint, Task.unit)
+      checkpointer = new DefaultCheckpointer("shard1", state, permit, updateCheckpoint, Task.unit)
     } yield checkpointer
 }

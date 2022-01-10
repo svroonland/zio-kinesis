@@ -1,12 +1,10 @@
 package nl.vroste.zio.kinesis.client.zionative
 
 import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.Lease
-import zio.test._
+import nl.vroste.zio.kinesis.client.zionative.ShardAssignmentStrategy.leasesToTake
+import zio.Random
 import zio.test.Assertion._
-import zio.test.Gen
-import zio.test.DefaultRunnableSpec
-import ShardAssignmentStrategy.leasesToTake
-import zio.{ Has, Random }
+import zio.test.{ DefaultRunnableSpec, Gen, _ }
 
 object ShardAssignmentStrategyTest extends DefaultRunnableSpec {
   val leaseDistributionGen = leases(Gen.int(2, 100), Gen.int(2, 10))
@@ -97,13 +95,11 @@ object ShardAssignmentStrategyTest extends DefaultRunnableSpec {
             } yield assert(toStealWorkers)(equalTo(busiestWorkers.take(toStealWorkers.size)))
         }
       }
-    ).provideCustomLayer(loggingLayer)
+    )
 
-  def changedElements[A](as: List[A]): List[A] =
+  def changedElements[A](as: List[A]): List[A]                                     =
     as.foldLeft(List.empty[A]) { case (acc, a) => if (acc.lastOption.contains(a)) acc else acc :+ a }
 
-  val loggingLayer                             = Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
-
   def genTraverse[R, A, B](elems: Iterable[A])(f: A => Gen[R, B]): Gen[R, List[B]] =
-    Gen.crossAll(elems.map(f))
+    Gen.collectAll(elems.map(f))
 }

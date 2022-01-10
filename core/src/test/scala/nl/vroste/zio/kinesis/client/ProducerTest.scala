@@ -1,30 +1,26 @@
 package nl.vroste.zio.kinesis.client
 
-import zio.aws.cloudwatch.CloudWatch
-import zio.aws.dynamodb.DynamoDb
-import zio.aws.kinesis
-import zio.aws.kinesis.Kinesis
-import zio.aws.kinesis.model.{ ScalingType, UpdateShardCountRequest }
 import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.producer.ProducerLive.ProduceRequest
 import nl.vroste.zio.kinesis.client.producer.{ ProducerLive, ProducerMetrics, ShardMap }
 import nl.vroste.zio.kinesis.client.serde.{ Serde, Serializer }
 import software.amazon.awssdk.services.kinesis.model.KinesisException
-import zio.logging.{ Logger, Logging }
-import zio.stream.{ ZChannel, ZPipeline, ZSink, ZStream, ZTransducer }
+import zio.Console.printLine
+import zio.aws.cloudwatch.CloudWatch
+import zio.aws.dynamodb.DynamoDb
+import zio.aws.kinesis.Kinesis
+import zio.aws.kinesis.model.primitives.{ PositiveIntegerObject, StreamName }
+import zio.aws.kinesis.model.{ ScalingType, UpdateShardCountRequest }
+import zio.stream.{ ZChannel, ZSink, ZStream }
 import zio.test.Assertion._
 import zio.test.TestAspect._
-import zio.test._
-import zio.{ Chunk, Queue, Ref, Runtime, ZIO, ZLayer, ZManaged }
+import zio.test.{ Gen, _ }
+import zio.{ Chunk, Clock, Console, Queue, Random, Ref, Runtime, System, ZIO, ZLayer, ZManaged, _ }
 
 import java.security.MessageDigest
 import java.time.Instant
 import java.util.UUID
-import zio.{ Clock, Console, Has, Random, System, _ }
-import zio.Console.printLine
-import zio.aws.kinesis.model.primitives.{ PositiveIntegerObject, StreamName }
-import zio.test.Gen
 
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
@@ -172,10 +168,7 @@ object ProducerTest extends DefaultRunnableSpec {
           check(
             Gen
               .listOf(
-                Gen.crossN(
-                  Gen.stringBounded(1, 1024)(Gen.unicodeChar),
-                  Gen.stringBounded(1, 1024 * 10)(Gen.unicodeChar)
-                )(Tuple2.apply)
+                Gen.stringBounded(1, 1024)(Gen.unicodeChar) zip Gen.stringBounded(1, 1024 * 10)(Gen.unicodeChar)
               )
               .filter(_.nonEmpty)
           ) {
@@ -320,7 +313,7 @@ object ProducerTest extends DefaultRunnableSpec {
                              .use { producer =>
                                ZStream
                                  .fromIterable(records)
-                                 .chunkN(10) // TODO Until https://github.com/zio/zio/issues/4190 is fixed
+                                 .rechunk(10) // TODO Until https://github.com/zio/zio/issues/4190 is fixed
                                  .throttleShape(10, 1.second)(_.size.toLong)
                                  .mapZIO(producer.produce)
                                  .runDrain
@@ -358,7 +351,7 @@ object ProducerTest extends DefaultRunnableSpec {
   def aggregatingBatcherForProducerRecord[R, T](
     shardMap: ShardMap,
     serializer: Serializer[R, T]
-  ): ZSink[R, Throwable, ProducerRecord[T], ProduceRequest, Any] = {
+  ): ZSink[R, Throwable, ProducerRecord[T], ProduceRequest, Chunk[Chunk[ProduceRequest]]] = {
     val aggregatorAsChannel
       : ZChannel[R, Nothing, Chunk[ProducerRecord[T]], Any, Throwable, Chunk[ProduceRequest], Any] =
       ProducerLive
@@ -379,13 +372,20 @@ object ProducerTest extends DefaultRunnableSpec {
     ]] =
       (aggregatorAsChannel pipeToOrFail batcherAsChannel)
 
-    val sink = piped.toSink[ProducerRecord[T], ProduceRequest]
+    piped.doneCollect
 
-    sink
+    val sink = piped.doneCollect.toSink[ProducerRecord[T], ProduceRequest]
+
+    sink.map(_._1)
   }
 
-  def runTransducer[R, E, I, O, Z](parser: ZSink[R, E, I, O, Z], input: Iterable[I]): ZIO[R, E, Chunk[O]] =
-    ZStream.fromIterable(input).transduce(parser).runCollect
+  def runTransducer[R, E, I, O, Z, I2 >: I](
+    parser: ZSink[R, E, I2, O, Z],
+    input: Iterable[I]
+  ): ZIO[R, E, Z] = {
+    val inputs: ZStream[Any, Nothing, I] = ZStream.fromIterable(input)
+    (inputs.channel >>> parser.channel).doneCollect.run.map(_._2)
+  }
 
   val shardMap = ShardMap(
     Chunk(ShardMap.minHashKey, ShardMap.maxHashKey / 2 + 1),

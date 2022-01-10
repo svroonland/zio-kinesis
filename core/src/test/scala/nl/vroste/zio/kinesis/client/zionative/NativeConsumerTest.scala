@@ -16,13 +16,12 @@ import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.LeaseCoordination
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
 import nl.vroste.zio.kinesis.client._
 import zio._
-
-import zio.stream.{ ZStream, ZTransducer }
+import zio.stream.{ ZSink, ZStream }
 import zio.test.Assertion._
 import zio.test._
-
-import zio.{ Clock, Console, Has, System }
+import zio.{ Clock, Console, System }
 import zio.Console._
+import zio.aws.kinesis.model.primitives.{ PositiveIntegerObject, ShardId, StreamName }
 
 object NativeConsumerTest extends DefaultRunnableSpec {
   /*
@@ -71,13 +70,13 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                            }
                            .take(nrRecords.toLong)
                            .runCollect
-              shardIds <- kinesis
-                            .describeStream(DescribeStreamRequest(streamName))
+              shardIds <- Kinesis
+                            .describeStream(DescribeStreamRequest(StreamName(streamName)))
                             .mapError(_.toThrowable)
-                            .map(_.streamDescriptionValue.shardsValue.map(_.shardIdValue))
+                            .map(_.streamDescription.shards.map(_.shardId))
               _        <- producer.interrupt
 
-            } yield assert(records.map(_.shardId).toSet)(equalTo(shardIds.toSet))
+            } yield assert(records.map(r => ShardId(r.shardId)).toSet)(equalTo(shardIds.toSet))
         }
       },
       test("release leases at shutdown") {
@@ -207,7 +206,10 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                 // .tap(r => UIO(println(s"Worker 1 got record on shard ${r.shardId}")))
                                   .tap(checkpointer.stage)
                                   .tap(_ => consumer1Started.succeed(()))
-                                  .aggregateAsyncWithin(ZTransducer.collectAllN(2000), Schedule.fixed(5.minutes))
+                                  .aggregateAsyncWithin(
+                                    ZSink.collectAllN[Record[String]](2000),
+                                    Schedule.fixed(5.minutes)
+                                  )
                                   .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
                                   .tap(_ => checkpointer.checkpoint())
                                   .catchAll {
@@ -220,7 +222,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                   }
                                   .mapConcat(identity(_))
                             }
-                            .updateService[Logger[String]](_.named("worker1"))
+//                            .updateService[Logger[String]](_.named("worker1"))
               consumer2         = Consumer
                             .shardedStream(
                               streamName,
@@ -231,15 +233,15 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                             )
                             .tap(tp => ZIO.logInfo(s"Got tuple ${tp}"))
                             .take(2) // 5 shards, so we expect 2
-                            .updateService[Logger[String]](_.named("worker2"))
-              worker1          <- consumer1.runDrain.tapError(e => ZIO.logError(s"Worker1 failed: ${e}")).fork
-              _                <- consumer1Started.await
-              _                <- ZIO.logInfo("Consumer 1 has started, starting consumer 2")
-              _                <- consumer2.runDrain
-              _                <- ZIO.logInfo("Shutting down worker 1")
-              _                <- worker1.interrupt
-              _                <- ZIO.logInfo("Shutting down producer")
-              _                <- producer.interrupt
+//                            .updateService[Logger[String]](_.named("worker2"))
+              worker1 <- consumer1.runDrain.tapError(e => ZIO.logError(s"Worker1 failed: ${e}")).fork
+              _       <- consumer1Started.await
+              _       <- ZIO.logInfo("Consumer 1 has started, starting consumer 2")
+              _       <- consumer2.runDrain
+              _       <- ZIO.logInfo("Shutting down worker 1")
+              _       <- worker1.interrupt
+              _       <- ZIO.logInfo("Shutting down producer")
+              _       <- producer.interrupt
 
             } yield assertCompletes
         }
@@ -269,7 +271,10 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                               case (shard @ _, shardStream, checkpointer) =>
                                 shardStream
                                   .tap(checkpointer.stage)
-                                  .aggregateAsyncWithin(ZTransducer.collectAllN(200), Schedule.fixed(1.second))
+                                  .aggregateAsyncWithin(
+                                    ZSink.collectAllN[Record[String]](200),
+                                    Schedule.fixed(1.second)
+                                  )
                                   .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
                                   // .tap(_ => checkpointer.checkpoint())
                                   .catchAll {
@@ -295,7 +300,10 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                 ZStream.fromZIO(shardsProcessedByConsumer2.update(_ + shard)) *>
                                   shardStream
                                     .tap(checkpointer.stage)
-                                    .aggregateAsyncWithin(ZTransducer.collectAllN(200), Schedule.fixed(1.second))
+                                    .aggregateAsyncWithin(
+                                      ZSink.collectAllN[Record[String]](200),
+                                      Schedule.fixed(1.second)
+                                    )
                                     .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
                                     // .tap(_ => checkpointer.checkpoint())
                                     .catchAll {
@@ -340,7 +348,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
               case (shard @ _, shardStream, checkpointer) =>
                 shardStream
                   .tap(checkpointer.stage)
-                  .aggregateAsyncWithin(ZTransducer.collectAllN(200), Schedule.fixed(1.second))
+                  .aggregateAsyncWithin(ZSink.collectAllN[Record[String]](200), Schedule.fixed(1.second))
                   .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
                   .map(_.lastOption)
                   .tap(_ => checkpointer.checkpoint())
@@ -353,7 +361,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
             .catchAll {
               case e => ZStream.unwrap(ZIO.logError(e.toString).as(ZStream.fail(e)))
             }
-            .updateService[Logger[String]](_.named(s"worker-${workerId}"))
+//            .updateService[Logger[String]](_.named(s"worker-${workerId}"))
 
         withRandomStreamAndApplicationName(nrShards) {
           (streamName, applicationName) =>
@@ -382,14 +390,14 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                  *> ZIO.logWarning("worker1 done") *> consumer1Done.succeed(())).fork
 
                   worker2 <- consumer(streamName, applicationName, "worker2", emitDiagnostic("worker2"))
-                               .ensuringFirst(
+                               .ensuring(
                                  ZIO.logWarning("worker2 DONE")
                                )
                                .runDrain
                                .delay(5.seconds)
                                .fork
                   worker3 <- consumer(streamName, applicationName, "worker3", emitDiagnostic("worker3"))
-                               .ensuringFirst(
+                               .ensuring(
                                  ZIO.logWarning("worker3 DONE")
                                )
                                .runDrain
@@ -397,20 +405,20 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                .fork
 
                   _       <- consumer1Done.await
-                  _       <- log.debug("Consumer1 is done")
+                  _       <- ZIO.logDebug("Consumer1 is done")
                   _       <- ZIO.sleep(10.seconds)
-                  _       <- log.debug("Interrupting producer")
+                  _       <- ZIO.logDebug("Interrupting producer")
                   _       <- producer.interrupt
-                  _       <- log.debug("Interrupting streams")
+                  _       <- ZIO.logDebug("Interrupting streams")
                   _       <- worker2.interrupt
                          .tap(_ => ZIO.logInfo("Done interrupting worker 2"))
-                         .tapErrorCause(e => ZIO.logError("Error interrupting worker 2:", e))
+                         //                         .tapErrorCause(e => ZIO.logError("Error interrupting worker 2:", e))
                          .ignore zipPar worker3.interrupt
                          .tap(_ => ZIO.logInfo("Done interrupting worker 3"))
-                         .tapErrorCause(e => ZIO.logError("Error interrupting worker 3:", e))
+                         //                         .tapErrorCause(e => ZIO.logError("Error interrupting worker 3:", e))
                          .ignore zipPar worker1.join
                          .tap(_ => ZIO.logInfo("Done interrupting worker 1"))
-                         .tapErrorCause(e => ZIO.logError("Error joining worker 1:", e))
+                         //                         .tapErrorCause(e => ZIO.logError("Error joining worker 1:", e))
                          .ignore
                 } yield ()
               }.onInterrupt(
@@ -473,7 +481,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
               case (shard @ _, shardStream, checkpointer) =>
                 shardStream
                   .tap(checkpointer.stage)
-                  .aggregateAsyncWithin(ZTransducer.collectAllN(200000), Schedule.fixed(checkpointInterval))
+                  .aggregateAsyncWithin(ZSink.collectAllN[Record[String]](200000), Schedule.fixed(checkpointInterval))
                   .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
                   .map(_.last)
                   .tap(_ => checkpointer.checkpoint())
@@ -542,10 +550,10 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                      ),
                                      ZStream.fromZIO(ZIO.sleep(5.seconds)) *> // Give worker1 the first lease
                                        consumer(streamName, applicationName, "worker2", handleEvent("worker2"))
-                                         .ensuringFirst(ZIO.logWarning("worker2 DONE")),
+                                         .ensuring(ZIO.logWarning("worker2 DONE")),
                                      ZStream.fromZIO(ZIO.sleep(5.seconds)) *> // Give worker1 the first lease
                                        consumer(streamName, applicationName, "worker3", handleEvent("worker3"))
-                                         .ensuringFirst(ZIO.logWarning("Worker3 DONE"))
+                                         .ensuring(ZIO.logWarning("Worker3 DONE"))
                                    )
                                    .runDrain
                                    .fork
@@ -582,7 +590,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                   case (shard @ _, shardStream, checkpointer) =>
                     val out = shardStream
                       .tap(checkpointer.stage)
-                      .aggregateAsyncWithin(ZTransducer.collectAllN(200), Schedule.fixed(1.second))
+                      .aggregateAsyncWithin(ZSink.collectAllN[Record[String]](200), Schedule.fixed(1.second))
                       .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
                       .map(_.last)
                       .tap(_ => checkpointer.checkpoint())
@@ -642,7 +650,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                   case (shard @ _, shardStream, checkpointer) =>
                     shardStream
                       .tap(checkpointer.stage)
-                      .aggregateAsyncWithin(ZTransducer.collectAllN(200), Schedule.fixed(1.second))
+                      .aggregateAsyncWithin(ZSink.collectAllN[Record[String]](200), Schedule.fixed(1.second))
                       .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
                       .map(_.last)
                       .tap(_ => checkpointer.checkpoint())
@@ -662,8 +670,14 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                 consumer("worker1", e => UIO(println(e.toString))).runCollect.tapErrorCause(e => UIO(println(e))).fork
               _             <- ZIO.sleep(20.seconds)
               _              = println("Resharding")
-              _             <- kinesis
-                     .updateShardCount(UpdateShardCountRequest(streamName, 4, ScalingType.UNIFORM_SCALING))
+              _             <- Kinesis
+                     .updateShardCount(
+                       UpdateShardCountRequest(
+                         StreamName(streamName),
+                         PositiveIntegerObject(4),
+                         ScalingType.UNIFORM_SCALING
+                       )
+                     )
                      .mapError(_.toThrowable)
               finishedShard <- stream.join.map(_.head)
               _             <- producer.interrupt
@@ -695,7 +709,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                   case (shard @ _, shardStream, checkpointer) =>
                     shardStream
                       .tap(checkpointer.stage)
-                      .aggregateAsyncWithin(ZTransducer.collectAllN(200), Schedule.fixed(1.second))
+                      .aggregateAsyncWithin(ZSink.collectAllN[Record[String]](200), Schedule.fixed(1.second))
                       .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
                       .map(_.last)
                       .tap(_ => checkpointer.checkpoint())
@@ -716,8 +730,14 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                 consumer("worker1", e => UIO(println(e.toString))).runCollect.tapErrorCause(e => UIO(println(e))).fork
               _       <- ZIO.sleep(10.seconds)
               _        = println("Resharding")
-              _       <- kinesis
-                     .updateShardCount(UpdateShardCountRequest(streamName, nrShards * 2, ScalingType.UNIFORM_SCALING))
+              _       <- Kinesis
+                     .updateShardCount(
+                       UpdateShardCountRequest(
+                         StreamName(streamName),
+                         PositiveIntegerObject(nrShards * 2),
+                         ScalingType.UNIFORM_SCALING
+                       )
+                     )
                      .mapError(_.toThrowable)
               _       <- ZIO.sleep(10.seconds)
               _       <- stream.join
@@ -801,16 +821,12 @@ object NativeConsumerTest extends DefaultRunnableSpec {
       TestAspect.timeoutWarning(45.seconds) @@
       TestAspect.timeout(120.seconds)
 
-  val loggingLayer: ZLayer[Any, Nothing, Logging] =
-    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
-
   val useAws = Runtime.default.unsafeRun(System.envOrElse("ENABLE_AWS", "0")).toInt == 1
 
   val env = (((if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()).orDie) >+>
     DynamoDbLeaseRepository.live ++
-      zio.test.environment.testEnvironment ++
-      Clock.live) >>>
-    (ZLayer.identity ++ loggingLayer)
+      zio.test.testEnvironment ++
+      Clock.live)
 
   def produceSampleRecords(
     streamName: String,
@@ -827,8 +843,8 @@ object NativeConsumerTest extends DefaultRunnableSpec {
           (indexStart until (nrRecords + indexStart)).map(i => ProducerRecord(s"key$i", s"msg$i"))
         ZStream
           .fromIterable(records)
-          .chunkN(chunkSize)
-          .mapChunksM { chunk =>
+          .rechunk(chunkSize)
+          .mapChunksZIO { chunk =>
             producer
               .produceChunk(chunk)
               .tapError(e => printLine(s"Error in producing fiber: $e").provideLayer(Console.live).orDie)
@@ -851,8 +867,8 @@ object NativeConsumerTest extends DefaultRunnableSpec {
         (indexStart until (nrRecords + indexStart)).map(i => ProducerRecord(s"key$i", s"msg$i"))
       ZStream
         .fromIterable(records)
-        .chunkN(chunkSize)
-        .mapChunksM(chunk =>
+        .rechunk(chunkSize)
+        .mapChunksZIO(chunk =>
           producer
             .produceChunk(chunk)
             .tapError(e => printLine(s"Error in producing fiber: $e").provideLayer(Console.live).orDie)
@@ -868,7 +884,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
   def onDiagnostic(worker: String): DiagnosticEvent => UIO[Unit] = {
     case _: PollComplete => UIO.unit
-    case ev              => ZIO.logInfo(s"${worker}: ${ev}").provideLayer(loggingLayer)
+    case ev              => ZIO.logInfo(s"${worker}: ${ev}")
   }
 
   def assertAllLeasesReleased(applicationName: String) =
@@ -879,7 +895,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
   def getCheckpoints(
     applicationName: String
-  ): ZIO[Clock with Has[LeaseRepository.Service], Throwable, Map[String, String]] =
+  ): ZIO[Clock with LeaseRepository.Service, Throwable, Map[String, String]] =
     for {
       table      <- ZIO.service[LeaseRepository.Service]
       leases     <- table.getLeases(applicationName).runCollect
@@ -899,9 +915,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
   def withRandomStreamAndApplicationName[R, A](nrShards: Int)(
     f: (String, String) => ZIO[R, Throwable, A]
-  ): ZIO[Kinesis with Clock with Has[Console] with Has[Console] with Has[
-    LeaseRepository.Service
-  ] with R, Throwable, A] =
+  ): ZIO[Kinesis with Clock with Console with Console with LeaseRepository.Service with R, Throwable, A] =
     ZIO.succeed((streamPrefix + "testStream", streamPrefix + "testApplication")).flatMap {
       case (streamName, applicationName) =>
         withStream(streamName, shards = nrShards) {

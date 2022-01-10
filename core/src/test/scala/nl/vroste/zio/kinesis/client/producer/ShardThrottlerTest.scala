@@ -1,11 +1,8 @@
 package nl.vroste.zio.kinesis.client.producer
 import nl.vroste.zio.kinesis.client.producer.ShardThrottler.DynamicThrottler
-import zio.ZIO
-import zio.test._
-
+import zio.{ ZIO, _ }
 import zio.test.Assertion._
-import zio.test.environment.TestClock
-import zio._
+import zio.test._
 
 object ShardThrottlerTest extends DefaultRunnableSpec {
   override def spec =
