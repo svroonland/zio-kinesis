@@ -11,9 +11,8 @@ import nl.vroste.zio.kinesis.client.producer.ProducerLive.ProduceRequest
 import nl.vroste.zio.kinesis.client.producer.{ ProducerLive, ProducerMetrics, ShardMap }
 import nl.vroste.zio.kinesis.client.serde.{ Serde, Serializer }
 import software.amazon.awssdk.services.kinesis.model.KinesisException
-
 import zio.logging.{ Logger, Logging }
-import zio.stream.{ ZStream, ZTransducer }
+import zio.stream.{ ZChannel, ZPipeline, ZSink, ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test._
@@ -24,22 +23,21 @@ import java.time.Instant
 import java.util.UUID
 import zio.{ Clock, Console, Has, Random, System, _ }
 import zio.Console.printLine
+import zio.aws.kinesis.model.primitives.{ PositiveIntegerObject, StreamName }
 import zio.test.Gen
 
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
-
-  val loggingLayer = Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   val useAws = Runtime.default.unsafeRun(System.envOrElse("ENABLE_AWS", "0")).toInt == 1
 
   val env: ZLayer[
     Any,
     Nothing,
-    CloudWatch with Kinesis with DynamoDb with Clock with Has[Console] with Random with Any
+    CloudWatch with Kinesis with DynamoDb with Clock with Console with Random with Any
   ] =
     ((if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()).orDie) >+>
-      (Clock.live ++ zio.Console.live ++ Random.live >+> loggingLayer)
+      (Clock.live ++ zio.Console.live ++ Random.live)
 
   def spec =
     suite("Producer")(
@@ -144,7 +142,6 @@ object ProducerTest extends DefaultRunnableSpec {
                 TestUtil.massProduceRecords(producer, 8000000, None, 14)
               } *> totalMetrics.get.flatMap(m => printLine(m.toString).orDie).as(assertCompletes)
           }
-          .untraced
       } @@ timeout(5.minute) @@ TestAspect.ifEnvSet("ENABLE_AWS") @@ TestAspect.retries(3),
       test("fail when attempting to produce to a stream that does not exist") {
         val streamName = "zio-test-stream-not-existing"
@@ -169,7 +166,7 @@ object ProducerTest extends DefaultRunnableSpec {
           for {
             batches <- runTransducer(batcher, records)
           } yield assert(batches.size)(equalTo(1)) &&
-            assert(batches.flatMap(Chunk.fromIterable).map(_.aggregateCount).sum)(equalTo(nrRecords))
+            assert(batches.flatMap(Chunk.fromIterable(_)).map(_.aggregateCount).sum)(equalTo(nrRecords))
         },
         test("aggregate records up to the record size limit") {
           check(
@@ -261,7 +258,7 @@ object ProducerTest extends DefaultRunnableSpec {
         def makeProducer(
           workerId: String,
           totalMetrics: Ref[ProducerMetrics]
-        ): ZManaged[Any with Has[Console] with Clock with Kinesis with Any, Throwable, Producer[
+        ): ZManaged[Any with Console with Clock with Kinesis with Any, Throwable, Producer[
           Chunk[Byte]
         ]] =
           Producer
@@ -283,7 +280,7 @@ object ProducerTest extends DefaultRunnableSpec {
                     ).orDie
                   )
             )
-            .updateService[Logger[String]](l => l.named(workerId))
+//            .updateService[Logger[String]](l => l.named(workerId))
 
         val nrRecords = 200000
 
@@ -302,7 +299,7 @@ object ProducerTest extends DefaultRunnableSpec {
                }
           _          <- printLine(metrics.toString).orDie
           endMetrics <- metrics.get
-        } yield assert(endMetrics.successRate)(isGreaterThan(0.75))).untraced
+        } yield assert(endMetrics.successRate)(isGreaterThan(0.75)))
       } @@ timeout(5.minute) @@ TestAspect.ifEnvSet("ENABLE_AWS"),
       test("updates the shard map after a reshard is detected") {
         val nrRecords = 1000
@@ -344,9 +341,12 @@ object ProducerTest extends DefaultRunnableSpec {
                       .fork
             _           <- ZIO.sleep(10.seconds)
             _           <- printLine("Resharding").orDie
-            _           <- kinesis
-                   .updateShardCount(UpdateShardCountRequest(streamName, 4, ScalingType.UNIFORM_SCALING))
-                   .mapError(_.toThrowable)
+            _           <-
+              Kinesis
+                .updateShardCount(
+                  UpdateShardCountRequest(StreamName(streamName), PositiveIntegerObject(4), ScalingType.UNIFORM_SCALING)
+                )
+                .mapError(_.toThrowable)
             _           <- done.join race producerFib.join
             _            = println("Done!")
             _           <- producerFib.interrupt
@@ -358,14 +358,33 @@ object ProducerTest extends DefaultRunnableSpec {
   def aggregatingBatcherForProducerRecord[R, T](
     shardMap: ShardMap,
     serializer: Serializer[R, T]
-  ): ZTransducer[R, Throwable, ProducerRecord[T], Seq[ProduceRequest]] =
-    ProducerLive
-      .aggregator(MessageDigest.getInstance("MD5"))
-      .contramapZIO((r: ProducerRecord[T]) =>
-        ProducerLive.makeProduceRequest(r, serializer, Instant.now, shardMap).map(_._2)
-      ) >>> ProducerLive.batcher
+  ): ZSink[R, Throwable, ProducerRecord[T], ProduceRequest, Any] = {
+    val aggregatorAsChannel
+      : ZChannel[R, Nothing, Chunk[ProducerRecord[T]], Any, Throwable, Chunk[ProduceRequest], Any] =
+      ProducerLive
+        .aggregator(MessageDigest.getInstance("MD5"))
+        .contramapZIO((r: ProducerRecord[T]) =>
+          ProducerLive.makeProduceRequest(r, serializer, Instant.now, shardMap).map(_._2)
+        )
+        .channel
 
-  def runTransducer[R, E, I, O](parser: ZTransducer[R, E, I, O], input: Iterable[I]): ZIO[R, E, Chunk[O]] =
+//    sealed trait ZChannel[-Env, -InErr, -InElem, -InDone, +OutErr, +OutElem, +OutDone] { self =>
+    val batcherAsChannel: ZChannel[Any, Nothing, Chunk[ProduceRequest], Any, Nothing, Chunk[
+      ProduceRequest
+    ], Chunk[ProduceRequest]] =
+      ProducerLive.batcher.channel
+
+    val piped: ZChannel[R, Nothing, Chunk[ProducerRecord[T]], Any, Throwable, Chunk[ProduceRequest], Chunk[
+      ProduceRequest
+    ]] =
+      (aggregatorAsChannel pipeToOrFail batcherAsChannel)
+
+    val sink = piped.toSink[ProducerRecord[T], ProduceRequest]
+
+    sink
+  }
+
+  def runTransducer[R, E, I, O, Z](parser: ZSink[R, E, I, O, Z], input: Iterable[I]): ZIO[R, E, Chunk[O]] =
     ZStream.fromIterable(input).transduce(parser).runCollect
 
   val shardMap = ShardMap(
