@@ -2,8 +2,13 @@ package nl.vroste.zio.kinesis.client
 
 import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
-import nl.vroste.zio.kinesis.client.producer.ProducerLive.ProduceRequest
-import nl.vroste.zio.kinesis.client.producer.{ ProducerLive, ProducerMetrics, ShardMap }
+import nl.vroste.zio.kinesis.client.producer.ProducerLive.{ batcher, ProduceRequest }
+import nl.vroste.zio.kinesis.client.producer.{
+  ProducerLive,
+  ProducerMetrics,
+  PutRecordsAggregatedBatchForShard,
+  ShardMap
+}
 import nl.vroste.zio.kinesis.client.serde.{ Serde, Serializer }
 import software.amazon.awssdk.services.kinesis.model.KinesisException
 import zio.Console.printLine
@@ -24,6 +29,11 @@ import java.util.UUID
 
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
+
+  override def runner: TestRunner[TestEnvironment, Any] =
+    defaultTestRunner.withRuntimeConfig(
+      _ @@ RuntimeConfigAspect.addLogger(ZLogger.defaultString.map(println(_)).filterLogLevel(_ => true))
+    )
 
   val useAws = Runtime.default.unsafeRun(System.envOrElse("ENABLE_AWS", "0")).toInt == 1
 
@@ -152,17 +162,70 @@ object ProducerTest extends DefaultRunnableSpec {
           .exit
           .map(r => assert(r)(fails(isSubtype[KinesisException](anything))))
       } @@ timeout(1.minute),
+      suite("foldWhile")(
+        test("empty")(
+          assertM(
+            ZStream.empty
+              .transduce(
+                ProducerLive.foldWhile(0)(_ => true)((x, y: Int) => ZIO.succeed(x + y))
+              )
+              .runCollect
+          )(equalTo(Chunk(0)))
+        ),
+        test("short circuits") {
+          val empty: ZStream[Any, Nothing, Int]     = ZStream.empty
+          val single: ZStream[Any, Nothing, Int]    = ZStream.succeed(1)
+          val double: ZStream[Any, Nothing, Int]    = ZStream(1, 2)
+          val failed: ZStream[Any, String, Nothing] = ZStream.fail("Ouch")
+
+          def run[E](stream: ZStream[Any, E, Int]) =
+            (for {
+              effects <- Ref.make[List[Int]](Nil)
+              exit    <- stream
+                        .transduce(ProducerLive.foldWhile(0)(_ => true) { (_, a: Int) =>
+                          effects.update(a :: _) *> UIO.succeed(30)
+                        })
+                        .runCollect
+              result  <- effects.get
+            } yield exit -> result).exit
+
+          (assertM(run(empty))(succeeds(equalTo((Chunk(0), Nil)))) <*>
+            assertM(run(single))(succeeds(equalTo((Chunk(30), List(1))))) <*>
+            assertM(run(double))(succeeds(equalTo((Chunk(30), List(2, 1))))) <*>
+            assertM(run(failed))(fails(equalTo("Ouch")))).map {
+            case (r1, r2, r3, r4) =>
+              r1 && r2 && r3 && r4
+          }
+        }
+//        test("equivalence with List#foldLeft") {
+//          val ioGen = ZStreamGen.successes(Gen.string)
+//          check(Gen.small(ZStreamGen.pureStreamGen(Gen.int, _)), Gen.function2(ioGen), ioGen) { (s, f, z) =>
+//            for {
+//              sinkResult <- z.flatMap(z => s.run(ZSink.foldLeftZIO(z)(f)))
+//              foldResult <- s.runFold(List[Int]())((acc, el) => el :: acc)
+//                              .map(_.reverse)
+//                              .flatMap(_.foldLeft(z)((acc, el) => acc.flatMap(f(_, el))))
+//                              .exit
+//            } yield assert(foldResult.isSuccess)(isTrue) implies assert(foldResult)(succeeds(equalTo(sinkResult)))
+//          }
+//        }
+      ),
       suite("aggregation")(
         test("batch aggregated records per shard") {
-          val batcher = aggregatingBatcherForProducerRecord(shardMap, Serde.asciiString)
+          val batcher = aggregatingBatcherForProducerRecord(MessageDigest.getInstance("MD5"))
 
           val nrRecords = 10
           val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))
 
           for {
-            batches <- runTransducer(batcher, records)
+            batches <-
+              ZStream
+                .fromIterable(records)
+                .mapZIO(r => ProducerLive.makeProduceRequest(r, Serde.asciiString, Instant.now, shardMap).map(_._2))
+                .transduce(batcher)
+                .runCollect
           } yield assert(batches.size)(equalTo(1)) &&
-            assert(batches.flatMap(Chunk.fromIterable(_)).map(_.aggregateCount).sum)(equalTo(nrRecords))
+            assert(batches.flatten.map(_.aggregateCount).sum)(equalTo(nrRecords))
         },
         test("aggregate records up to the record size limit") {
           check(
@@ -173,30 +236,41 @@ object ProducerTest extends DefaultRunnableSpec {
               .filter(_.nonEmpty)
           ) {
             inputs =>
-              val batcher = aggregatingBatcherForProducerRecord(shardMap, Serde.asciiString)
+              val batcher = aggregatingBatcherForProducerRecord(MessageDigest.getInstance("MD5"))
 
               val records = inputs.map { case (key, value) => ProducerRecord(key, value) }
 
+              println("Running testie")
               for {
-                batches           <- runTransducer(batcher, records)
-                recordPayloadSizes = batches.flatMap(Chunk.fromIterable).map(r => r.payloadSize)
+                batches           <-
+                  ZStream
+                    .fromIterable(records)
+                    .mapZIO(r => ProducerLive.makeProduceRequest(r, Serde.asciiString, Instant.now, shardMap).map(_._2))
+                    .transduce(batcher)
+                    .runCollect
+                recordPayloadSizes = batches.flatten.map(r => r.payloadSize)
               } yield assert(recordPayloadSizes)(forall(isLessThanEqualTo(ProducerLive.maxPayloadSizePerRecord)))
           }
         },
         test("aggregate records up to the batch size limit") {
-          val batcher = aggregatingBatcherForProducerRecord(shardMap, Serde.asciiString)
+          val batcher = aggregatingBatcherForProducerRecord(MessageDigest.getInstance("MD5"))
 
           val nrRecords = 100000
           val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))
 
           for {
-            batches          <- runTransducer(batcher, records)
+            batches          <-
+              ZStream
+                .fromIterable(records)
+                .mapZIO(r => ProducerLive.makeProduceRequest(r, Serde.asciiString, Instant.now, shardMap).map(_._2))
+                .transduce(batcher)
+                .runCollect
             batchPayloadSizes = batches.map(_.map(_.data.length).sum)
           } yield assert(batches.map(_.size))(forall(isLessThanEqualTo(ProducerLive.maxRecordsPerRequest))) &&
             assert(batchPayloadSizes)(forall(isLessThanEqualTo(ProducerLive.maxPayloadSizePerRequest)))
         }
         // TODO test that retries end up in the output
-      ),
+      ), // @@ TestAspect.timeout(60.seconds),
       test("produce to the right shard when aggregating") {
         val nrRecords = 1000
         val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))
@@ -346,20 +420,22 @@ object ProducerTest extends DefaultRunnableSpec {
           } yield assertCompletes
         }
       } @@ TestAspect.timeout(2.minute)
-    ).provideCustomLayerShared(env) @@ sequential
+    ).provideCustomLayerShared(env) @@ sequential @@ TestAspect.timeout(2.minute)
 
-  def aggregatingBatcherForProducerRecord[R, T](
-    shardMap: ShardMap,
-    serializer: Serializer[R, T]
-  ): ZSink[R, Throwable, ProducerRecord[T], ProduceRequest, Chunk[Chunk[ProduceRequest]]] = {
+  def aggregatingBatcherForProducerRecord(
+    digest: MessageDigest
+  ): ZSink[Any, Throwable, ProduceRequest, ProduceRequest, Chunk[ProduceRequest]] = {
+    val aggregator: ZSink[Any, Throwable, ProduceRequest, ProduceRequest, PutRecordsAggregatedBatchForShard] =
+      ProducerLive.aggregator
+
     val aggregatorAsChannel
-      : ZChannel[R, Nothing, Chunk[ProducerRecord[T]], Any, Throwable, Chunk[ProduceRequest], Any] =
-      ProducerLive
-        .aggregator(MessageDigest.getInstance("MD5"))
-        .contramapZIO((r: ProducerRecord[T]) =>
-          ProducerLive.makeProduceRequest(r, serializer, Instant.now, shardMap).map(_._2)
+      : ZChannel[Any, Nothing, Chunk[ProduceRequest], Any, Throwable, Chunk[ProduceRequest], Chunk[ProduceRequest]] =
+      aggregator.channel
+        .mapZIO(
+          _.toProduceRequest(digest)
+            .tap(o => UIO(println("Chunk was empty!")).when(o.isEmpty))
+            .map(o => Chunk.fromIterable(o.toIterable))
         )
-        .channel
 
 //    sealed trait ZChannel[-Env, -InErr, -InElem, -InDone, +OutErr, +OutElem, +OutDone] { self =>
     val batcherAsChannel: ZChannel[Any, Nothing, Chunk[ProduceRequest], Any, Nothing, Chunk[
@@ -367,25 +443,24 @@ object ProducerTest extends DefaultRunnableSpec {
     ], Chunk[ProduceRequest]] =
       ProducerLive.batcher.channel
 
-    val piped: ZChannel[R, Nothing, Chunk[ProducerRecord[T]], Any, Throwable, Chunk[ProduceRequest], Chunk[
-      ProduceRequest
-    ]] =
+    val piped
+      : ZChannel[Any, Nothing, Chunk[ProduceRequest], Any, Throwable, Chunk[ProduceRequest], Chunk[ProduceRequest]] =
       (aggregatorAsChannel pipeToOrFail batcherAsChannel)
 
-    piped.doneCollect
+    val sink = piped.doneCollect.toSink[ProduceRequest, ProduceRequest]
 
-    val sink = piped.doneCollect.toSink[ProducerRecord[T], ProduceRequest]
-
-    sink.map(_._1)
+    sink
+      .map(_._2)
   }
 
-  def runTransducer[R, E, I, O, Z, I2 >: I](
-    parser: ZSink[R, E, I2, O, Z],
+  def runTransducer[R, E, I, Z, I2 >: I](
+    parser: ZSink[R, E, I2, I2, Z],
     input: Iterable[I]
-  ): ZIO[R, E, Z] = {
-    val inputs: ZStream[Any, Nothing, I] = ZStream.fromIterable(input)
-    (inputs.channel >>> parser.channel).doneCollect.run.map(_._2)
-  }
+  ): ZIO[R, E, Chunk[Z]] =
+    ZStream
+      .fromIterable(input)
+      .transduce(parser)
+      .runCollect
 
   val shardMap = ShardMap(
     Chunk(ShardMap.minHashKey, ShardMap.maxHashKey / 2 + 1),

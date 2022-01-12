@@ -47,20 +47,24 @@ final case class PutRecordsAggregatedBatchForShard(
   def isWithinLimits: Boolean =
     payloadSize <= maxPayloadSizePerRecord
 
-  def toProduceRequest(digest: MessageDigest): UIO[ProduceRequest] =
+  def toProduceRequest(digest: MessageDigest): UIO[Option[ProduceRequest]] =
     UIO {
-      // Do not inline to avoid capturing the entire chunk in the closure below
-      val completes = entries.map(_.complete)
+      entries.headOption.flatMap { firstEntry =>
+        // Do not inline to avoid capturing the entire chunk in the closure below
+        val completes = entries.map(_.complete)
 
-      ProduceRequest(
-        data = ProtobufAggregation.encodeAggregatedRecord(digest, builtAggregate),
-        partitionKey = entries.head.partitionKey, // First one?
-        complete = result => ZIO.foreachDiscard(completes)(_(result)),
-        timestamp = entries.head.timestamp,
-        isAggregated = true,
-        aggregateCount = entries.size,
-        predictedShard = entries.head.predictedShard
-      )
+        Some(
+          ProduceRequest(
+            data = ProtobufAggregation.encodeAggregatedRecord(digest, builtAggregate),
+            partitionKey = firstEntry.partitionKey, // First one?
+            complete = result => ZIO.foreachDiscard(completes)(_(result)),
+            timestamp = firstEntry.timestamp,
+            isAggregated = true,
+            aggregateCount = entries.size,
+            predictedShard = firstEntry.predictedShard
+          )
+        )
+      }
     }
 }
 

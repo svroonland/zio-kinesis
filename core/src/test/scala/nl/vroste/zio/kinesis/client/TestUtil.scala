@@ -66,6 +66,7 @@ object TestUtil {
     Kinesis
       .describeStream(DescribeStreamRequest(StreamName(streamName)))
       .mapError(_.toThrowable)
+      .tap(r => Task(println(r)))
       .retryWhile {
         case _: ResourceNotFoundException => true
         case _                            => false

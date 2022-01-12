@@ -1,29 +1,32 @@
 package nl.vroste.zio.kinesis.client.zionative
 
-import java.time.Instant
-import java.{ util => ju }
-import scala.collection.compat._
-import zio.aws.kinesis
-import zio.aws.kinesis.Kinesis
-import zio.aws.kinesis.model.{ DescribeStreamRequest, ScalingType, UpdateShardCountRequest }
 import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.TestUtil.{ retryOnResourceNotFound, withStream }
+import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.LeaseCoordinationSettings
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
-import nl.vroste.zio.kinesis.client._
-import zio._
+import zio.Console._
+import zio.aws.kinesis.Kinesis
+import zio.aws.kinesis.model.primitives.{ PositiveIntegerObject, ShardId, StreamName }
+import zio.aws.kinesis.model.{ DescribeStreamRequest, ScalingType, UpdateShardCountRequest }
 import zio.stream.{ ZSink, ZStream }
 import zio.test.Assertion._
 import zio.test._
-import zio.{ Clock, Console, System }
-import zio.Console._
-import zio.aws.kinesis.model.primitives.{ PositiveIntegerObject, ShardId, StreamName }
+import zio.{ Clock, Console, System, _ }
+
+import java.time.Instant
+import java.{ util => ju }
 
 object NativeConsumerTest extends DefaultRunnableSpec {
+  override def runner: TestRunner[TestEnvironment, Any] =
+    defaultTestRunner.withRuntimeConfig(
+      _ @@ RuntimeConfigAspect.addLogger(ZLogger.defaultString)
+    )
+
   /*
   - [X] It must retrieve records from all shards
   - [X] Support both polling and enhanced fanout

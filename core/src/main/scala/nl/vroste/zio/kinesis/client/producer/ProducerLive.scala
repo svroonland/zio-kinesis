@@ -52,7 +52,9 @@ private[client] final class ProducerLive[R, R1, T](
       .flatMapPar(Int.MaxValue, chunkBufferSize) {
         case (shardId @ _, requests) =>
           ZStream.managed(ShardMap.md5.orDie).flatMap { digest =>
-            if (aggregate) requests.aggregateAsync(aggregator(digest)) else requests
+            if (aggregate)
+              requests.aggregateAsync(aggregator).mapConcatZIO(_.toProduceRequest(digest).map(_.toIterable))
+            else requests
           }
       })
       .groupByKey2(_.predictedShard, chunkBufferSize) // TODO can we avoid this second group by?
@@ -385,6 +387,7 @@ private[client] object ProducerLive {
       def foldChunkSplitM(z: S, chunk: Chunk[In])(
         contFn: S => Boolean
       )(f: (S, In) => ZIO[Env, Err, S]): ZIO[Env, Err, (S, Option[Chunk[In]])] = {
+
         def fold(s: S, chunk: Chunk[In], idx: Int, len: Int): ZIO[Env, Err, (S, Option[Chunk[In]])] =
           if (idx == len) UIO.succeed((s, None))
           else
@@ -392,7 +395,7 @@ private[client] object ProducerLive {
               if (contFn(s1))
                 fold(s1, chunk, idx + 1, len)
               else
-                UIO.succeed((s1, Some(chunk.drop(idx + 1))))
+                UIO.succeed((s, Some(chunk.drop(idx))))
             }
 
         fold(z, chunk, 0, chunk.length)
@@ -422,8 +425,8 @@ private[client] object ProducerLive {
       ZIO.succeed(batch.add(record))
     }.map(_.entries)
 
-  def aggregator(digest: MessageDigest): ZSink[Any, Nothing, ProduceRequest, ProduceRequest, ProduceRequest] =
+  val aggregator: ZSink[Any, Nothing, ProduceRequest, ProduceRequest, PutRecordsAggregatedBatchForShard] =
     foldWhile(PutRecordsAggregatedBatchForShard.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
       ZIO.succeed(batch.add(record))
-    }.mapZIO(_.toProduceRequest(digest))
+    }
 }
