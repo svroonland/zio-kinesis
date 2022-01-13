@@ -1,38 +1,27 @@
 package nl.vroste.zio.kinesis.client.dynamicconsumer
 
-import zio.aws.cloudwatch.CloudWatch
-import zio.aws.dynamodb.DynamoDb
-import zio.aws.kinesis.Kinesis
+import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.consumeWith
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.{ ProducerRecord, TestUtil }
-import zio.test.Assertion.equalTo
-import zio.test.TestAspect.{ sequential, timeout }
-import zio.test.{ assert, DefaultRunnableSpec }
-import zio.{ Has, Promise, Ref, ZLayer }
-import DynamicConsumer.consumeWith
-import zio.duration.durationInt
-import zio.test.mock.MockRandom
-
-import java.util.UUID
-import zio.{ Clock, Console, Random }
 import zio.Console.printLine
+import zio.aws.cloudwatch.CloudWatch
+import zio.aws.dynamodb.DynamoDb
+import zio.aws.kinesis.Kinesis
+import zio.test.Assertion.equalTo
+import zio.test.TestAspect.timeout
+import zio.test.{ assert, DefaultRunnableSpec }
+import zio.{ durationInt, Clock, Console, Promise, Random, Ref, ZLayer }
 
 object ConsumeWithTest extends DefaultRunnableSpec {
   import TestUtil._
 
-  val loggingLayer: ZLayer[Has[Console] with Clock, Nothing, Logging] =
-    Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
-
   private val env: ZLayer[
     Any,
     Throwable,
-    Has[Console] with Clock with Any with Has[
-      Random
-    ] with CloudWatch with Kinesis with DynamoDb with DynamicConsumer
+    Console with Clock with Any with Random with CloudWatch with Kinesis with DynamoDb with DynamicConsumer
   ] =
-    (Console.live ++ Clock.live ++ Blocking.live ++ Random.live) >+> loggingLayer >+> LocalStackServices
-      .localStackAwsLayer() >+> DynamicConsumer.live
+    (Console.live ++ Clock.live ++ Random.live) >+> LocalStackServices.localStackAwsLayer() >+> DynamicConsumer.live
 
   def testConsume1 =
     test("consumeWith should consume records produced on all shards") {
@@ -51,7 +40,7 @@ object ConsumeWithTest extends DefaultRunnableSpec {
                      .tapError(e => printLine(s"error1: $e").provideLayer(Console.live))
                      .retry(retryOnResourceNotFound)
               _                <- printLine("Starting dynamic consumer")
-              consumerFiber    <- consumeWith[Any, Logging, String](
+              consumerFiber    <- consumeWith[Any, Any, String](
                                  streamName,
                                  applicationName = applicationName,
                                  deserializer = Serde.asciiString,
@@ -95,7 +84,7 @@ object ConsumeWithTest extends DefaultRunnableSpec {
                      .tapError(e => printLine(s"error1: $e").provideLayer(Console.live))
                      .retry(retryOnResourceNotFound)
               _                <- printLine("Starting dynamic consumer - about to fail")
-              _                <- consumeWith[Any, Logging, String](
+              _                <- consumeWith[Any, Any, String](
                      streamName,
                      applicationName = applicationName,
                      deserializer = Serde.asciiString,
@@ -110,7 +99,7 @@ object ConsumeWithTest extends DefaultRunnableSpec {
                        )
                    }.ignore
               _                <- printLine("Starting dynamic consumer - about to succeed")
-              consumerFiber    <- consumeWith[Any, Logging, String](
+              consumerFiber    <- consumeWith[Any, Any, String](
                                  streamName,
                                  applicationName = applicationName,
                                  deserializer = Serde.asciiString,

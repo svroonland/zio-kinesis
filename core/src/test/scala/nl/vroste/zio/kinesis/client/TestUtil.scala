@@ -131,7 +131,7 @@ object TestUtil {
       }
       .use(massProduceRecords(_, nrRecords, produceRate = Some(produceRate), maxRecordSize))
 
-  val defaultChunkSize = 1000
+  val defaultChunkSize = 10000
 
   def putRecords[R, T](
     streamName: String,
@@ -223,6 +223,7 @@ object TestUtil {
   ): ZIO[Clock with R, Throwable, Unit] =
     records
       .mapChunks(Chunk.single)
+      .buffer(20)
       .mapZIOParUnordered(50) { chunk =>
         producer
           .produceChunk(chunk)

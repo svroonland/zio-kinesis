@@ -1,41 +1,33 @@
 package nl.vroste.zio.kinesis.client.dynamicconsumer
 
-import zio.aws.cloudwatch.CloudWatch
-import zio.aws.dynamodb.DynamoDb
-import zio.aws.kinesis
-import zio.aws.kinesis.model.ScalingType
-import zio.aws.kinesis.{ model, Kinesis }
 import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.TestUtil
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.kinesis.exceptions.ShutdownException
-import zio._
-import zio.blocking.Blocking
-import zio.duration.{ durationInt, Duration }
-import zio.stream.{ SubscriptionRef, ZStream, ZTransducer }
+import zio.Console.printLine
+import zio.aws.cloudwatch.CloudWatch
+import zio.aws.dynamodb.DynamoDb
+import zio.aws.kinesis.model.ScalingType
+import zio.aws.kinesis.model.primitives.{ PositiveIntegerObject, StreamName }
+import zio.aws.kinesis.{ model, Kinesis }
+import zio.stream.{ SubscriptionRef, ZSink, ZStream }
 import zio.test.Assertion._
 import zio.test.TestAspect.timeout
 import zio.test._
-import zio.{ Clock, Console, Has, Random, System, System }
-import zio.Console.printLine
+import zio.{ Clock, Console, Random, System, _ }
 
 object DynamicConsumerTest extends DefaultRunnableSpec {
   import TestUtil._
-
-  val loggingLayer: ZLayer[Any, Nothing, Logging] =
-    (Console.live ++ Clock.live) >>> Logging.console(LogLevel.Trace) >>> Logging.withRootLoggerName(getClass.getName)
 
   val useAws = Runtime.default.unsafeRun(System.envOrElse("ENABLE_AWS", "0")).toInt == 1
 
   private val env: ZLayer[
     Any,
-    Throwable,
-    CloudWatch with Kinesis with DynamoDb with DynamicConsumer with Clock with Any with Has[
-      Random
-    ] with Has[Console] with Has[System]
-  ] = (if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()) >+> loggingLayer >+>
-    (DynamicConsumer.live ++ Clock.live ++ Blocking.live ++ Random.live ++ Console.live ++ zio.system.System.live)
+    Nothing,
+    CloudWatch with Kinesis with DynamoDb with DynamicConsumer with Clock with Random with Console with System
+  ] = (if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()).orDie >+>
+    (DynamicConsumer.live ++ Clock.live ++ Random.live ++ Console.live ++ zio.System.live)
 
   def testConsumePolling =
     test("consume records produced on all shards produced on the stream") {
@@ -121,8 +113,8 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
       withRandomStreamEnv(10) { (streamName, applicationName) =>
         def streamConsumer(
           workerIdentifier: String,
-          activeConsumers: RefM[Set[String]]
-        ): ZStream[Has[Console] with Any with DynamicConsumer with Clock, Throwable, (String, String)] =
+          activeConsumers: Ref.Synchronized[Set[String]]
+        ): ZStream[Console with Any with DynamicConsumer with Clock, Throwable, (String, String)] =
           for {
             service <- ZStream.service[DynamicConsumer.Service]
             stream  <- ZStream
@@ -139,10 +131,12 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                             .flatMapPar(Int.MaxValue) {
                               case (shardId, shardStream, checkpointer @ _) =>
                                 shardStream
-                                  .viaFunction(checkpointer.checkpointBatched[Any with Has[Clock]](1000, 1.second))
+                                  .viaFunction(checkpointer.checkpointBatched[Clock](1000, 1.second))
                                   .as((workerIdentifier, shardId))
                                   // Background and a bit delayed so we get a chance to actually emit some records
-                                  .tap(_ => activeConsumers.update(s => ZIO(s + workerIdentifier)).delay(1.second).fork)
+                                  .tap(_ =>
+                                    activeConsumers.updateZIO(s => ZIO(s + workerIdentifier)).delay(1.second).fork
+                                  )
                                   .ensuring(printLine(s"Shard $shardId completed for consumer $workerIdentifier").orDie)
                                   .catchSome {
                                     case _: ShutdownException => // This will be thrown when the shard lease has been stolen
@@ -177,7 +171,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
           lastProcessedRecords: Ref[Map[String, String]],
           lastCheckpointedRecords: Ref[Map[String, String]]
         ): ZStream[
-          Has[Console] with Any with Clock with DynamicConsumer with Kinesis,
+          Console with Any with Clock with DynamicConsumer with Kinesis,
           Throwable,
           DynamicConsumer.Record[
             String
@@ -208,7 +202,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                               // It's important that the checkpointing is always done before flattening the stream, otherwise
                               // we cannot guarantee that the KCL has not yet shutdown the record processor and taken away the lease
                               .aggregateAsyncWithin(
-                                ZTransducer.collectAllN(
+                                ZSink.collectAllN[DynamicConsumer.Record[String]](
                                   100
                                 ), // TODO we need to make sure that in our test this thing has some records buffered after shutdown request
                                 Schedule.fixed(1.seconds)
@@ -255,7 +249,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
           firstRecordProcessed: Promise[Nothing, Unit],
           newShardDetected: Queue[Unit]
         ): ZStream[
-          Has[Console] with Any with Clock with DynamicConsumer with Kinesis,
+          Console with Any with Clock with DynamicConsumer with Kinesis,
           Throwable,
           DynamicConsumer.Record[
             String
@@ -278,7 +272,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                               .tap(_ => firstRecordProcessed.succeed(()))
                               .tap(checkpointer.stage)
                               .aggregateAsyncWithin(
-                                ZTransducer.last, // TODO we need to make sure that in our test this thing has some records buffered after shutdown request
+                                ZSink.last[DynamicConsumer.Record[String]], // TODO we need to make sure that in our test this thing has some records buffered after shutdown request
                                 Schedule.fixed(1.seconds)
                               )
                               .mapConcat(_.toList)
@@ -307,13 +301,17 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                         firstRecordProcessed,
                         newShards
                       ).runCollect
-                        .tapError(e => zio.logging.ZIO.logError(s"Error in stream consumer,: ${e}"))
+                        .tapError(e => ZIO.logError(s"Error in stream consumer,: ${e}"))
                         .fork
           _        <- firstRecordProcessed.await
           _         = println("Resharding")
-          _        <- kinesis
+          _        <- Kinesis
                  .updateShardCount(
-                   model.UpdateShardCountRequest(streamName, nrShards * 2, ScalingType.UNIFORM_SCALING)
+                   model.UpdateShardCountRequest(
+                     StreamName(streamName),
+                     PositiveIntegerObject(nrShards * 2),
+                     ScalingType.UNIFORM_SCALING
+                   )
                  )
                  .mapError(_.toThrowable)
           _        <- ZStream.fromQueue(newShards).take(nrShards * 3L).runDrain
@@ -335,7 +333,7 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
       testConsume2,
       testCheckpointAtShutdown,
       testShardEnd
-    ).provideCustomLayer(env.orDie) @@ timeout(10.minutes)
+    ).provideCustomLayer(env) @@ timeout(10.minutes)
 
   def delayStream[R, E, O](s: ZStream[R, E, O], delay: Duration) =
     ZStream.fromZIO(ZIO.sleep(delay)).flatMap(_ => s)

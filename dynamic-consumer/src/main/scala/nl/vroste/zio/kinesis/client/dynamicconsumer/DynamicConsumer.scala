@@ -8,7 +8,7 @@ import nl.vroste.zio.kinesis.client.serde.Deserializer
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import software.amazon.kinesis.common.{ InitialPositionInStream, InitialPositionInStreamExtended }
 import software.amazon.kinesis.exceptions.ShutdownException
-import zio.stream.{ ZStream, ZTransducer }
+import zio.stream.{ ZSink, ZStream }
 import zio._
 
 import java.time.Instant
@@ -32,12 +32,13 @@ object DynamicConsumer {
     aggregated: Boolean
   )
 
-  val live: ZLayer[Kinesis with CloudWatch with DynamoDb, Nothing, DynamicConsumer] =
-    ZLayer
-      .fromServices[Logger[String], Kinesis.Service, CloudWatch.Service, DynamoDb.Service, DynamicConsumer.Service] {
-        case (logger, kinesis, cloudwatch, dynamodb) =>
-          new DynamicConsumerLive(logger, kinesis.api, cloudwatch.api, dynamodb.api)
-      }
+  val live: ZLayer[Kinesis with CloudWatch with DynamoDb, Nothing, DynamicConsumer] = {
+    for {
+      kinesis    <- ZManaged.service[Kinesis]
+      cloudwatch <- ZManaged.service[CloudWatch]
+      dynamodb   <- ZManaged.service[DynamoDb]
+    } yield new DynamicConsumerLive(kinesis.api, cloudwatch.api, dynamodb.api): DynamicConsumer
+  }.toLayer
 
   /**
    * Implements a fake `DynamicConsumer` that also offers fake checkpointing functionality that can be tracked using the
@@ -50,10 +51,8 @@ object DynamicConsumer {
   def fake(
     shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, Chunk[Byte]])],
     refCheckpointedList: Ref[Seq[Record[Any]]]
-  ): ZLayer[Clock, Nothing, Has[Service]] =
-    ZLayer.fromService[Clock, DynamicConsumer.Service] { clock =>
-      new DynamicConsumerFake(shards, refCheckpointedList, clock)
-    }
+  ): ZLayer[Clock, Nothing, Service] =
+    ZIO.service[Clock].map(new DynamicConsumerFake(shards, refCheckpointedList, _)).toLayer
 
   /**
    * Overloaded version of above but without fake checkpointing functionality
@@ -63,12 +62,11 @@ object DynamicConsumer {
    */
   def fake(
     shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, Chunk[Byte]])]
-  ): ZLayer[Clock, Nothing, Has[Service]] =
-    ZLayer.fromServiceM[Clock, Any, Nothing, DynamicConsumer.Service] { clock =>
-      Ref.make[Seq[Record[Any]]](Seq.empty).map { refCheckpointedList =>
+  ): ZLayer[Clock, Nothing, Service] =
+    (Ref.make[Seq[Record[Any]]](Seq.empty) zip ZIO.service[Clock]).map {
+      case (refCheckpointedList, clock) =>
         new DynamicConsumerFake(shards, refCheckpointedList, clock)
-      }
-    }
+    }.toLayer
 
   trait Service {
 
@@ -215,7 +213,7 @@ object DynamicConsumer {
                case (_, shardStream, checkpointer) =>
                  shardStream
                    .tap(record => recordProcessor(record) *> checkpointer.stage(record))
-                   .via(
+                   .viaFunction(
                      checkpointer
                        .checkpointBatched[Any with RC](
                          nr = checkpointBatchSize,
@@ -297,7 +295,7 @@ object DynamicConsumer {
       nr: Long,
       interval: Duration
     ): ZStream[R, Throwable, Any] => ZStream[R with Clock with Any, Throwable, Unit] =
-      _.aggregateAsyncWithin(ZTransducer.foldUntil((), nr)((_, _) => ()), Schedule.fixed(interval))
+      _.aggregateAsyncWithin(ZSink.foldUntil[Any, Unit]((), nr)((_, _) => ()), Schedule.fixed(interval))
         .tap(_ => checkpoint)
         .catchAll {
           case _: ShutdownException =>

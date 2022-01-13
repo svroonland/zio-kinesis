@@ -53,7 +53,7 @@ private[client] class DynamicConsumerFake(
                 shardName,
                 stream.zipWithIndex.mapZIO {
                   case (byteBuffer, i) =>
-                    deserializer.deserialize(byteBuffer).flatMap(record(shardName, i, _)).provide(env)
+                    deserializer.deserialize(byteBuffer).flatMap(record(shardName, i, _)).provideEnvironment(env)
                 },
                 checkpointer
               )

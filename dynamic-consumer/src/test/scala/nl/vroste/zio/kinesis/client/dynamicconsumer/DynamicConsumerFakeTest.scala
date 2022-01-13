@@ -1,13 +1,12 @@
 package nl.vroste.zio.kinesis.client.dynamicconsumer
 
-import nl.vroste.zio.kinesis.client.dynamicconsumer.fake.DynamicConsumerFake
 import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.Record
+import nl.vroste.zio.kinesis.client.dynamicconsumer.fake.DynamicConsumerFake
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
-import zio.duration.durationInt
 import zio.stream.ZStream
 import zio.test._
-import zio.{ Chunk, Queue, Ref, ZLayer }
+import zio.{ durationInt, Chunk, Queue, Ref }
 
 import java.time.OffsetDateTime
 
@@ -15,9 +14,6 @@ object DynamicConsumerFakeTest extends DefaultRunnableSpec {
   private type Shard = ZStream[Any, Nothing, (String, ZStream[Any, Throwable, Chunk[Byte]])]
 
   private val now = OffsetDateTime.parse("1970-01-01T00:00:00Z")
-
-  private val loggingLayer: ZLayer[Any, Nothing, Logging] =
-    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 
   private val shardsFromIterables: Shard =
     DynamicConsumerFake.shardsFromIterables(Serde.asciiString, List("msg1", "msg2"), List("msg3", "msg4"))
@@ -59,7 +55,7 @@ object DynamicConsumerFakeTest extends DefaultRunnableSpec {
                checkpointBatchSize = 1000L,
                checkpointDuration = 5.minutes
              )(record => q.offer(record).unit)
-             .provideCustomLayer(DynamicConsumer.fake(shards, refCheckpointedList) ++ loggingLayer)
+             .provideCustomLayer(DynamicConsumer.fake(shards, refCheckpointedList))
              .exitCode
       checkpointedList    <- refCheckpointedList.get
       xs                  <- q.takeAll
@@ -77,7 +73,7 @@ object DynamicConsumerFakeTest extends DefaultRunnableSpec {
                checkpointBatchSize = 1000L,
                checkpointDuration = 5.minutes
              )(record => q.offer(record).unit)
-             .provideCustomLayer(DynamicConsumer.fake(shards) ++ loggingLayer)
+             .provideCustomLayer(DynamicConsumer.fake(shards))
              .exitCode
       xs <- q.takeAll
     } yield xs

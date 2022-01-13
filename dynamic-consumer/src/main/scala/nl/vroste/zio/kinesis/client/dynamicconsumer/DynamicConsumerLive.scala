@@ -20,7 +20,6 @@ import zio.stream.ZStream
 import scala.jdk.CollectionConverters._
 
 private[client] class DynamicConsumerLive(
-  logger: Logger[String],
   kinesisAsyncClient: KinesisAsyncClient,
   cloudWatchAsyncClient: CloudWatchAsyncClient,
   dynamoDbAsyncClient: DynamoDbAsyncClient
@@ -69,22 +68,22 @@ private[client] class DynamicConsumerLive(
         runtime.unsafeRun {
           val records = r.asScala
           for {
-            _ <- logger.debug(s"offerRecords for ${shardId} got ${records.size} records")
+            _ <- ZIO.logDebug(s"offerRecords for ${shardId} got ${records.size} records")
             _ <- checkpointerInternal.setMaxSequenceNumber(
                    ExtendedSequenceNumber(
                      records.last.sequenceNumber(),
                      Option(records.last.subSequenceNumber()).filter(_ != 0L)
                    )
                  )
-            _ <- q.offerAll(records.map(Exit.succeed)).unit.catchSomeCause { case c if c.interrupted => ZIO.unit }
-            _ <- logger.trace(s"offerRecords for ${shardId} COMPLETE")
+            _ <- q.offerAll(records.map(Exit.succeed)).unit.catchSomeCause { case c if c.isInterrupted => ZIO.unit }
+//            _ <- ZIO.logTrace(s"offerRecords for ${shardId} COMPLETE")
           } yield ()
 
           // TODO what behavior do we want if the queue + substream are already shutdown for some reason..?
         }
 
       def shutdownQueue: UIO[Unit] =
-        logger.debug(s"shutdownQueue for ${shardId}") *>
+        ZIO.logDebug(s"shutdownQueue for ${shardId}") *>
           q.shutdown
 
       /**
@@ -101,12 +100,12 @@ private[client] class DynamicConsumerLive(
             q.takeAll.unit.unless(reason == ShardQueueStopReason.ShardEnded)
 
           for {
-            _ <- logger.debug(s"stop() for ${shardId} because of ${reason}")
+            _ <- ZIO.logDebug(s"stop() for ${shardId} because of ${reason}")
             _ <- checkpointerInternal.markEndOfShard.when(reason == ShardQueueStopReason.ShardEnded)
             _ <- (drainQueueUnlessShardEnded *>
                      q.offer(Exit.fail(None)).unit <* // Pass an exit signal in the queue to stop the stream
                      q.awaitShutdown).race(q.awaitShutdown)
-            _ <- logger.trace(s"stop() for ${shardId} because of ${reason} - COMPLETE")
+//            _ <- ZIO.logTrace(s"stop() for ${shardId} because of ${reason} - COMPLETE")
           } yield ()
 
           // TODO maybe we want to only do this when the main stream's completion has bubbled up..?
@@ -150,7 +149,7 @@ private[client] class DynamicConsumerLive(
       def newShard(shard: String, checkpointer: RecordProcessorCheckpointer): ShardQueue =
         runtime.unsafeRun {
           for {
-            checkpointer <- Checkpointer.make(checkpointer, logger)
+            checkpointer <- Checkpointer.make(checkpointer)
             queue        <- Queue
                        .bounded[Exit[Option[Throwable], KinesisClientRecord]](
                          maxShardBufferSize
@@ -226,7 +225,7 @@ private[client] class DynamicConsumerLive(
                          config.retrieval
                        )
                      ).toManaged
-        doShutdown = logger.debug("Starting graceful shutdown") *>
+        doShutdown = ZIO.logDebug("Starting graceful shutdown") *>
                        ZIO.fromFutureJava(scheduler.startGracefulShutdown()).unit.orDie <*
                        queues.shutdown
         _         <- zio.ZIO
@@ -243,11 +242,11 @@ private[client] class DynamicConsumerLive(
           case (shardId, shardQueue, checkpointer) =>
             val stream = ZStream
               .fromQueue(shardQueue.q)
-              .ensuringFirst(shardQueue.shutdownQueue)
+              .ensuring(shardQueue.shutdownQueue)
               .flattenExitOption
               .mapChunksZIO(_.mapZIO(toRecord(shardId, _)))
-              .provide(env)
-              .ensuringFirst((checkpointer.checkEndOfShardCheckpointed *> checkpointer.checkpoint).catchSome {
+              .provideEnvironment(env)
+              .ensuring((checkpointer.checkEndOfShardCheckpointed *> checkpointer.checkpoint).catchSome {
                 case _: ShutdownException => UIO.unit
               }.orDie)
 

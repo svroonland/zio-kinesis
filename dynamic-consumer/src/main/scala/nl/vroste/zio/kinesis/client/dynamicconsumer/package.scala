@@ -1,7 +1,6 @@
 package nl.vroste.zio.kinesis.client
 
-import zio.Has
-
 package object dynamicconsumer {
-  type DynamicConsumer = Has[DynamicConsumer.Service]
+  // TODO zio module 2
+  type DynamicConsumer = DynamicConsumer.Service
 }

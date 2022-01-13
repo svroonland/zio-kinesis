@@ -22,8 +22,7 @@ private[dynamicconsumer] object Checkpointer {
   )
 
   def make(
-    kclCheckpointer: RecordProcessorCheckpointer,
-    logger: Logger[String]
+    kclCheckpointer: RecordProcessorCheckpointer
   ): UIO[CheckpointerInternal] =
     for {
       state <- Ref.make(State(None, None, None, false))
@@ -35,7 +34,7 @@ private[dynamicconsumer] object Checkpointer {
         state.get.flatMap {
           case State(Some(sequenceNumber), _, _, _) =>
             for {
-              _ <- logger.trace(s"about to checkpoint ${sequenceNumber}")
+//              _ <- ZIO.logTrace(s"about to checkpoint ${sequenceNumber}")
               _ <- zio.ZIO.blocking {
                      Task(
                        kclCheckpointer
