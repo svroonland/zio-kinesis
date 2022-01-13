@@ -11,8 +11,7 @@ import software.amazon.awssdk.http.SdkHttpConfigurationOption
 import software.amazon.awssdk.utils.AttributeMap
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio.aws.cloudwatch.CloudWatch
-import zio.aws.core.AwsError
-import zio.aws.core.aspects.{ callLogging, AwsCallAspect, Described }
+import zio.aws.core.aspects.callLogging
 import zio.aws.dynamodb
 import zio.aws.kinesis.Kinesis
 import zio.aws.kinesis.model.primitives.{ PositiveIntegerObject, StreamName }
@@ -214,7 +213,7 @@ object ExampleApp extends zio.ZIOAppDefault {
       )
     )
 
-    val kinesisClient = Clock.live >>> kinesisAsyncClientLayer() @@ (callLogging)
+    val kinesisClient = Clock.live >>> kinesisAsyncClientLayer() /// @@ (callLogging)
 
     val cloudWatch = cloudWatchAsyncClientLayer()
     val dynamo     = dynamoDbAsyncClientLayer()
