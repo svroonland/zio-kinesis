@@ -5,11 +5,11 @@
         </encoder>
     </appender>
 
-    <root level="DEBUG">
+    <root level="INFO">
         <appender-ref ref="STDOUT" />
     </root>
 
-    <logger name="nl.vroste" level="DEBUG"/>
-    <logger name="software.amazon.kinesis" level="DEBUG"/>
+    <logger name="nl.vroste" level="INFO"/>
+    <logger name="software.amazon.kinesis" level="INFO"/>
     <logger name="io.netty.channel.DefaultChannelPipeline" level="ERROR"/>
 </configuration>

@@ -16,7 +16,7 @@ import zio.{ CancelableFuture, ZIO }
 
 import scala.concurrent.duration._
 import scala.concurrent.{ ExecutionContext, Future }
-import zio.{ Clock, Has, Random }
+import zio.{ Clock, Random }
 
 /**
  * A scala-native Future based interface to the zio-kinesis Consumer
@@ -81,7 +81,7 @@ object Consumer {
     buildHttpClient: NettyNioAsyncHttpClient.Builder => SdkAsyncHttpClient = _.build()
   ): Consumer = {
 
-    val sdkClients = HttpClientBuilder.make(build = buildHttpClient) >>> config.default >>> (
+    val sdkClients = HttpClientBuilder.make(build = buildHttpClient) >>> config.AwsConfig.default >>> (
       kinesisAsyncClientLayer(buildKinesisClient) ++
         cloudWatchAsyncClientLayer(buildCloudWatchClient) ++
         dynamoDbAsyncClientLayer(buildDynamoDbClient)
@@ -89,7 +89,6 @@ object Consumer {
 
     val layer = Clock.live ++
       Random.live ++
-      Logging.ignore ++
       (sdkClients >+> DynamoDbLeaseRepository.live)
 
     val runtime = zio.Runtime.unsafeFromLayer(layer)

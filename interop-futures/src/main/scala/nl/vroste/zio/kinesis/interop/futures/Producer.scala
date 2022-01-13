@@ -73,7 +73,7 @@ object Producer {
     buildHttpClient: NettyNioAsyncHttpClient.Builder => SdkAsyncHttpClient = _.build()
   ): Producer[T] = {
 
-    val sdkClients = HttpClientBuilder.make(build = buildHttpClient) >>> config.default >>> (
+    val sdkClients = HttpClientBuilder.make(build = buildHttpClient) >>> config.AwsConfig.default >>> (
       kinesisAsyncClientLayer(buildKinesisClient) ++
         cloudWatchAsyncClientLayer(buildCloudWatchClient) ++
         dynamoDbAsyncClientLayer(buildDynamoDbClient)
@@ -84,7 +84,7 @@ object Producer {
         .make(streamName, serializer, settings, metricsCollector = m => ZIO(metricsCollector(m)).orDie)
         .toLayer
 
-    val layer   = (Clock.live ++ Logging.ignore ++ sdkClients) >>> producer
+    val layer   = (Clock.live ++ sdkClients) >>> producer
     val runtime = zio.Runtime.unsafeFromLayer(layer)
 
     new Producer[T](runtime, runtime.unsafeRun(ZIO.service[client.Producer[T]]))
