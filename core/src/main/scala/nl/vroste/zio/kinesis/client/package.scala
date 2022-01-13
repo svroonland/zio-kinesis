@@ -6,7 +6,6 @@ import zio.aws.core.httpclient
 import zio.aws.core.httpclient.HttpClient
 import zio.aws.dynamodb.DynamoDb
 import zio.aws.kinesis.Kinesis
-import zio.aws.{ cloudwatch, dynamodb, kinesis }
 import software.amazon.awssdk.awscore.client.builder.{ AwsAsyncClientBuilder, AwsClientBuilder }
 import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
 import software.amazon.awssdk.core.retry.RetryPolicy

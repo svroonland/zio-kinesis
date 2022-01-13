@@ -1,9 +1,8 @@
 package nl.vroste.zio.kinesis.client.zionative
 
-import zio.{ Exit, Schedule, UIO, ZIO }
 import nl.vroste.zio.kinesis.client.{ Record, Util }
-import zio.stream.{ ZPipeline, ZSink, ZStream }
-import zio.{ Clock, _ }
+import zio.stream.{ ZSink, ZStream }
+import zio._
 
 /**
  * Error indicating that while checkpointing it was discovered that the lease for a shard was stolen

@@ -7,6 +7,7 @@ import zio.{ Chunk, Managed, Task, ZManaged }
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.time.Instant
+import scala.collection.compat._
 
 private[client] final case class ShardMap(
   minHashKeys: Chunk[BigInt],

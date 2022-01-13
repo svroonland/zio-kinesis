@@ -1,6 +1,5 @@
 package nl.vroste.zio.kinesis.client
 import java.time.Instant
-import zio.aws.kinesis
 import zio.aws.kinesis.model.{ ListShardsRequest, ShardFilter, ShardFilterType }
 import zio.aws.kinesis.Kinesis
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse

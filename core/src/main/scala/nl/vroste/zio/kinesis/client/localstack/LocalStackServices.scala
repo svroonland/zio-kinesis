@@ -6,7 +6,6 @@ import zio.aws.core.config.AwsConfig
 import zio.aws.core.httpclient.HttpClient
 import zio.aws.dynamodb.DynamoDb
 import zio.aws.kinesis.Kinesis
-import zio.aws.{ cloudwatch, dynamodb, kinesis }
 import nl.vroste.zio.kinesis.client.HttpClientBuilder
 import software.amazon.awssdk.auth.credentials.{
   AwsBasicCredentials,
