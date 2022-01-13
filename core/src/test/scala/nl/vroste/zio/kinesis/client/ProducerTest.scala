@@ -33,7 +33,7 @@ object ProducerTest extends DefaultRunnableSpec {
 
   override def runner: TestRunner[TestEnvironment, Any] =
     defaultTestRunner.withRuntimeConfig(
-      _ @@ RuntimeConfigAspect.addLogger(ZLogger.defaultString.map(println(_)).filterLogLevel(_ => true))
+      _ @@ RuntimeConfigAspect.addLogger(ZLogger.defaultString.map(println(_)).filterLogLevel(_ > LogLevel.Debug))
     )
 
   val useAws = Runtime.default.unsafeRun(System.envOrElse("ENABLE_AWS", "0")).toInt == 1
@@ -113,8 +113,6 @@ object ProducerTest extends DefaultRunnableSpec {
         }
       } @@ TestAspect.ifEnvSet("ENABLE_AWS"),
       test("produce records to Kinesis successfully and efficiently") {
-        // This test demonstrates production of about 5000-6000 records per second on my Mid 2015 Macbook Pro
-
         val streamName = "zio-test-stream-producer4"
 
         Ref

@@ -34,7 +34,8 @@ private[client] final class ProducerLive[R, R1, T](
   aggregate: Boolean = false,
   inFlightCalls: Ref[Int],
   triggerUpdateShards: UIO[Unit],
-  throttler: ShardThrottler
+  throttler: ShardThrottler,
+  md5Pool: ZPool[Throwable, MessageDigest]
 ) extends Producer[T] {
   import ProducerLive._
   import Util.ZStreamExtensions
@@ -254,7 +255,7 @@ private[client] final class ProducerLive[R, R1, T](
     (for {
       shardMap        <- shards.get
       now             <- instant
-      ar              <- ShardMap.md5.use(makeProduceRequest(r, serializer, now, shardMap, _))
+      ar              <- md5Pool.get.use(makeProduceRequest(r, serializer, now, shardMap, _))
       (await, request) = ar
       _               <- queue.offer(request)
       response        <- await
@@ -281,7 +282,7 @@ private[client] final class ProducerLive[R, R1, T](
                        } yield ()
                    )
                    .unit
-      requests          <- ShardMap.md5.use { digest =>
+      requests          <- md5Pool.get.use { digest =>
                     ZIO.foreach(chunk) { r =>
                       for {
                         data          <- serializer.serialize(r.data)

@@ -13,6 +13,8 @@ import zio.Clock
 import zio.Clock.instant
 import zio.aws.kinesis.model.primitives.StreamName
 
+import java.security.MessageDigest
+
 /**
  * Producer for Kinesis records
  *
@@ -90,7 +92,8 @@ final case class ProducerSettings(
   metricsInterval: Duration = 30.seconds,
   updateShardInterval: Duration = 30.seconds,
   aggregate: Boolean = false,
-  allowedErrorRate: Double = 0.05
+  allowedErrorRate: Double = 0.05,
+  md5DigestPoolSize: Int = 8 // TODO document
 ) {
   require(allowedErrorRate > 0 && allowedErrorRate <= 1.0, "allowedErrorRate must be between 0 and 1 (inclusive)")
 }
@@ -124,6 +127,7 @@ object Producer {
       shardMap        <- getShardMap(StreamName(streamName)).toManaged
       currentShardMap <- Ref.make(shardMap).toManaged
       inFlightCalls   <- Ref.make(0).toManaged
+      md5Pool         <- ZPool.make(ZManaged.fromZIO(ZIO(MessageDigest.getInstance("MD5"))), settings.md5DigestPoolSize)
       failedQueue     <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManagedWith(_.shutdown)
 
       triggerUpdateShards <- Util.periodicAndTriggerableOperation(
@@ -150,7 +154,8 @@ object Producer {
                    settings.aggregate,
                    inFlightCalls,
                    triggerUpdateShards,
-                   throttler
+                   throttler,
+                   md5Pool
                  )
       _       <- producer.runloop.forkManaged
       _       <- producer.metricsCollection.forkManaged.ensuring(producer.collectMetrics)
