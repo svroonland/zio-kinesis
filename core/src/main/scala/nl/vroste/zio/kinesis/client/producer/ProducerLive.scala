@@ -254,7 +254,7 @@ private[client] final class ProducerLive[R, R1, T](
     (for {
       shardMap        <- shards.get
       now             <- instant
-      ar              <- makeProduceRequest(r, serializer, now, shardMap)
+      ar              <- ShardMap.md5.use(makeProduceRequest(r, serializer, now, shardMap, _))
       (await, request) = ar
       _               <- queue.offer(request)
       response        <- await
@@ -337,14 +337,14 @@ private[client] object ProducerLive {
     r: ProducerRecord[T],
     serializer: Serializer[R, T],
     now: Instant,
-    shardMap: ShardMap
+    shardMap: ShardMap,
+    md5: MessageDigest
   ): ZIO[R, Throwable, (ZIO[Any, Throwable, ProduceResponse], ProduceRequest)] =
     for {
       done <- Promise.make[Throwable, ProduceResponse]
       data <- serializer.serialize(r.data)
 
-      predictedShard <-
-        ShardMap.md5.use(digest => ZIO.succeed(shardMap.shardForPartitionKey(digest, PartitionKey(r.partitionKey))))
+      predictedShard <- ZIO.succeed(shardMap.shardForPartitionKey(md5, PartitionKey(r.partitionKey)))
     } yield (
       done.await,
       ProduceRequest(data, PartitionKey(r.partitionKey), done.completeWith(_).unit, now, predictedShard)
@@ -379,7 +379,6 @@ private[client] object ProducerLive {
   /**
    * Like ZTransducer.foldM, but with 'while' instead of 'until' semantics regarding `contFn`
    */
-  // TODO while semantics
   def foldWhile[Env, Err, In, S](z: => S)(contFn: S => Boolean)(
     f: (S, In) => ZIO[Env, Err, S]
   )(implicit trace: ZTraceElement): ZSink[Env, Err, In, In, S] =
