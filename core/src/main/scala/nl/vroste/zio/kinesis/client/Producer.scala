@@ -83,6 +83,9 @@ trait Producer[T] {
  *                  Enabling this setting can give higher throughput for small records, by working around
  *                  the 1000 records/s limit per shard.
  * @param allowedErrorRate The maximum allowed rate of errors before throttling is applied
+ * @param md5DigestPoolSize Size of the pool of MessageDigest instances used for shard prediction. The MessageDigest
+ *                          is too costly to instantiate for each record, hence a `ZPool` of them is used. This
+ *                          MessageDigest is used in `produce` and `produceChunk` calls.
  */
 final case class ProducerSettings(
   bufferSize: Int = 8192,
@@ -93,7 +96,7 @@ final case class ProducerSettings(
   updateShardInterval: Duration = 30.seconds,
   aggregate: Boolean = false,
   allowedErrorRate: Double = 0.05,
-  md5DigestPoolSize: Int = 8 // TODO document
+  md5DigestPoolSize: Int = 8
 ) {
   require(allowedErrorRate > 0 && allowedErrorRate <= 1.0, "allowedErrorRate must be between 0 and 1 (inclusive)")
 }
