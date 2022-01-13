@@ -36,7 +36,7 @@ object ProducerTest extends DefaultRunnableSpec {
       _ @@ RuntimeConfigAspect.addLogger(ZLogger.defaultString.map(println(_)).filterLogLevel(_ > LogLevel.Debug))
     )
 
-  val useAws = Runtime.default.unsafeRun(System.envOrElse("ENABLE_AWS", "0")).toInt == 1
+  val useAws = scala.sys.env.getOrElse("ENABLE_AWS", "0").toInt == 1
 
   val env: ZLayer[
     Any,
