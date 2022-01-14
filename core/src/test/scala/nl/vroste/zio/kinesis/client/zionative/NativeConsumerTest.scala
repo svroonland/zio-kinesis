@@ -25,7 +25,7 @@ import java.{ util => ju }
 object NativeConsumerTest extends DefaultRunnableSpec {
   override def runner: TestRunner[TestEnvironment, Any] =
     defaultTestRunner.withRuntimeConfig(
-      _ @@ RuntimeConfigAspect.addLogger(ZLogger.defaultString)
+      _ @@ RuntimeConfigAspect.addLogger(ZLogger.defaultString.map(println(_)).filterLogLevel(_ => true))
     )
 
   /*
@@ -798,8 +798,8 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                 .mapZIOParUnordered(nrShards) {
                   case (shard @ _, shardStream, checkpointer @ _) =>
                     shardStream
-                      .tap(checkpointer.stage)
                       .take(nr.toLong)
+                      .tap(checkpointer.stage)
                       .runCollect
                 }
                 .flattenChunks

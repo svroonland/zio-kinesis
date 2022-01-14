@@ -22,7 +22,6 @@ object Util {
                                .unbounded[Exit[Option[E], (K, Queue[GroupQueueValues])]]
                                .toManaged
           substreamsQueuesMap <- Ref.make(Map.empty[K, Queue[GroupQueueValues]]).toManaged
-          _                   <- ZManaged.finalizer(UIO(println("Finalized groupbykey2")))
           inStream             = {
             def addToSubStream(key: K, values: Chunk[O]): ZIO[Any, Nothing, Unit] =
               for {
@@ -44,16 +43,13 @@ object Util {
                   case (k, chunk) => ZIO.uninterruptible(addToSubStream(k, chunk))
                 }
                 .as(Chunk.empty)
-            }.ensuring(UIO(println("Fibert done")))
-//              .tapErrorCause(e => UIO(println(s"Fibert caught ${e}")))
-//              .fork
+            }
           }
           _                   <- ZManaged.finalizer(
                  substreamsQueuesMap.get.flatMap(map =>
                    ZIO.foreachDiscard(map.values)(_.offer(Exit.fail(None)).catchAllCause(_ => UIO.unit))
                  )
                )
-          _                   <- ZManaged.finalizer(UIO(println("Finalizing groupbykey2")))
         } yield inStream mergeTerminateEither ZStream.fromQueueWithShutdown(substreamsQueue).flattenExitOption.map {
           case (key, substreamQueue) =>
             val substream = ZStream

@@ -146,7 +146,6 @@ object ShardAssignmentStrategy {
 
               // We can only steal from our target budget, not the optional ones
               remaining = Math.max(0, minNrLeasesToTake - leasesWithoutOwnerOrExpired.size)
-              _         = println(s"Remaining: ${remaining}, ${minNrLeasesToTake} to ${maxNrLeasesToTake}")
               toSteal  <- leasesToSteal(allLeases, workerId, target, nrLeasesToSteal = remaining)
             } yield (leasesWithoutOwnerOrExpired ++ toSteal).map(_.key).toSet
           else ZIO.succeed(Set.empty[String]))
