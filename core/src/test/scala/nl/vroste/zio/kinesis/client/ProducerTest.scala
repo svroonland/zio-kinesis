@@ -424,7 +424,7 @@ object ProducerTest extends DefaultRunnableSpec {
                   UpdateShardCountRequest(StreamName(streamName), PositiveIntegerObject(4), ScalingType.UNIFORM_SCALING)
                 )
                 .mapError(_.toThrowable)
-            _           <- done.join race producerFib.join
+            _           <- done.join
             _            = println("Done!")
             _           <- producerFib.interrupt
           } yield assertCompletes

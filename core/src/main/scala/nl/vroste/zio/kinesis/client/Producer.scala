@@ -159,7 +159,8 @@ object Producer {
                    throttler,
                    md5Pool
                  )
-      _       <- producer.runloop.forkManaged
+      _       <- ZManaged.finalizer(UIO(println("Closed runloop")))
+      _       <- producer.runloop.forkManaged.ensuringFirst(UIO(println("Closing runloop")))
       _       <- producer.metricsCollection.forkManaged.ensuring(producer.collectMetrics)
     } yield producer
 

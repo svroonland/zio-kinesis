@@ -20,10 +20,11 @@ object Util {
         for {
           substreamsQueue     <- Queue
                                .unbounded[Exit[Option[E], (K, Queue[GroupQueueValues])]]
-                               .toManagedWith(_.shutdown)
+                               .toManaged
           substreamsQueuesMap <- Ref.make(Map.empty[K, Queue[GroupQueueValues]]).toManaged
-          _                   <- {
-            val addToSubStream: (K, Chunk[O]) => ZIO[Any, Nothing, Unit] = (key: K, values: Chunk[O]) => {
+          _                   <- ZManaged.finalizer(UIO(println("Finalized groupbykey2")))
+          inStream             = {
+            def addToSubStream(key: K, values: Chunk[O]): ZIO[Any, Nothing, Unit] =
               for {
                 substreams <- substreamsQueuesMap.get
                 _          <- if (substreams.contains(key))
@@ -32,19 +33,28 @@ object Util {
                        Queue
                          .bounded[GroupQueueValues](substreamChunkBuffer)
                          .tap(_.offer(Exit.succeed(values)))
-                         .tap(q => substreamsQueue.offer(Exit.succeed((key, q))))
                          .tap(q => substreamsQueuesMap.update(_ + (key -> q)))
+                         .tap(q => substreamsQueue.offer(Exit.succeed((key, q))))
                          .unit
               } yield ()
-            }
-            (stream.runForeachChunk { chunk =>
-              ZIO.foreachDiscard(chunk.groupBy(getKey))(addToSubStream.tupled)
-            } *> substreamsQueue.offer(Exit.fail(None))).catchSome {
-              case e =>
-                substreamsQueue.offer(Exit.fail(Some(e)))
-            }.forkManaged
+
+            stream.mapChunksZIO { chunk =>
+              ZIO
+                .foreachDiscard(chunk.groupBy(getKey)) {
+                  case (k, chunk) => ZIO.uninterruptible(addToSubStream(k, chunk))
+                }
+                .as(Chunk.empty)
+            }.ensuring(UIO(println("Fibert done")))
+//              .tapErrorCause(e => UIO(println(s"Fibert caught ${e}")))
+//              .fork
           }
-        } yield ZStream.fromQueueWithShutdown(substreamsQueue).flattenExitOption.map {
+          _                   <- ZManaged.finalizer(
+                 substreamsQueuesMap.get.flatMap(map =>
+                   ZIO.foreachDiscard(map.values)(_.offer(Exit.fail(None)).catchAllCause(_ => UIO.unit))
+                 )
+               )
+          _                   <- ZManaged.finalizer(UIO(println("Finalizing groupbykey2")))
+        } yield inStream mergeTerminateEither ZStream.fromQueueWithShutdown(substreamsQueue).flattenExitOption.map {
           case (key, substreamQueue) =>
             val substream = ZStream
               .fromQueueWithShutdown(substreamQueue)
