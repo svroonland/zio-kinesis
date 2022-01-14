@@ -1,13 +1,12 @@
 package nl.vroste.zio.kinesis.client.producer
 import zio.aws.kinesis.model.Shard
 import nl.vroste.zio.kinesis.client.producer.ProducerLive.ShardId
-import zio.aws.kinesis.model.primitives.PartitionKey
+import zio.aws.kinesis.model.primitives.{ HashKey, PartitionKey }
 import zio.{ Chunk, Managed, Task, ZManaged }
 
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.time.Instant
-import scala.collection.compat._
 
 private[client] final case class ShardMap(
   minHashKeys: Chunk[BigInt],
@@ -51,7 +50,7 @@ private[client] object ShardMap {
   def fromShards(shards: Chunk[Shard.ReadOnly], now: Instant): ShardMap = {
     if (shards.isEmpty) throw new IllegalArgumentException("Cannot create ShardMap from empty shards list")
 
-    val sorted = shards.sortBy(_.hashKeyRange.startingHashKey)
+    val sorted = shards.sortBy(s => HashKey.unwrap(s.hashKeyRange.startingHashKey))
     ShardMap(
       sorted.map(s => BigInt(s.hashKeyRange.startingHashKey)).materialize,
       sorted.map(s => BigInt(s.hashKeyRange.endingHashKey)).materialize,
