@@ -3,13 +3,8 @@ package nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.producer.ProducerLive.{ batcher, ProduceRequest }
-import nl.vroste.zio.kinesis.client.producer.{
-  ProducerLive,
-  ProducerMetrics,
-  PutRecordsAggregatedBatchForShard,
-  ShardMap
-}
-import nl.vroste.zio.kinesis.client.serde.{ Serde, Serializer }
+import nl.vroste.zio.kinesis.client.producer.{ ProducerLive, ProducerMetrics, ShardMap }
+import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.awssdk.services.kinesis.model.KinesisException
 import zio.Console.printLine
 import zio.aws.cloudwatch.CloudWatch
@@ -21,7 +16,7 @@ import zio.stream.{ ZChannel, ZPipeline, ZSink, ZStream }
 import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test.{ Gen, _ }
-import zio.{ Chunk, Clock, Console, Queue, Random, Ref, Runtime, System, ZIO, ZLayer, ZManaged, _ }
+import zio.{ Chunk, Clock, Console, Queue, Random, Ref, ZIO, ZLayer, ZManaged, _ }
 
 import java.security.MessageDigest
 import java.time.Instant

@@ -1,8 +1,12 @@
 package nl.vroste.zio.kinesis.client.zionative
-import java.nio.charset.Charset
+import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
+import nl.vroste.zio.kinesis.client.zionative.FetchMode.Polling
+import nl.vroste.zio.kinesis.client.zionative.fetcher.PollingFetcher
+import software.amazon.awssdk.services.kinesis.model.ProvisionedThroughputExceededException
+import zio._
 import zio.aws.core.AwsError
 import zio.aws.core.aspects.AwsCallAspect
-import zio.prelude.newtypes._
+import zio.aws.kinesis.model.primitives._
 import zio.aws.kinesis.model.{
   ChildShard,
   GetRecordsResponse,
@@ -13,24 +17,11 @@ import zio.aws.kinesis.model.{
   StartingPosition
 }
 import zio.aws.kinesis.{ model, Kinesis }
-import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
-import nl.vroste.zio.kinesis.client.zionative.FetchMode.Polling
-import nl.vroste.zio.kinesis.client.zionative.fetcher.PollingFetcher
-import software.amazon.awssdk.services.kinesis.model.ProvisionedThroughputExceededException
-import zio._
-import zio.aws.kinesis.model.primitives.{
-  Data,
-  HashKey,
-  MillisBehindLatest,
-  PartitionKey,
-  SequenceNumber,
-  ShardId,
-  ShardIterator,
-  StreamName
-}
 import zio.stream.ZStream
 import zio.test.Assertion._
 import zio.test._
+
+import java.nio.charset.Charset
 
 object PollingFetcherTest extends DefaultRunnableSpec {
 
