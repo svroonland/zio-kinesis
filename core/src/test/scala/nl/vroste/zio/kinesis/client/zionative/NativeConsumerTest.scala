@@ -7,6 +7,7 @@ import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
+import nl.vroste.zio.kinesis.client.zionative.NativeConsumerTest.produceSampleRecords
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.LeaseCoordinationSettings
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
 import zio.Console._
@@ -17,8 +18,8 @@ import zio.stream.{ ZSink, ZStream }
 import zio.test.Assertion._
 import zio.test._
 import zio.{ Clock, Console, System, _ }
-import scala.collection.compat._
 
+import scala.collection.compat._
 import java.time.Instant
 import java.{ util => ju }
 
@@ -519,7 +520,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
         withRandomStreamAndApplicationName(nrShards) {
           (streamName, applicationName) =>
             for {
-              producer   <- produceSampleRecords(streamName, nrRecords, chunkSize = 50).fork
+              _          <- produceSampleRecords(streamName, nrRecords, chunkSize = 50).fork
               done       <- Promise.make[Nothing, Unit]
               events     <- Ref.make[List[(String, Instant, DiagnosticEvent)]](List.empty)
               handleEvent = (workerId: String) =>
@@ -541,35 +542,27 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                        )
                        .tap(allEvents => UIO(println(allEvents.mkString("\n"))))
                    }.useDiscard {
-                     for {
-
-                       stream <- ZStream
-                                   .mergeAll(3)(
-                                     // The zombie consumer: not updating checkpoints and not renewing leases
-                                     consumer(
-                                       streamName,
-                                       applicationName,
-                                       "worker1",
-                                       handleEvent("worker1"),
-                                       checkpointInterval = 5.minutes,
-                                       renewInterval = 5.minutes
-                                     ),
-                                     ZStream.fromZIO(ZIO.sleep(5.seconds)) *> // Give worker1 the first lease
-                                       consumer(streamName, applicationName, "worker2", handleEvent("worker2"))
-                                         .ensuring(ZIO.logWarning("worker2 DONE")),
-                                     ZStream.fromZIO(ZIO.sleep(5.seconds)) *> // Give worker1 the first lease
-                                       consumer(streamName, applicationName, "worker3", handleEvent("worker3"))
-                                         .ensuring(ZIO.logWarning("Worker3 DONE"))
-                                   )
-                                   .runDrain
-                                   .tapErrorCause(c => ZIO.logError(s"${c.prettyPrint}"))
-                                   .fork
-                       _      <- done.await
-                       _      <- printLine("Interrupting producer and stream").orDie
-                       _      <- producer.interrupt
-                       _      <- stream.interrupt
-                     } yield ()
-                   }
+                     ZStream
+                       .mergeAll(3)(
+                         // The zombie consumer: not updating checkpoints and not renewing leases
+                         consumer(
+                           streamName,
+                           applicationName,
+                           "worker1",
+                           handleEvent("worker1"),
+                           checkpointInterval = 5.minutes,
+                           renewInterval = 5.minutes
+                         ),
+                         ZStream.fromZIO(ZIO.sleep(5.seconds)) *> // Give worker1 the first lease
+                           consumer(streamName, applicationName, "worker2", handleEvent("worker2"))
+                             .ensuring(ZIO.logWarning("worker2 DONE")),
+                         ZStream.fromZIO(ZIO.sleep(5.seconds)) *> // Give worker1 the first lease
+                           consumer(streamName, applicationName, "worker3", handleEvent("worker3"))
+                             .ensuring(ZIO.logWarning("Worker3 DONE"))
+                       )
+                       .runDrain
+                       .tapErrorCause(c => ZIO.logError(s"${c.prettyPrint}"))
+                   } raceFirst done.await
             } yield assertCompletes
         }
       },
@@ -599,7 +592,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                       .tap(checkpointer.stage)
                       .aggregateAsyncWithin(ZSink.collectAllN[Record[String]](200), Schedule.fixed(1.second))
                       .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-                      .map(_.last)
+                      .mapConcat(_.lastOption)
                       .tap(_ => checkpointer.checkpoint())
                       .catchAll {
                         case Right(_) =>
@@ -612,7 +605,8 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
             // TODO extract DiagnosticEventList { def eventsByWorker(workerId), eventsAfter(instant), etc }
             for {
-              producer      <- produceSampleRecords(streamName, nrRecords, chunkSize = 50, throttle = Some(1.second)).fork
+              _ <- produceSampleRecords(streamName, nrRecords, chunkSize = 50, throttle = Some(1.second)).fork
+
               done          <- Promise.make[Nothing, Unit]
               events        <- Ref.make[List[DiagnosticEvent]](List.empty)
               emitDiagnostic = (workerId: String) =>
@@ -626,10 +620,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                        }.sum == nrShards + 1))
                                        .unit
 
-              stream        <- consumer("worker1", emitDiagnostic("worker1")).runDrain.fork
-              _             <- done.await
-              _             <- producer.interrupt
-              _             <- stream.interrupt
+              _             <- done.await raceFirst consumer("worker1", emitDiagnostic("worker1")).runDrain
             } yield assertCompletes
         }
       },
@@ -659,7 +650,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                       .tap(checkpointer.stage)
                       .aggregateAsyncWithin(ZSink.collectAllN[Record[String]](200), Schedule.fixed(1.second))
                       .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-                      .map(_.last)
+                      .mapConcat(_.lastOption)
                       .tap(_ => checkpointer.checkpoint())
                       .catchAll {
                         case Right(_) =>
@@ -718,7 +709,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                       .tap(checkpointer.stage)
                       .aggregateAsyncWithin(ZSink.collectAllN[Record[String]](200), Schedule.fixed(1.second))
                       .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-                      .map(_.last)
+                      .mapConcat(_.lastOption)
                       .tap(_ => checkpointer.checkpoint())
                       .catchAll {
                         case Right(_) =>
