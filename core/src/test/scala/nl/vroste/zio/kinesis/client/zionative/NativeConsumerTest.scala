@@ -25,7 +25,7 @@ import java.{ util => ju }
 object NativeConsumerTest extends DefaultRunnableSpec {
   override def runner: TestRunner[TestEnvironment, Any] =
     defaultTestRunner.withRuntimeConfig(
-      _ @@ RuntimeConfigAspect.addLogger(ZLogger.defaultString.map(println(_)).filterLogLevel(_ => true))
+      _ @@ RuntimeConfigAspect.addLogger(ZLogger.defaultString.map(println(_)).filterLogLevel(_ > LogLevel.Debug))
     )
 
   /*
@@ -487,7 +487,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                   .tap(checkpointer.stage)
                   .aggregateAsyncWithin(ZSink.collectAllN[Record[String]](200000), Schedule.fixed(checkpointInterval))
                   .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-                  .map(_.last)
+                  .mapConcat(_.lastOption)
                   .tap(_ => checkpointer.checkpoint())
                   .catchAll {
                     case Right(_) =>
@@ -529,7 +529,9 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                     .map(_.toInstant())
                                     .flatMap(time => events.update(_ :+ ((workerId, time, event))))
                                     .provideLayer(Clock.live) *>
-                                  events.get.flatMap(events => done.succeed(()).when(testIsComplete(events))).unit
+                                  events.get
+                                    .flatMap(events => done.succeed(()).when(testIsComplete(events)))
+                                    .unit
 
               _          <- ZManaged.finalizer {
                      events.get
@@ -560,6 +562,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                          .ensuring(ZIO.logWarning("Worker3 DONE"))
                                    )
                                    .runDrain
+                                   .tapErrorCause(c => ZIO.logError(s"${c.prettyPrint}"))
                                    .fork
                        _      <- done.await
                        _      <- printLine("Interrupting producer and stream").orDie
