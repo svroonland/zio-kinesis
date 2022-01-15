@@ -35,8 +35,8 @@ object TestUtil {
       _               <- createStream(streamName, shards)
       _               <- getShards(streamName).toManaged
       _               <- ZManaged.finalizer(DynamoDb.deleteTable(DeleteTableRequest(TableName(applicationName))).ignore)
-    } yield (streamName, applicationName)).use {
-      case (streamName, applicationName) => f(streamName, applicationName).fork.flatMap(_.join)
+    } yield (streamName, applicationName)).use { case (streamName, applicationName) =>
+      f(streamName, applicationName).fork.flatMap(_.join)
     }
 
   def getShards(name: String): ZIO[Kinesis with Clock, Throwable, Chunk[Shard.ReadOnly]] =
@@ -50,13 +50,13 @@ object TestUtil {
   def createStream(
     streamName: String,
     nrShards: Int
-  ): ZManaged[Console with Clock with Kinesis, Throwable, Unit]                          = {
+  ): ZManaged[Console with Clock with Kinesis, Throwable, Unit] = {
     createStreamUnmanaged(streamName, nrShards).toManagedWith(_ =>
       Kinesis
         .deleteStream(DeleteStreamRequest(StreamName(streamName), enforceConsumerDeletion = Some(BooleanObject(true))))
         .mapError(_.toThrowable)
-        .catchSome {
-          case _: ResourceNotFoundException => ZIO.unit
+        .catchSome { case _: ResourceNotFoundException =>
+          ZIO.unit
         }
         .orDie
     )
@@ -85,9 +85,8 @@ object TestUtil {
     Kinesis
       .createStream(CreateStreamRequest(StreamName(streamName), Some(PositiveIntegerObject(nrShards))))
       .mapError(_.toThrowable)
-      .catchSome {
-        case _: ResourceInUseException =>
-          printLine("Stream already exists").orDie
+      .catchSome { case _: ResourceInUseException =>
+        printLine("Stream already exists").orDie
       }
       .retry(Schedule.exponential(1.second) && Schedule.recurs(10))
 
@@ -140,13 +139,12 @@ object TestUtil {
   ): ZIO[Kinesis with R, Throwable, PutRecordsResponse.ReadOnly] =
     for {
       recordsAndBytes <- ZIO.foreach(records)(r => serializer.serialize(r.data).map((_, r.partitionKey)))
-      entries          = recordsAndBytes.map {
-                  case (data, partitionKey) =>
-                    PutRecordsRequestEntry(Data(data), partitionKey = PartitionKey(partitionKey))
-                }
+      entries          = recordsAndBytes.map { case (data, partitionKey) =>
+                           PutRecordsRequestEntry(Data(data), partitionKey = PartitionKey(partitionKey))
+                         }
       response        <- Kinesis
-                    .putRecords(PutRecordsRequest(entries.toList, StreamName(streamName)))
-                    .mapError(_.toThrowable)
+                           .putRecords(PutRecordsRequest(entries.toList, StreamName(streamName)))
+                           .mapError(_.toThrowable)
     } yield response
 
   /**
@@ -186,13 +184,12 @@ object TestUtil {
     val intervals = 10
     produceRate.fold(s) { produceRate =>
       s.throttleShape(
-          produceRate.toLong / intervals,
-          1000.millis * (1.0 / intervals),
-          produceRate.toLong / intervals
-        )(
-          _.size.toLong
-        )
-        .buffer(produceRate * 10)
+        produceRate.toLong / intervals,
+        1000.millis * (1.0 / intervals),
+        produceRate.toLong / intervals
+      )(
+        _.size.toLong
+      ).buffer(produceRate * 10)
     }
   }
 
@@ -205,10 +202,10 @@ object TestUtil {
     val records = ZStream.repeatZIO {
       for {
         key   <- Random
-                 .nextIntBetween(1, 256)
-                 .flatMap(keyLength =>
-                   ZIO.replicateZIO(keyLength)(Random.nextIntBetween('\u0000', '\uD7FF').map(_.toChar)).map(_.mkString)
-                 )
+                   .nextIntBetween(1, 256)
+                   .flatMap(keyLength =>
+                     ZIO.replicateZIO(keyLength)(Random.nextIntBetween('\u0000', '\uD7FF').map(_.toChar)).map(_.mkString)
+                   )
         value <- Random
                    .nextIntBetween(1, maxRecordSize)
                    .map(valueLength => Chunk.fromIterable(List.fill(valueLength)(0x01.toByte)))

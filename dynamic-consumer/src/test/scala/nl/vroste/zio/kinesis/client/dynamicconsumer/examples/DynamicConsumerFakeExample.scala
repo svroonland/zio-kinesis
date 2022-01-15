@@ -19,16 +19,16 @@ object DynamicConsumerFakeExample extends zio.ZIOAppDefault {
     for {
       refCheckpointedList <- Ref.make[Seq[Record[Any]]](Seq.empty)
       exitCode            <- DynamicConsumer
-                    .consumeWith(
-                      streamName = "my-stream",
-                      applicationName = "my-application",
-                      deserializer = Serde.asciiString,
-                      workerIdentifier = "worker1",
-                      checkpointBatchSize = 1000L,
-                      checkpointDuration = 5.minutes
-                    )(record => printLine(s"Processing record $record").orDie)
-                    .provideCustomLayer(DynamicConsumer.fake(shards, refCheckpointedList))
-                    .exitCode
+                               .consumeWith(
+                                 streamName = "my-stream",
+                                 applicationName = "my-application",
+                                 deserializer = Serde.asciiString,
+                                 workerIdentifier = "worker1",
+                                 checkpointBatchSize = 1000L,
+                                 checkpointDuration = 5.minutes
+                               )(record => printLine(s"Processing record $record").orDie)
+                               .provideCustomLayer(DynamicConsumer.fake(shards, refCheckpointedList))
+                               .exitCode
       _                   <- printLine(s"refCheckpointedList=$refCheckpointedList").orDie
     } yield exitCode
 

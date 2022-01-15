@@ -70,40 +70,39 @@ object ProducerTest extends DefaultRunnableSpec {
           (for {
             totalMetrics <- Ref.make(ProducerMetrics.empty).toManaged
             producer     <- Producer
-                          .make(
-                            streamName,
-                            Serde.asciiString,
-                            ProducerSettings(bufferSize = 128),
-                            metrics => totalMetrics.updateAndGet(_ + metrics).flatMap(m => printLine(m.toString).orDie)
-                          )
-          } yield producer).use {
-            producer =>
-              val increment = 1
-              for {
-                batchSize <- Ref.make(1)
-                timing    <- Ref.make[Chunk[Chunk[Duration]]](Chunk.empty)
+                              .make(
+                                streamName,
+                                Serde.asciiString,
+                                ProducerSettings(bufferSize = 128),
+                                metrics => totalMetrics.updateAndGet(_ + metrics).flatMap(m => printLine(m.toString).orDie)
+                              )
+          } yield producer).use { producer =>
+            val increment = 1
+            for {
+              batchSize <- Ref.make(1)
+              timing    <- Ref.make[Chunk[Chunk[Duration]]](Chunk.empty)
 
-                _       <- ZStream
-                       .tick(1.second)
-                       .take(200)
-                       .mapZIO(_ => batchSize.getAndUpdate(_ + 1))
-                       .map { batchSize =>
-                         Chunk.fromIterable(
-                           (1 to batchSize * increment)
-                             .map(i => ProducerRecord(s"key${i}" + UUID.randomUUID(), s"value${i}"))
-                         )
-                       }
-                       .mapZIO { batch =>
-                         for {
-                           _     <- printLine(s"Sending batch of size ${batch.size}!").orDie
-                           times <- ZIO.foreachPar(batch)(producer.produce(_).timed.map(_._1))
-                           _     <- timing.update(_ :+ times)
-                         } yield ()
-                       }
-                       .runDrain
-                results <- timing.get
-                _       <- ZIO.foreachDiscard(results)(r => printLine(r.map(_.toMillis).mkString(" ")).orDie)
-              } yield assertCompletes
+              _       <- ZStream
+                           .tick(1.second)
+                           .take(200)
+                           .mapZIO(_ => batchSize.getAndUpdate(_ + 1))
+                           .map { batchSize =>
+                             Chunk.fromIterable(
+                               (1 to batchSize * increment)
+                                 .map(i => ProducerRecord(s"key${i}" + UUID.randomUUID(), s"value${i}"))
+                             )
+                           }
+                           .mapZIO { batch =>
+                             for {
+                               _     <- printLine(s"Sending batch of size ${batch.size}!").orDie
+                               times <- ZIO.foreachPar(batch)(producer.produce(_).timed.map(_._1))
+                               _     <- timing.update(_ :+ times)
+                             } yield ()
+                           }
+                           .runDrain
+              results <- timing.get
+              _       <- ZIO.foreachDiscard(results)(r => printLine(r.map(_.toMillis).mkString(" ")).orDie)
+            } yield assertCompletes
           }
         }
       } @@ TestAspect.ifEnvSet("ENABLE_AWS"),
@@ -112,35 +111,34 @@ object ProducerTest extends DefaultRunnableSpec {
 
         Ref
           .make(ProducerMetrics.empty)
-          .flatMap {
-            totalMetrics =>
-              (for {
-                _        <- printLine("creating stream").orDie.toManaged
-                _        <- createStreamUnmanaged(streamName, 24).toManaged
-                _        <- printLine("creating producer").orDie.toManaged
-                producer <- Producer
-                              .make(
-                                streamName,
-                                Serde.bytes,
-                                ProducerSettings(
-                                  bufferSize = 16384 * 48,
-                                  maxParallelRequests = 24,
-                                  metricsInterval = 5.seconds,
-                                  aggregate = true
-                                ),
-                                metrics =>
-                                  totalMetrics
-                                    .updateAndGet(_ + metrics)
-                                    .flatMap(m =>
-                                      printLine(
-                                        s"""${metrics.toString}
-                                           |${m.toString}""".stripMargin
-                                      ).orDie
-                                    )
-                              )
-              } yield producer).use { producer =>
-                TestUtil.massProduceRecords(producer, 8000000, None, 14)
-              } *> totalMetrics.get.flatMap(m => printLine(m.toString).orDie).as(assertCompletes)
+          .flatMap { totalMetrics =>
+            (for {
+              _        <- printLine("creating stream").orDie.toManaged
+              _        <- createStreamUnmanaged(streamName, 24).toManaged
+              _        <- printLine("creating producer").orDie.toManaged
+              producer <- Producer
+                            .make(
+                              streamName,
+                              Serde.bytes,
+                              ProducerSettings(
+                                bufferSize = 16384 * 48,
+                                maxParallelRequests = 24,
+                                metricsInterval = 5.seconds,
+                                aggregate = true
+                              ),
+                              metrics =>
+                                totalMetrics
+                                  .updateAndGet(_ + metrics)
+                                  .flatMap(m =>
+                                    printLine(
+                                      s"""${metrics.toString}
+                                         |${m.toString}""".stripMargin
+                                    ).orDie
+                                  )
+                            )
+            } yield producer).use { producer =>
+              TestUtil.massProduceRecords(producer, 8000000, None, 14)
+            } *> totalMetrics.get.flatMap(m => printLine(m.toString).orDie).as(assertCompletes)
           }
       } @@ timeout(5.minute) @@ TestAspect.ifEnvSet("ENABLE_AWS") @@ TestAspect.retries(3),
       test("fail when attempting to produce to a stream that does not exist") {
@@ -176,19 +174,18 @@ object ProducerTest extends DefaultRunnableSpec {
             (for {
               effects <- Ref.make[List[Int]](Nil)
               exit    <- stream
-                        .transduce(ProducerLive.foldWhile(0)(_ => true) { (_, a: Int) =>
-                          effects.update(a :: _) *> UIO.succeed(30)
-                        })
-                        .runCollect
+                           .transduce(ProducerLive.foldWhile(0)(_ => true) { (_, a: Int) =>
+                             effects.update(a :: _) *> UIO.succeed(30)
+                           })
+                           .runCollect
               result  <- effects.get
             } yield exit -> result).exit
 
           (assertM(run(empty))(succeeds(equalTo((Chunk(0), Nil)))) <*>
             assertM(run(single))(succeeds(equalTo((Chunk(30), List(1))))) <*>
             assertM(run(double))(succeeds(equalTo((Chunk(30), List(2, 1))))) <*>
-            assertM(run(failed))(fails(equalTo("Ouch")))).map {
-            case (r1, r2, r3, r4) =>
-              r1 && r2 && r3 && r4
+            assertM(run(failed))(fails(equalTo("Ouch")))).map { case (r1, r2, r3, r4) =>
+            r1 && r2 && r3 && r4
           }
         }
 //        test("equivalence with List#foldLeft") {
@@ -235,26 +232,25 @@ object ProducerTest extends DefaultRunnableSpec {
                 Gen.stringBounded(1, 1024)(Gen.unicodeChar) zip Gen.stringBounded(1, 1024 * 10)(Gen.unicodeChar)
               )
               .filter(_.nonEmpty)
-          ) {
-            inputs =>
-              val batcher = aggregationPipeline(MessageDigest.getInstance("MD5"))
+          ) { inputs =>
+            val batcher = aggregationPipeline(MessageDigest.getInstance("MD5"))
 
-              val records = inputs.map { case (key, value) => ProducerRecord(key, value) }
+            val records = inputs.map { case (key, value) => ProducerRecord(key, value) }
 
-              for {
-                batches           <- ShardMap.md5.use { md5 =>
-                             ZStream
-                               .fromIterable(records)
-                               .mapZIO(r =>
-                                 ProducerLive
-                                   .makeProduceRequest(r, Serde.asciiString, Instant.now, shardMap, md5)
-                                   .map(_._2)
-                               )
-                               .via(batcher)
-                               .runCollect
-                           }
-                recordPayloadSizes = batches.flatten.map(r => r.payloadSize)
-              } yield assert(recordPayloadSizes)(forall(isLessThanEqualTo(ProducerLive.maxPayloadSizePerRecord)))
+            for {
+              batches           <- ShardMap.md5.use { md5 =>
+                                     ZStream
+                                       .fromIterable(records)
+                                       .mapZIO(r =>
+                                         ProducerLive
+                                           .makeProduceRequest(r, Serde.asciiString, Instant.now, shardMap, md5)
+                                           .map(_._2)
+                                       )
+                                       .via(batcher)
+                                       .runCollect
+                                   }
+              recordPayloadSizes = batches.flatten.map(r => r.payloadSize)
+            } yield assert(recordPayloadSizes)(forall(isLessThanEqualTo(ProducerLive.maxPayloadSizePerRecord)))
           }
         } @@ TestAspect.ignore,
         test("aggregate records up to the batch size limit") {
@@ -265,16 +261,16 @@ object ProducerTest extends DefaultRunnableSpec {
 
           for {
             batches          <- ShardMap.md5.use { md5 =>
-                         ZStream
-                           .fromIterable(records)
-                           .mapZIO(r =>
-                             ProducerLive
-                               .makeProduceRequest(r, Serde.asciiString, Instant.now, shardMap, md5)
-                               .map(_._2)
-                           )
-                           .via(batcher)
-                           .runCollect
-                       }
+                                  ZStream
+                                    .fromIterable(records)
+                                    .mapZIO(r =>
+                                      ProducerLive
+                                        .makeProduceRequest(r, Serde.asciiString, Instant.now, shardMap, md5)
+                                        .map(_._2)
+                                    )
+                                    .via(batcher)
+                                    .runCollect
+                                }
             batchPayloadSizes = batches.map(_.map(_.data.length).sum)
           } yield assert(batches.map(_.size))(forall(isLessThanEqualTo(ProducerLive.maxRecordsPerRequest))) &&
             assert(batchPayloadSizes)(forall(isLessThanEqualTo(ProducerLive.maxPayloadSizePerRequest)))
@@ -293,13 +289,13 @@ object ProducerTest extends DefaultRunnableSpec {
             .flatMap { totalMetrics =>
               for {
                 _          <- Producer
-                       .make(
-                         streamName,
-                         Serde.asciiString,
-                         ProducerSettings(aggregate = true),
-                         metricsCollector = m => totalMetrics.update(_ + m)
-                       )
-                       .use(_.produceChunk(Chunk.fromIterable(records)) *> printLine(s"Chunk completed").orDie)
+                                .make(
+                                  streamName,
+                                  Serde.asciiString,
+                                  ProducerSettings(aggregate = true),
+                                  metricsCollector = m => totalMetrics.update(_ + m)
+                                )
+                                .use(_.produceChunk(Chunk.fromIterable(records)) *> printLine(s"Chunk completed").orDie)
                 endMetrics <- totalMetrics.get
               } yield assert(endMetrics.shardPredictionErrors)(isZero)
             }
@@ -317,13 +313,13 @@ object ProducerTest extends DefaultRunnableSpec {
             .flatMap { totalMetrics =>
               for {
                 _          <- Producer
-                       .make(
-                         streamName,
-                         Serde.asciiString,
-                         ProducerSettings(aggregate = true),
-                         metricsCollector = m => totalMetrics.update(_ + m)
-                       )
-                       .use(_.produceChunk(Chunk.fromIterable(records)))
+                                .make(
+                                  streamName,
+                                  Serde.asciiString,
+                                  ProducerSettings(aggregate = true),
+                                  metricsCollector = m => totalMetrics.update(_ + m)
+                                )
+                                .use(_.produceChunk(Chunk.fromIterable(records)))
                 endMetrics <- totalMetrics.get
               } yield assert(endMetrics.nrRecordsPublished)(equalTo(nrRecords.toLong))
             }
@@ -366,14 +362,13 @@ object ProducerTest extends DefaultRunnableSpec {
           _          <- createStreamUnmanaged(streamName, 1)
           _          <- printLine("creating producer").orDie
           metrics    <- Ref.make(ProducerMetrics.empty)
-          _          <- (makeProducer("producer1", metrics) zip makeProducer("producer2", metrics)).use {
-                 case (p1, p2) =>
-                   for {
-                     run1 <- TestUtil.massProduceRecords(p1, nrRecords / 2, Some(nrRecords / 100), 14).fork
-                     run2 <- TestUtil.massProduceRecords(p2, nrRecords / 2, Some(nrRecords / 100), 14).fork
-                     _    <- run1.join <&> run2.join
-                   } yield ()
-               }
+          _          <- (makeProducer("producer1", metrics) zip makeProducer("producer2", metrics)).use { case (p1, p2) =>
+                          for {
+                            run1 <- TestUtil.massProduceRecords(p1, nrRecords / 2, Some(nrRecords / 100), 14).fork
+                            run2 <- TestUtil.massProduceRecords(p2, nrRecords / 2, Some(nrRecords / 100), 14).fork
+                            _    <- run1.join <&> run2.join
+                          } yield ()
+                        }
           _          <- printLine(metrics.toString).orDie
           endMetrics <- metrics.get
         } yield assert(endMetrics.successRate)(isGreaterThan(0.75)))
@@ -405,17 +400,17 @@ object ProducerTest extends DefaultRunnableSpec {
                              .fork
             // Wait for one or more shard prediction errors and then wait for recovery: no more errors
             done        <- ZStream
-                      .fromQueue(metrics)
-                      .tap(m =>
-                        printLine(s"Detected shard prediction errors: ${m.shardPredictionErrors}").orDie.when(
-                          m.shardPredictionErrors > 0
-                        )
-                      )
-                      .dropWhile(_.shardPredictionErrors == 0)
-                      .dropWhile(_.shardPredictionErrors != 0)
-                      .take(3) // This is not quite '3 consecutive', but close enough
-                      .runDrain
-                      .fork
+                             .fromQueue(metrics)
+                             .tap(m =>
+                               printLine(s"Detected shard prediction errors: ${m.shardPredictionErrors}").orDie.when(
+                                 m.shardPredictionErrors > 0
+                               )
+                             )
+                             .dropWhile(_.shardPredictionErrors == 0)
+                             .dropWhile(_.shardPredictionErrors != 0)
+                             .take(3) // This is not quite '3 consecutive', but close enough
+                             .runDrain
+                             .fork
             _           <- ZIO.sleep(10.seconds)
             _           <- printLine("Resharding").orDie
             _           <-
@@ -463,8 +458,7 @@ object ZPipelineExtensions {
   implicit class ZPipelineExt(self: ZPipeline.type) {
 
     /**
-     * Creates a pipeline that repeatedly sends all elements through the given
-     * sink.
+     * Creates a pipeline that repeatedly sends all elements through the given sink.
      */
     def fromSink[Env, Err, In, Out](
       sink: ZSink[Env, Err, In, In, Out]
@@ -505,20 +499,18 @@ object ZPipelineExtensions {
             )
 
           lazy val transducer: ZChannel[Env, Nothing, Chunk[In], Any, Err, Chunk[Out], Unit] =
-            sink.channel.doneCollect.flatMap {
-              case (leftover, z) =>
-                ZChannel
-                  .succeed((upstreamDone.get, concatAndGet(leftover)))
-                  .flatMap[Env, Nothing, Chunk[In], Any, Err, Chunk[Out], Unit] {
-                    case (done, newLeftovers) =>
-                      val nextChannel =
-                        if (done && newLeftovers.isEmpty) ZChannel.unit
-                        else transducer
+            sink.channel.doneCollect.flatMap { case (leftover, z) =>
+              ZChannel
+                .succeed((upstreamDone.get, concatAndGet(leftover)))
+                .flatMap[Env, Nothing, Chunk[In], Any, Err, Chunk[Out], Unit] { case (done, newLeftovers) =>
+                  val nextChannel =
+                    if (done && newLeftovers.isEmpty) ZChannel.unit
+                    else transducer
 
-                      ZChannel
-                        .write(Chunk.single(z))
-                        .zipRight[Env, Nothing, Chunk[In], Any, Err, Chunk[Out], Unit](nextChannel)
-                  }
+                  ZChannel
+                    .write(Chunk.single(z))
+                    .zipRight[Env, Nothing, Chunk[In], Any, Err, Chunk[Out], Unit](nextChannel)
+                }
             }
 
           upstreamMarker >>>

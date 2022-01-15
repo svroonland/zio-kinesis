@@ -9,10 +9,14 @@ import zio._
  *
  * Can be combined with the `+` operator with other `ProducerMetrics` to get statistically sound total metrics
  *
- * @param interval Interval over which metrics were collected
- * @param attempts Histogram of number of attempts needed to successfully publish
- * @param nrFailures Number of failed record publish attempts
- * @param latency Histogram of latency between enqueuing and successful publishing
+ * @param interval
+ *   Interval over which metrics were collected
+ * @param attempts
+ *   Histogram of number of attempts needed to successfully publish
+ * @param nrFailures
+ *   Number of failed record publish attempts
+ * @param latency
+ *   Histogram of latency between enqueuing and successful publishing
  */
 final case class ProducerMetrics(
   interval: Duration,
@@ -40,7 +44,7 @@ final case class ProducerMetrics(
 
   val meanNrPutRecordCalls: Double = if (interval > Duration.Zero) nrPutRecordCalls * 1000.0 / interval.toMillis else 0
 
-  override def toString: String                 =
+  override def toString: String =
     Seq(
       ("interval", interval.getSeconds, "s"),
       ("total records published", nrRecordsPublished, ""),

@@ -61,18 +61,18 @@ private[client] object ShardThrottler {
         updateSuccessRate = for {
                               counts                 <- counter.getAndSet((0, 0))
                               currentSuccessRate      = counts match {
-                                                     case (successes, failures) =>
-                                                       if ((successes + failures) > 0)
-                                                         successes * 1.0d / (successes + failures)
-                                                       else 1.0
-                                                   }
+                                                          case (successes, failures) =>
+                                                            if ((successes + failures) > 0)
+                                                              successes * 1.0d / (successes + failures)
+                                                            else 1.0
+                                                        }
                               successRateUpdateFactor = currentSuccessRate
                               _                      <- successRate.updateAndGet(r => (r * successRateUpdateFactor + allowedError) min 1.0)
                             } yield ()
         _                <- updateSuccessRate
-               .repeat(Schedule.spaced(updatePeriod))
-               .delay(updatePeriod)
-               .forkManaged
+                              .repeat(Schedule.spaced(updatePeriod))
+                              .delay(updatePeriod)
+                              .forkManaged
       } yield new DynamicThrottler {
         override final def throughputFactor: UIO[Double] = successRate.get
         override final def addSuccess: UIO[Unit]         = update(addSuccess = 1)

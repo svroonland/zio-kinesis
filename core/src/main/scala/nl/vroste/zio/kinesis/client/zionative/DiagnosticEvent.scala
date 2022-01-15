@@ -4,7 +4,7 @@ import zio._
 
 /**
  * Events for diagnostics of Kinesis streaming
- **/
+ */
 sealed trait DiagnosticEvent
 
 object DiagnosticEvent {
@@ -12,11 +12,12 @@ object DiagnosticEvent {
   /**
    * A single round of polling of record on a shard completed with results
    *
-    * @param shardId
+   * @param shardId
    * @param nrRecords
-   * @param behindLatest See GetRecords
-   * @param duration Time the call to GetRecords took, including time needed to wait for taking into
-   *   account AWS limits
+   * @param behindLatest
+   *   See GetRecords
+   * @param duration
+   *   Time the call to GetRecords took, including time needed to wait for taking into account AWS limits
    */
   final case class PollComplete(shardId: String, nrRecords: Int, behindLatest: Duration, duration: Duration)
       extends DiagnosticEvent
@@ -33,7 +34,7 @@ object DiagnosticEvent {
   /**
    * Enhanced fanout produced a batch of records
    *
-        * @param shardId
+   * @param shardId
    * @param nrRecords
    * @param behindLatest
    */
@@ -45,8 +46,10 @@ object DiagnosticEvent {
   /**
    * The worker acquired the lease for a shard
    *
-    * @param shardId Shard ID
-   * @param checkpoint The last checkpoint made for this shard
+   * @param shardId
+   *   Shard ID
+   * @param checkpoint
+   *   The last checkpoint made for this shard
    */
   final case class LeaseAcquired(shardId: String, checkpoint: Option[Either[SpecialCheckpoint, ExtendedSequenceNumber]])
       extends LeaseEvent
@@ -56,30 +59,36 @@ object DiagnosticEvent {
    *
    * This may be discovered during lease renewal or checkpointing
    *
-    * @param shardId Shard ID
+   * @param shardId
+   *   Shard ID
    */
   final case class ShardLeaseLost(shardId: String) extends LeaseEvent
 
   /**
    * The worker successfully renewed the lease for the given shard
    *
-    * @param shardId Shard ID
-   * @param duration Time it took to renew the lease
+   * @param shardId
+   *   Shard ID
+   * @param duration
+   *   Time it took to renew the lease
    */
   final case class LeaseRenewed(shardId: String, duration: Duration) extends LeaseEvent
 
   /**
    * The lease for the given shard was gracefully released
    *
-    * @param shardId Shard ID
+   * @param shardId
+   *   Shard ID
    */
   final case class LeaseReleased(shardId: String) extends LeaseEvent
 
   /**
    * A checkpoint was made for the given shard
    *
-    * @param shardId Shard ID
-   * @param checkpoint Checkpoint
+   * @param shardId
+   *   Shard ID
+   * @param checkpoint
+   *   Checkpoint
    */
   final case class Checkpoint(shardId: String, checkpoint: Either[SpecialCheckpoint, ExtendedSequenceNumber])
       extends LeaseEvent

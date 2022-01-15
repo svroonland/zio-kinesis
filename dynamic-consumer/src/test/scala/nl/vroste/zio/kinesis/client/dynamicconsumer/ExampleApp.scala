@@ -46,17 +46,25 @@ object ExampleApp extends zio.ZIOAppDefault {
   )
 
   val program: ZIO[
-    Clock with Any with Random with Console with Kinesis with CloudWatch with CloudWatchMetricsPublisherConfig with DynamicConsumer with LeaseRepository,
+    Clock
+      with Any
+      with Random
+      with Console
+      with Kinesis
+      with CloudWatch
+      with CloudWatchMetricsPublisherConfig
+      with DynamicConsumer
+      with LeaseRepository,
     Throwable,
     ExitCode
-  ] = {
+  ] =
     for {
       _          <- TestUtil.createStreamUnmanaged(streamName, nrShards)
       _          <- TestUtil.getShards(streamName)
       producer   <- TestUtil
-                    .produceRecords(streamName, nrRecords, produceRate, maxRecordSize, producerSettings)
-                    .tapError(e => ZIO.logError(s"Producer error: ${e}"))
-                    .fork
+                      .produceRecords(streamName, nrRecords, produceRate, maxRecordSize, producerSettings)
+                      .tapError(e => ZIO.logError(s"Producer error: ${e}"))
+                      .fork
 //      _          <- producer.join
       workers    <- ZIO.foreach((1 to nrNativeWorkers).toList)(id => worker(s"worker${id}").runCount.fork)
       kclWorkers <-
@@ -72,29 +80,28 @@ object ExampleApp extends zio.ZIOAppDefault {
         )
       // Sleep, but abort early if one of our children dies
       _          <- reshardAfter
-             .map(delay =>
-               (ZIO.logInfo("Resharding") *>
-                 Kinesis.updateShardCount(
-                   UpdateShardCountRequest(
-                     StreamName(streamName),
-                     PositiveIntegerObject(Math.ceil(nrShards.toDouble * reshardFactor).toInt),
-                     ScalingType.UNIFORM_SCALING
-                   )
-                 ))
-                 .delay(delay)
-             )
-             .getOrElse(ZIO.unit)
-             .fork
+                      .map(delay =>
+                        (ZIO.logInfo("Resharding") *>
+                          Kinesis.updateShardCount(
+                            UpdateShardCountRequest(
+                              StreamName(streamName),
+                              PositiveIntegerObject(Math.ceil(nrShards.toDouble * reshardFactor).toInt),
+                              ScalingType.UNIFORM_SCALING
+                            )
+                          ))
+                          .delay(delay)
+                      )
+                      .getOrElse(ZIO.unit)
+                      .fork
       _          <- ZIO.sleep(runLength) raceFirst ZIO.foreachParDiscard(kclWorkers ++ workers)(_.join) raceFirst producer.join
       _           = println("Interrupting app")
       _          <- producer.interruptFork
       _          <- ZIO.foreachParDiscard(kclWorkers)(_.interrupt)
       _          <- ZIO.foreachParDiscard(workers)(_.interrupt.map { exit =>
-             exit.fold(_ => (), nrRecordsProcessed => println(s"Worker processed ${nrRecordsProcessed}"))
+                      exit.fold(_ => (), nrRecordsProcessed => println(s"Worker processed ${nrRecordsProcessed}"))
 
-           })
+                    })
     } yield ExitCode.success
-  }
 
   override def run: ZIO[ZEnv with ZIOAppArgs, Any, Any] =
     program
@@ -128,31 +135,30 @@ object ExampleApp extends zio.ZIOAppDefault {
               case ev                               => ZIO.logInfo(id + ": " + ev.toString)
             }) *> metrics.processEvent(ev)
         )
-        .flatMapPar(Int.MaxValue) {
-          case (shardID, shardStream, checkpointer) =>
-            shardStream
-              .tap(r =>
-                checkpointer
-                  .stageOnSuccess(
-                    (ZIO.logInfo(s"${id} Processing record $r") *> ZIO
-                      .sleep(recordProcessingTime)
-                      .when(recordProcessingTime >= 1.millis)).when(false)
-                  )(r)
-              )
-              .aggregateAsyncWithin(ZSink.collectAllN[Record[String]](5000), Schedule.fixed(10.second))
-              .tap(rs => ZIO.logInfo(s"${id} processed ${rs.size} records on shard ${shardID}").when(true))
-              .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-              .tap(_ => checkpointer.checkpoint())
-              .catchAll {
-                case Right(ShardLeaseLost) =>
-                  ZStream.fromZIO(ZIO.logInfo(s"${id} Doing checkpoint for ${shardID}: shard lease lost")) *>
-                    ZStream.empty
+        .flatMapPar(Int.MaxValue) { case (shardID, shardStream, checkpointer) =>
+          shardStream
+            .tap(r =>
+              checkpointer
+                .stageOnSuccess(
+                  (ZIO.logInfo(s"${id} Processing record $r") *> ZIO
+                    .sleep(recordProcessingTime)
+                    .when(recordProcessingTime >= 1.millis)).when(false)
+                )(r)
+            )
+            .aggregateAsyncWithin(ZSink.collectAllN[Record[String]](5000), Schedule.fixed(10.second))
+            .tap(rs => ZIO.logInfo(s"${id} processed ${rs.size} records on shard ${shardID}").when(true))
+            .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
+            .tap(_ => checkpointer.checkpoint())
+            .catchAll {
+              case Right(ShardLeaseLost) =>
+                ZStream.fromZIO(ZIO.logInfo(s"${id} Doing checkpoint for ${shardID}: shard lease lost")) *>
+                  ZStream.empty
 
-                case Left(e)               =>
-                  ZStream.fromZIO(
-                    ZIO.logError(s"${id} shard ${shardID} stream failed with " + e + ": " + e.getStackTrace)
-                  ) *> ZStream.fail(e)
-              }
+              case Left(e) =>
+                ZStream.fromZIO(
+                  ZIO.logError(s"${id} shard ${shardID} stream failed with " + e + ": " + e.getStackTrace)
+                ) *> ZStream.fail(e)
+            }
         }
         .mapConcatChunk(identity(_))
         .ensuring(ZIO.logInfo(s"Worker ${id} stream completed"))
@@ -175,26 +181,25 @@ object ExampleApp extends zio.ZIOAppDefault {
         requestShutdown = requestShutdown.await,
         configureKcl = config => if (enhancedFanout) config.withEnhancedFanOut else config.withPolling
       )
-      .flatMapPar(Int.MaxValue) {
-        case (shardID, shardStream, checkpointer) =>
-          shardStream
-            .tap(r =>
-              checkpointer
-                .stageOnSuccess(ZIO.logInfo(s"${id} Processing record $r").when(false))(r)
-            )
-            .aggregateAsyncWithin(ZSink.collectAllN[DynamicConsumer.Record[String]](1000), Schedule.fixed(5.minutes))
-            .mapConcat(_.lastOption.toList)
-            .tap(_ => ZIO.logInfo(s"${id} Checkpointing shard ${shardID}") *> checkpointer.checkpoint)
-            .catchAll {
-              case _: ShutdownException => // This will be thrown when the shard lease has been stolen
-                // Abort the stream when we no longer have the lease
+      .flatMapPar(Int.MaxValue) { case (shardID, shardStream, checkpointer) =>
+        shardStream
+          .tap(r =>
+            checkpointer
+              .stageOnSuccess(ZIO.logInfo(s"${id} Processing record $r").when(false))(r)
+          )
+          .aggregateAsyncWithin(ZSink.collectAllN[DynamicConsumer.Record[String]](1000), Schedule.fixed(5.minutes))
+          .mapConcat(_.lastOption.toList)
+          .tap(_ => ZIO.logInfo(s"${id} Checkpointing shard ${shardID}") *> checkpointer.checkpoint)
+          .catchAll {
+            case _: ShutdownException => // This will be thrown when the shard lease has been stolen
+              // Abort the stream when we no longer have the lease
 
-                ZStream.fromZIO(ZIO.logError(s"${id} shard ${shardID} lost")) *> ZStream.empty
-              case e                    =>
-                ZStream.fromZIO(
-                  ZIO.logError(s"${id} shard ${shardID} stream failed with" + e + ": " + e.getStackTrace)
-                ) *> ZStream.fail(e)
-            }
+              ZStream.fromZIO(ZIO.logError(s"${id} shard ${shardID} lost")) *> ZStream.empty
+            case e                    =>
+              ZStream.fromZIO(
+                ZIO.logError(s"${id} shard ${shardID} stream failed with" + e + ": " + e.getStackTrace)
+              ) *> ZStream.fail(e)
+          }
       }
 
   val localStackEnv =
@@ -203,7 +208,12 @@ object ExampleApp extends zio.ZIOAppDefault {
   val awsEnv: ZLayer[
     Any,
     Nothing,
-    Kinesis with CloudWatch with dynamodb.DynamoDb with DynamicConsumer with LeaseRepository with CloudWatchMetricsPublisherConfig
+    Kinesis
+      with CloudWatch
+      with dynamodb.DynamoDb
+      with DynamicConsumer
+      with LeaseRepository
+      with CloudWatchMetricsPublisherConfig
   ] = {
     val httpClient = HttpClientBuilder.make(
       maxConcurrency = 100,
@@ -213,7 +223,7 @@ object ExampleApp extends zio.ZIOAppDefault {
       )
     )
 
-    val kinesisClient = Clock.live >>> kinesisAsyncClientLayer() /// @@ (callLogging)
+    val kinesisClient = Clock.live >>> kinesisAsyncClientLayer() // / @@ (callLogging)
 
     val cloudWatch = cloudWatchAsyncClientLayer()
     val dynamo     = dynamoDbAsyncClientLayer()

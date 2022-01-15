@@ -20,28 +20,29 @@ import java.security.MessageDigest
  * Supports higher volume producing than making use of the kinesis client directly.
  *
  * Features:
- * - Batching of records into a single PutRecords calls to Kinesis for reduced IO overhead
- * - Retry requests with backoff on recoverable errors
- * - Retry individual records
- * - Rate limiting to respect shard capacity
- * - Dynamic throttling: when other systems are producing records, Producer will find a rate that optimizes
- *   the success rate while maintaining high throughput.
- *  - Aggregatting of small records into one Kinesis records.
+ *   - Batching of records into a single PutRecords calls to Kinesis for reduced IO overhead
+ *   - Retry requests with backoff on recoverable errors
+ *   - Retry individual records
+ *   - Rate limiting to respect shard capacity
+ *   - Dynamic throttling: when other systems are producing records, Producer will find a rate that optimizes the
+ *     success rate while maintaining high throughput.
+ *     - Aggregatting of small records into one Kinesis records.
  *
- * Records are batched for up to 500 records or 5MB of payload size,
- * whichever comes first. The latter two are Kinesis API limits.
+ * Records are batched for up to 500 records or 5MB of payload size, whichever comes first. The latter two are Kinesis
+ * API limits.
  *
  * Individual records which cannot be produced due to Kinesis shard rate limits are retried.
  *
  * Inspired by https://docs.aws.amazon.com/streams/latest/dev/developing-producers-with-kpl.html and
  * https://aws.amazon.com/blogs/big-data/implementing-efficient-and-reliable-producers-with-the-amazon-kinesis-producer-library/
  *
- * Rate limits for the Kinesis PutRecords API (see https://docs.aws.amazon.com/kinesis/latest/APIReference/API_PutRecords.html):
- * - 500 records per request
- * - Whole request max 5MB
- * - Each item max 1MB
- * - Each shard max 1000 records / s
- * - Each shard max 1MB / s
+ * Rate limits for the Kinesis PutRecords API (see
+ * https://docs.aws.amazon.com/kinesis/latest/APIReference/API_PutRecords.html):
+ *   - 500 records per request
+ *   - Whole request max 5MB
+ *   - Each item max 1MB
+ *   - Each shard max 1000 records / s
+ *   - Each shard max 1MB / s
  */
 trait Producer[T] {
 
@@ -51,14 +52,16 @@ trait Producer[T] {
    * Backpressures when too many requests are in flight
    *
    * @param r
-   * @return Task that fails if the records fail to be produced with a non-recoverable error
+   * @return
+   *   Task that fails if the records fail to be produced with a non-recoverable error
    */
   def produce(r: ProducerRecord[T]): Task[ProduceResponse]
 
   /**
    * Backpressures when too many requests are in flight
    *
-   * @return Task that fails if any of the records fail to be produced with a non-recoverable error
+   * @return
+   *   Task that fails if any of the records fail to be produced with a non-recoverable error
    */
   def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[Chunk[ProduceResponse]]
 
@@ -70,21 +73,26 @@ trait Producer[T] {
 }
 
 /**
- *
- * @param bufferSize Maximum number of records to be queued for processing
- *                   When this number is reached, calls to `produce` or `produceChunk` will backpressure.
- * @param maxParallelRequests Maximum number of `PutRecords` calls that are in flight concurrently
+ * @param bufferSize
+ *   Maximum number of records to be queued for processing When this number is reached, calls to `produce` or
+ *   `produceChunk` will backpressure.
+ * @param maxParallelRequests
+ *   Maximum number of `PutRecords` calls that are in flight concurrently
  * @param backoffRequests
  * @param failedDelay
- * @param metricsInterval Interval at which metrics are published
- * @param updateShardInterval Interval at which the stream's shards are refreshed
- * @param aggregate Aggregate records
- *                  Enabling this setting can give higher throughput for small records, by working around
- *                  the 1000 records/s limit per shard.
- * @param allowedErrorRate The maximum allowed rate of errors before throttling is applied
- * @param md5DigestPoolSize Size of the pool of MessageDigest instances used for shard prediction. The MessageDigest
- *                          is too costly to instantiate for each record, hence a `ZPool` of them is used. This
- *                          MessageDigest is used in `produce` and `produceChunk` calls.
+ * @param metricsInterval
+ *   Interval at which metrics are published
+ * @param updateShardInterval
+ *   Interval at which the stream's shards are refreshed
+ * @param aggregate
+ *   Aggregate records Enabling this setting can give higher throughput for small records, by working around the 1000
+ *   records/s limit per shard.
+ * @param allowedErrorRate
+ *   The maximum allowed rate of errors before throttling is applied
+ * @param md5DigestPoolSize
+ *   Size of the pool of MessageDigest instances used for shard prediction. The MessageDigest is too costly to
+ *   instantiate for each record, hence a `ZPool` of them is used. This MessageDigest is used in `produce` and
+ *   `produceChunk` calls.
  */
 final case class ProducerSettings(
   bufferSize: Int = 8192,
@@ -106,14 +114,20 @@ object Producer {
   /**
    * Create a Producer of `T` values to stream `streamName`
    *
-   * @param streamName Stream to produce to
-   * @param serializer Serializer for values of type T
+   * @param streamName
+   *   Stream to produce to
+   * @param serializer
+   *   Serializer for values of type T
    * @param settings
-   * @param metricsCollector Periodically called with producer metrics
-   * @tparam R Environment required by the serializer, usually Any
+   * @param metricsCollector
+   *   Periodically called with producer metrics
+   * @tparam R
+   *   Environment required by the serializer, usually Any
    * @tparam R1
-   * @tparam T Type of values to produce
-   * @return A Managed Producer
+   * @tparam T
+   *   Type of values to produce
+   * @return
+   *   A Managed Producer
    */
   def make[R, R1, T](
     streamName: String,

@@ -22,9 +22,8 @@ object DynamicConsumerFakeTest extends DefaultRunnableSpec {
 
   private val expectedRecords = {
     def recordsForShard(shardName: String, xs: String*) =
-      xs.zipWithIndex.map {
-        case (s, i) =>
-          record(i.toLong, shardName, s)
+      xs.zipWithIndex.map { case (s, i) =>
+        record(i.toLong, shardName, s)
       }
     recordsForShard("shard0", "msg1", "msg2") ++ recordsForShard("shard1", "msg3", "msg4")
   }
@@ -47,16 +46,16 @@ object DynamicConsumerFakeTest extends DefaultRunnableSpec {
       q                   <- Queue.unbounded[Record[String]]
       refCheckpointedList <- Ref.make[Seq[Record[_]]](Seq.empty)
       _                   <- DynamicConsumer
-             .consumeWith(
-               streamName = "my-stream",
-               applicationName = "my-application",
-               deserializer = Serde.asciiString,
-               workerIdentifier = "worker1",
-               checkpointBatchSize = 1000L,
-               checkpointDuration = 5.minutes
-             )(record => q.offer(record).unit)
-             .provideCustomLayer(DynamicConsumer.fake(shards, refCheckpointedList))
-             .exitCode
+                               .consumeWith(
+                                 streamName = "my-stream",
+                                 applicationName = "my-application",
+                                 deserializer = Serde.asciiString,
+                                 workerIdentifier = "worker1",
+                                 checkpointBatchSize = 1000L,
+                                 checkpointDuration = 5.minutes
+                               )(record => q.offer(record).unit)
+                               .provideCustomLayer(DynamicConsumer.fake(shards, refCheckpointedList))
+                               .exitCode
       checkpointedList    <- refCheckpointedList.get
       xs                  <- q.takeAll
     } yield (checkpointedList, xs)
@@ -65,16 +64,16 @@ object DynamicConsumerFakeTest extends DefaultRunnableSpec {
     for {
       q  <- Queue.unbounded[Record[String]]
       _  <- DynamicConsumer
-             .consumeWith(
-               streamName = "my-stream",
-               applicationName = "my-application",
-               deserializer = Serde.asciiString,
-               workerIdentifier = "worker1",
-               checkpointBatchSize = 1000L,
-               checkpointDuration = 5.minutes
-             )(record => q.offer(record).unit)
-             .provideCustomLayer(DynamicConsumer.fake(shards))
-             .exitCode
+              .consumeWith(
+                streamName = "my-stream",
+                applicationName = "my-application",
+                deserializer = Serde.asciiString,
+                workerIdentifier = "worker1",
+                checkpointBatchSize = 1000L,
+                checkpointDuration = 5.minutes
+              )(record => q.offer(record).unit)
+              .provideCustomLayer(DynamicConsumer.fake(shards))
+              .exitCode
       xs <- q.takeAll
     } yield xs
 

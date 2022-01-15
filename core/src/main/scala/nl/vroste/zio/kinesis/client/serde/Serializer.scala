@@ -5,7 +5,8 @@ import zio.{ Chunk, RIO }
 /**
  * Serializer from values of some type T to a byte array
  *
- * @tparam R Environment available to the serializer
+ * @tparam R
+ *   Environment available to the serializer
  * @tparam T
  */
 trait Serializer[-R, -T] {

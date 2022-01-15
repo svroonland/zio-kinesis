@@ -10,22 +10,25 @@ import zio.Random.shuffle
 
 /**
  * Decides which shards this worker would like to have
- **/
+ */
 trait ShardAssignmentStrategy {
 
   /**
    * Given the current lease assignment, pick which shards this worker desires
    *
-   * Leases for picked shards which don't yet exist will be created, leases owned by other workers
-   * will be stolen. Note that all of this may fail when other workers are active in the pool,
-   * so it is not guaranteed that this worker actually gets its desired shards. However, on the
-   * next lease assignment interval, the strategy can indicate its desired shards again based.
+   * Leases for picked shards which don't yet exist will be created, leases owned by other workers will be stolen. Note
+   * that all of this may fail when other workers are active in the pool, so it is not guaranteed that this worker
+   * actually gets its desired shards. However, on the next lease assignment interval, the strategy can indicate its
+   * desired shards again based.
    *
    * Leases for shards that are not desired (anymore) will be released.
    *
-    * @param leases Current lease assignments + time of last update
-   * @param shards IDs of all shards of the stream
-   * @param workerId ID of current worker, reflected in the 'owner' property of leases
+   * @param leases
+   *   Current lease assignments + time of last update
+   * @param shards
+   *   IDs of all shards of the stream
+   * @param workerId
+   *   ID of current worker, reflected in the 'owner' property of leases
    * @return
    */
   def desiredShards(
@@ -40,13 +43,14 @@ object ShardAssignmentStrategy {
   /**
    * Manual shard assignment for a fixed set of shards
    *
-   * Note that users must make sure that other workers in the pool also use a manual shard assignment
-   * strategy, otherwise stealing back of leases by other workers may occur.
+   * Note that users must make sure that other workers in the pool also use a manual shard assignment strategy,
+   * otherwise stealing back of leases by other workers may occur.
    *
-   * You also need to make sure that all shards are covered by the shard assignment of all workers.
-   * After resharding, the list of shards must be reconfigured.
+   * You also need to make sure that all shards are covered by the shard assignment of all workers. After resharding,
+   * the list of shards must be reconfigured.
    *
-   * @param shardAssignment IDs of shards to assign to this worker
+   * @param shardAssignment
+   *   IDs of shards to assign to this worker
    */
   def manual(shardAssignment: Set[String]) =
     new ShardAssignmentStrategy {
@@ -64,15 +68,15 @@ object ShardAssignmentStrategy {
   /**
    * Balances shard assignments between a set of workers by taking / stealing leases so that each has its fair share
    *
-   * Shards which do not yet have a lease will be claimed by this worker. To get a fair share of leases,
-   * the desired shards may contain leases to steal from other workers. The most shards will be selected
-   * from the busiest worker. A random selection is made within each worker's shards so that the chance of
-   * contention with other stealing workers is reduced.
+   * Shards which do not yet have a lease will be claimed by this worker. To get a fair share of leases, the desired
+   * shards may contain leases to steal from other workers. The most shards will be selected from the busiest worker. A
+   * random selection is made within each worker's shards so that the chance of contention with other stealing workers
+   * is reduced.
    *
-   * @param expirationTime Time after which a lease is considered expired if not updated in the meantime
-   *                       This should be set to several times the lease renewal interval so that leases are
-   *                       not considered expired until several renew intervals have been missed, in case of
-   *                       transient connection issues.
+   * @param expirationTime
+   *   Time after which a lease is considered expired if not updated in the meantime This should be set to several times
+   *   the lease renewal interval so that leases are not considered expired until several renew intervals have been
+   *   missed, in case of transient connection issues.
    */
   def balanced(expirationTime: Duration = 10.seconds) =
     new ShardAssignmentStrategy {
@@ -82,14 +86,14 @@ object ShardAssignmentStrategy {
         workerId: String
       ): ZIO[Random with Clock, Nothing, Set[String]] =
         for {
-          now               <- zio.Clock.currentDateTime.map(_.toInstant())
-          expiredLeases      = leases.collect {
+          now          <- zio.Clock.currentDateTime.map(_.toInstant())
+          expiredLeases = leases.collect {
                             case (lease, lastUpdated)
                                 if lastUpdated.isBefore(now.minusMillis(expirationTime.toMillis)) &&
                                   !lease.checkpoint.contains(Left(SpecialCheckpoint.ShardEnd)) =>
                               lease
                           }
-          _                 <-
+          _            <-
             ZIO.logInfo(s"Found expired leases: ${expiredLeases.map(_.key).mkString(",")}").when(expiredLeases.nonEmpty)
 
           shardsWithoutLease = shards.filterNot(shard => leases.map(_._1.key).toList.contains(shard))
@@ -103,13 +107,17 @@ object ShardAssignmentStrategy {
   /**
    * Compute which leases to take, either without owner or from other workers
    *
-   * We take expired and unowned leases first. We only steal if necessary and do it from the busiest worker first.
-   * We will not steal more than the other worker's target (nr leases / nr workers).
+   * We take expired and unowned leases first. We only steal if necessary and do it from the busiest worker first. We
+   * will not steal more than the other worker's target (nr leases / nr workers).
    *
-    * @param allLeases Latest known state of the all leases
-   * @param workerId ID of this worker
-   * @param expiredLeases Leases that have expired
-   * @return List of leases that should be taken by this worker
+   * @param allLeases
+   *   Latest known state of the all leases
+   * @param workerId
+   *   ID of this worker
+   * @param expiredLeases
+   *   Leases that have expired
+   * @return
+   *   List of leases that should be taken by this worker
    */
   def leasesToTake(
     allLeases: List[Lease],
@@ -154,11 +162,16 @@ object ShardAssignmentStrategy {
   /**
    * Computes leases to steal from other workers
    *
-   * @param allLeases Latest known state of the all leases
-   * @param workerId ID of this worker
-   * @param target Target number of leases for this worker
-   * @param nrLeasesToSteal How many leases to steal to get to the target
-   * @return List of leases that should be stolen
+   * @param allLeases
+   *   Latest known state of the all leases
+   * @param workerId
+   *   ID of this worker
+   * @param target
+   *   Target number of leases for this worker
+   * @param nrLeasesToSteal
+   *   How many leases to steal to get to the target
+   * @return
+   *   List of leases that should be stolen
    */
   def leasesToSteal(
     allLeases: List[Lease],
@@ -178,12 +191,12 @@ object ShardAssignmentStrategy {
       .view
       .filterKeys(_ != workerId)
       .toList
-      .sortBy {
-        case (worker, nrLeases) => (nrLeases * -1, worker)
+      .sortBy { case (worker, nrLeases) =>
+        (nrLeases * -1, worker)
       } // Sort desc by nr of leases and then asc by worker ID for deterministic sort order
     // println(s"Nr Leases by worker: ${nrLeasesByWorker}")
-    val spilloverByWorker = nrLeasesByWorker.map {
-      case (worker, nrLeases) => worker -> Math.max(0, nrLeases - target)
+    val spilloverByWorker = nrLeasesByWorker.map { case (worker, nrLeases) =>
+      worker -> Math.max(0, nrLeases - target)
     }
     // println(s"Spillover: ${spilloverByWorker}")
 
@@ -201,10 +214,9 @@ object ShardAssignmentStrategy {
 
     // From each worker that we want to take some leases, randomize the leases to reduce contention
     for {
-      leasesToStealByWorker <- ZIO.foreach(nrLeasesToStealByWorker.toList) {
-                                 case (worker, nrLeasesToTake) =>
-                                   shuffle(leasesByWorker.getOrElse(worker, List.empty))
-                                     .map(_.take(nrLeasesToTake))
+      leasesToStealByWorker <- ZIO.foreach(nrLeasesToStealByWorker.toList) { case (worker, nrLeasesToTake) =>
+                                 shuffle(leasesByWorker.getOrElse(worker, List.empty))
+                                   .map(_.take(nrLeasesToTake))
                                }
       leasesToSteal          = leasesToStealByWorker.flatten
     } yield leasesToSteal

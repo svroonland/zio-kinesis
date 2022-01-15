@@ -12,19 +12,19 @@ object LeaseCoordinatorTest extends DefaultRunnableSpec {
   def toShardMapWithStringKey(shards: Seq[Shard.ReadOnly]): Map[String, Shard.ReadOnly] =
     shards.map(s => ShardId.unwrap(s.shardId) -> s).toMap
 
-  val shard1                                                                            =
+  val shard1 =
     Shard(
       ShardId("001"),
       hashKeyRange = HashKeyRange(HashKey("0"), HashKey("0")),
       sequenceNumberRange = SequenceNumberRange(SequenceNumber("1"))
     ).asReadOnly
-  val shard2                                                                            =
+  val shard2 =
     Shard(
       ShardId("002"),
       hashKeyRange = HashKeyRange(HashKey("0"), HashKey("0")),
       sequenceNumberRange = SequenceNumberRange(SequenceNumber("1"))
     ).asReadOnly
-  val shard3                                                                            = Shard(
+  val shard3 = Shard(
     ShardId("003"),
     parentShardId = Some(ShardId("001")),
     adjacentParentShardId = Some(ShardId("002")),

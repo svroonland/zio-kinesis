@@ -14,13 +14,13 @@ import zio.stream.ZStream
  * Fetcher that uses GetRecords
  *
  * Limits (from https://docs.aws.amazon.com/streams/latest/dev/service-sizes-and-limits.html):
- * - GetRecords can retrieve up to 10 MB of data per call from a single shard, and up to 10,000 records per call.
- *   Each call to GetRecords is counted as one read transaction.
- * - Each shard can support up to five read transactions per second.
- *   Each read transaction can provide up to 10,000 records with an upper quota of 10 MB per transaction.
- * - Each shard can support up to a maximum total data read rate of 2 MB per second via GetRecords. i
- *   If a call to GetRecords returns 10 MB, subsequent calls made within the next 5 seconds throw an exception.
- * - GetShardIterator: max 5 calls per second globally
+ *   - GetRecords can retrieve up to 10 MB of data per call from a single shard, and up to 10,000 records per call. Each
+ *     call to GetRecords is counted as one read transaction.
+ *   - Each shard can support up to five read transactions per second. Each read transaction can provide up to 10,000
+ *     records with an upper quota of 10 MB per transaction.
+ *   - Each shard can support up to a maximum total data read rate of 2 MB per second via GetRecords. i If a call to
+ *     GetRecords returns 10 MB, subsequent calls made within the next 5 seconds throw an exception.
+ *   - GetShardIterator: max 5 calls per second globally
  */
 object PollingFetcher {
   import Consumer.retryOnThrottledWithSchedule
@@ -38,8 +38,8 @@ object PollingFetcher {
       ZStream.unwrapManaged {
         for {
           _                    <- ZIO
-                 .logInfo(s"Creating PollingFetcher for shard ${shardId} with starting position ${startingPosition}")
-                 .toManaged
+                                    .logInfo(s"Creating PollingFetcher for shard ${shardId} with starting position ${startingPosition}")
+                                    .toManaged
           initialShardIterator <-
             getShardIterator(
               GetShardIteratorRequest(streamName, shardId, startingPosition.`type`, startingPosition.sequenceNumber)
@@ -52,7 +52,7 @@ object PollingFetcher {
           shardIterator        <- Ref.make[Option[ShardIterator]](Some(initialShardIterator)).toManaged
 
           // Failure with None indicates that there's no next shard iterator and the shard has ended
-          doPoll      = for {
+          doPoll = for {
                      currentIterator      <- shardIterator.get
                      currentIterator      <- ZIO.fromOption(currentIterator)
                      responseWithDuration <-
@@ -78,13 +78,13 @@ object PollingFetcher {
                      millisBehindLatest   <-
                        ZIO.fromOption(response.millisBehindLatest).orElse(ZIO.succeed(MillisBehindLatest(0)))
                      _                    <- emitDiagnostic(
-                            DiagnosticEvent.PollComplete(
-                              shardId,
-                              response.records.size,
-                              millisBehindLatest.millis,
-                              duration
-                            )
-                          )
+                                               DiagnosticEvent.PollComplete(
+                                                 shardId,
+                                                 response.records.size,
+                                                 millisBehindLatest.millis,
+                                                 duration
+                                               )
+                                             )
                    } yield response
 
           shardStream = ZStream

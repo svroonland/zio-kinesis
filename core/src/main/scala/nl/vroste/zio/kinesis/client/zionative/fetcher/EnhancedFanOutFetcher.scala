@@ -56,13 +56,12 @@ object EnhancedFanOutFetcher {
                   .SubscribeToShardEvent(shardId, e.records.size, e.millisBehindLatest.millis)
               )
             }
-            .catchSome {
-              case NonFatal(e) =>
-                ZStream.unwrap(
-                  ZIO
-                    .logWarning(s"Error in EnhancedFanOutFetcher for shard ${shardId}, will retry. ${e}")
-                    .as(ZStream.fail(e))
-                )
+            .catchSome { case NonFatal(e) =>
+              ZStream.unwrap(
+                ZIO
+                  .logWarning(s"Error in EnhancedFanOutFetcher for shard ${shardId}, will retry. ${e}")
+                  .as(ZStream.fail(e))
+              )
             }
             // Retry on connection loss, throttling exception, etc.
             // Note that retry has to be at this level, not the outermost ZStream because that reinitializes the start position
@@ -85,20 +84,19 @@ object EnhancedFanOutFetcher {
       .registerStreamConsumer(RegisterStreamConsumerRequest(StreamARN(streamARN), ConsumerName(consumerName)))
       .mapError(_.toThrowable)
       .map(_.consumer.consumerARN)
-      .catchSome {
-        case e: ResourceInUseException =>
-          // Consumer already exists, retrieve it
-          Kinesis
-            .describeStreamConsumer(
-              DescribeStreamConsumerRequest(
-                streamARN = Some(StreamARN(streamARN)),
-                consumerName = Some(ConsumerName(consumerName))
-              )
+      .catchSome { case e: ResourceInUseException =>
+        // Consumer already exists, retrieve it
+        Kinesis
+          .describeStreamConsumer(
+            DescribeStreamConsumerRequest(
+              streamARN = Some(StreamARN(streamARN)),
+              consumerName = Some(ConsumerName(consumerName))
             )
-            .mapError(_.toThrowable)
-            .map(_.consumerDescription)
-            .filterOrElseWith(_.consumerStatus != ConsumerStatus.DELETING)(_ => ZIO.fail(e))
-            .map(_.consumerARN)
+          )
+          .mapError(_.toThrowable)
+          .map(_.consumerDescription)
+          .filterOrElseWith(_.consumerStatus != ConsumerStatus.DELETING)(_ => ZIO.fail(e))
+          .map(_.consumerARN)
       }
 }
 

@@ -19,37 +19,37 @@ object Util {
 
         for {
           substreamsQueue     <- Queue
-                               .unbounded[Exit[Option[E], (K, Queue[GroupQueueValues])]]
-                               .toManaged
+                                   .unbounded[Exit[Option[E], (K, Queue[GroupQueueValues])]]
+                                   .toManaged
           substreamsQueuesMap <- Ref.make(Map.empty[K, Queue[GroupQueueValues]]).toManaged
           inStream             = {
             def addToSubStream(key: K, values: Chunk[O]): ZIO[Any, Nothing, Unit] =
               for {
                 substreams <- substreamsQueuesMap.get
                 _          <- if (substreams.contains(key))
-                       substreams(key).offer(Exit.succeed(values))
-                     else
-                       Queue
-                         .bounded[GroupQueueValues](substreamChunkBuffer)
-                         .tap(_.offer(Exit.succeed(values)))
-                         .tap(q => substreamsQueuesMap.update(_ + (key -> q)))
-                         .tap(q => substreamsQueue.offer(Exit.succeed((key, q))))
-                         .unit
+                                substreams(key).offer(Exit.succeed(values))
+                              else
+                                Queue
+                                  .bounded[GroupQueueValues](substreamChunkBuffer)
+                                  .tap(_.offer(Exit.succeed(values)))
+                                  .tap(q => substreamsQueuesMap.update(_ + (key -> q)))
+                                  .tap(q => substreamsQueue.offer(Exit.succeed((key, q))))
+                                  .unit
               } yield ()
 
             stream.mapChunksZIO { chunk =>
               ZIO
-                .foreachDiscard(chunk.groupBy(getKey)) {
-                  case (k, chunk) => ZIO.uninterruptible(addToSubStream(k, chunk))
+                .foreachDiscard(chunk.groupBy(getKey)) { case (k, chunk) =>
+                  ZIO.uninterruptible(addToSubStream(k, chunk))
                 }
                 .as(Chunk.empty)
             }
           }
           _                   <- ZManaged.finalizer(
-                 substreamsQueuesMap.get.flatMap(map =>
-                   ZIO.foreachDiscard(map.values)(_.offer(Exit.fail(None)).catchAllCause(_ => UIO.unit))
-                 )
-               )
+                                   substreamsQueuesMap.get.flatMap(map =>
+                                     ZIO.foreachDiscard(map.values)(_.offer(Exit.fail(None)).catchAllCause(_ => UIO.unit))
+                                   )
+                                 )
         } yield inStream mergeTerminateEither ZStream.fromQueueWithShutdown(substreamsQueue).flattenExitOption.map {
           case (key, substreamQueue) =>
             val substream = ZStream
@@ -64,11 +64,16 @@ object Util {
   /**
    * Schedule for exponential backoff up to a maximum interval and an optional maximum number of retries
    *
-   * @param min Minimum backoff time
-   * @param max Maximum backoff time. When this value is reached, subsequent intervals will be equal to this value.
-   * @param factor Exponential factor. 2 means doubling, 1 is constant, < 1 means decreasing
-   * @param maxRecurs Maximum retries. When this number is exceeded, the schedule will end
-   * @tparam A Schedule input
+   * @param min
+   *   Minimum backoff time
+   * @param max
+   *   Maximum backoff time. When this value is reached, subsequent intervals will be equal to this value.
+   * @param factor
+   *   Exponential factor. 2 means doubling, 1 is constant, < 1 means decreasing
+   * @param maxRecurs
+   *   Maximum retries. When this number is exceeded, the schedule will end
+   * @tparam A
+   *   Schedule input
    */
   @nowarn("msg=a type was inferred to be `Any`")
   def exponentialBackoff[A](
@@ -85,9 +90,12 @@ object Util {
    *
    * Allows for bursting
    *
-   * @param units Maximum number of calls per duration
-   * @param duration Duration for nr of tokens
-   * @return The original function with rate limiting applied, as a managed resource
+   * @param units
+   *   Maximum number of calls per duration
+   * @param duration
+   *   Duration for nr of tokens
+   * @return
+   *   The original function with rate limiting applied, as a managed resource
    */
   def throttledFunction[R, I, E, A](units: Int, duration: Duration)(
     f: I => ZIO[R, E, A]
@@ -95,11 +103,11 @@ object Util {
     for {
       requestsQueue <- Queue.bounded[(IO[E, A], Promise[E, A])](units / 2 * 2).toManaged
       _             <- ZStream
-             .fromQueueWithShutdown(requestsQueue)
-             .throttleShape(units.toLong, duration, units.toLong)(_ => 1)
-             .mapZIO { case (effect, promise) => promise.completeWith(effect) }
-             .runDrain
-             .forkManaged
+                         .fromQueueWithShutdown(requestsQueue)
+                         .throttleShape(units.toLong, duration, units.toLong)(_ => 1)
+                         .mapZIO { case (effect, promise) => promise.completeWith(effect) }
+                         .runDrain
+                         .forkManaged
     } yield (input: I) =>
       for {
         env     <- ZIO.environment[R]
@@ -113,25 +121,26 @@ object Util {
 
   final case class ThrottledFunctionPartial(units: Int, duration: Duration) {
     def apply[R, I0, I1, E, A](f: (I0, I1) => ZIO[R, E, A]): ZManaged[Clock, Nothing, (I0, I1) => ZIO[R, E, A]] =
-      throttledFunction[R, (I0, I1), E, A](units, duration) {
-        case (i0, i1) => f(i0, i1)
+      throttledFunction[R, (I0, I1), E, A](units, duration) { case (i0, i1) =>
+        f(i0, i1)
       }.map(Function.untupled(_))
 
     def apply[R, I0, I1, I2, E, A](
       f: (I0, I1, I2) => ZIO[R, E, A]
     ): ZManaged[Clock, Nothing, (I0, I1, I2) => ZIO[R, E, A]] =
-      throttledFunction[R, (I0, I1, I2), E, A](units, duration) {
-        case (i0, i1, i2) => f(i0, i1, i2)
+      throttledFunction[R, (I0, I1, I2), E, A](units, duration) { case (i0, i1, i2) =>
+        f(i0, i1, i2)
       }.map(Function.untupled(_))
   }
 
   /**
    * Creates a resource that executes `effect` with intervals of `period` or via manual invocation
    *
-   * After manual invocation, the next effect execution will be after interval. Any triggers during
-   * effect execution are ignored.
+   * After manual invocation, the next effect execution will be after interval. Any triggers during effect execution are
+   * ignored.
    *
-   * @return ZIO that when executed, immediately starts execution of `effect`
+   * @return
+   *   ZIO that when executed, immediately starts execution of `effect`
    */
   def periodicAndTriggerableOperation[R, A](
     effect: ZIO[R, Nothing, A],

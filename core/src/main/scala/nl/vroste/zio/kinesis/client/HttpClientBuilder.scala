@@ -15,14 +15,15 @@ object HttpClientBuilder {
    *
    * Some settings' defaults are recommended settings for Kinesis streaming using HTTP 2
    *
-   * @param maxConcurrency Maximum concurrent connections.
-   *                       Recommended to set higher than the amount of shards you expect to process
+   * @param maxConcurrency
+   *   Maximum concurrent connections. Recommended to set higher than the amount of shards you expect to process
    * @param initialWindowSize
    * @param healthCheckPingPeriod
    * @param maxPendingConnectionAcquires
    * @param connectionAcquisitionTimeout
    * @param readTimeout
-   * @param allowHttp2 Allow services that support HTTP2 to use it. Set to false to only use HTTP 1
+   * @param allowHttp2
+   *   Allow services that support HTTP2 to use it. Set to false to only use HTTP 1
    */
   def make(
     maxConcurrency: Int = Int.MaxValue,
