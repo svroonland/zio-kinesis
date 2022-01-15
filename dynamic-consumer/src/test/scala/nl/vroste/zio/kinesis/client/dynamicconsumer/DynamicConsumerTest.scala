@@ -164,9 +164,12 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
 
   def testCheckpointAtShutdown =
     test("checkpoint for the last processed record at stream shutdown") {
+      val nrRecords = 500
+
       withRandomStreamEnv(2) { (streamName, applicationName) =>
         def streamConsumer(
           interrupted: Promise[Nothing, Unit],
+          consumerAlive: Promise[Nothing, Unit],
           nrRecordsSeen: Ref[Int],
           lastProcessedRecords: Ref[Map[String, String]],
           lastCheckpointedRecords: Ref[Map[String, String]]
@@ -189,49 +192,59 @@ object DynamicConsumerTest extends DefaultRunnableSpec {
                         )
                         .flatMapPar(Int.MaxValue) {
                           case (shardId, shardStream, checkpointer @ _) =>
-                            shardStream
-                              .tap(record => lastProcessedRecords.update(_ + (shardId -> record.sequenceNumber)))
-                              .tap(checkpointer.stage)
-                              .tap(_ => nrRecordsSeen.update(_ + 1))
-                              .tap(record =>
-                                ZIO.whenZIO(nrRecordsSeen.get.map(_ == 500))(
-                                  printLine(s"Interrupting for partition key ${record.partitionKey}").orDie
-                                    *> interrupted.succeed(())
+                            ZStream.fromZIO(consumerAlive.succeed(())) *>
+                              shardStream
+                                .tap(record => lastProcessedRecords.update(_ + (shardId -> record.sequenceNumber)))
+                                .tap(checkpointer.stage)
+                                .tap(_ => nrRecordsSeen.update(_ + 1))
+                                .tap(record =>
+                                  ZIO.whenZIO(nrRecordsSeen.get.map(_ == nrRecords))(
+                                    printLine(s"Interrupting for partition key ${record.partitionKey}").orDie
+                                      *> interrupted.succeed(())
+                                  )
                                 )
-                              )
-                              // It's important that the checkpointing is always done before flattening the stream, otherwise
-                              // we cannot guarantee that the KCL has not yet shutdown the record processor and taken away the lease
-                              .aggregateAsyncWithin(
-                                ZSink.collectAllN[DynamicConsumer.Record[String]](
-                                  100
-                                ), // TODO we need to make sure that in our test this thing has some records buffered after shutdown request
-                                Schedule.fixed(1.seconds)
-                              )
-                              .mapConcat(_.toList)
-                              .tap { r =>
-                                (printLine(s"Shard ${r.shardId}: checkpointing for record $r $interrupted").orDie *>
-                                  checkpointer.checkpoint)
-                                  .unlessZIO(interrupted.isDone)
-                                  .tapError(e => ZIO(println(s"Checkpointing failed: ${e}")))
-                                  .tap(_ => lastCheckpointedRecords.update(_ + (shardId -> r.sequenceNumber)))
-                                  .tap(_ => ZIO(println(s"Checkpointing for shard ${r.shardId} done")))
-                              }
+                                // It's important that the checkpointing is always done before flattening the stream, otherwise
+                                // we cannot guarantee that the KCL has not yet shutdown the record processor and taken away the lease
+                                .aggregateAsyncWithin(
+                                  ZSink.collectAllN[DynamicConsumer.Record[String]](
+                                    100
+                                  ), // TODO we need to make sure that in our test this thing has some records buffered after shutdown request
+                                  Schedule.fixed(1.seconds)
+                                )
+                                .mapConcat(_.toList)
+                                .tap { r =>
+                                  (printLine(s"Shard ${r.shardId}: checkpointing for record $r $interrupted").orDie *>
+                                    checkpointer.checkpoint)
+                                    .unlessZIO(interrupted.isDone)
+                                    .tapError(e => ZIO(println(s"Checkpointing failed: ${e}")))
+                                    .tap(_ => lastCheckpointedRecords.update(_ + (shardId -> r.sequenceNumber)))
+                                    .tap(_ => ZIO(println(s"Checkpointing for shard ${r.shardId} done")))
+                                }
                         }
           } yield stream)
 
         for {
-          _                         <- TestUtil
-                 .produceRecords(streamName, 10000, 10, 10)
-                 .tap(_ => ZIO(println("PRODUCING RECORDS DONE")))
-                 .fork
-
-          interrupted               <- Promise
-                           .make[Nothing, Unit]
+          started                   <- Clock.instant
+          interrupted               <- Promise.make[Nothing, Unit]
+          consumerAlive             <- Promise.make[Nothing, Unit]
           nrRecordsSeen             <- Ref.make(0)
           lastProcessedRecords      <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
           lastCheckpointedRecords   <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
-          consumer                  <-
-            streamConsumer(interrupted, nrRecordsSeen, lastProcessedRecords, lastCheckpointedRecords).runCollect.fork
+          consumer                  <- streamConsumer(
+                        interrupted,
+                        consumerAlive,
+                        nrRecordsSeen,
+                        lastProcessedRecords,
+                        lastCheckpointedRecords
+                      ).runCollect.fork
+          _                         <- consumerAlive.await
+          _                         <- Clock.instant.tap(now =>
+                 UIO(println(s"Consumer has started after ${java.time.Duration.between(started, now)}"))
+               )
+          _                         <- TestUtil
+                 .produceRecords(streamName, 10000, 25, 10)
+                 .tap(_ => ZIO(println("PRODUCING RECORDS DONE")))
+                 .fork
           _                         <- interrupted.await
           _                         <- consumer.join
           (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
