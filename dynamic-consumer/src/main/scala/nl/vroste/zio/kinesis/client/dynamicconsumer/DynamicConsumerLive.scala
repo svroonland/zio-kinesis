@@ -247,7 +247,7 @@ private[client] class DynamicConsumerLive(
               .mapChunksZIO(_.mapZIO(toRecord(shardId, _)))
               .provideEnvironment(env)
               .ensuring((checkpointer.checkEndOfShardCheckpointed *> checkpointer.checkpoint).catchSome {
-                case _: ShutdownException => UIO.unit
+                case _: ShutdownException => UIO.unit: ZIO[Any, Nothing, Unit]
               }.orDie)
 
             (shardId, stream, checkpointer)
