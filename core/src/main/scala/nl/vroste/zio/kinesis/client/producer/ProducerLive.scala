@@ -53,7 +53,7 @@ private[client] final class ProducerLive[R, R1, T](
       .flatMapPar(Int.MaxValue, chunkBufferSize) { case (shardId @ _, requests) =>
         ZStream.managed(ShardMap.md5.orDie).flatMap { digest =>
           if (aggregate)
-            requests.aggregateAsync(aggregator).mapConcatZIO(_.toProduceRequest(digest).map(_.toIterable))
+            requests.aggregateAsync(aggregator).mapConcatZIO(_.toProduceRequest(digest).map(_.toList))
           else requests
         }
       })
