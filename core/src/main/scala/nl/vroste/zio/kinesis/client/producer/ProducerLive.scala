@@ -357,8 +357,8 @@ private[client] object ProducerLive {
       case _: IOException                                   => true
       case _: ResourceInUseException                        =>
         true // Also covers DELETING, but will result in ResourceNotFoundException on a subsequent attempt
-      case e: SdkException if Option(e.getCause).isDefined => isRecoverableException(e.getCause)
-      case _                                               => false
+      case e: SdkException if Option(e.getCause).isDefined  => isRecoverableException(e.getCause)
+      case _                                                => false
     }
 
   def payloadSizeForEntry(entry: PutRecordsRequestEntry): Int =
