@@ -445,7 +445,7 @@ private[zionative] object DefaultLeaseCoordinator {
                            .ensuring(log.debug("Acquired leases queue shutdown"))
       table           <- ZIO.service[LeaseRepository.Service].toManaged_
       state           <- Ref.make(State.empty).toManaged_
-      serialExecution <- SerialExecution.keyed[String]().ensuringFirst(log.debug("Shutting down runloop"))
+      serialExecution <- SerialExecution.keyed[String].ensuringFirst(log.debug("Shutting down runloop"))
       c                = new DefaultLeaseCoordinator(
                            table,
                            applicationName,

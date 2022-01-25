@@ -1,6 +1,5 @@
 package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
-import zio.stream.ZStream
-import zio.{ Promise, Queue, UIO, UManaged, ZIO }
+import zio.{ Ref, Semaphore, UManaged, ZIO }
 
 /**
  * Ensures that effects are run serially per key
@@ -13,26 +12,29 @@ trait SerialExecution[K] {
 }
 
 object SerialExecution {
-  def keyed[K](queueSize: Int = 128): UManaged[SerialExecution[K]] =
+  def keyed[K]: UManaged[SerialExecution[K]] =
     for {
-      queue <- Queue
-                 .bounded[(K, UIO[Unit])](queueSize)
-                 .toManaged_
-      _     <- ZStream
-                 .fromQueue(queue)
-                 .groupByKey(_._1) { case (key @ _, actions) =>
-                   actions.mapM { case (_, action) => action }
-                 }
-                 .runDrain
-                 .forkManaged
+      locks <- Ref.make(Map.empty[K, Semaphore]).toManaged_
     } yield new SerialExecution[K] {
       override def apply[R, E, A](key: K)(f: ZIO[R, E, A]): ZIO[R, E, A] =
         for {
-          p      <- Promise.make[E, A]
-          env    <- ZIO.environment[R]
-          action  = f.provide(env).foldM(p.fail, p.succeed).unit
-          _      <- queue.offer((key, action))
-          result <- p.await
+          lockOpt <- locks.get.map(_.get(key))
+          lock    <- lockOpt match {
+                       case Some(lock) => ZIO.succeed(lock)
+                       case None       =>
+                         for {
+                           // There's a race condition between getting a None from the locks map and putting the new Semaphore there, hence we
+                           // atomically check again. The unused created Semaphore will get GC'd
+                           newLock        <- Semaphore.make(1)
+                           newLockUpdated <- locks.modify { locks =>
+                                               locks.get(key) match {
+                                                 case Some(lock) => (lock, locks)
+                                                 case None       => (newLock, locks + (key -> newLock))
+                                               }
+                                             }
+                         } yield newLockUpdated
+                     }
+          result  <- lock.withPermit(f)
         } yield result
     }
 }
