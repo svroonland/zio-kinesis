@@ -58,6 +58,37 @@ private class DefaultLeaseCoordinator(
 
   val now = zio.Clock.currentDateTime.map(_.toInstant())
 
+  def initialize(
+    shards: Task[Map[ShardId, Shard.ReadOnly]]
+  ): ZManaged[Clock with Random, Throwable, Unit] = {
+    val getLeasesOrInitializeLeaseTable = refreshLeases.catchSome { case _: ResourceNotFoundException =>
+      table.createLeaseTableIfNotExists(applicationName) *> shards.flatMap(updateShards)
+    }
+
+    val periodicRefreshAndTakeLeases = repeatAndRetry(settings.refreshAndTakeInterval) {
+      (refreshLeases *> takeLeases)
+        .tapError(e => ZIO.logError(s"Refresh & take leases failed, will retry: ${e}"))
+    }
+
+    // Optimized for the 'second startup or later' situation: lease table exists and covers all shards
+    // Consumer will periodically update shards anyway
+    // Wait for shards if the lease table does not exist yet, otherwise we assume there's leases
+    // for all shards already, so just fork it. If there's new shards, the next `takeLeases` will
+    // claim leases for them.
+    (for {
+      _ <- getLeasesOrInitializeLeaseTable.toManaged
+      // Initialization. If it fails, we will try in the loop
+      _ <- (takeLeases.ignore *> periodicRefreshAndTakeLeases).forkManaged.ensuringFirst(
+             ZIO.logDebug("Shutting down refresh & take lease loop")
+           )
+      _ <- repeatAndRetry(settings.renewInterval)(renewLeases).forkManaged
+             .ensuringFirst(ZIO.logDebug("Shutting down renew lease loop"))
+    } yield ())
+      .tapErrorCause(c =>
+        ZManaged.fromZIO(ZIO.logError("Error in DefaultLeaseCoordinator initialize") *> ZIO.logErrorCause(c))
+      )
+  }
+
   override def updateShards(shards: Map[ShardId, Shard.ReadOnly]): UIO[Unit] =
     updateStateWithDiagnosticEvents(_.updateShards(shards))
 
@@ -140,7 +171,7 @@ private class DefaultLeaseCoordinator(
    *
    * Leases that recently had their checkpoint updated are not updated here to save on DynamoDB usage
    */
-  val renewLeases: ZIO[Clock, Throwable, Unit] = for {
+  val renewLeases: ZIO[Clock, Throwable, Unit] = (for {
     currentLeases <- state.get.map(_.currentLeases)
     now           <- now
     leasesToRenew  = currentLeases.view.collect {
@@ -159,7 +190,8 @@ private class DefaultLeaseCoordinator(
                        )
                      }
     // _             <- ZIO.logDebug(s"Renewing ${leasesToRenew.size} leases done")
-  } yield ()
+  } yield ())
+    .tapError(e => ZIO.logError(s"Renewing leases failed, will retry: ${e}"))
 
   // Lease renewal increases the counter only. May detect that lease was stolen
   private def renewLease(shard: String): ZIO[Clock, Throwable, Unit] =
@@ -414,7 +446,7 @@ private[zionative] object DefaultLeaseCoordinator {
                            .ensuring(ZIO.logDebug("Acquired leases queue shutdown"))
       table           <- ZIO.service[LeaseRepository.Service].toManaged
       state           <- Ref.make(State.empty).toManaged
-      serialExecution <- SerialExecution.keyed[String]().ensuringFirst(ZIO.logDebug("Shutting down runloop"))
+      serialExecution <- SerialExecution.keyed[String].ensuringFirst(ZIO.logDebug("Shutting down runloop"))
       c                = new DefaultLeaseCoordinator(
                            table,
                            applicationName,
@@ -427,39 +459,10 @@ private[zionative] object DefaultLeaseCoordinator {
                            strategy,
                            initialPosition
                          )
+      _               <- c.initialize(shards).fork
       _               <- ZManaged.finalizer(
                            c.releaseLeases *> ZIO.logDebug("releaseLeases done")
                          ) // We need the runloop to be alive for this operation
-
-      // Wait for shards if the lease table does not exist yet, otherwise we assume there's leases
-      // for all shards already, so just fork it. If there's new shards, the next `takeLeases` will
-      // claim leases for them.
-      // Optimized for the 'second startup or later' situation: lease table exists and covers all shards
-      // Consumer will periodically update shards anyway
-      _               <- (for {
-                           _ <- c.refreshLeases.catchSome { case _: ResourceNotFoundException =>
-                                  ZIO
-                                    .service[LeaseRepository.Service]
-                                    .flatMap(_.createLeaseTableIfNotExists(applicationName)) *>
-                                    (shards flatMap c.updateShards)
-                                }.toManaged
-                           // Initialization. If it fails, we will try in the loop
-                           _ <- (c.takeLeases.ignore *>
-                                  // Periodic refresh
-                                  repeatAndRetry(settings.refreshAndTakeInterval) {
-                                    (c.refreshLeases *> c.takeLeases)
-                                      .tapError(e => ZIO.logError(s"Refresh & take leases failed, will retry: ${e}"))
-                                  }).forkManaged.ensuringFirst(ZIO.logDebug("Shutting down refresh & take lease loop"))
-                           _ <- repeatAndRetry(settings.renewInterval) {
-                                  c.renewLeases
-                                    .tapError(e => ZIO.logError(s"Renewing leases failed, will retry: ${e}"))
-                                }.forkManaged.ensuringFirst(ZIO.logDebug("Shutting down renew lease loop"))
-                         } yield ())
-                           .tapErrorCause(c =>
-                             ZManaged.fromZIO(ZIO.logSpan("Error in DefaultLeaseCoordinator runloop")(ZIO.logErrorCause(c)))
-                           )
-                           .fork
-
     } yield c)
       .tapErrorCause(c => ZIO.logSpan("Error creating DefaultLeaseCoordinator")(ZIO.logErrorCause(c)).toManaged)
 

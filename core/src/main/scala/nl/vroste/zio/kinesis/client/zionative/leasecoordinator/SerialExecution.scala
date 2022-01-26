@@ -1,6 +1,6 @@
 package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
-import zio.stream.ZStream
-import zio.{ Promise, Queue, UIO, UManaged, ZIO }
+import zio.stm.TMap
+import zio.{ Semaphore, UManaged, ZIO }
 
 /**
  * Ensures that effects are run serially per key
@@ -13,26 +13,27 @@ trait SerialExecution[K] {
 }
 
 object SerialExecution {
-  def keyed[K](queueSize: Int = 128): UManaged[SerialExecution[K]] =
+  def keyed[K]: UManaged[SerialExecution[K]] =
     for {
-      queue <- Queue
-                 .bounded[(K, UIO[Unit])](queueSize)
-                 .toManaged
-      _     <- ZStream
-                 .fromQueue(queue)
-                 .groupByKey(_._1) { case (key @ _, actions) =>
-                   actions.mapZIO { case (_, action) => action }
-                 }
-                 .runDrain
-                 .forkManaged
+      locks <- TMap.empty[K, Semaphore].commit.toManaged
     } yield new SerialExecution[K] {
       override def apply[R, E, A](key: K)(f: ZIO[R, E, A]): ZIO[R, E, A] =
         for {
-          p      <- Promise.make[E, A]
-          env    <- ZIO.environment[R]
-          action  = f.provideEnvironment(env).foldZIO(p.fail, p.succeed).unit
-          _      <- queue.offer((key, action))
-          result <- p.await
+          lockOpt <- locks.get(key).commit
+          lock    <- lockOpt.fold(createLockForKey(key))(ZIO.succeed(_))
+          result  <- lock.withPermit(f)
         } yield result
+
+      private def createLockForKey(key: K): ZIO[Any, Nothing, Semaphore] =
+        for {
+          // There's a race condition between getting a None from the locks map and putting the new Semaphore there, hence we
+          // atomically check again. The unused created Semaphore will get GC'd
+          newLock        <- Semaphore.make(1)
+          newLockUpdated <- (for {
+                              _              <- locks.putIfAbsent(key, newLock)
+                              newLockUpdated <- locks.getOrElse(key, newLock)
+                            } yield newLockUpdated).commit
+        } yield newLockUpdated
     }
+
 }
