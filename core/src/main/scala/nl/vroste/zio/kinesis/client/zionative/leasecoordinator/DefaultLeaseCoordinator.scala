@@ -67,7 +67,8 @@ private class DefaultLeaseCoordinator(
     shards: Task[Map[String, Shard.ReadOnly]]
   ): ZManaged[Clock with Logging with Random, Throwable, Unit] = {
     val getLeasesOrInitializeLeaseTable = refreshLeases.catchSome { case _: ResourceNotFoundException =>
-      table.createLeaseTableIfNotExists(applicationName) *> (shards >>= updateShards)
+      table.createLeaseTableIfNotExists(applicationName) *> shards
+        .flatMap[Clock with Logging with Random, Throwable, Unit](updateShards)
     }
 
     val periodicRefreshAndTakeLeases = repeatAndRetry(settings.refreshAndTakeInterval) {
