@@ -13,6 +13,7 @@ import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepos
 import nl.vroste.zio.kinesis.client.zionative.metrics.{ CloudWatchMetricsPublisher, CloudWatchMetricsPublisherConfig }
 import nl.vroste.zio.kinesis.client.zionative._
 import nl.vroste.zio.kinesis.client._
+import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository.TableParameters
 import software.amazon.awssdk.http.SdkHttpConfigurationOption
 import software.amazon.awssdk.utils.AttributeMap
 import software.amazon.kinesis.exceptions.ShutdownException
@@ -75,7 +76,9 @@ object ExampleApp extends zio.App {
                       .tapError(e => log.error(s"Producer error: ${e}"))
                       .fork
 //      _          <- producer.join
-      workers    <- ZIO.foreach(1 to nrNativeWorkers)(id => worker(s"worker${id}").runCount.fork)
+      workers    <- ZIO.foreach(1 to nrNativeWorkers)(id =>
+                      worker(s"worker${id}").runCount.tapCause(e => log.error(s"Error in worker ${id}", e)).fork
+                    )
       kclWorkers <-
         ZIO.foreach((1 + nrNativeWorkers) to (nrKclWorkers + nrNativeWorkers))(id =>
           (for {
@@ -254,7 +257,9 @@ object ExampleApp extends zio.App {
       io.github.vigoo.zioaws.core.config.default >>>
       (kinesisClient ++ cloudWatch ++ dynamo)).orDie
 
-    val leaseRepo       = DynamoDbLeaseRepository.live
+    val leaseRepo       = DynamoDbLeaseRepository.make(
+      DynamoDbLeaseRepository.Settings(TableParameters(tags = Seq(dynamodb.model.Tag("app", "zio-kinesis"))))
+    )
     val dynamicConsumer = DynamicConsumer.live
     val logging         = loggingLayer
 
