@@ -1,9 +1,9 @@
 package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
 
 import java.time.{ DateTimeException, Instant }
-
 import DefaultLeaseCoordinator.State
 import io.github.vigoo.zioaws.kinesis.model.Shard
+import nl.vroste.zio.kinesis.client.Util.ZStreamExtensions
 import nl.vroste.zio.kinesis.client.zionative.Consumer.InitialPosition
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
@@ -369,9 +369,8 @@ private class DefaultLeaseCoordinator(
                       ) // We need the runloop to be alive for this operation
     } yield ZStream
       .fromQueue(acquiredLeasesQueue)
-      .map { case (lease, complete) => Exit.succeed(AcquiredLease(lease.key, complete)) }
-      .mergeTerminateEither(ZStream.fromEffect(runloopFiber.join).as(Exit.fail(None)))
-      .flattenExitOption
+      .map { case (lease, complete) => AcquiredLease(lease.key, complete) }
+      .terminateOnFiberFailure(runloopFiber)
   }
 
   override def getCheckpointForShard(shardId: String): UIO[Option[Either[SpecialCheckpoint, ExtendedSequenceNumber]]] =
@@ -423,7 +422,7 @@ private class DefaultLeaseCoordinator(
                                         updateStateWithDiagnosticEvents(_.releaseLease(updatedLease, _)) *>
                                         emitDiagnostic(DiagnosticEvent.LeaseReleased(shard)) *>
                                         emitDiagnostic(DiagnosticEvent.ShardEnded(shard)).when(shardEnded) <*
-                                        takeLeases.fork.when(shardEnded)
+                                        takeLeases.ignore.fork.when(shardEnded) // When it fails, the runloop will try it again sooner
                                     ).when(release)).orDie
                                 }
     } yield ()).provide(env)

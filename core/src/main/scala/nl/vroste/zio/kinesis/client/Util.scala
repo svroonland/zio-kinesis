@@ -37,9 +37,9 @@ object Util {
               } yield ()
             (stream.foreachChunk { chunk =>
               ZIO.foreach_(chunk.groupBy(getKey))(addToSubStream.tupled)
-            } *> substreamsQueue.offer(Exit.fail(None))).catchSome { case e =>
+            } *> substreamsQueue.offer(Exit.fail(None))).catchAll { case e =>
               substreamsQueue.offer(Exit.fail(Some(e)))
-            }.forkManaged
+            }.forkManaged // Fiber cannot fail
           }
         } yield ZStream.fromQueueWithShutdown(substreamsQueue).flattenExitOption.map { case (key, substreamQueue) =>
           val substream = ZStream
@@ -49,6 +49,12 @@ object Util {
           (key, substream)
         }
       }
+
+    def terminateOnFiberFailure[E1 >: E](fib: Fiber[E1, Any]): ZStream[R, E1, O] =
+      stream.map(Exit.succeed).mergeTerminateEither(ZStream.fromEffect(fib.join).as(Exit.fail(None))).flattenExitOption
+
+    def terminateOnPromiseCompleted[E1 >: E](p: Promise[Nothing, _]): ZStream[R, E1, O] =
+      stream.map(Exit.succeed).mergeTerminateEither(ZStream.fromEffect(p.await).as(Exit.fail(None))).flattenExitOption
   }
 
   /**
@@ -137,6 +143,7 @@ object Util {
   ): ZManaged[R with Clock, Nothing, UIO[Unit]] =
     for {
       queue <- Queue.dropping[Unit](1).toManaged(_.shutdown)
-      _     <- ((queue.take raceFirst ZIO.sleep(period)) *> effect *> queue.takeAll).forever.forkManaged
+      _     <-
+        ((queue.take raceFirst ZIO.sleep(period)) *> effect *> queue.takeAll).forever.forkManaged // Fiber cannot fail
     } yield queue.offer(()).unit
 }

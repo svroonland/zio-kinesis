@@ -214,7 +214,7 @@ private[client] final class ProducerLive[R, R1, T](
               s"on a different shard than expected and/or " +
               s"${failed.map(_._2.aggregateCount).sum} records (aggregated as ${failed.size}) would end up " +
               s"on a different shard than expected if they had succeeded. This may happen after a reshard."
-          ) *> triggerUpdateShards.fork.whenM {
+          ) *> triggerUpdateShards.fork.whenM { // Fiber cannot fail
           shards
             .getAndUpdate(_.invalidate)
             .map(shardMap => !shardMap.invalid && shardMap.lastUpdated.toEpochMilli < maxProduceRequestTimestamp)
