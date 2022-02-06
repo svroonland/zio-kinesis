@@ -51,7 +51,10 @@ object Util {
       }
 
     def terminateOnFiberFailure[E1 >: E](fib: Fiber[E1, Any]): ZStream[R, E1, O] =
-      stream.map(Exit.succeed).mergeTerminateEither(ZStream.fromEffect(fib.join).as(Exit.fail(None))).flattenExitOption
+      stream
+        .map(Exit.succeed)
+        .mergeTerminateEither(ZStream.fromEffect(fib.join).as(Exit.fail(None)) *> ZStream.never)
+        .flattenExitOption
 
     def terminateOnPromiseCompleted[E1 >: E](p: Promise[Nothing, _]): ZStream[R, E1, O] =
       stream.map(Exit.succeed).mergeTerminateEither(ZStream.fromEffect(p.await).as(Exit.fail(None))).flattenExitOption
