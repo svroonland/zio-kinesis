@@ -147,10 +147,10 @@ private class CloudWatchMetricsPublisher(
       case WorkerLeft(workerId)      => workers.update(_ - workerId)
     }
 
-  val processQueue =
+  val processQueue: ZIO[Clock with Logging, Nothing, Unit] =
     (ZStream
       .fromQueue(eventQueue)
-      .mapM(event => now.map((event, _)))
+      .mapM(event => now.orDie.map((event, _))) // Could be UIO, see comment on Clock.Service.currentDateTime
       .tap { case (e, _) => collectPeriodicMetrics(e) }
       .mapConcat(Function.tupled(toMetrics)) merge ZStream.fromQueue(periodicMetricsQueue))
       .aggregateAsyncWithin(
@@ -166,9 +166,9 @@ private class CloudWatchMetricsPublisher(
       .runDrain
       .tapCause(e => log.error("Metrics uploading has stopped with error", e))
 
-  val generatePeriodicMetrics =
+  val generatePeriodicMetrics: ZIO[Clock, Nothing, Long] =
     (for {
-      now            <- now
+      now            <- now.orDie // Could be UIO, see comment on Clock.Service.currentDateTime
       nrWorkers      <- workers.get.map(_.size)
       nrLeases       <- heldLeases.get.map(_.size)
       _               = println(s"Worker ${workerId} has ${nrLeases} leases")
@@ -223,8 +223,8 @@ object CloudWatchMetricsPublisher {
       leases  <- Ref.make[Set[String]](Set.empty).toManaged_
       workers <- Ref.make[Set[String]](Set.empty).toManaged_
       c        = new CloudWatchMetricsPublisher(client, q, q2, applicationName, workerId, leases, workers, config)
-      _       <- c.processQueue.forkManaged
-      _       <- c.generatePeriodicMetrics.forkManaged
+      _       <- c.processQueue.forkManaged            // Fiber cannot fail
+      _       <- c.generatePeriodicMetrics.forkManaged // Fiber cannot fail
       // Shutdown the queues first
       _       <- ZManaged.finalizer(q.shutdown)
       _       <- ZManaged.finalizer(q2.shutdown)

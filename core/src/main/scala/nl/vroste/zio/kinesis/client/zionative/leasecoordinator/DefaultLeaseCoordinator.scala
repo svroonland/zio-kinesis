@@ -1,9 +1,9 @@
 package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
 
 import java.time.{ DateTimeException, Instant }
-
 import DefaultLeaseCoordinator.State
 import io.github.vigoo.zioaws.kinesis.model.Shard
+import nl.vroste.zio.kinesis.client.Util.ZStreamExtensions
 import nl.vroste.zio.kinesis.client.zionative.Consumer.InitialPosition
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
@@ -55,25 +55,29 @@ private class DefaultLeaseCoordinator(
   serialExecutionByShard: SerialExecution[String],
   settings: LeaseCoordinationSettings,
   strategy: ShardAssignmentStrategy,
-  initialPosition: InitialPosition
+  initialPosition: InitialPosition,
+  shards: Task[Map[String, Shard.ReadOnly]],
+  logger: Logger[String],
+  clock: Clock.Service,
+  random: Random.Service
 ) extends LeaseCoordinator {
+  private val env: Has[Clock.Service] with Has[Logger[String]] with Has[Random.Service] =
+    Has.allOf[Clock.Service, Logger[String], Random.Service](clock, logger, random)
 
   import DefaultLeaseCoordinator._
   import ZioExtensions.OnSuccessSyntax
 
   val now = zio.clock.currentDateTime.map(_.toInstant())
 
-  def initialize(
-    shards: Task[Map[String, Shard.ReadOnly]]
-  ): ZManaged[Clock with Logging with Random, Throwable, Unit] = {
+  private def initialize: ZManaged[Any, Throwable, Unit] = {
     val getLeasesOrInitializeLeaseTable = refreshLeases.catchSome { case _: ResourceNotFoundException =>
       table.createLeaseTableIfNotExists(applicationName) *> shards
-        .flatMap[Clock with Logging with Random, Throwable, Unit](updateShards)
+        .flatMap[Clock with Random, Throwable, Unit](updateShards)
     }
 
     val periodicRefreshAndTakeLeases = repeatAndRetry(settings.refreshAndTakeInterval) {
       (refreshLeases *> takeLeases)
-        .tapError(e => log.error(s"Refresh & take leases failed, will retry: ${e}"))
+        .tapError(e => logger.error(s"Refresh & take leases failed, will retry: ${e}"))
     }
 
     // Optimized for the 'second startup or later' situation: lease table exists and covers all shards
@@ -84,21 +88,21 @@ private class DefaultLeaseCoordinator(
     (for {
       _ <- getLeasesOrInitializeLeaseTable.toManaged_
       // Initialization. If it fails, we will try in the loop
-      _ <- (takeLeases.ignore *> periodicRefreshAndTakeLeases).forkManaged.ensuringFirst(
-             log.debug("Shutting down refresh & take lease loop")
+      _ <- (takeLeases.retryN(1).ignore *> periodicRefreshAndTakeLeases).forkManaged.ensuringFirst(
+             logger.debug("Shutting down refresh & take lease loop")
            )
       _ <- repeatAndRetry(settings.renewInterval)(renewLeases).forkManaged
-             .ensuringFirst(log.debug("Shutting down renew lease loop"))
+             .ensuringFirst(logger.debug("Shutting down renew lease loop"))
     } yield ())
-      .tapCause(c => ZManaged.fromEffect(log.error("Error in DefaultLeaseCoordinator initialize", c)))
-  }
+      .tapCause(c => ZManaged.fromEffect(logger.error("Error in DefaultLeaseCoordinator initialize", c)))
+  }.provide(env)
 
   override def updateShards(shards: Map[String, Shard.ReadOnly]): UIO[Unit] =
     updateStateWithDiagnosticEvents(_.updateShards(shards))
 
   override def childShardsDetected(
     childShards: Seq[Shard.ReadOnly]
-  ): ZIO[Clock with Logging with Random, Throwable, Unit] =
+  ): ZIO[Clock with Random, Throwable, Unit] =
     updateStateWithDiagnosticEvents(s =>
       s.updateShards(s.shards ++ childShards.map(shard => shard.shardIdValue -> shard).toMap)
     )
@@ -148,24 +152,24 @@ private class DefaultLeaseCoordinator(
         .getOrElse(ZIO.unit)
     )
 
-  def releaseHeldLease: ((Lease, Promise[Nothing, Unit])) => ZIO[Logging with Clock, Throwable, Unit] = {
-    case (lease, completed) =>
-      val updatedLease = lease.copy(owner = None).increaseCounter
+  def releaseHeldLease: ((Lease, Promise[Nothing, Unit])) => ZIO[Clock, Throwable, Unit] = { case (lease, completed) =>
+    val updatedLease = lease.copy(owner = None).increaseCounter
 
-      table
-        .releaseLease(applicationName, updatedLease)
-        .timeout(settings.releaseLeaseTimeout)
-        .tap(result => log.warn(s"Timeout while releasing lease for shard ${lease.key}, ignored").when(result.isEmpty))
-        .tapError {
-          case Right(LeaseObsolete) => // This is fine at shutdown
-            ZIO.unit
-          case Left(e)              =>
-            log.error(s"Error releasing lease for shard ${lease.key}, ignored: ${e}")
-        }
-        .ignore *>
-        completed.succeed(()) *>
-        updateStateWithDiagnosticEvents(_.releaseLease(updatedLease, _)) *>
-        emitDiagnostic(DiagnosticEvent.LeaseReleased(lease.key))
+    table
+      .releaseLease(applicationName, updatedLease)
+      .provide(env)
+      .timeout(settings.releaseLeaseTimeout)
+      .tap(result => logger.warn(s"Timeout while releasing lease for shard ${lease.key}, ignored").when(result.isEmpty))
+      .tapError {
+        case Right(LeaseObsolete) => // This is fine at shutdown
+          ZIO.unit
+        case Left(e)              =>
+          logger.error(s"Error releasing lease for shard ${lease.key}, ignored: ${e}")
+      }
+      .ignore *>
+      completed.succeed(()) *>
+      updateStateWithDiagnosticEvents(_.releaseLease(updatedLease, _)) *>
+      emitDiagnostic(DiagnosticEvent.LeaseReleased(lease.key))
   }
 
   /**
@@ -174,7 +178,7 @@ private class DefaultLeaseCoordinator(
    *
    * Leases that recently had their checkpoint updated are not updated here to save on DynamoDB usage
    */
-  val renewLeases: ZIO[Clock with Logging, Throwable, Unit] = (for {
+  val renewLeases: ZIO[Clock, Throwable, Unit] = (for {
     currentLeases <- state.get.map(_.currentLeases)
     now           <- now
     leasesToRenew  = currentLeases.view.collect {
@@ -183,27 +187,28 @@ private class DefaultLeaseCoordinator(
                              .contains(workerId) =>
                          shard
                      }
-    _             <- log.debug(s"Renewing ${leasesToRenew.size} leases")
+    _             <- logger.debug(s"Renewing ${leasesToRenew.size} leases")
     _             <- foreachParNUninterrupted_(settings.maxParallelLeaseRenewals)(leasesToRenew) { shardId =>
                        serialExecutionByShard(shardId)(renewLease(shardId))
-                         .tapError(e => log.error(s"Error renewing lease: ${e}"))
+                         .tapError(e => logger.error(s"Error renewing lease: ${e}"))
                          .retry(settings.renewRetrySchedule) orElse (
-                         log.warn(s"Failed to renew lease for shard ${shardId}, releasing") *>
+                         logger.warn(s"Failed to renew lease for shard ${shardId}, releasing") *>
                            serialExecutionByShard(shardId)(releaseLease(shardId))
                        )
                      }
-    // _             <- log.debug(s"Renewing ${leasesToRenew.size} leases done")
+    // _             <- logger.debug(s"Renewing ${leasesToRenew.size} leases done")
   } yield ())
-    .tapError(e => log.error(s"Renewing leases failed, will retry: ${e}"))
+    .tapError(e => logger.error(s"Renewing leases failed, will retry: ${e}"))
 
   // Lease renewal increases the counter only. May detect that lease was stolen
-  private def renewLease(shard: String): ZIO[Logging with Clock, Throwable, Unit] =
+  private def renewLease(shard: String): ZIO[Clock, Throwable, Unit] =
     state.get.map(_.getHeldLease(shard)).flatMap {
       case Some((lease, leaseCompleted)) =>
         val updatedLease = lease.increaseCounter
         (for {
           duration <- table
                         .renewLease(applicationName, updatedLease)
+                        .provide(env)
                         .timed
                         .map(_._1)
           _        <- updateStateWithDiagnosticEvents(_.updateLease(updatedLease, _)).mapError(Left(_))
@@ -212,7 +217,7 @@ private class DefaultLeaseCoordinator(
           // This means the lease was updated by another worker
           case Right(LeaseObsolete) =>
             leaseLost(lease, leaseCompleted) *>
-              log.info(s"Unable to renew lease for shard, lease counter was obsolete")
+              logger.info(s"Unable to renew lease for shard, lease counter was obsolete")
           case Left(e)              =>
             ZIO.fail(e)
         }
@@ -226,15 +231,15 @@ private class DefaultLeaseCoordinator(
    *
    * Also if other workers have taken our leases and we haven't yet checkpointed, we can find out now
    */
-  val refreshLeases: ZIO[Logging with Clock, Throwable, Unit] =
+  val refreshLeases: ZIO[Clock, Throwable, Unit] =
     for {
-      _        <- log.info("Refreshing leases")
+      _        <- logger.info("Refreshing leases")
       duration <- table
                     .getLeases(applicationName)
                     .mapChunksM(
                       ZIO
                         .foreachPar_(_) { lease =>
-                          log.info(s"RefreshLeases: ${lease}") *>
+                          logger.info(s"RefreshLeases: ${lease}") *>
                             serialExecutionByShard(lease.key)(refreshLease(lease))
                         }
                         .as(Chunk.unit)
@@ -242,7 +247,7 @@ private class DefaultLeaseCoordinator(
                     .runDrain
                     .timed
                     .map(_._1)
-      _        <- log.debug(s"Refreshing leases took ${duration.toMillis}")
+      _        <- logger.debug(s"Refreshing leases took ${duration.toMillis}")
     } yield ()
 
   private def refreshLease(lease: Lease): ZIO[Clock, Throwable, Unit] =
@@ -284,11 +289,11 @@ private class DefaultLeaseCoordinator(
     desiredShards: Set[String],
     shards: Map[String, Shard.ReadOnly],
     leases: Map[String, Lease]
-  ): ZIO[Logging with Clock, Throwable, Unit] =
+  ): ZIO[Clock, Throwable, Unit] =
     for {
-      _                 <- log.info(s"Found ${leases.size} leases")
+      _                 <- logger.info(s"Found ${leases.size} leases")
       shardsWithoutLease = desiredShards.filterNot(leases.contains).toSeq.sorted.map(shards(_))
-      _                 <- log
+      _                 <- logger
                              .info(
                                s"No leases exist yet for these shards, creating and claiming: " +
                                  s"${shardsWithoutLease.map(_.shardIdValue).mkString(",")}"
@@ -306,11 +311,11 @@ private class DefaultLeaseCoordinator(
 
                                (table.createLease(applicationName, lease) <* serialExecutionByShard(lease.key)(
                                  registerNewAcquiredLease(lease)
-                               )).catchAll {
+                               )).provide(env).catchAll {
                                  case Right(LeaseAlreadyExists) =>
-                                   log.info(s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?")
+                                   logger.info(s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?")
                                  case Left(e)                   =>
-                                   log.error(s"Error creating lease: ${e}") *> ZIO.fail(e)
+                                   logger.error(s"Error creating lease: ${e}") *> ZIO.fail(e)
                                }
                              }
     } yield ()
@@ -324,8 +329,8 @@ private class DefaultLeaseCoordinator(
    *
    * The effect fails with a Throwable when having failed to take one or more leases
    */
-  val takeLeases: ZIO[Clock with Logging with Random, Throwable, Unit] =
-    for {
+  val takeLeases: ZIO[Clock with Random, Throwable, Unit] =
+    (for {
       leases          <- state.get.map(_.currentLeases.values.toSet)
       shards          <- state.get.map(_.shards)
       leaseMap         = leases.map(s => s.lease.key -> s.lease).toMap
@@ -335,10 +340,10 @@ private class DefaultLeaseCoordinator(
                          }
       consumableShards = shardsReadyToConsume(shards, leaseMap)
       desiredShards   <- strategy.desiredShards(openLeases, consumableShards.keySet, workerId)
-      _               <- log.info(s"Desired shard assignment: ${desiredShards.mkString(",")}")
+      _               <- logger.info(s"Desired shard assignment: ${desiredShards.mkString(",")}")
       toTake           = leaseMap.values.filter(l => desiredShards.contains(l.key) && !l.owner.contains(workerId))
       _               <- claimLeasesForShardsWithoutLease(desiredShards, shards, leaseMap)
-      _               <- log
+      _               <- logger
                            .info(s"Going to take ${toTake.size} leases from other workers: ${toTake.mkString(",")}")
                            .when(toTake.nonEmpty)
       _               <- foreachParNUninterrupted_(settings.maxParallelLeaseAcquisitions)(toTake) { lease =>
@@ -346,20 +351,27 @@ private class DefaultLeaseCoordinator(
                            (table.claimLease(applicationName, updatedLease) *>
                              serialExecutionByShard(updatedLease.key)(registerNewAcquiredLease(updatedLease))).catchAll {
                              case Right(UnableToClaimLease) =>
-                               log
+                               logger
                                  .info(
                                    s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
                                  )
                              case Left(e)                   =>
-                               log.error(s"Got error ${e}") *> ZIO.fail(e)
+                               logger.error(s"Got error ${e}") *> ZIO.fail(e)
                            }
                          }
-    } yield ()
+    } yield ()).provide(env)
 
-  override def acquiredLeases: ZStream[zio.clock.Clock, Throwable, AcquiredLease] =
-    ZStream
+  override def acquiredLeases: ZStream[zio.clock.Clock, Throwable, AcquiredLease] = ZStream.unwrapManaged {
+    for {
+      runloopFiber <- initialize.fork
+      _            <- ZManaged.finalizer(
+                        releaseLeases *> logger.debug("releaseLeases done")
+                      ) // We need the runloop to be alive for this operation
+    } yield ZStream
       .fromQueue(acquiredLeasesQueue)
       .map { case (lease, complete) => AcquiredLease(lease.key, complete) }
+      .terminateOnFiberFailure(runloopFiber)
+  }
 
   override def getCheckpointForShard(shardId: String): UIO[Option[Either[SpecialCheckpoint, ExtendedSequenceNumber]]] =
     for {
@@ -376,8 +388,7 @@ private class DefaultLeaseCoordinator(
       env,
       state,
       permit,
-      (checkpoint, release) =>
-        serialExecutionByShard(shardId)(updateCheckpoint(shardId, checkpoint, release).provide(env)),
+      (checkpoint, release) => serialExecutionByShard(shardId)(updateCheckpoint(shardId, checkpoint, release)),
       serialExecutionByShard(shardId)(releaseLease(shardId).provide(env))
     )
 
@@ -385,8 +396,8 @@ private class DefaultLeaseCoordinator(
     shard: String,
     checkpoint: Either[SpecialCheckpoint, ExtendedSequenceNumber],
     release: Boolean
-  ): ZIO[Logging with Clock with Random, Either[Throwable, ShardLeaseLost.type], Unit] =
-    for {
+  ): ZIO[Any, Either[Throwable, ShardLeaseLost.type], Unit] =
+    (for {
       heldleaseWithComplete  <- state.get
                                   .map(_.heldLeases.get(shard))
                                   .someOrFail(Right(ShardLeaseLost): Either[Throwable, ShardLeaseLost.type])
@@ -403,7 +414,7 @@ private class DefaultLeaseCoordinator(
                                     leaseLost(updatedLease, leaseCompleted).orDie *>
                                       ZIO.fail(Right(ShardLeaseLost))
                                   case Left(e)              =>
-                                    log.warn(s"Error updating checkpoint: $e") *> ZIO.fail(Left(e))
+                                    logger.warn(s"Error updating checkpoint: $e") *> ZIO.fail(Left(e))
                                 }.onSuccess { _ =>
                                   (updateStateWithDiagnosticEvents(_.updateLease(updatedLease, _)) *>
                                     (
@@ -411,18 +422,18 @@ private class DefaultLeaseCoordinator(
                                         updateStateWithDiagnosticEvents(_.releaseLease(updatedLease, _)) *>
                                         emitDiagnostic(DiagnosticEvent.LeaseReleased(shard)) *>
                                         emitDiagnostic(DiagnosticEvent.ShardEnded(shard)).when(shardEnded) <*
-                                        takeLeases.fork.when(shardEnded)
+                                        takeLeases.ignore.fork.when(shardEnded) // When it fails, the runloop will try it again sooner
                                     ).when(release)).orDie
                                 }
-    } yield ()
+    } yield ()).provide(env)
 
-  def releaseLeases: ZIO[Logging with Clock, Nothing, Unit] =
-    log.debug("Starting releaseLeases") *>
+  def releaseLeases: ZIO[Clock, Nothing, Unit] =
+    logger.debug("Starting releaseLeases") *>
       state.get
         .map(_.heldLeases.values)
         .flatMap(ZIO.foreachParN_(settings.maxParallelLeaseRenewals)(_) { case (lease, _) =>
           serialExecutionByShard(lease.key)(releaseLease(lease.key)).ignore // We do our best to release the lease
-        }) *> log.debug("releaseLeases done")
+        }) *> logger.debug("releaseLeases done")
 }
 
 private[zionative] object DefaultLeaseCoordinator {
@@ -445,6 +456,9 @@ private[zionative] object DefaultLeaseCoordinator {
                            .toManaged(_.shutdown)
                            .ensuring(log.debug("Acquired leases queue shutdown"))
       table           <- ZIO.service[LeaseRepository.Service].toManaged_
+      logging         <- ZIO.service[Logger[String]].toManaged_
+      clock           <- ZIO.service[Clock.Service].toManaged_
+      random          <- ZIO.service[Random.Service].toManaged_
       state           <- Ref.make(State.empty).toManaged_
       serialExecution <- SerialExecution.keyed[String].ensuringFirst(log.debug("Shutting down runloop"))
       c                = new DefaultLeaseCoordinator(
@@ -457,12 +471,12 @@ private[zionative] object DefaultLeaseCoordinator {
                            serialExecution,
                            settings,
                            strategy,
-                           initialPosition
+                           initialPosition,
+                           shards,
+                           logging,
+                           clock,
+                           random
                          )
-      _               <- c.initialize(shards).fork
-      _               <- ZManaged.finalizer(
-                           c.releaseLeases *> log.debug("releaseLeases done")
-                         ) // We need the runloop to be alive for this operation
     } yield c)
       .tapCause(c => log.error("Error creating DefaultLeaseCoordinator", c).toManaged_)
 
@@ -510,8 +524,8 @@ private[zionative] object DefaultLeaseCoordinator {
         }
     }
 
-  private def repeatAndRetry[R, E, A](interval: Duration)(effect: ZIO[R, E, A]) =
-    effect.repeat(Schedule.fixed(interval)).delay(interval).retry(Schedule.forever)
+  private def repeatAndRetry[R, E, A](interval: Duration)(effect: ZIO[R, E, A]): ZIO[R with Clock, Nothing, Unit] =
+    effect.repeat(Schedule.fixed(interval)).delay(interval).retry(Schedule.forever).ignore // Cannot fail
 
   final case class LeaseState(lease: Lease, completed: Option[Promise[Nothing, Unit]], lastUpdated: Instant) {
     def update(updatedLease: Lease, now: Instant) =
