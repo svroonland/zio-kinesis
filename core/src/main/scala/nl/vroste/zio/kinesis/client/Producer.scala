@@ -165,8 +165,8 @@ object Producer {
                    triggerUpdateShards,
                    throttler
                  )
-      _       <- producer.runloop.forkManaged
-      _       <- producer.metricsCollection.forkManaged.ensuring(producer.collectMetrics)
+      _       <- producer.runloop.forkManaged                                             // Fiber cannot fail
+      _       <- producer.metricsCollection.forkManaged.ensuring(producer.collectMetrics) // Fiber cannot fail
     } yield producer
 
   private def getShardMap(streamName: String): ZIO[Clock with Kinesis, Throwable, ShardMap] = {

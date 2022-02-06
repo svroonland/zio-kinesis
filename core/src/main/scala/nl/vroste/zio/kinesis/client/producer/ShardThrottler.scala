@@ -72,7 +72,7 @@ private[client] object ShardThrottler {
         _                <- updateSuccessRate
                               .repeat(Schedule.spaced(updatePeriod))
                               .delay(updatePeriod)
-                              .forkManaged
+                              .forkManaged // Fiber cannot fail
       } yield new DynamicThrottler {
         override final def throughputFactor: UIO[Double] = successRate.get
         override final def addSuccess: UIO[Unit]         = update(addSuccess = 1)
