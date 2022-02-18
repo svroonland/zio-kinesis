@@ -294,7 +294,7 @@ private[client] final class ProducerLive[R, R1, T](
                              }
                            }
       _                 <- queue.offerAll(requests.map(_._2))
-      results           <- done.await
+      results           <- if (chunk.nonEmpty) done.await else ZIO.succeed(Chunk.empty)
       latencies          = results.map(r => java.time.Duration.between(now, r.completed))
       _                 <- currentMetrics.getAndUpdate(_.addSuccesses(results.map(_.attempts), latencies))
     } yield results)
