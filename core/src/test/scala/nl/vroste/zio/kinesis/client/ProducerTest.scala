@@ -64,6 +64,20 @@ object ProducerTest extends DefaultRunnableSpec {
             }
         }
       },
+      testM("not block when passing an empty chunk to produceChunk") {
+
+        val streamName = "zio-test-stream-producer-2"
+
+        withStream(streamName, 1) {
+          Producer
+            .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 128))
+            .use { producer =>
+              for {
+                _ <- producer.produceChunk(Chunk.empty)
+              } yield assertCompletes
+            }
+        }
+      },
       testM("support a ramp load") {
         val streamName = "zio-test-stream-producer-ramp"
 
