@@ -41,22 +41,26 @@ object PollingFetcher {
       val initialize: ZManaged[
         Clock with Logging,
         Nothing,
-        (Ref[Option[SequenceNumber]], GetRecordsRequest => ZIO[Kinesis, AwsError, GetRecordsResponse.ReadOnly])
+        (
+          Ref[(ShardIteratorType, Option[SequenceNumber])],
+          GetRecordsRequest => ZIO[Kinesis, AwsError, GetRecordsResponse.ReadOnly]
+        )
       ] = for {
         _                   <- log
                                  .info(s"Creating PollingFetcher for shard ${shardId} with starting position ${startingPosition}")
                                  .toManaged_
-        sequenceNumber      <- Ref.make(startingPosition.sequenceNumber).toManaged_
+        sequenceNumber      <- Ref.make((startingPosition.`type`, startingPosition.sequenceNumber)).toManaged_
         getRecordsThrottled <- throttledFunction(getRecordsRateLimit, 1.second)(kinesis.getRecords)
       } yield (sequenceNumber, getRecordsThrottled)
 
       def streamFromSequenceNumber(
+        iteratorType: ShardIteratorType,
         sequenceNr: Option[SequenceNumber],
         getRecordsThrottled: GetRecordsRequest => ZIO[Kinesis, AwsError, GetRecordsResponse.ReadOnly]
       ): ZStream[Clock with Logging with Kinesis, Throwable, GetRecordsResponse.ReadOnly] = ZStream.unwrapManaged {
         for {
           initialShardIterator <-
-            getShardIterator(GetShardIteratorRequest(streamName, shardId, startingPosition.`type`, sequenceNr))
+            getShardIterator(GetShardIteratorRequest(streamName, shardId, iteratorType, sequenceNr))
               .map(_.shardIteratorValue.get)
               .mapError(_.toThrowable)
               .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
@@ -125,9 +129,13 @@ object PollingFetcher {
       ZStream.unwrapManaged {
         initialize.map { case (sequenceNumberRef, getRecordsThrottled) =>
           val streamFromLastSequenceNr =
-            ZStream.fromEffect(sequenceNumberRef.get).flatMap { sequenceNr =>
-              streamFromSequenceNumber(sequenceNr, getRecordsThrottled)
-                .tap(response => sequenceNumberRef.set(response.recordsValue.lastOption.map(_.sequenceNumberValue)))
+            ZStream.fromEffect(sequenceNumberRef.get).flatMap { case (iteratorType, sequenceNr) =>
+              streamFromSequenceNumber(iteratorType, sequenceNr, getRecordsThrottled)
+                .tap(response =>
+                  ZIO.foreach_(response.recordsValue.lastOption.map(_.sequenceNumberValue))(s =>
+                    sequenceNumberRef.set((ShardIteratorType.AFTER_SEQUENCE_NUMBER, Some(s)))
+                  )
+                )
             }
 
           streamFromLastSequenceNr.catchSome { case _: ExpiredIteratorException =>
