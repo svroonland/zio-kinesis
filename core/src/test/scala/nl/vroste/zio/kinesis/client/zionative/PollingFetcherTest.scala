@@ -317,7 +317,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
           val shardIterator = request.shardIterator
           val limit         = request.limit.getOrElse(0)
           val offset        = shardIterator.toInt
-          val expire        = issuedIterators.get.flatMap(issued => doExpire(offset, issued(offset)))
+          val expire        = issuedIterators.get.flatMap[Any, Nothing, Boolean](issued => doExpire(offset, issued(offset)))
 
           doThrottle(shardIterator, limit).zip(expire).flatMap { case (throttle, expire) =>
             if (throttle)
