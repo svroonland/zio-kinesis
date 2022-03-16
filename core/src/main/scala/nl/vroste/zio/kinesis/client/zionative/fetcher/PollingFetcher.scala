@@ -4,11 +4,10 @@ import io.github.vigoo.zioaws.kinesis
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model._
 import io.github.vigoo.zioaws.kinesis.model.primitives.{ SequenceNumber, ShardIterator }
-import nl.vroste.zio.kinesis.client.Util
 import nl.vroste.zio.kinesis.client.Util._
 import nl.vroste.zio.kinesis.client.zionative.Consumer.{ childShardToShard, retryOnThrottledWithSchedule }
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
-import nl.vroste.zio.kinesis.client.zionative.{ Consumer, DiagnosticEvent, FetchMode, Fetcher }
+import nl.vroste.zio.kinesis.client.zionative.{ DiagnosticEvent, FetchMode, Fetcher }
 import software.amazon.awssdk.services.kinesis.model.ExpiredIteratorException
 import zio._
 import zio.clock.Clock
