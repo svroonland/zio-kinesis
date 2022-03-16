@@ -72,7 +72,6 @@ object PollingFetcher {
                 log.warn(s"Error in PollingFetcher for shard ${shardId}: ${e}")
               ) *> ZStream.fail(e)
           }
-          .retry(config.throttlingBackoff)
       }
 
       def makePollEffectWithShardIterator[R](
@@ -132,8 +131,9 @@ object PollingFetcher {
             }
 
           streamFromLastSequenceNr.catchSome { case _: ExpiredIteratorException =>
-            ZStream.fromEffect(log.debug("Iterator expired. Refreshing")) *> streamFromLastSequenceNr
+            ZStream.fromEffect(log.info("Iterator expired. Refreshing")) *> streamFromLastSequenceNr
           }
+            .retry(config.throttlingBackoff)
         }
       }
         .via(detectEndOfShard)

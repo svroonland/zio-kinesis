@@ -278,7 +278,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
           _              <- chunksFib.join
         } yield assert(chunksReceived)(equalTo(nrBatches))
       }
-    ).provideCustomLayer(loggingLayer ++ TestClock.default)
+    ).provideCustomLayer(loggingLayer ++ TestClock.default) @@ TestAspect.timeout(30.seconds)
 
   private def makeRecords(nrRecords: Long): Seq[Record] =
     (0 until nrRecords.toInt).map { i =>
