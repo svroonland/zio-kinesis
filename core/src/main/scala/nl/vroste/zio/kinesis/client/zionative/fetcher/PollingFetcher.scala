@@ -11,7 +11,6 @@ import zio.clock.Clock
 import zio.duration._
 import zio.logging.{ log, Logging }
 import zio.stream.ZStream
-import io.github.vigoo.zioaws.core.AwsError
 import software.amazon.awssdk.services.kinesis.model.ExpiredIteratorException
 
 /**
