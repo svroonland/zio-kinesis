@@ -70,9 +70,7 @@ object PollingFetcher {
             case None    =>
               ZStream.empty
             case Some(e) =>
-              ZStream.fromEffect(
-                log.warn(s"Error in PollingFetcher for shard ${shardId}: ${e}")
-              ) *> ZStream.fail(e)
+              ZStream.fail(e)
           }
       }
 
@@ -139,6 +137,7 @@ object PollingFetcher {
           streamFromLastSequenceNr.catchSome { case _: ExpiredIteratorException =>
             ZStream.fromEffect(log.info("Iterator expired. Refreshing")) *> streamFromLastSequenceNr
           }
+            .onError(e => log.warn(s"Error in PollingFetcher for shard ${shardId}: ${e}"))
             .retry(config.throttlingBackoff)
         }
       }
