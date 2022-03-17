@@ -28,6 +28,8 @@ import zio.stream.ZStream
  *   - GetShardIterator: max 5 calls per second globally
  */
 object PollingFetcher {
+  private case class PollState(shardIteratorType: ShardIteratorType, sequenceNumber: Option[SequenceNumber])
+
   def make(
     streamName: String,
     config: FetchMode.Polling,
@@ -40,17 +42,14 @@ object PollingFetcher {
       val initialize: ZManaged[
         Clock with Logging,
         Nothing,
-        (
-          Ref[(ShardIteratorType, Option[SequenceNumber])],
-          GetRecordsRequest => ZIO[Kinesis, AwsError, GetRecordsResponse.ReadOnly]
-        )
+        (Ref[PollState], GetRecordsRequest => ZIO[Kinesis, AwsError, GetRecordsResponse.ReadOnly])
       ] = for {
         _                   <- log
                                  .info(s"Creating PollingFetcher for shard ${shardId} with starting position ${startingPosition}")
                                  .toManaged_
-        sequenceNumber      <- Ref.make((startingPosition.`type`, startingPosition.sequenceNumber)).toManaged_
+        pollState           <- Ref.make(PollState(startingPosition.`type`, startingPosition.sequenceNumber)).toManaged_
         getRecordsThrottled <- throttledFunction(getRecordsRateLimit, 1.second)(kinesis.getRecords)
-      } yield (sequenceNumber, getRecordsThrottled)
+      } yield (pollState, getRecordsThrottled)
 
       def streamFromSequenceNumber(
         iteratorType: ShardIteratorType,
@@ -126,13 +125,13 @@ object PollingFetcher {
           }
 
       ZStream.unwrapManaged {
-        initialize.map { case (sequenceNumberRef, getRecordsThrottled) =>
+        initialize.map { case (pollState, getRecordsThrottled) =>
           val streamFromLastSequenceNr =
-            ZStream.fromEffect(sequenceNumberRef.get).flatMap { case (iteratorType, sequenceNr) =>
+            ZStream.fromEffect(pollState.get).flatMap { case PollState(iteratorType, sequenceNr) =>
               streamFromSequenceNumber(iteratorType, sequenceNr, getRecordsThrottled)
                 .tap(response =>
                   ZIO.foreach_(response.recordsValue.lastOption.map(_.sequenceNumberValue))(s =>
-                    sequenceNumberRef.set((ShardIteratorType.AFTER_SEQUENCE_NUMBER, Some(s)))
+                    pollState.set(PollState(ShardIteratorType.AFTER_SEQUENCE_NUMBER, Some(s)))
                   )
                 )
             }
