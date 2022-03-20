@@ -16,8 +16,6 @@ import zio.clock.Clock
 import zio.logging.Logging
 import zio.{ CancelableFuture, Chunk, ZIO }
 
-import scala.annotation.nowarn
-
 /**
  * A scala-native Future based interface to the zio-kinesis Producer
  */
