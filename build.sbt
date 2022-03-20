@@ -1,7 +1,7 @@
 import xerial.sbt.Sonatype.GitHubHosting
 
 val mainScala = "2.13.8"
-val allScala  = Seq("2.12.15", mainScala)
+val allScala  = Seq("2.12.15", mainScala, "3.1.1")
 
 inThisBuild(
   List(
@@ -10,6 +10,7 @@ inThisBuild(
     licenses                         := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
     scalaVersion                     := mainScala,
     crossScalaVersions               := allScala,
+    compileOrder                     := CompileOrder.JavaThenScala,
     Test / parallelExecution         := false,
     Global / cancelable              := true,
     Test / fork                      := true,
@@ -54,6 +55,7 @@ lazy val root = project
 lazy val core = (project in file("core"))
   .enablePlugins(ProtobufPlugin)
   .settings(stdSettings: _*)
+  .settings(Seq(publish / skip := true))
   .settings(
     Seq(
       name := "zio-kinesis"

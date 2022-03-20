@@ -2,7 +2,7 @@ package nl.vroste.zio.kinesis.client.dynamicconsumer
 
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.core.AwsError
-import io.github.vigoo.zioaws.core.aspects.{ AwsCallAspect, Described }
+import io.github.vigoo.zioaws.core.aspects.{ AwsCallAspect, Described, ZLayerSyntax }
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model.{ ScalingType, UpdateShardCountRequest }
 import io.github.vigoo.zioaws.{ dynamodb, kinesis }

@@ -206,13 +206,16 @@ object TestUtil {
                    .nextIntBetween(1, maxRecordSize)
                    .map(valueLength => Chunk.fromIterable(List.fill(valueLength)(0x01.toByte)))
       } yield ProducerRecord(key, value)
-    }.chunkN(defaultChunkSize).take(nrRecords.toLong).via(throttle(produceRate, _)).buffer(defaultChunkSize)
+    }.chunkN(defaultChunkSize)
+      .take(nrRecords.toLong)
+      .via(stream => throttle[Random with Clock, Throwable, ProducerRecord[Chunk[Byte]]](produceRate, stream))
+      .buffer(defaultChunkSize)
     massProduceRecords(producer, records)
   }
 
   def massProduceRecords[R, T](
     producer: Producer[T],
-    records: ZStream[R, Nothing, ProducerRecord[T]]
+    records: ZStream[R, Throwable, ProducerRecord[T]]
   ): ZIO[Logging with Clock with R, Throwable, Unit] =
     records
       .mapChunks(Chunk.single)

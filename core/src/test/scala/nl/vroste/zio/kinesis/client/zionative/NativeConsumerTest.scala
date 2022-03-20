@@ -1,5 +1,8 @@
 package nl.vroste.zio.kinesis.client.zionative
 
+import io.github.vigoo.zioaws.cloudwatch.CloudWatch
+import io.github.vigoo.zioaws.dynamodb.DynamoDb
+
 import java.time.Instant
 import java.{ util => ju }
 import scala.collection.compat._
@@ -24,11 +27,6 @@ import zio.logging.{ log, _ }
 import zio.stream.{ ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test._
-
-import java.time.Instant
-import java.{ util => ju }
-
-import scala.collection.compat._
 
 object NativeConsumerTest extends DefaultRunnableSpec {
   /*
@@ -180,7 +178,9 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                              .take(1)
                              .runHead
 
-          } yield assert(firstRecord)(isSome(hasField("key", _.partitionKey, equalTo(s"key${nrRecords + 3}"))))
+          } yield assert(firstRecord)(
+            isSome(hasField("key", (_: Record[String]).partitionKey, equalTo(s"key${nrRecords + 3}")))
+          )
         }
       },
       testM("worker steals leases from other worker until they both have an equal share") {
@@ -776,7 +776,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
             )
         }
       }
-    ).provideSomeLayerShared(env) @@
+    ).provideCustomLayerShared(env) @@
       TestAspect.timed @@
 //      TestAspect.sequential @@ // For CircleCI
 //      TestAspect.nonFlaky(10)
@@ -788,11 +788,17 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
   val useAws = Runtime.default.unsafeRun(system.envOrElse("ENABLE_AWS", "0")).toInt == 1
 
-  val env = (((if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()).orDie) >+>
-    DynamoDbLeaseRepository.live ++
-    zio.test.environment.testEnvironment ++
-    Clock.live) >>>
-    (ZLayer.identity ++ loggingLayer)
+  val awsLayer: ZLayer[Any, Throwable, CloudWatch with Kinesis with DynamoDb] =
+    if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()
+
+  val env: ZLayer[
+    Any,
+    Nothing,
+    Kinesis with CloudWatch with DynamoDb with LeaseRepository with Clock with Logging
+  ] =
+    awsLayer.orDie >+>
+      (DynamoDbLeaseRepository.live ++
+        Clock.live ++ loggingLayer)
 
   def produceSampleRecords(
     streamName: String,
