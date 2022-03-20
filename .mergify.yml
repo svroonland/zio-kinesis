@@ -11,7 +11,7 @@ pull_request_rules:
       - "status-success=ci/circleci: test213"
       - "status-success=ci/circleci: test213_dynamic_consumer"
       - "status-success=ci/circleci: test212"
-      - "status-success=ci/circleci: test310"
+      - "status-success=ci/circleci: test31"
     actions:
       merge:
         method: squash
