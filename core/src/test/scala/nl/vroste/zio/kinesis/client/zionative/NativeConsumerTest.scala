@@ -2,36 +2,30 @@ package nl.vroste.zio.kinesis.client.zionative
 
 import io.github.vigoo.zioaws.cloudwatch.CloudWatch
 import io.github.vigoo.zioaws.dynamodb.DynamoDb
-
-import java.time.Instant
-import java.{ util => ju }
-import scala.collection.compat._
 import io.github.vigoo.zioaws.kinesis
 import io.github.vigoo.zioaws.kinesis.Kinesis
 import io.github.vigoo.zioaws.kinesis.model.{ DescribeStreamRequest, ScalingType, UpdateShardCountRequest }
 import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.TestUtil.{ retryOnResourceNotFound, withStream }
+import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.LeaseCoordinationSettings
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
-import nl.vroste.zio.kinesis.client._
 import zio._
 import zio.blocking.Blocking
 import zio.clock.Clock
 import zio.console._
 import zio.duration._
-import zio.logging.{ log, _ }
+import zio.logging._
 import zio.stream.{ ZStream, ZTransducer }
 import zio.test.Assertion._
 import zio.test._
-import zio.test.environment.TestEnvironment
 
 import java.time.Instant
 import java.{ util => ju }
-import scala.collection.compat._
 
 object NativeConsumerTest extends DefaultRunnableSpec {
   /*
