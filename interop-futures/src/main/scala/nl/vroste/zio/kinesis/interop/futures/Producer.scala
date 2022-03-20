@@ -16,6 +16,8 @@ import zio.clock.Clock
 import zio.logging.Logging
 import zio.{ CancelableFuture, Chunk, ZIO }
 
+import scala.annotation.nowarn
+
 /**
  * A scala-native Future based interface to the zio-kinesis Producer
  */
@@ -68,6 +70,7 @@ object Producer {
    * @return
    *   A Managed Producer
    */
+  @nowarn("cat=unused-params") // Scala warns that Tag is unused, but removing it gives missing implicits errors
   def make[T: Tag](
     streamName: String,
     serializer: Serializer[Any, T],

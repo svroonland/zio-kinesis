@@ -781,7 +781,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
             )
         }
       }
-    ).provideSomeLayerShared(env) @@
+    ).provideCustomLayerShared(env) @@
       TestAspect.timed @@
 //      TestAspect.sequential @@ // For CircleCI
 //      TestAspect.nonFlaky(10)
@@ -793,14 +793,16 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 
   val useAws = Runtime.default.unsafeRun(system.envOrElse("ENABLE_AWS", "0")).toInt == 1
 
+  val awsLayer: ZLayer[Any, Throwable, CloudWatch with Kinesis with DynamoDb] =
+    if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()
+
   val env: ZLayer[
     Any,
     Nothing,
-    Kinesis with CloudWatch with DynamoDb with LeaseRepository with TestEnvironment with Clock with Logging
+    Kinesis with CloudWatch with DynamoDb with LeaseRepository with Clock with Logging
   ] =
-    (if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()).orDie >+>
+    awsLayer.orDie >+>
       (DynamoDbLeaseRepository.live ++
-        zio.test.environment.testEnvironment ++
         Clock.live ++ loggingLayer)
 
   def produceSampleRecords(
