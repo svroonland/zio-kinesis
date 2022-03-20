@@ -101,7 +101,7 @@ object Util {
     for {
       requestsQueue <- Queue.bounded[(IO[E, A], Promise[E, A])](units / 2 * 2).toManaged_
       _             <- ZStream
-                         .fromQueueWithShutdown(requestsQueue)
+                         .fromQueueWithShutdown(requestsQueue, units) // See https://github.com/zio/zio/issues/4190
                          .throttleShape(units.toLong, duration, units.toLong)(_ => 1)
                          .mapM { case (effect, promise) => promise.completeWith(effect) }
                          .runDrain
