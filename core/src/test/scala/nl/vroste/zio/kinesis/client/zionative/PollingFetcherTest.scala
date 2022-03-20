@@ -247,36 +247,35 @@ object PollingFetcherTest extends DefaultRunnableSpec {
           equalTo(nrBatches)
         ))
       },
-      testM("refresh an iterator if it expires") {
+      testM("restart from the correct sequence number when an iterator has expired") {
         val batchSize    = 10
         val nrBatches    = 3L
         val pollInterval = 1.second
 
         val records = makeRecords(nrBatches * batchSize)
 
+        val doExpire = (next: Int, count: Int) => ZIO.succeed(next == batchSize && count == 1)
         for {
-          chunksReceived <- Ref.make[Long](0)
-          doExpire        = (next: Int, count: Int) => ZIO.succeed(next == batchSize && count == 1)
-          chunksFib      <-
+          fetcherFib <-
             PollingFetcher
               .make("my-stream-1", FetchMode.Polling(batchSize, Polling.dynamicSchedule(pollInterval)), _ => UIO.unit)
               .use { fetcher =>
                 fetcher
                   .shardRecordStream("shard1", StartingPosition(ShardIteratorType.TRIM_HORIZON))
                   .mapChunks(Chunk.single)
-                  .tap(_ => chunksReceived.update(_ + 1))
                   .take(nrBatches)
-                  .runDrain
+                  .runCollect
               }
               .provideSomeLayer[ZEnv with Logging with TestClock](
                 ZLayer.fromEffect(stubClient(records, doExpire = doExpire))
               )
               .fork
-          _              <- TestClock.adjust(0.seconds)
+          _          <- TestClock.adjust(0.seconds)
 
-          chunksReceived <- chunksReceived.get
-          _              <- chunksFib.join
-        } yield assert(chunksReceived)(equalTo(nrBatches))
+          received <- fetcherFib.join
+        } yield assert(received)(hasSize(equalTo(nrBatches.toInt))) && assertTrue(
+          received.flatten.map(_.partitionKeyValue) == Chunk.fromIterable(records.map(_.partitionKey))
+        )
       }
     ).provideCustomLayer(loggingLayer ++ TestClock.default) @@ TestAspect.timeout(30.seconds)
 
