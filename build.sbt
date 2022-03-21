@@ -55,7 +55,6 @@ lazy val root = project
 lazy val core = (project in file("core"))
   .enablePlugins(ProtobufPlugin)
   .settings(stdSettings: _*)
-  .settings(Seq(publish / skip := true))
   .settings(
     Seq(
       name := "zio-kinesis"
