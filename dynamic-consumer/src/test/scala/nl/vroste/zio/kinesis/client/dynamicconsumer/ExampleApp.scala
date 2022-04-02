@@ -115,8 +115,8 @@ object ExampleApp extends zio.ZIOAppDefault {
     ZStream.unwrapManaged {
       for {
         metrics <- CloudWatchMetricsPublisher.make(applicationName, id)
-        delay   <- zio.Random.nextIntBetween(0, maxRandomWorkerStartDelayMillis).map(_.millis).toManaged
-        _       <- ZIO.logInfo(s"Waiting ${delay.toMillis} ms to start worker ${id}").toManaged
+        delay   <- zio.Random.nextIntBetween(0, maxRandomWorkerStartDelayMillis).map(_.millis)
+        _       <- ZIO.logInfo(s"Waiting ${delay.toMillis} ms to start worker ${id}")
       } yield ZStream.fromZIO(ZIO.sleep(delay)) *> Consumer
         .shardedStream(
           streamName,

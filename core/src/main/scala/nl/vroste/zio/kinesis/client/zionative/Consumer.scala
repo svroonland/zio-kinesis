@@ -1,9 +1,5 @@
 package nl.vroste.zio.kinesis.client.zionative
 
-import java.time.Instant
-import zio.aws.cloudwatch.CloudWatch
-import zio.aws.kinesis.Kinesis
-import zio.aws.kinesis.model._
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.{ EnhancedFanOut, Polling }
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
@@ -17,12 +13,15 @@ import software.amazon.awssdk.services.kinesis.model.{
   LimitExceededException,
   ProvisionedThroughputExceededException
 }
-import zio._
+import zio.aws.cloudwatch.CloudWatch
+import zio.aws.kinesis.Kinesis
+import zio.aws.kinesis.model._
 import zio.aws.kinesis.model.primitives.{ SequenceNumber, ShardId, StreamName, Timestamp }
 import zio.stream.ZStream
+import zio._
 
+import java.time.Instant
 import scala.jdk.CollectionConverters._
-import zio.{ Clock, Random }
 
 final case class ExtendedSequenceNumber(sequenceNumber: String, subSequenceNumber: Long)
 
@@ -198,10 +197,10 @@ object Consumer {
                                       Record(
                                         shardId,
                                         r.sequenceNumber,
-                                        r.approximateArrivalTimestamp.get,
+                                        r.approximateArrivalTimestamp.toOption.get,
                                         data,
                                         aggregatedRecord.getPartitionKeyTable(subRecord.getPartitionKeyIndex.toInt),
-                                        r.encryptionType,
+                                        r.encryptionType.toOption,
                                         Some(subSequenceNr.toLong),
                                         if (subRecord.hasExplicitHashKeyIndex)
                                           Some(aggregatedRecord.getExplicitHashKeyTable(subRecord.getExplicitHashKeyIndex.toInt))
@@ -218,10 +217,10 @@ object Consumer {
             Record(
               shardId,
               r.sequenceNumber,
-              r.approximateArrivalTimestamp.get,
+              r.approximateArrivalTimestamp.toOption.get,
               data,
               r.partitionKey,
-              r.encryptionType,
+              r.encryptionType.toOption,
               subSequenceNumber = None,
               explicitHashKey = None,
               aggregated = false
@@ -232,7 +231,7 @@ object Consumer {
 
     def makeFetcher(
       streamDescription: StreamDescription.ReadOnly
-    ): ZManaged[Clock with Kinesis, Throwable, Fetcher] =
+    ): ZIO[Scope with Clock with Kinesis, Throwable, Fetcher] =
       fetchMode match {
         case c: Polling        => PollingFetcher.make(streamDescription.streamName, c, emitDiagnostic)
         case c: EnhancedFanOut => EnhancedFanOutFetcher.make(streamDescription, workerIdentifier, c, emitDiagnostic)
@@ -248,19 +247,13 @@ object Consumer {
         else ZIO.succeed(shards)
       }
 
-    def createDependencies: ZManaged[
-      Clock with Random with LeaseRepository with Kinesis,
-      Throwable,
-      (Fetcher, LeaseCoordinator)
-    ] =
-      ZManaged
-        .fromZIO(
-          Kinesis
-            .describeStream(DescribeStreamRequest(StreamName(streamName)))
-            .mapError(_.toThrowable)
-            .map(_.streamDescription)
-            .fork
-        )
+    def createDependencies
+      : ZIO[Scope with Clock with Random with LeaseRepository with Kinesis, Throwable, (Fetcher, LeaseCoordinator)] =
+      Kinesis
+        .describeStream(DescribeStreamRequest(StreamName(streamName)))
+        .mapError(_.toThrowable)
+        .map(_.streamDescription)
+        .fork
         .flatMap { streamDescriptionFib =>
           val fetchShards = streamDescriptionFib.join.flatMap { streamDescription =>
             if (!streamDescription.hasMoreShards)
@@ -269,8 +262,8 @@ object Consumer {
               listShards
           }
 
-          ZManaged
-            .unwrap(streamDescriptionFib.join.map(makeFetcher))
+          streamDescriptionFib.join
+            .flatMap(makeFetcher)
             .ensuring(ZIO.logDebug("Fetcher shut down")) zipPar (
             // Fetch shards and initialize the lease coordinator at the same time
             // When we have the shards, we inform the lease coordinator. When the lease table
@@ -280,7 +273,7 @@ object Consumer {
             // additional information to the lease coordinator, and the list of leases is used
             // as the list of shards.
             for {
-              env              <- ZIO.environment[Clock with Kinesis].toManaged
+              env              <- ZIO.environment[Clock with Kinesis]
               leaseCoordinator <- DefaultLeaseCoordinator
                                     .make(
                                       applicationName,
@@ -291,17 +284,17 @@ object Consumer {
                                       shardAssignmentStrategy,
                                       initialPosition
                                     )
-              _                <- ZIO.logInfo("Lease coordinator created").toManaged
+              _                <- ZIO.logInfo("Lease coordinator created")
               // Periodically refresh shards
               _                <- (listShards flatMap leaseCoordinator.updateShards)
                                     .repeat(Schedule.spaced(leaseCoordinationSettings.shardRefreshInterval))
                                     .delay(leaseCoordinationSettings.shardRefreshInterval)
-                                    .forkManaged
+                                    .forkScoped
             } yield leaseCoordinator
           )
         }
 
-    ZStream.unwrapManaged {
+    ZStream.unwrapScoped {
       createDependencies.map { case (fetcher, leaseCoordinator) =>
         leaseCoordinator.acquiredLeases.collect { case AcquiredLease(shardId, leaseLost) =>
           (shardId, leaseLost)

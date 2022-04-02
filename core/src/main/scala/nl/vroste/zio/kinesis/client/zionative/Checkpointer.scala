@@ -116,9 +116,7 @@ trait Checkpointer {
   ): ZStream[R, Throwable, Any] => ZStream[R with Clock, Throwable, Unit] =
     _.aggregateAsyncWithin(ZSink.foldUntil[Any, Unit]((), nr)((_, _) => ()), Schedule.fixed(interval))
       .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-      .tap { _ =>
-        checkpoint(retrySchedule)
-      }
+      .tap(_ => checkpoint(retrySchedule))
       .catchAll {
         case Left(e)               =>
           ZStream.fail(e)

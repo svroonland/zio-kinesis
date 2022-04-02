@@ -1,6 +1,6 @@
 package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
 import zio.stm.TMap
-import zio.{ Semaphore, UManaged, ZIO }
+import zio.{ Scope, Semaphore, ZIO }
 
 /**
  * Ensures that effects are run serially per key
@@ -13,9 +13,9 @@ trait SerialExecution[K] {
 }
 
 object SerialExecution {
-  def keyed[K]: UManaged[SerialExecution[K]] =
+  def keyed[K]: ZIO[Scope, Nothing, SerialExecution[K]] =
     for {
-      locks <- TMap.empty[K, Semaphore].commit.toManaged
+      locks <- TMap.empty[K, Semaphore].commit
     } yield new SerialExecution[K] {
       override def apply[R, E, A](key: K)(f: ZIO[R, E, A]): ZIO[R, E, A] =
         for {

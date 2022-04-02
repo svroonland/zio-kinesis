@@ -14,14 +14,14 @@ object Util {
       getKey: O => K,
       substreamChunkBuffer: Int = 32 // Number of chunks to buffer per substream
     ): ZStream[R, E, (K, ZStream[Any, E, O])] =
-      ZStream.unwrapManaged {
+      ZStream.unwrapScoped[R] {
         type GroupQueueValues = Exit[Option[E], Chunk[O]]
 
         for {
-          substreamsQueue     <- Queue
-                                   .unbounded[Exit[Option[E], (K, Queue[GroupQueueValues])]]
-                                   .toManaged
-          substreamsQueuesMap <- Ref.make(Map.empty[K, Queue[GroupQueueValues]]).toManaged
+          substreamsQueue <- Queue
+                               .unbounded[Exit[Option[E], (K, Queue[GroupQueueValues])]]
+
+          substreamsQueuesMap <- Ref.make(Map.empty[K, Queue[GroupQueueValues]])
           inStream             = {
             def addToSubStream(key: K, values: Chunk[O]): ZIO[Any, Nothing, Unit] =
               for {
@@ -45,7 +45,7 @@ object Util {
                 .as(Chunk.empty)
             }
           }
-          _                   <- ZManaged.finalizer(
+          _                   <- ZIO.addFinalizer(
                                    substreamsQueuesMap.get.flatMap(map =>
                                      ZIO.foreachDiscard(map.values)(_.offer(Exit.fail(None)).catchAllCause(_ => UIO.unit))
                                    )
@@ -99,15 +99,15 @@ object Util {
    */
   def throttledFunction[R, I, E, A](units: Int, duration: Duration)(
     f: I => ZIO[R, E, A]
-  ): ZManaged[Clock, Nothing, I => ZIO[R, E, A]] =
+  ): ZIO[Scope with Clock, Nothing, I => ZIO[R, E, A]] =
     for {
-      requestsQueue <- Queue.bounded[(IO[E, A], Promise[E, A])](units / 2 * 2).toManaged
+      requestsQueue <- Queue.bounded[(IO[E, A], Promise[E, A])](units / 2 * 2)
       _             <- ZStream
                          .fromQueueWithShutdown(requestsQueue)
                          .throttleShape(units.toLong, duration, units.toLong)(_ => 1)
                          .mapZIO { case (effect, promise) => promise.completeWith(effect) }
                          .runDrain
-                         .forkManaged
+                         .forkScoped
     } yield (input: I) =>
       for {
         env     <- ZIO.environment[R]
@@ -120,14 +120,14 @@ object Util {
     ThrottledFunctionPartial(units, duration)
 
   final case class ThrottledFunctionPartial(units: Int, duration: Duration) {
-    def apply[R, I0, I1, E, A](f: (I0, I1) => ZIO[R, E, A]): ZManaged[Clock, Nothing, (I0, I1) => ZIO[R, E, A]] =
+    def apply[R, I0, I1, E, A](f: (I0, I1) => ZIO[R, E, A]): ZIO[Scope with Clock, Nothing, (I0, I1) => ZIO[R, E, A]] =
       throttledFunction[R, (I0, I1), E, A](units, duration) { case (i0, i1) =>
         f(i0, i1)
       }.map(Function.untupled(_))
 
     def apply[R, I0, I1, I2, E, A](
       f: (I0, I1, I2) => ZIO[R, E, A]
-    ): ZManaged[Clock, Nothing, (I0, I1, I2) => ZIO[R, E, A]] =
+    ): ZIO[Scope with Clock, Nothing, (I0, I1, I2) => ZIO[R, E, A]] =
       throttledFunction[R, (I0, I1, I2), E, A](units, duration) { case (i0, i1, i2) =>
         f(i0, i1, i2)
       }.map(Function.untupled(_))
@@ -145,9 +145,9 @@ object Util {
   def periodicAndTriggerableOperation[R, A](
     effect: ZIO[R, Nothing, A],
     period: Duration
-  ): ZManaged[R with Clock, Nothing, UIO[Unit]] =
+  ): ZIO[Scope with R with Clock, Nothing, UIO[Unit]] =
     for {
-      queue <- Queue.dropping[Unit](1).toManagedWith(_.shutdown)
-      _     <- ((queue.take raceFirst ZIO.sleep(period)) *> effect *> queue.takeAll).forever.forkManaged
+      queue <- ZIO.acquireRelease(Queue.dropping[Unit](1))(_.shutdown)
+      _     <- ((queue.take raceFirst ZIO.sleep(period)) *> effect *> queue.takeAll).forever.forkScoped
     } yield queue.offer(()).unit
 }

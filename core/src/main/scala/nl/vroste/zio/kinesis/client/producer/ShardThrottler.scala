@@ -16,11 +16,11 @@ private[client] object ShardThrottler {
   def make(
     updatePeriod: Duration = 5.seconds,
     allowedError: Double = 0.02
-  ): ZManaged[Clock, Nothing, ShardThrottler] =
+  ): ZIO[Scope with Clock, Nothing, ShardThrottler] =
     for {
-      scope  <- ZManaged.scope
-      clock  <- ZManaged.environment[Clock]
-      shards <- Ref.make(Map.empty[String, DynamicThrottler]).toManaged
+      scope  <- ZIO.scope
+      clock  <- ZIO.environment[Clock]
+      shards <- Ref.make(Map.empty[String, DynamicThrottler])
     } yield new ShardThrottler {
       override def throughputFactor(shard: String): UIO[Double] = withShard(shard, _.throughputFactor)
       override def addSuccess(shard: String): UIO[Unit]         = withShard(shard, _.addSuccess)
@@ -35,9 +35,8 @@ private[client] object ShardThrottler {
           if (throttlers.contains(shardId)) ZIO.succeed(throttlers(shardId))
           else
             for {
-              throttlerAndFinalizer <- scope.apply(DynamicThrottler.make(updatePeriod, allowedError))
-              throttler              = throttlerAndFinalizer._2
-              _                     <- shards.update(_ + (shardId -> throttler))
+              throttler <- scope.extend(DynamicThrottler.make(updatePeriod, allowedError))
+              _         <- shards.update(_ + (shardId -> throttler))
             } yield throttler
         }.provideEnvironment(clock)
     }
@@ -54,10 +53,10 @@ private[client] object ShardThrottler {
     def make(
       updatePeriod: Duration = 5.seconds,
       allowedError: Double = 0.1
-    ): ZManaged[Clock, Nothing, DynamicThrottler] =
+    ): ZIO[Scope with Clock, Nothing, DynamicThrottler] =
       for {
-        counter          <- Ref.make[(Long, Long)]((0, 0)).toManaged
-        successRate      <- Ref.make(1.0d).toManaged
+        counter          <- Ref.make[(Long, Long)]((0, 0))
+        successRate      <- Ref.make(1.0d)
         updateSuccessRate = for {
                               counts                 <- counter.getAndSet((0, 0))
                               currentSuccessRate      = counts match {
@@ -72,7 +71,7 @@ private[client] object ShardThrottler {
         _                <- updateSuccessRate
                               .repeat(Schedule.spaced(updatePeriod))
                               .delay(updatePeriod)
-                              .forkManaged
+                              .forkScoped
       } yield new DynamicThrottler {
         override final def throughputFactor: UIO[Double] = successRate.get
         override final def addSuccess: UIO[Unit]         = update(addSuccess = 1)

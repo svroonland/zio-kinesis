@@ -212,20 +212,20 @@ object CloudWatchMetricsPublisher {
   def make(
     applicationName: String,
     workerId: String
-  ): ZManaged[Clock with CloudWatch with CloudWatchMetricsPublisherConfig, Nothing, Service] =
+  ): ZIO[Scope with Clock with CloudWatch with CloudWatchMetricsPublisherConfig, Nothing, Service] =
     for {
-      client  <- ZManaged.service[CloudWatch]
-      config  <- ZManaged.service[CloudWatchMetricsPublisherConfig]
-      q       <- Queue.bounded[DiagnosticEvent](1000).toManaged
-      q2      <- Queue.bounded[MetricDatum](1000).toManaged
-      leases  <- Ref.make[Set[String]](Set.empty).toManaged
-      workers <- Ref.make[Set[String]](Set.empty).toManaged
+      client  <- ZIO.service[CloudWatch]
+      config  <- ZIO.service[CloudWatchMetricsPublisherConfig]
+      q       <- Queue.bounded[DiagnosticEvent](1000)
+      q2      <- Queue.bounded[MetricDatum](1000)
+      leases  <- Ref.make[Set[String]](Set.empty)
+      workers <- Ref.make[Set[String]](Set.empty)
       c        = new CloudWatchMetricsPublisher(client, q, q2, applicationName, workerId, leases, workers, config)
-      _       <- c.processQueue.forkManaged
-      _       <- c.generatePeriodicMetrics.forkManaged
+      _       <- c.processQueue.forkScoped
+      _       <- c.generatePeriodicMetrics.forkScoped
       // Shutdown the queues first
-      _       <- ZManaged.finalizer(q.shutdown)
-      _       <- ZManaged.finalizer(q2.shutdown)
+      _       <- ZIO.addFinalizer(q.shutdown)
+      _       <- ZIO.addFinalizer(q2.shutdown)
     } yield c
 
   private def metric(

@@ -134,17 +134,17 @@ object Producer {
     serializer: Serializer[R, T],
     settings: ProducerSettings = ProducerSettings(),
     metricsCollector: ProducerMetrics => ZIO[R1, Nothing, Unit] = (_: ProducerMetrics) => ZIO.unit
-  ): ZManaged[R with R1 with Clock with Kinesis, Throwable, Producer[T]] =
+  ): ZIO[Scope with R with R1 with Clock with Kinesis, Throwable, Producer[T]] =
     for {
-      client          <- ZManaged.service[Kinesis]
-      env             <- ZIO.environment[R with Clock].toManaged
-      queue           <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManagedWith(_.shutdown)
-      currentMetrics  <- instant.map(CurrentMetrics.empty).flatMap(Ref.make(_)).toManaged
-      shardMap        <- getShardMap(StreamName(streamName)).toManaged
-      currentShardMap <- Ref.make(shardMap).toManaged
-      inFlightCalls   <- Ref.make(0).toManaged
-      md5Pool         <- ZPool.make(ZManaged.fromZIO(ZIO(MessageDigest.getInstance("MD5"))), settings.md5DigestPoolSize)
-      failedQueue     <- zio.Queue.bounded[ProduceRequest](settings.bufferSize).toManagedWith(_.shutdown)
+      client          <- ZIO.service[Kinesis]
+      env             <- ZIO.environment[R with Clock]
+      queue           <- ZIO.acquireRelease(Queue.bounded[ProduceRequest](settings.bufferSize))(_.shutdown)
+      currentMetrics  <- instant.map(CurrentMetrics.empty).flatMap(Ref.make(_))
+      shardMap        <- getShardMap(StreamName(streamName))
+      currentShardMap <- Ref.make(shardMap)
+      inFlightCalls   <- Ref.make(0)
+      md5Pool         <- ZPool.make(ZIO.attempt(MessageDigest.getInstance("MD5")), settings.md5DigestPoolSize)
+      failedQueue     <- ZIO.acquireRelease(Queue.bounded[ProduceRequest](settings.bufferSize))(_.shutdown)
 
       triggerUpdateShards <- Util.periodicAndTriggerableOperation(
                                (ZIO.logDebug("Refreshing shard map") *>
@@ -173,8 +173,8 @@ object Producer {
                    throttler,
                    md5Pool
                  )
-      _       <- producer.runloop.forkManaged
-      _       <- producer.metricsCollection.forkManaged.ensuring(producer.collectMetrics)
+      _       <- producer.runloop.forkScoped
+      _       <- producer.metricsCollection.forkScoped.ensuring(producer.collectMetrics)
     } yield producer
 
   private def getShardMap(streamName: StreamName): ZIO[Clock with Kinesis, Throwable, ShardMap] = {

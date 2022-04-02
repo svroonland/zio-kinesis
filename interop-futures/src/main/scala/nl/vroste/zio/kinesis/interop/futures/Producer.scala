@@ -20,7 +20,7 @@ import scala.annotation.nowarn
  * A scala-native Future based interface to the zio-kinesis Producer
  */
 class Producer[T] private (
-  runtime: zio.Runtime.Managed[Any],
+  runtime: zio.Runtime.Scoped[Any],
   producer: client.Producer[T]
 ) {
 
@@ -86,10 +86,10 @@ object Producer {
         dynamoDbAsyncClientLayer(buildDynamoDbClient)
     )
 
-    val producer =
+    val producer = ZLayer.scoped {
       client.Producer
-        .make(streamName, serializer, settings, metricsCollector = m => ZIO(metricsCollector(m)).orDie)
-        .toLayer
+        .make(streamName, serializer, settings, metricsCollector = m => ZIO.attempt(metricsCollector(m)).orDie)
+    }
 
     val layer   = (Clock.live ++ sdkClients) >>> producer
     val runtime = zio.Runtime.unsafeFromLayer(layer)

@@ -30,11 +30,11 @@ object TestUtil {
     f: (String, String) => ZIO[R, Throwable, A]
   ): ZIO[Kinesis with DynamoDb with Clock with Console with Random with R, Throwable, A] =
     (for {
-      streamName      <- Random.nextUUID.map("zio-test-stream-" + _.toString).toManaged
-      applicationName <- Random.nextUUID.map("zio-test-" + _.toString).toManaged
+      streamName      <- Random.nextUUID.map("zio-test-stream-" + _.toString)
+      applicationName <- Random.nextUUID.map("zio-test-" + _.toString)
       _               <- createStream(streamName, shards)
-      _               <- getShards(streamName).toManaged
-      _               <- ZManaged.finalizer(DynamoDb.deleteTable(DeleteTableRequest(TableName(applicationName))).ignore)
+      _               <- getShards(streamName)
+      _               <- ZIO.finalizer(DynamoDb.deleteTable(DeleteTableRequest(TableName(applicationName))).ignore)
     } yield (streamName, applicationName)).use { case (streamName, applicationName) =>
       f(streamName, applicationName).fork.flatMap(_.join)
     }
@@ -50,7 +50,7 @@ object TestUtil {
   def createStream(
     streamName: String,
     nrShards: Int
-  ): ZManaged[Console with Clock with Kinesis, Throwable, Unit] = {
+  ): ZIO[Scope with Console with Clock with Kinesis, Throwable, Unit] = {
     createStreamUnmanaged(streamName, nrShards).toManagedWith(_ =>
       Kinesis
         .deleteStream(DeleteStreamRequest(StreamName(streamName), enforceConsumerDeletion = Some(BooleanObject(true))))
@@ -60,7 +60,7 @@ object TestUtil {
         }
         .orDie
     )
-  } <* ZManaged.fromZIO(waitForStreamActive(streamName))
+  } <* ZIO.fromZIO(waitForStreamActive(streamName))
 
   def waitForStreamActive(streamName: String): ZIO[Kinesis with Clock, Throwable, Unit] =
     Kinesis
@@ -114,7 +114,6 @@ object TestUtil {
   ): ZIO[Random with Console with Clock with Kinesis with Any, Throwable, Unit] =
     Ref
       .make(ProducerMetrics.empty)
-      .toManaged
       .flatMap { totalMetrics =>
         Producer
           .make(

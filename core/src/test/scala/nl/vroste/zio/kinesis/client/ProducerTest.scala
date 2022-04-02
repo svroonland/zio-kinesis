@@ -68,7 +68,7 @@ object ProducerTest extends DefaultRunnableSpec {
 
         withStream(streamName, 10) {
           (for {
-            totalMetrics <- Ref.make(ProducerMetrics.empty).toManaged
+            totalMetrics <- Ref.make(ProducerMetrics.empty)
             producer     <- Producer
                               .make(
                                 streamName,
@@ -113,9 +113,9 @@ object ProducerTest extends DefaultRunnableSpec {
           .make(ProducerMetrics.empty)
           .flatMap { totalMetrics =>
             (for {
-              _        <- printLine("creating stream").orDie.toManaged
-              _        <- createStreamUnmanaged(streamName, 24).toManaged
-              _        <- printLine("creating producer").orDie.toManaged
+              _        <- printLine("creating stream").orDie
+              _        <- createStreamUnmanaged(streamName, 24)
+              _        <- printLine("creating producer").orDie
               producer <- Producer
                             .make(
                               streamName,
@@ -331,7 +331,7 @@ object ProducerTest extends DefaultRunnableSpec {
         def makeProducer(
           workerId: String,
           totalMetrics: Ref[ProducerMetrics]
-        ): ZManaged[Any with Console with Clock with Kinesis with Any, Throwable, Producer[
+        ): ZIO[Scope with Any with Console with Clock with Kinesis with Any, Throwable, Producer[
           Chunk[Byte]
         ]] =
           Producer

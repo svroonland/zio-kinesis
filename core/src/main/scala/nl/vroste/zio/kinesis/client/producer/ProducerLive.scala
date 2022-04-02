@@ -51,7 +51,7 @@ private[client] final class ProducerLive[R, R1, T](
       // Aggregate records per shard
       .groupByKey2(_.predictedShard, chunkBufferSize)
       .flatMapPar(Int.MaxValue, chunkBufferSize) { case (shardId @ _, requests) =>
-        ZStream.managed(ShardMap.md5.orDie).flatMap { digest =>
+        ZStream.scoped(ShardMap.md5.orDie).flatMap { digest =>
           if (aggregate)
             requests.aggregateAsync(aggregator).mapConcatZIO(_.toProduceRequest(digest).map(_.toList))
           else requests
@@ -139,8 +139,8 @@ private[client] final class ProducerLive[R, R1, T](
                                          request.complete(
                                            ZIO.succeed(
                                              ProduceResponse(
-                                               response.shardId.get,
-                                               response.sequenceNumber.get,
+                                               response.shardId.toOption.get,
+                                               response.sequenceNumber.toOption.get,
                                                request.attemptNumber,
                                                completed = now
                                              )
@@ -163,16 +163,20 @@ private[client] final class ProducerLive[R, R1, T](
     for {
       _ <- ZIO.foreachDiscard(requests)(r => throttler.addFailure(r.predictedShard))
       _ <- ZIO.logWarning(s"Failed to produce ${failedCount} records").when(newFailed.nonEmpty)
-      _ <- ZIO.logWarning(responses.take(10).flatMap(_.errorCode).mkString(", ")).when(newFailed.nonEmpty)
+      _ <- ZIO.logWarning(responses.take(10).flatMap(_.errorCode.toOption).mkString(", ")).when(newFailed.nonEmpty)
 
       // The shard map may not yet be updated unless we're experiencing high latency
       updatedFailed <- if (repredict)
-                         ShardMap.md5.orDie.use { digest =>
-                           shards.get.map(shardMap =>
-                             requests.map(r =>
-                               r.newAttempt.copy(predictedShard = shardMap.shardForPartitionKey(digest, r.partitionKey))
+                         ZIO.scoped {
+                           ShardMap.md5.orDie.flatMap { digest =>
+                             shards.get.map(shardMap =>
+                               requests.map(r =>
+                                 r.newAttempt.copy(predictedShard =
+                                   shardMap.shardForPartitionKey(digest, r.partitionKey)
+                                 )
+                               )
                              )
-                           )
+                           }
                          }
                        else
                          ZIO.succeed(requests.map(_.newAttempt))
@@ -217,15 +221,15 @@ private[client] final class ProducerLive[R, R1, T](
   }
 
   private def countInFlight[R0, E, A](e: ZIO[R0, E, A]): ZIO[R0, E, A] =
-    inFlightCalls
-      .updateAndGet(_ + 1)
-      .tap(inFlightCalls => ZIO.logDebug(s"${inFlightCalls} PutRecords calls in flight"))
-      .toManagedWith(_ =>
-        inFlightCalls
-          .updateAndGet(_ - 1)
-          .tap(inFlightCalls => ZIO.logDebug(s"${inFlightCalls} PutRecords calls in flight"))
-      )
-      .useDiscard(e)
+    ZIO.acquireReleaseWith(
+      inFlightCalls
+        .updateAndGet(_ + 1)
+        .tap(inFlightCalls => ZIO.logDebug(s"${inFlightCalls} PutRecords calls in flight"))
+    )(_ =>
+      inFlightCalls
+        .updateAndGet(_ - 1)
+        .tap(inFlightCalls => ZIO.logDebug(s"${inFlightCalls} PutRecords calls in flight"))
+    )(_ => e)
 
   val collectMetrics: ZIO[R1 with Clock, Nothing, Unit] = for {
     now    <- instant
@@ -251,7 +255,10 @@ private[client] final class ProducerLive[R, R1, T](
     (for {
       shardMap        <- shards.get
       now             <- instant
-      ar              <- md5Pool.get.use(makeProduceRequest(r, serializer, now, shardMap, _))
+      ar              <- ZIO.scoped[R] {
+                           md5Pool.get
+                             .flatMap(digest => makeProduceRequest(r, serializer, now, shardMap, digest))
+                         }
       (await, request) = ar
       _               <- queue.offer(request)
       response        <- await
@@ -278,15 +285,17 @@ private[client] final class ProducerLive[R, R1, T](
                                    } yield ()
                                )
                                .unit
-      requests          <- md5Pool.get.use { digest =>
-                             ZIO.foreach(chunk) { r =>
-                               for {
-                                 data          <- serializer.serialize(r.data)
-                                 predictedShard = shardMap.shardForPartitionKey(digest, PartitionKey(r.partitionKey))
-                               } yield (
-                                 done.await,
-                                 ProduceRequest(data, PartitionKey(r.partitionKey), onDone, now, predictedShard)
-                               )
+      requests          <- ZIO.scoped[R] {
+                             md5Pool.get.flatMap { digest =>
+                               ZIO.foreach(chunk) { r =>
+                                 for {
+                                   data          <- serializer.serialize(r.data)
+                                   predictedShard = shardMap.shardForPartitionKey(digest, PartitionKey(r.partitionKey))
+                                 } yield (
+                                   done.await,
+                                   ProduceRequest(data, PartitionKey(r.partitionKey), onDone, now, predictedShard)
+                                 )
+                               }
                              }
                            }
       _                 <- queue.offerAll(requests.map(_._2))

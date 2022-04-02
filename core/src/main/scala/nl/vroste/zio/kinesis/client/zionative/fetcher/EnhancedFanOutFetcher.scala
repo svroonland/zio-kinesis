@@ -22,10 +22,10 @@ object EnhancedFanOutFetcher {
     workerId: String,
     config: FetchMode.EnhancedFanOut,
     emitDiagnostic: DiagnosticEvent => UIO[Unit]
-  ): ZManaged[Clock with Kinesis, Throwable, Fetcher] =
+  ): ZIO[Scope with Clock with Kinesis, Throwable, Fetcher] =
     for {
-      env                <- ZIO.environment[Clock with Kinesis].toManaged
-      consumerARN        <- registerConsumerIfNotExists(streamDescription.streamARN, workerId).toManaged
+      env                <- ZIO.environment[Clock with Kinesis]
+      consumerARN        <- registerConsumerIfNotExists(streamDescription.streamARN, workerId)
       subscribeThrottled <- Util.throttledFunctionN(config.maxSubscriptionsPerSecond, 1.second) {
                               (pos: StartingPosition, shardId: String) =>
                                 ZIO.succeed(

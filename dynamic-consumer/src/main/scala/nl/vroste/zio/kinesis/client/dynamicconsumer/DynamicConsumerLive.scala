@@ -172,12 +172,13 @@ private[client] class DynamicConsumerLive(
     }
 
     object Queues {
-      def make: ZManaged[Any, Nothing, Queues] =
+      def make: ZIO[Scope with Any, Nothing, Queues] =
         for {
-          runtime <- ZIO.runtime[Any].toManaged
-          q       <- Queue
-                       .unbounded[Exit[Option[Throwable], (String, ShardQueue, CheckpointerInternal)]]
-                       .toManagedWith(_.shutdown)
+          runtime <- ZIO.runtime[Any]
+          q       <- ZIO.acquireRelease(
+                       Queue
+                         .unbounded[Exit[Option[Throwable], (String, ShardQueue, CheckpointerInternal)]]
+                     )(_.shutdown)
         } yield new Queues(runtime, q)
     }
 
@@ -220,9 +221,9 @@ private[client] class DynamicConsumerLive(
         config         = configureKcl(
                            SchedulerConfig.makeDefault(configsBuilder, kinesisAsyncClient, initialPosition, streamName)
                          )
-        env           <- ZIO.environment[R].toManaged
+        env           <- ZIO.environment[R]
 
-        scheduler <- Task(
+        scheduler <- Task.attempt(
                        new Scheduler(
                          config.checkpoint,
                          config.coordinator,
@@ -232,17 +233,17 @@ private[client] class DynamicConsumerLive(
                          config.processor,
                          config.retrieval
                        )
-                     ).toManaged
+                     )
         doShutdown = ZIO.logDebug("Starting graceful shutdown") *>
                        ZIO.fromFutureJava(scheduler.startGracefulShutdown()).unit.orDie <*
                        queues.shutdown
         _         <- zio.ZIO
-                       .blocking(ZIO(scheduler.run()))
+                       .blocking(ZIO.attempt(scheduler.run()))
                        .fork
                        .flatMap(_.join)
                        .onInterrupt(doShutdown)
-                       .forkManaged
-        _         <- (requestShutdown *> doShutdown).forkManaged
+                       .forkScoped
+        _         <- (requestShutdown *> doShutdown).forkScoped
       } yield ZStream
         .fromQueue(queues.shards)
         .flattenExitOption
@@ -260,7 +261,7 @@ private[client] class DynamicConsumerLive(
           (shardId, stream, checkpointer)
         }
 
-    ZStream.unwrapManaged(schedulerM)
+    ZStream.unwrapScoped[R](schedulerM)
 
   }
 }

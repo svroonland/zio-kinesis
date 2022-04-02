@@ -14,7 +14,7 @@ object ProducerWithMetricsExample extends zio.ZIOAppDefault {
   val env = client.defaultAwsLayer
 
   val program = (for {
-    totalMetrics <- Ref.make(ProducerMetrics.empty).toManaged
+    totalMetrics <- Ref.make(ProducerMetrics.empty)
     producer     <- Producer
                       .make(
                         streamName,

@@ -516,7 +516,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                   .flatMap(events => done.succeed(()).when(testIsComplete(events)))
                                   .unit
 
-            _ <- ZManaged.finalizer {
+            _ <- ZIO.finalizer {
                    events.get
                      .map(
                        _.filterNot(_._3.isInstanceOf[PollComplete])
@@ -890,7 +890,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     ZIO.succeed((streamPrefix + "testStream", streamPrefix + "testApplication")).flatMap {
       case (streamName, applicationName) =>
         withStream(streamName, shards = nrShards) {
-          ZManaged.finalizer(deleteTable(applicationName).ignore).useDiscard { // Table may not have been created
+          ZIO.finalizer(deleteTable(applicationName).ignore).useDiscard { // Table may not have been created
             f(streamName, applicationName)
           }
         }

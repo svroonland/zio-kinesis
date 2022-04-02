@@ -15,7 +15,7 @@ private[zionative] class DefaultCheckpointer(
 ) extends Checkpointer
     with CheckpointerInternal {
   @nowarn("msg=a type was inferred to be `Any`")
-  def checkpoint[R](
+  override def checkpoint[R](
     retrySchedule: Schedule[Clock with R, Throwable, Any]
   ): ZIO[Clock with R, Either[Throwable, ShardLeaseLost.type], Unit] =
     doCheckpoint(false)

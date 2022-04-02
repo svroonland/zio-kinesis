@@ -60,7 +60,7 @@ private class DefaultLeaseCoordinator(
 
   def initialize(
     shards: Task[Map[ShardId, Shard.ReadOnly]]
-  ): ZManaged[Clock with Random, Throwable, Unit] = {
+  ): ZIO[Scope with Clock with Random, Throwable, Unit] = {
     val getLeasesOrInitializeLeaseTable = refreshLeases.catchSome { case _: ResourceNotFoundException =>
       table.createLeaseTableIfNotExists(applicationName) *> shards.flatMap(updateShards)
     }
@@ -76,17 +76,15 @@ private class DefaultLeaseCoordinator(
     // for all shards already, so just fork it. If there's new shards, the next `takeLeases` will
     // claim leases for them.
     (for {
-      _ <- getLeasesOrInitializeLeaseTable.toManaged
+      _ <- getLeasesOrInitializeLeaseTable
       // Initialization. If it fails, we will try in the loop
-      _ <- (takeLeases.ignore *> periodicRefreshAndTakeLeases).forkManaged.ensuringFirst(
+      _ <- (takeLeases.ignore *> periodicRefreshAndTakeLeases).forkScoped.withFinalizer(
              ZIO.logDebug("Shutting down refresh & take lease loop")
            )
-      _ <- repeatAndRetry(settings.renewInterval)(renewLeases).forkManaged
-             .ensuringFirst(ZIO.logDebug("Shutting down renew lease loop"))
+      _ <- repeatAndRetry(settings.renewInterval)(renewLeases).forkScoped
+             .withFinalizer(ZIO.logDebug("Shutting down renew lease loop"))
     } yield ())
-      .tapErrorCause(c =>
-        ZManaged.fromZIO(ZIO.logError("Error in DefaultLeaseCoordinator initialize") *> ZIO.logErrorCause(c))
-      )
+      .tapErrorCause(c => ZIO.logError("Error in DefaultLeaseCoordinator initialize") *> ZIO.logErrorCause(c))
   }
 
   override def updateShards(shards: Map[ShardId, Shard.ReadOnly]): UIO[Unit] =
@@ -434,19 +432,17 @@ private[zionative] object DefaultLeaseCoordinator {
     shards: Task[Map[ShardId, Shard.ReadOnly]],
     strategy: ShardAssignmentStrategy,
     initialPosition: InitialPosition
-  ): ZManaged[
-    Clock with Random with LeaseRepository,
-    Throwable,
-    LeaseCoordinator
-  ] =
+  ): ZIO[Scope with Clock with Random with LeaseRepository, Throwable, LeaseCoordinator] =
     (for {
-      acquiredLeases  <- Queue
-                           .bounded[(Lease, Promise[Nothing, Unit])](128)
-                           .toManagedWith(_.shutdown)
+      acquiredLeases  <- ZIO
+                           .acquireRelease(
+                             Queue
+                               .bounded[(Lease, Promise[Nothing, Unit])](128)
+                           )(_.shutdown)
                            .ensuring(ZIO.logDebug("Acquired leases queue shutdown"))
-      table           <- ZIO.service[LeaseRepository.Service].toManaged
-      state           <- Ref.make(State.empty).toManaged
-      serialExecution <- SerialExecution.keyed[String].ensuringFirst(ZIO.logDebug("Shutting down runloop"))
+      table           <- ZIO.service[LeaseRepository.Service]
+      state           <- Ref.make(State.empty)
+      serialExecution <- SerialExecution.keyed[String].withFinalizer(ZIO.logDebug("Shutting down runloop"))
       c                = new DefaultLeaseCoordinator(
                            table,
                            applicationName,
@@ -460,11 +456,11 @@ private[zionative] object DefaultLeaseCoordinator {
                            initialPosition
                          )
       _               <- c.initialize(shards).fork
-      _               <- ZManaged.finalizer(
+      _               <- ZIO.addFinalizer(
                            c.releaseLeases *> ZIO.logDebug("releaseLeases done")
                          ) // We need the runloop to be alive for this operation
     } yield c)
-      .tapErrorCause(c => ZIO.logSpan("Error creating DefaultLeaseCoordinator")(ZIO.logErrorCause(c)).toManaged)
+      .tapErrorCause(c => ZIO.logSpan("Error creating DefaultLeaseCoordinator")(ZIO.logErrorCause(c)))
 
   /**
    * A shard can be consumed when it itself has not been processed until the end yet (lease checkpoint = SHARD_END) and

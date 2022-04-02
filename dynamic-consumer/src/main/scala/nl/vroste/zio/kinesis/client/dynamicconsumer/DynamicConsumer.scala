@@ -34,9 +34,9 @@ object DynamicConsumer {
 
   val live: ZLayer[Kinesis with CloudWatch with DynamoDb, Nothing, DynamicConsumer] = {
     for {
-      kinesis    <- ZManaged.service[Kinesis]
-      cloudwatch <- ZManaged.service[CloudWatch]
-      dynamodb   <- ZManaged.service[DynamoDb]
+      kinesis    <- ZIO.service[Kinesis]
+      cloudwatch <- ZIO.service[CloudWatch]
+      dynamodb   <- ZIO.service[DynamoDb]
     } yield new DynamicConsumerLive(kinesis.api, cloudwatch.api, dynamodb.api): DynamicConsumer
   }.toLayer
 

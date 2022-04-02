@@ -35,8 +35,8 @@ private[dynamicconsumer] object Checkpointer {
           case State(Some(sequenceNumber), _, _, _) =>
             for {
 //              _ <- ZIO.logTrace(s"about to checkpoint ${sequenceNumber}")
-              _ <- zio.ZIO.blocking {
-                     Task(
+              _ <- ZIO.blocking {
+                     Task.attempt(
                        kclCheckpointer
                          .checkpoint(sequenceNumber.sequenceNumber, sequenceNumber.subSequenceNumber.getOrElse(0L))
                      )

@@ -48,7 +48,7 @@ final case class PutRecordsAggregatedBatchForShard(
     payloadSize <= maxPayloadSizePerRecord
 
   def toProduceRequest(digest: MessageDigest): UIO[Option[ProduceRequest]] =
-    UIO {
+    UIO.succeed {
       entries.headOption.flatMap { firstEntry =>
         // Do not inline to avoid capturing the entire chunk in the closure below
         val completes = entries.map(_.complete)

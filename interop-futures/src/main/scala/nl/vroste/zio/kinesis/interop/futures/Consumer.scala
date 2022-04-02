@@ -22,7 +22,7 @@ import zio.{ Clock, Random }
  * A scala-native Future based interface to the zio-kinesis Consumer
  */
 class Consumer private (
-  runtime: zio.Runtime.Managed[Clock with Random with Kinesis with LeaseRepository]
+  runtime: zio.Runtime.Scoped[Clock with Random with Kinesis with LeaseRepository]
 ) {
 
   /**
@@ -69,7 +69,7 @@ class Consumer private (
         fetchMode,
         leaseCoordinationSettings,
         initialPosition,
-        emitDiagnostic = e => ZIO(emitDiagnostic(e)).orDie,
+        emitDiagnostic = e => ZIO.attempt(emitDiagnostic(e)).orDie,
         shardAssignmentStrategy,
         checkpointBatchSize,
         zio.Duration.fromScala(checkpointDuration)

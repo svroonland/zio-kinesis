@@ -267,14 +267,17 @@ private class DynamoDbLeaseRepository(client: DynamoDb, timeout: Duration) exten
     Try {
       def getValue(key: String): Option[AttributeValue] = item.get(AttributeName(key))
       Lease(
-        key = getValue("leaseKey").get.s.get,
-        owner = getValue("leaseOwner").flatMap(_.s),
-        counter = getValue("leaseCounter").flatMap(_.n).get.toLong,
+        key = getValue("leaseKey").get.s.toOption.get,
+        owner = getValue("leaseOwner").flatMap(_.s.toOption),
+        counter = getValue("leaseCounter").flatMap(_.n.toOption).get.toLong,
         checkpoint = getValue("checkpoint")
           .filterNot(_.nul.isDefined)
-          .flatMap(_.s)
+          .flatMap(_.s.toOption)
           .map(
-            toSequenceNumberOrSpecialCheckpoint(_, getValue("checkpointSubSequenceNumber").flatMap(_.n).get.toLong)
+            toSequenceNumberOrSpecialCheckpoint(
+              _,
+              getValue("checkpointSubSequenceNumber").flatMap(_.n.toOption).get.toLong
+            )
           ),
         parentShardIds = getValue("parentShardIds").map(_.ss.toList.flatten).getOrElse(List.empty)
       )
