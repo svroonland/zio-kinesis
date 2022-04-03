@@ -52,7 +52,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
         withRandomStreamAndApplicationName(nrShards) { (streamName, applicationName) =>
           for {
             _        <- ZIO.logInfo("Starting producer")
-            producer <- produceSampleRecords(streamName, nrRecords, chunkSize = 500).fork
+            _        <- produceSampleRecords(streamName, nrRecords, chunkSize = 500)
             _        <- ZIO.logInfo("Starting consumer")
             records  <- Consumer
                           .shardedStream(
@@ -62,16 +62,18 @@ object NativeConsumerTest extends ZIOSpecDefault {
                             fetchMode = FetchMode.Polling(batchSize = 1000),
                             emitDiagnostic = onDiagnostic("worker1")
                           )
-                          .flatMapPar(Int.MaxValue) { case (shard @ _, shardStream, checkpointer) =>
-                            shardStream.tap(checkpointer.stage)
+                          .flatMapPar(Int.MaxValue) { case (shard @ _, shardStream, checkpointer @ _) =>
+                            shardStream
+                              .tap(checkpointer.stage)
                           }
                           .take(nrRecords.toLong)
+                          .zipWithIndex
+                          .map(_._1)
                           .runCollect
             shardIds <- Kinesis
                           .describeStream(DescribeStreamRequest(StreamName(streamName)))
                           .mapError(_.toThrowable)
                           .map(_.streamDescription.shards.map(_.shardId))
-            _        <- producer.interrupt
 
           } yield assert(records.map(r => ShardId(r.shardId)).toSet)(equalTo(shardIds.toSet))
         }

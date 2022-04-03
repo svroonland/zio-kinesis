@@ -253,7 +253,7 @@ object Consumer {
         .describeStream(DescribeStreamRequest(StreamName(streamName)))
         .mapError(_.toThrowable)
         .map(_.streamDescription)
-        .fork
+        .forkScoped
         .flatMap { streamDescriptionFib =>
           val fetchShards = streamDescriptionFib.join.flatMap { streamDescription =>
             if (!streamDescription.hasMoreShards)

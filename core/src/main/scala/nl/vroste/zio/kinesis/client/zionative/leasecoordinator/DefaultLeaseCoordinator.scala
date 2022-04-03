@@ -455,7 +455,7 @@ private[zionative] object DefaultLeaseCoordinator {
                            strategy,
                            initialPosition
                          )
-      _               <- c.initialize(shards).fork
+      _               <- c.initialize(shards).forkScoped
       _               <- ZIO.addFinalizer(
                            c.releaseLeases *> ZIO.logDebug("releaseLeases done")
                          ) // We need the runloop to be alive for this operation
@@ -506,8 +506,15 @@ private[zionative] object DefaultLeaseCoordinator {
         }
     }
 
-  private def repeatAndRetry[R, E, A](interval: Duration)(effect: ZIO[R, E, A]) =
-    effect.repeat(Schedule.fixed(interval)).delay(interval).retry(Schedule.forever)
+  private def repeatAndRetry[R, E, A](
+    interval: Duration
+  )(effect: ZIO[R, E, A]): ZIO[R with Clock, E, Long] =
+    ZIO.interruptibleMask { restore =>
+      restore(effect)
+        .repeat(Schedule.fixed(interval))
+        .delay(interval)
+        .retry(Schedule.forever)
+    }
 
   final case class LeaseState(lease: Lease, completed: Option[Promise[Nothing, Unit]], lastUpdated: Instant) {
     def update(updatedLease: Lease, now: Instant) =
