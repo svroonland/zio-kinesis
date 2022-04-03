@@ -11,7 +11,7 @@ object ProducerWithMetricsExample extends zio.ZIOAppDefault {
   val streamName      = "my_stream"
   val applicationName = "my_awesome_zio_application"
 
-  val env = client.defaultAwsLayer
+  val env = client.defaultAwsLayer ++ Scope.default
 
   val program = (for {
     totalMetrics <- Ref.make(ProducerMetrics.empty)
@@ -22,7 +22,7 @@ object ProducerWithMetricsExample extends zio.ZIOAppDefault {
                         ProducerSettings(),
                         metrics => totalMetrics.updateAndGet(_ + metrics).flatMap(m => printLine(m.toString).orDie)
                       )
-  } yield (producer, totalMetrics)).use { case (producer, totalMetrics) =>
+  } yield (producer, totalMetrics)).flatMap { case (producer, totalMetrics) =>
     val records = (1 to 100).map(j => ProducerRecord(s"key${j}", s"message${j}"))
 
     for {
@@ -33,6 +33,5 @@ object ProducerWithMetricsExample extends zio.ZIOAppDefault {
     } yield ()
   }
 
-  override def run: ZIO[zio.ZEnv with ZIOAppArgs, Any, Any] =
-    program.provideCustomLayer(env).exitCode
+  override def run = program.provideCustomLayer(env).exitCode
 }

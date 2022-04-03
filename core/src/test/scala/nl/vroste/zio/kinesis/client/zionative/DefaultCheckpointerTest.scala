@@ -11,7 +11,7 @@ import scala.annotation.nowarn
 import scala.concurrent.TimeoutException
 
 @nowarn("msg=a type was inferred to be `Any`")
-object DefaultCheckpointerTest extends DefaultRunnableSpec {
+object DefaultCheckpointerTest extends ZIOSpecDefault {
   type Checkpoint = Either[SpecialCheckpoint, ExtendedSequenceNumber]
   val record1 = Record("shard1", "0", Instant.now, "bla", "bla", None, None, None, false)
   val record2 = Record("shard1", "1", Instant.now, "bla", "bla", None, None, None, false)

@@ -22,21 +22,23 @@ object TestUtil {
   def withStream[R, A](name: String, shards: Int)(
     f: ZIO[R, Throwable, A]
   ): ZIO[Kinesis with Clock with Console with R, Throwable, A] =
-    createStream(name, shards)
-      .tapZIO(_ => getShards(name))
-      .useDiscard(f)
+    ZIO.scoped[Kinesis with Clock with Console with R] {
+      (createStream(name, shards) <* getShards(name)) *> f
+    }
 
   def withRandomStreamEnv[R, A](shards: Int = 2)(
     f: (String, String) => ZIO[R, Throwable, A]
   ): ZIO[Kinesis with DynamoDb with Clock with Console with Random with R, Throwable, A] =
-    (for {
-      streamName      <- Random.nextUUID.map("zio-test-stream-" + _.toString)
-      applicationName <- Random.nextUUID.map("zio-test-" + _.toString)
-      _               <- createStream(streamName, shards)
-      _               <- getShards(streamName)
-      _               <- ZIO.finalizer(DynamoDb.deleteTable(DeleteTableRequest(TableName(applicationName))).ignore)
-    } yield (streamName, applicationName)).use { case (streamName, applicationName) =>
-      f(streamName, applicationName).fork.flatMap(_.join)
+    ZIO.scoped[Kinesis with DynamoDb with Clock with Console with Random with R] {
+      (for {
+        streamName      <- Random.nextUUID.map("zio-test-stream-" + _.toString)
+        applicationName <- Random.nextUUID.map("zio-test-" + _.toString)
+        _               <- createStream(streamName, shards)
+        _               <- getShards(streamName)
+        _               <- ZIO.addFinalizer(DynamoDb.deleteTable(DeleteTableRequest(TableName(applicationName))).ignore)
+      } yield (streamName, applicationName)).flatMap { case (streamName, applicationName) =>
+        f(streamName, applicationName).fork.flatMap(_.join)
+      }
     }
 
   def getShards(name: String): ZIO[Kinesis with Clock, Throwable, Chunk[Shard.ReadOnly]] =
@@ -50,23 +52,22 @@ object TestUtil {
   def createStream(
     streamName: String,
     nrShards: Int
-  ): ZIO[Scope with Console with Clock with Kinesis, Throwable, Unit] = {
-    createStreamUnmanaged(streamName, nrShards).toManagedWith(_ =>
+  ): ZIO[Scope with Console with Clock with Kinesis, Throwable, Unit] =
+    ZIO.acquireRelease(createStreamUnmanaged(streamName, nrShards))(_ =>
       Kinesis
-        .deleteStream(DeleteStreamRequest(StreamName(streamName), enforceConsumerDeletion = Some(BooleanObject(true))))
+        .deleteStream(DeleteStreamRequest(StreamName(streamName), enforceConsumerDeletion = Some(true)))
         .mapError(_.toThrowable)
         .catchSome { case _: ResourceNotFoundException =>
           ZIO.unit
         }
         .orDie
-    )
-  } <* ZIO.fromZIO(waitForStreamActive(streamName))
+    ) <* waitForStreamActive(streamName)
 
   def waitForStreamActive(streamName: String): ZIO[Kinesis with Clock, Throwable, Unit] =
     Kinesis
       .describeStream(DescribeStreamRequest(StreamName(streamName)))
       .mapError(_.toThrowable)
-      .tap(r => Task(println(r)))
+      .tap(r => Task.succeed(println(r)))
       .retryWhile {
         case _: ResourceNotFoundException => true
         case _                            => false
@@ -112,22 +113,23 @@ object TestUtil {
     maxRecordSize: Int,
     producerSettings: ProducerSettings = ProducerSettings()
   ): ZIO[Random with Console with Clock with Kinesis with Any, Throwable, Unit] =
-    Ref
-      .make(ProducerMetrics.empty)
-      .flatMap { totalMetrics =>
-        Producer
-          .make(
-            streamName,
-            Serde.bytes,
-            producerSettings,
-            metrics =>
-              totalMetrics
-                .updateAndGet(_ + metrics)
-                .flatMap(m => printLine(s"""${metrics.toString}
-                                           |Total metrics: ${m.toString}""".stripMargin).orDie)
-          )
-      }
-      .use(massProduceRecords(_, nrRecords, produceRate = Some(produceRate), maxRecordSize))
+    ZIO.scoped {
+      for {
+        totalMetrics <- Ref.make(ProducerMetrics.empty)
+        producer     <- Producer
+                          .make(
+                            streamName,
+                            Serde.bytes,
+                            producerSettings,
+                            metrics =>
+                              totalMetrics
+                                .updateAndGet(_ + metrics)
+                                .flatMap(m => printLine(s"""${metrics.toString}
+                                                       |Total metrics: ${m.toString}""".stripMargin).orDie)
+                          )
+        _            <- massProduceRecords(producer, nrRecords, produceRate = Some(produceRate), maxRecordSize)
+      } yield ()
+    }
 
   val defaultChunkSize = 10000
 
@@ -170,7 +172,7 @@ object TestUtil {
     )
 
     val records = ZStream
-      .repeatZIOChunk(UIO(chunk))
+      .repeatZIOChunk(UIO.succeed(chunk))
       .take(nrRecords.toLong)
       .viaFunction(throttle(produceRate, _))
     massProduceRecords(producer, records)
@@ -215,7 +217,7 @@ object TestUtil {
 
   def massProduceRecords[R, T](
     producer: Producer[T],
-    records: ZStream[R, Nothing, ProducerRecord[T]]
+    records: ZStream[R, Throwable, ProducerRecord[T]]
   ): ZIO[Clock with R, Throwable, Unit] =
     records
       .mapChunks(Chunk.single)

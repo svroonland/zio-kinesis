@@ -4,7 +4,7 @@ import zio.test.Assertion._
 import zio.test._
 import zio._
 
-object UtilTest extends DefaultRunnableSpec {
+object UtilTest extends ZIOSpecDefault {
 
   override def spec =
     suite("Util")(

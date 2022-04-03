@@ -22,12 +22,7 @@ import scala.collection.compat._
 import java.time.Instant
 import java.{ util => ju }
 
-object NativeConsumerTest extends DefaultRunnableSpec {
-  override def runner: TestRunner[TestEnvironment, Any] =
-    defaultTestRunner.withRuntimeConfig(
-      _ @@ RuntimeConfigAspect.addLogger(ZLogger.defaultString.map(println(_)).filterLogLevel(_ > LogLevel.Debug))
-    )
-
+object NativeConsumerTest extends ZIOSpecDefault {
   /*
   - [X] It must retrieve records from all shards
   - [X] Support both polling and enhanced fanout
@@ -198,7 +193,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                   )
                                   .flatMapPar(Int.MaxValue) { case (shard @ _, shardStream, checkpointer) =>
                                     shardStream
-                                      // .tap(r => UIO(println(s"Worker 1 got record on shard ${r.shardId}")))
+                                      // .tap(r => UIO.succeed(println(s"Worker 1 got record on shard ${r.shardId}")))
                                       .tap(checkpointer.stage)
                                       .tap(_ => consumer1Started.succeed(()))
                                       .aggregateAsyncWithin(
@@ -275,7 +270,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                   ZStream.empty
                                 case Left(e)  => ZStream.fail(e)
                               }
-                              .ensuring(UIO(println(s"Shard stream worker 1 ${shard} completed")))
+                              .ensuring(UIO.succeed(println(s"Shard stream worker 1 ${shard} completed")))
                           }
                           .tap(_ => ZIO.logInfo("WORKER1 GOT A BATCH"))
                           .take(10)
@@ -303,7 +298,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                     ZStream.empty
                                   case Left(e)  => ZStream.fail(e)
                                 }
-                                .ensuring(UIO(println(s"Shard stream worker 2 ${shard} completed")))
+                                .ensuring(UIO.succeed(println(s"Shard stream worker 2 ${shard} completed")))
                           }
                           .tap(_ => ZIO.logInfo("WORKER2 GOT A BATCH"))
                           .take(10)
@@ -417,7 +412,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                   _.filterNot(_._3.isInstanceOf[PollComplete])
                     .filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
                 )
-                .tap(allEvents => UIO(println(allEvents.mkString("\n"))))
+                .tap(allEvents => UIO.succeed(println(allEvents.mkString("\n"))))
             )
             allEvents <- events.get.map(
                            _.filterNot(_._3.isInstanceOf[PollComplete])
@@ -516,14 +511,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                   .flatMap(events => done.succeed(()).when(testIsComplete(events)))
                                   .unit
 
-            _ <- ZIO.finalizer {
-                   events.get
-                     .map(
-                       _.filterNot(_._3.isInstanceOf[PollComplete])
-                         .filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
-                     )
-                     .tap(allEvents => UIO(println(allEvents.mkString("\n"))))
-                 }.useDiscard {
+            _ <- (
                    ZStream
                      .mergeAll(3)(
                        // The zombie consumer: not updating checkpoints and not renewing leases
@@ -544,7 +532,15 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                      )
                      .runDrain
                      .tapErrorCause(c => ZIO.logError(s"${c.prettyPrint}"))
-                 } raceFirst done.await
+                   )
+                   .withFinalizer {
+                     events.get
+                       .map(
+                         _.filterNot(_._3.isInstanceOf[PollComplete])
+                           .filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
+                       )
+                       .tap(allEvents => UIO.succeed(println(allEvents.mkString("\n"))))
+                   } raceFirst done.await
           } yield assertCompletes
         }
       },
@@ -643,7 +639,9 @@ object NativeConsumerTest extends DefaultRunnableSpec {
           for {
             producer      <- produceSampleRecords(streamName, nrRecords, chunkSize = 50, throttle = Some(1.second)).fork
             stream        <-
-              consumer("worker1", e => UIO(println(e.toString))).runCollect.tapErrorCause(e => UIO(println(e))).fork
+              consumer("worker1", e => UIO.succeed(println(e.toString))).runCollect
+                .tapErrorCause(e => UIO.succeed(println(e)))
+                .fork
             _             <- ZIO.sleep(20.seconds)
             _              = println("Resharding")
             _             <- Kinesis
@@ -701,7 +699,9 @@ object NativeConsumerTest extends DefaultRunnableSpec {
             producer <- produceSampleRecords(streamName, nrRecords, chunkSize = 50, throttle = Some(1.second)).fork
 
             stream  <-
-              consumer("worker1", e => UIO(println(e.toString))).runCollect.tapErrorCause(e => UIO(println(e))).fork
+              consumer("worker1", e => UIO.succeed(println(e.toString))).runCollect
+                .tapErrorCause(e => UIO.succeed(println(e)))
+                .fork
             _       <- ZIO.sleep(10.seconds)
             _        = println("Resharding")
             _       <- Kinesis
@@ -718,7 +718,9 @@ object NativeConsumerTest extends DefaultRunnableSpec {
             shards  <- TestUtil.getShards(streamName)
             _        = println(shards.mkString(", "))
             stream2 <-
-              consumer("worker1", e => UIO(println(e.toString))).runCollect.tapErrorCause(e => UIO(println(e))).fork
+              consumer("worker1", e => UIO.succeed(println(e.toString))).runCollect
+                .tapErrorCause(e => UIO.succeed(println(e)))
+                .fork
             _       <- ZIO.sleep(30.seconds)
             _       <- stream2.interrupt
             _       <- producer.interrupt
@@ -736,7 +738,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                 streamName,
                 applicationName,
                 Serde.asciiString,
-                emitDiagnostic = e => UIO(println(e.toString))
+                emitDiagnostic = e => UIO.succeed(println(e.toString))
               )
               .flatMapPar(nrShards) { case (shard @ _, shardStream, checkpointer @ _) => shardStream }
               .take(nrRecords.toLong)
@@ -761,7 +763,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                 streamName,
                 applicationName,
                 Serde.asciiString,
-                emitDiagnostic = e => UIO(println(e.toString))
+                emitDiagnostic = e => UIO.succeed(println(e.toString))
               )
               .mapZIOParUnordered(nrShards) { case (shard @ _, shardStream, checkpointer @ _) =>
                 shardStream
@@ -790,7 +792,10 @@ object NativeConsumerTest extends DefaultRunnableSpec {
 //      TestAspect.sequential @@ // For CircleCI
 //      TestAspect.nonFlaky(10)
       TestAspect.timeoutWarning(45.seconds) @@
-      TestAspect.timeout(120.seconds)
+      TestAspect.timeout(120.seconds) @@
+      TestAspect.runtimeConfig(
+        RuntimeConfigAspect.addLogger(ZLogger.default.map(println(_)).filterLogLevel(_ > LogLevel.Debug))
+      )
 
   val useAws = Runtime.default.unsafeRun(System.envOrElse("ENABLE_AWS", "0")).toInt == 1
 
@@ -806,10 +811,10 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     throttle: Option[Duration] = None,
     indexStart: Int = 1,
     aggregated: Boolean = false
-  ): ZIO[Kinesis with Clock with Any, Throwable, Chunk[ProduceResponse]] =
+  ): ZIO[Kinesis with Clock with Any, Throwable, Chunk[ProduceResponse]] = ZIO.scoped {
     Producer
       .make(streamName, Serde.asciiString, ProducerSettings(maxParallelRequests = 1, aggregate = aggregated))
-      .use { producer =>
+      .flatMap { producer =>
         val records =
           (indexStart until (nrRecords + indexStart)).map(i => ProducerRecord(s"key$i", s"msg$i"))
         ZStream
@@ -826,14 +831,15 @@ object NativeConsumerTest extends DefaultRunnableSpec {
           .runCollect
           .map(Chunk.fromIterable)
       }
+  }
 
   def produceSampleRecordsMassivelyParallel(
     streamName: String,
     nrRecords: Int,
     chunkSize: Int = 100,
     indexStart: Int = 1
-  ): ZIO[Kinesis with Clock with Any, Throwable, Chunk[ProduceResponse]] =
-    Producer.make(streamName, Serde.asciiString).use { producer =>
+  ): ZIO[Kinesis with Clock with Any, Throwable, Chunk[ProduceResponse]] = ZIO.scoped {
+    Producer.make(streamName, Serde.asciiString).flatMap { producer =>
       val records =
         (indexStart until (nrRecords + indexStart)).map(i => ProducerRecord(s"key$i", s"msg$i"))
       ZStream
@@ -852,6 +858,7 @@ object NativeConsumerTest extends DefaultRunnableSpec {
         .runCollect
         .map(Chunk.fromIterable)
     }
+  }
 
   def onDiagnostic(worker: String): DiagnosticEvent => UIO[Unit] = {
     case _: PollComplete => UIO.unit
@@ -890,8 +897,10 @@ object NativeConsumerTest extends DefaultRunnableSpec {
     ZIO.succeed((streamPrefix + "testStream", streamPrefix + "testApplication")).flatMap {
       case (streamName, applicationName) =>
         withStream(streamName, shards = nrShards) {
-          ZIO.finalizer(deleteTable(applicationName).ignore).useDiscard { // Table may not have been created
-            f(streamName, applicationName)
+          ZIO.scoped[R with Clock with LeaseRepository.Service] {
+            ZIO.addFinalizer(deleteTable(applicationName).ignore) *> { // Table may not have been created
+              f(streamName, applicationName)
+            }
           }
         }
     }

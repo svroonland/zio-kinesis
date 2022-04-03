@@ -10,7 +10,7 @@ import zio.{ durationInt, Chunk, Queue, Ref }
 
 import java.time.OffsetDateTime
 
-object DynamicConsumerFakeTest extends DefaultRunnableSpec {
+object DynamicConsumerFakeTest extends ZIOSpecDefault {
   private type Shard = ZStream[Any, Nothing, (String, ZStream[Any, Throwable, Chunk[Byte]])]
 
   private val now = OffsetDateTime.parse("1970-01-01T00:00:00Z")

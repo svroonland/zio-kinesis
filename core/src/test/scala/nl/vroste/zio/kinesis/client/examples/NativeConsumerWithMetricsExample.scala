@@ -17,7 +17,7 @@ object NativeConsumerWithMetricsExample extends zio.ZIOAppDefault {
   override def run: ZIO[zio.ZEnv with ZIOAppArgs, Any, Any] =
     CloudWatchMetricsPublisher
       .make(applicationName, workerIdentifier)
-      .use { metrics =>
+      .flatMap { metrics =>
         Consumer
           .shardedStream(
             streamName = "my-stream",
@@ -35,8 +35,8 @@ object NativeConsumerWithMetricsExample extends zio.ZIOAppDefault {
           .runDrain
       }
       .provideCustomLayer(
-        (HttpClientBuilder.make() >>> Consumer.defaultEnvironment) ++ ZLayer
-          .succeed(metricsConfig)
+        (HttpClientBuilder.make() >>> Consumer.defaultEnvironment) ++
+          ZLayer.succeed(metricsConfig) ++ Scope.default
       )
       .exitCode
 

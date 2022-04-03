@@ -8,7 +8,7 @@ import zio.aws.kinesis.model.{ HashKeyRange, SequenceNumberRange, Shard }
 import zio.test.Assertion._
 import zio.test._
 
-object LeaseCoordinatorTest extends DefaultRunnableSpec {
+object LeaseCoordinatorTest extends ZIOSpecDefault {
   def toShardMapWithStringKey(shards: Seq[Shard.ReadOnly]): Map[String, Shard.ReadOnly] =
     shards.map(s => ShardId.unwrap(s.shardId) -> s).toMap
 

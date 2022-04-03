@@ -4,9 +4,9 @@ import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.Lease
 import nl.vroste.zio.kinesis.client.zionative.ShardAssignmentStrategy.leasesToTake
 import zio.Random
 import zio.test.Assertion._
-import zio.test.{ DefaultRunnableSpec, Gen, _ }
+import zio.test.{ Gen, ZIOSpecDefault, _ }
 
-object ShardAssignmentStrategyTest extends DefaultRunnableSpec {
+object ShardAssignmentStrategyTest extends ZIOSpecDefault {
   val leaseDistributionGen = leases(Gen.int(2, 100), Gen.int(2, 10))
 
   def workerId(w: Int): String = s"worker-${w}"

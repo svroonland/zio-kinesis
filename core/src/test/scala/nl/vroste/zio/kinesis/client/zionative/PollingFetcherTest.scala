@@ -23,7 +23,7 @@ import zio.test._
 
 import java.nio.charset.Charset
 
-object PollingFetcherTest extends DefaultRunnableSpec {
+object PollingFetcherTest extends ZIOSpecDefault {
 
   /**
    * PollingFetcher must:
@@ -48,7 +48,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
         (for {
           chunksFib <- PollingFetcher
                          .make(StreamName(StreamName("my-stream-1")), FetchMode.Polling(10), _ => UIO.unit)
-                         .use { fetcher =>
+                         .flatMap { fetcher =>
                            fetcher
                              .shardRecordStream(
                                ShardId(ShardId("shard1")),
@@ -62,7 +62,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
                          .fork
           chunks    <- chunksFib.join
         } yield assert(chunks.headOption)(isSome(hasSize(equalTo(batchSize)))))
-          .provideSomeLayer[ZEnv](ZLayer.succeed(stubClient(records)))
+          .provideSomeLayer[ZEnv with Scope](ZLayer.succeed(stubClient(records)))
       },
       test("immediately polls again when there are more records available") {
         val batchSize = 10
@@ -73,7 +73,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
         (for {
             chunksFib <- PollingFetcher
                            .make(StreamName("my-stream-1"), FetchMode.Polling(batchSize), _ => UIO.unit)
-                           .use { fetcher =>
+                           .flatMap { fetcher =>
                              fetcher
                                .shardRecordStream(ShardId("shard1"), StartingPosition(ShardIteratorType.TRIM_HORIZON))
                                .mapChunks(Chunk.single)
@@ -83,7 +83,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
                            .fork
             _         <- chunksFib.join
           } yield assertCompletes // The fact that we don't have to adjust our test clock suffices
-        ).provideSomeLayer[ZEnv](ZLayer.succeed(stubClient(records)))
+        ).provideSomeLayer[ZEnv with Scope](ZLayer.succeed(stubClient(records)))
       },
       test("delay polling when there are no more records available") {
         val batchSize    = 10
@@ -100,7 +100,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
                                            FetchMode.Polling(batchSize, Polling.dynamicSchedule(pollInterval)),
                                            _ => UIO.unit
                                          )
-                                         .use { fetcher =>
+                                         .flatMap { fetcher =>
                                            fetcher
                                              .shardRecordStream(ShardId("shard1"), StartingPosition(ShardIteratorType.TRIM_HORIZON))
                                              .mapChunks(Chunk.single)
@@ -116,7 +116,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
           _                         <- chunksFib.join
         } yield assert(chunksReceivedImmediately)(equalTo(nrBatches)) && assert(chunksReceivedLater)(
           equalTo(nrBatches + 1)
-        )).provideSomeLayer[ZEnv with TestClock](ZLayer.succeed(stubClient(records)))
+        )).provideSomeLayer[ZEnv with TestClock with Scope](ZLayer.succeed(stubClient(records)))
       },
       test("make no more than 5 calls per second per shard to GetRecords") {
         val batchSize    = 10
@@ -133,7 +133,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
                                            FetchMode.Polling(batchSize, Polling.dynamicSchedule(pollInterval)),
                                            _ => UIO.unit
                                          )
-                                         .use { fetcher =>
+                                         .flatMap { fetcher =>
                                            fetcher
                                              .shardRecordStream(ShardId("shard1"), StartingPosition(ShardIteratorType.TRIM_HORIZON))
                                              .mapChunks(Chunk.single)
@@ -149,7 +149,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
           _                         <- chunksFib.join
         } yield assert(chunksReceivedImmediately)(equalTo(5L)) && assert(chunksReceivedLater)(
           equalTo(nrBatches)
-        )).provideSomeLayer[ZEnv with TestClock](ZLayer.succeed(stubClient(records)))
+        )).provideSomeLayer[ZEnv with TestClock with Scope](ZLayer.succeed(stubClient(records)))
       },
       test("make the next call with the previous response's nextShardIterator") {
         val batchSize = 10
@@ -160,7 +160,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
         (for {
           fetched      <- PollingFetcher
                             .make(StreamName("my-stream-1"), FetchMode.Polling(batchSize), _ => UIO.unit)
-                            .use { fetcher =>
+                            .flatMap { fetcher =>
                               fetcher
                                 .shardRecordStream(ShardId("shard1"), StartingPosition(ShardIteratorType.TRIM_HORIZON))
                                 .mapChunks(Chunk.single)
@@ -170,7 +170,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
                             }
           partitionKeys = fetched.map(_.partitionKey)
         } yield assert(partitionKeys)(equalTo(records.map(_.partitionKey))))
-          .provideSomeLayer[ZEnv](ZLayer.succeed(stubClient(records)))
+          .provideSomeLayer[ZEnv with Scope](ZLayer.succeed(stubClient(records)))
       },
       test("end the shard stream when the shard has ended") {
         val batchSize = 10
@@ -180,7 +180,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
         (for {
           _ <- PollingFetcher
                  .make(StreamName("my-stream-1"), FetchMode.Polling(batchSize), _ => UIO.unit)
-                 .use { fetcher =>
+                 .flatMap { fetcher =>
                    fetcher
                      .shardRecordStream(ShardId("shard1"), StartingPosition(ShardIteratorType.TRIM_HORIZON))
                      .mapChunks(Chunk.single)
@@ -191,7 +191,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
                      .runCollect
                  }
         } yield assertCompletes)
-          .provideSomeLayer[ZEnv](
+          .provideSomeLayer[ZEnv with Scope](
             ZLayer.succeed(stubClient(records, endAfterRecords = true))
           )
       },
@@ -206,7 +206,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
 
           _             <- PollingFetcher
                              .make(StreamName("my-stream-1"), FetchMode.Polling(batchSize), emitDiagnostic)
-                             .use { fetcher =>
+                             .flatMap { fetcher =>
                                fetcher
                                  .shardRecordStream(ShardId("shard1"), StartingPosition(ShardIteratorType.TRIM_HORIZON))
                                  .mapChunks(Chunk.single)
@@ -215,7 +215,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
                              }
           emittedEvents <- events.get
         } yield assert(emittedEvents)(forall(isSubtype[PollComplete](anything))))
-          .provideSomeLayer[ZEnv](ZLayer.succeed(stubClient(records)))
+          .provideSomeLayer[ZEnv with Scope](ZLayer.succeed(stubClient(records)))
       },
       test("retry after some time when throttled") {
         val batchSize    = 10
@@ -234,7 +234,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
                                            FetchMode.Polling(batchSize, Polling.dynamicSchedule(pollInterval)),
                                            _ => UIO.unit
                                          )
-                                         .use { fetcher =>
+                                         .flatMap { fetcher =>
                                            fetcher
                                              .shardRecordStream(ShardId("shard1"), StartingPosition(ShardIteratorType.TRIM_HORIZON))
                                              .mapChunks(Chunk.single)
@@ -242,7 +242,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
                                              .take(nrBatches)
                                              .runDrain
                                          }
-                                         .provideSomeLayer[ZEnv with TestClock](
+                                         .provideSomeLayer[ZEnv with TestClock with Scope](
                                            ZLayer.succeed(stubClient(records, doThrottle = doThrottle))
                                          )
                                          .fork
@@ -255,7 +255,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
           equalTo(nrBatches)
         ))
       }
-    ).provideCustomLayer(TestClock.default)
+    ).provideCustomLayer(TestClock.default ++ Scope.default)
 
   private def makeRecords(nrRecords: Long): Seq[Record] =
     (0 until nrRecords.toInt).map { i =>
@@ -270,7 +270,7 @@ object PollingFetcherTest extends DefaultRunnableSpec {
   private def stubClient(
     records: Seq[Record],
     endAfterRecords: Boolean = false,
-    doThrottle: (String, Int) => UIO[Boolean] = (_, _) => UIO(false)
+    doThrottle: (String, Int) => UIO[Boolean] = (_, _) => UIO.succeed(false)
   ): Kinesis =
     new StubClient { self =>
       override def withAspect[R](newAspect: AwsCallAspect[R], r: ZEnvironment[R]): Kinesis = self

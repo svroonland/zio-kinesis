@@ -4,11 +4,11 @@ import zio.{ ZIO, _ }
 import zio.test.Assertion._
 import zio.test._
 
-object ShardThrottlerTest extends DefaultRunnableSpec {
+object ShardThrottlerTest extends ZIOSpecDefault {
   override def spec =
     suite("ShardThrottler")(
       test("does not throtle for zero throughput") {
-        DynamicThrottler.make(1.second).use { throttler =>
+        DynamicThrottler.make(1.second).flatMap { throttler =>
           for {
             _    <- TestClock.adjust(1.second)
             rate <- throttler.throughputFactor
@@ -16,7 +16,7 @@ object ShardThrottlerTest extends DefaultRunnableSpec {
         }
       },
       test("does not throtle for only successes") {
-        DynamicThrottler.make(1.second).use { throttler =>
+        DynamicThrottler.make(1.second).flatMap { throttler =>
           for {
             _    <- ZIO.collectAllDiscard(ZIO.replicate(100)(throttler.addSuccess))
             _    <- TestClock.adjust(1.second)
@@ -26,7 +26,7 @@ object ShardThrottlerTest extends DefaultRunnableSpec {
       },
       test("throttles to the expected values") {
         val errorRate = 0.1
-        DynamicThrottler.make(1.second, errorRate).use { throttler =>
+        DynamicThrottler.make(1.second, errorRate).flatMap { throttler =>
           for {
             _     <- ZIO.collectAllDiscard(ZIO.replicate(100)(throttler.addSuccess))
             _     <- ZIO.collectAllDiscard(ZIO.replicate(100)(throttler.addFailure))
@@ -41,7 +41,7 @@ object ShardThrottlerTest extends DefaultRunnableSpec {
       },
       test("throttles the correct shard") {
         val errorRate = 0.1
-        ShardThrottler.make(1.second, errorRate).use { throttler =>
+        ShardThrottler.make(1.second, errorRate).flatMap { throttler =>
           for {
             _      <- ZIO.collectAllDiscard(ZIO.replicate(100)(throttler.addSuccess("1")))
             _      <- ZIO.collectAllDiscard(ZIO.replicate(100)(throttler.addFailure("1")))

@@ -10,9 +10,9 @@ object ProducerExample extends zio.ZIOAppDefault {
   val streamName      = "my_stream"
   val applicationName = "my_awesome_zio_application"
 
-  val env = client.defaultAwsLayer
+  val env = client.defaultAwsLayer ++ Scope.default
 
-  val program = Producer.make(streamName, Serde.asciiString).use { producer =>
+  val program = Producer.make(streamName, Serde.asciiString).flatMap { producer =>
     val record = ProducerRecord("key1", "message1")
 
     for {

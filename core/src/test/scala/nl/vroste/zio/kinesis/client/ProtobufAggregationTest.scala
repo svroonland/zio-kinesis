@@ -9,7 +9,7 @@ import zio.test._
 
 import java.security.MessageDigest
 
-object ProtobufAggregationTest extends DefaultRunnableSpec {
+object ProtobufAggregationTest extends ZIOSpecDefault {
   override def spec =
     suite("ProtobufAggregation")(
       test("roundtrip encoding") {

@@ -10,10 +10,10 @@ import zio.aws.dynamodb.DynamoDb
 import zio.aws.kinesis.Kinesis
 import zio.test.Assertion.equalTo
 import zio.test.TestAspect.timeout
-import zio.test.{ assert, DefaultRunnableSpec }
+import zio.test.{ assert, ZIOSpecDefault }
 import zio.{ durationInt, Clock, Console, Promise, Random, Ref, ZLayer }
 
-object ConsumeWithTest extends DefaultRunnableSpec {
+object ConsumeWithTest extends ZIOSpecDefault {
   import TestUtil._
 
   private val env: ZLayer[

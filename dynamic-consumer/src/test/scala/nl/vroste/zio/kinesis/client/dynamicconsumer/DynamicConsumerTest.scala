@@ -17,7 +17,7 @@ import zio.test.TestAspect.timeout
 import zio.test._
 import zio.{ Clock, Console, Random, System, _ }
 
-object DynamicConsumerTest extends DefaultRunnableSpec {
+object DynamicConsumerTest extends ZIOSpecDefault {
   import TestUtil._
 
   val useAws = Runtime.default.unsafeRun(System.envOrElse("ENABLE_AWS", "0")).toInt == 1
