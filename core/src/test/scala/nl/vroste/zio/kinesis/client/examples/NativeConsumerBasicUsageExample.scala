@@ -3,10 +3,10 @@ package nl.vroste.zio.kinesis.client.examples
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.Consumer
 import zio.Console.printLine
-import zio.{ Console, _ }
+import zio._
 
 object NativeConsumerBasicUsageExample extends zio.ZIOAppDefault {
-  override def run: ZIO[zio.ZEnv with ZIOAppArgs, Any, Any] =
+  override def run: ZIO[Any with ZIOAppArgs with Scope, Any, Any] =
     Consumer
       .shardedStream(
         streamName = "my-stream",
@@ -18,9 +18,9 @@ object NativeConsumerBasicUsageExample extends zio.ZIOAppDefault {
         shardStream
           .tap(record => printLine(s"Processing record ${record} on shard ${shardId}"))
           .tap(checkpointer.stage(_))
-          .viaFunction(checkpointer.checkpointBatched[Console](nr = 1000, interval = 5.minutes))
+          .viaFunction(checkpointer.checkpointBatched[Any](nr = 1000, interval = 5.minutes))
       }
       .runDrain
-      .provideCustomLayer(Consumer.defaultEnvironment)
+      .provideLayer(Consumer.defaultEnvironment)
       .exitCode
 }

@@ -4,13 +4,13 @@ import nl.vroste.zio.kinesis.client.defaultAwsLayer
 import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio.Console.printLine
-import zio.{ durationInt, ZEnv, ZIO, ZIOAppArgs }
+import zio.{ durationInt, Scope, ZIO, ZIOAppArgs }
 
 /**
  * Basic usage example for `DynamicConsumer.consumeWith` convenience method
  */
 object DynamicConsumerConsumeWithExample extends zio.ZIOAppDefault {
-  override def run: ZIO[ZEnv with ZIOAppArgs, Any, Any] =
+  override def run: ZIO[Any with ZIOAppArgs with Scope, Any, Any] =
     DynamicConsumer
       .consumeWith(
         streamName = "my-stream",
@@ -20,6 +20,6 @@ object DynamicConsumerConsumeWithExample extends zio.ZIOAppDefault {
         checkpointBatchSize = 1000L,
         checkpointDuration = 5.minutes
       )(record => printLine(s"Processing record $record"))
-      .provideCustomLayer(defaultAwsLayer >+> DynamicConsumer.live)
+      .provideLayer(defaultAwsLayer >+> DynamicConsumer.live)
       .exitCode
 }

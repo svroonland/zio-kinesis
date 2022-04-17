@@ -2,7 +2,6 @@ package nl.vroste.zio.kinesis.client.zionative
 
 import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.Lease
 import nl.vroste.zio.kinesis.client.zionative.ShardAssignmentStrategy.leasesToTake
-import zio.Random
 import zio.test.Assertion._
 import zio.test.{ Gen, ZIOSpecDefault, _ }
 
@@ -11,7 +10,7 @@ object ShardAssignmentStrategyTest extends ZIOSpecDefault {
 
   def workerId(w: Int): String = s"worker-${w}"
 
-  def leases(nrShards: Gen[Random, Int], nrWorkers: Gen[Random, Int], allOwned: Boolean = true) =
+  def leases(nrShards: Gen[Any, Int], nrWorkers: Gen[Any, Int], allOwned: Boolean = true) =
     for {
       nrShards    <- nrShards
       nrWorkers   <- nrWorkers

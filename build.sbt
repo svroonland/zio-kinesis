@@ -3,6 +3,8 @@ import xerial.sbt.Sonatype.GitHubHosting
 val mainScala = "2.13.7"
 val allScala  = Seq("2.12.15", mainScala)
 
+val excludeInferAny = { options: Seq[String] => options.filterNot(Set("-Xlint:infer-any")) }
+
 inThisBuild(
   List(
     organization                     := "nl.vroste",
@@ -37,8 +39,8 @@ inThisBuild(
   )
 )
 
-val zioVersion    = "2.0.0-RC3"
-val zioAwsVersion = "5.17.162.1"
+val zioVersion    = "2.0.0-RC5"
+val zioAwsVersion = "5.17.171.1"
 
 lazy val root = project
   .in(file("."))
@@ -79,7 +81,8 @@ lazy val stdSettings: Seq[sbt.Def.SettingsDefinition] = Seq(
       Seq("-Wconf:cat=unused-imports:silent")
     else Seq.empty
   },
-// Suppresses problems with Scaladoc @throws links
+  Compile / scalacOptions ~= excludeInferAny,
+  // Suppresses problems with Scaladoc @throws links
   testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework"),
   libraryDependencies ++= Seq(
     "dev.zio"                %% "zio"                         % zioVersion,

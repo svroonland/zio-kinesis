@@ -8,7 +8,7 @@ import nl.vroste.zio.kinesis.client.serde.Serializer
 import software.amazon.awssdk.core.exception.SdkException
 import software.amazon.awssdk.services.kinesis.model.{ KinesisException, ResourceInUseException }
 import zio.Clock.instant
-import zio.{ Clock, _ }
+import zio._
 import zio.aws.kinesis.Kinesis
 import zio.aws.kinesis.model.primitives.{ PartitionKey, StreamName }
 import zio.aws.kinesis.model.{ PutRecordsRequest, PutRecordsRequestEntry, PutRecordsResponse, PutRecordsResultEntry }
@@ -22,7 +22,7 @@ import scala.util.control.NonFatal
 
 private[client] final class ProducerLive[R, R1, T](
   client: Kinesis,
-  env: ZEnvironment[R with Clock],
+  env: ZEnvironment[R],
   queue: Queue[ProduceRequest],
   failedQueue: Queue[ProduceRequest],
   serializer: Serializer[R, T],
@@ -40,7 +40,7 @@ private[client] final class ProducerLive[R, R1, T](
   import ProducerLive._
   import Util.ZStreamExtensions
 
-  val runloop: ZIO[Clock, Nothing, Unit] = {
+  val runloop: ZIO[Any, Nothing, Unit] = {
     val retries         = ZStream.fromQueue(failedQueue, maxChunkSize = maxChunkSize)
     val chunkBufferSize = Math.ceil(settings.bufferSize * 1.0 / maxChunkSize).toInt
 
@@ -93,7 +93,7 @@ private[client] final class ProducerLive[R, R1, T](
 
   private def processBatch(
     batch: Chunk[ProduceRequest]
-  ): ZIO[Clock, Nothing, (Option[PutRecordsResponse.ReadOnly], Chunk[ProduceRequest])] = {
+  ): ZIO[Any, Nothing, (Option[PutRecordsResponse.ReadOnly], Chunk[ProduceRequest])] = {
     val totalPayload = batch.map(_.data.length).sum
     (for {
       _        <- ZIO.logInfo(
@@ -117,7 +117,7 @@ private[client] final class ProducerLive[R, R1, T](
   private def processBatchResponse(
     response: PutRecordsResponse.ReadOnly,
     batch: Chunk[ProduceRequest]
-  ): ZIO[Clock, Nothing, CurrentMetrics] = {
+  ): ZIO[Any, Nothing, CurrentMetrics] = {
     val totalPayload = batch.map(_.data.length).sum
 
     val responseAndRequests    = Chunk.fromIterable(response.records).zip(batch)
@@ -231,7 +231,7 @@ private[client] final class ProducerLive[R, R1, T](
         .tap(inFlightCalls => ZIO.logDebug(s"${inFlightCalls} PutRecords calls in flight"))
     )(_ => e)
 
-  val collectMetrics: ZIO[R1 with Clock, Nothing, Unit] = for {
+  val collectMetrics: ZIO[R1, Nothing, Unit] = for {
     now    <- instant
     m      <- currentMetrics.getAndUpdate(_ => CurrentMetrics.empty(now))
     metrics = ProducerMetrics(
@@ -247,7 +247,7 @@ private[client] final class ProducerLive[R, R1, T](
   } yield ()
 
 // Repeatedly produce metrics
-  val metricsCollection: ZIO[R1 with Clock, Nothing, Long] = collectMetrics
+  val metricsCollection: ZIO[R1, Nothing, Long] = collectMetrics
     .delay(settings.metricsInterval)
     .repeat(Schedule.fixed(settings.metricsInterval))
 

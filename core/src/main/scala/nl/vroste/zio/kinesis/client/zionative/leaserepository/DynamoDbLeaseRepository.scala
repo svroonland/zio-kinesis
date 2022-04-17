@@ -13,7 +13,7 @@ import software.amazon.awssdk.services.dynamodb.model.{
   ResourceInUseException,
   ResourceNotFoundException
 }
-import zio.{ Clock, _ }
+import zio._
 import zio.aws.dynamodb.model._
 import zio.aws.dynamodb.model.primitives.{ AttributeName, ConditionExpression, TableName }
 import zio.aws.dynamodb.{ model, DynamoDb }
@@ -21,7 +21,6 @@ import zio.stream.ZStream
 
 import java.util.concurrent.TimeoutException
 import scala.util.{ Failure, Try }
-import scala.collection.compat._
 
 // TODO this thing should have a global throttling / backoff
 // via a Tap that tries to find the optimal maximal throughput
@@ -31,7 +30,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb, timeout: Duration) exten
   /**
    * Returns whether the table already existed
    */
-  override def createLeaseTableIfNotExists(tableName: String): ZIO[Clock, Throwable, Boolean] = {
+  override def createLeaseTableIfNotExists(tableName: String): ZIO[Any, Throwable, Boolean] = {
     val keySchema            = List(keySchemaElement("leaseKey", KeyType.HASH))
     val attributeDefinitions = List(attributeDefinition("leaseKey", ScalarAttributeType.S))
 
@@ -64,7 +63,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb, timeout: Duration) exten
           .tap(exists => ZIO.logInfo(s"Lease table ${tableName} exists? ${exists}"))
 
     // recursion, yeah!
-    def awaitTableActive: ZIO[Clock, Throwable, Unit] =
+    def awaitTableActive: ZIO[Any, Throwable, Unit] =
       leaseTableExists
         .flatMap(awaitTableActive.delay(1.seconds).unless(_))
         .unit
@@ -128,7 +127,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb, timeout: Duration) exten
   override def claimLease(
     tableName: String,
     lease: Lease
-  ): ZIO[Clock, Either[Throwable, UnableToClaimLease.type], Unit] = {
+  ): ZIO[Any, Either[Throwable, UnableToClaimLease.type], Unit] = {
     val request = baseUpdateItemRequestForLease(tableName, lease).copy(
       attributeUpdates = Some(
         Map(
@@ -169,7 +168,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb, timeout: Duration) exten
   override def updateCheckpoint(
     tableName: String,
     lease: Lease
-  ): ZIO[Clock, Either[Throwable, LeaseObsolete.type], Unit] = {
+  ): ZIO[Any, Either[Throwable, LeaseObsolete.type], Unit] = {
     require(lease.checkpoint.isDefined, "Cannot update checkpoint without Lease.checkpoint property set")
 
     val request = baseUpdateItemRequestForLease(tableName, lease).copy(
@@ -209,7 +208,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb, timeout: Duration) exten
   override def renewLease(
     tableName: String,
     lease: Lease
-  ): ZIO[Clock, Either[Throwable, LeaseObsolete.type], Unit] = {
+  ): ZIO[Any, Either[Throwable, LeaseObsolete.type], Unit] = {
 
     val request = baseUpdateItemRequestForLease(tableName, lease)
       .copy(attributeUpdates = Some(Map(AttributeName("leaseCounter") -> putAttributeValueUpdate(lease.counter))))
@@ -231,7 +230,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb, timeout: Duration) exten
   override def createLease(
     tableName: String,
     lease: Lease
-  ): ZIO[Clock, Either[Throwable, LeaseAlreadyExists.type], Unit] = {
+  ): ZIO[Any, Either[Throwable, LeaseAlreadyExists.type], Unit] = {
     val request =
       PutItemRequest(
         TableName(tableName),
@@ -254,7 +253,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb, timeout: Duration) exten
 
   override def deleteTable(
     tableName: String
-  ): ZIO[Clock, Throwable, Unit] = {
+  ): ZIO[Any, Throwable, Unit] = {
     val request = DeleteTableRequest(TableName(tableName))
     client
       .deleteTable(request)
@@ -317,6 +316,8 @@ object DynamoDbLeaseRepository {
   val live: ZLayer[DynamoDb, Nothing, LeaseRepository] = make(defaultTimeout)
 
   def make(timeout: Duration = defaultTimeout): ZLayer[DynamoDb, Nothing, LeaseRepository] =
-    (new DynamoDbLeaseRepository(_, timeout)).toLayer
+    ZLayer.fromFunction {
+      new DynamoDbLeaseRepository(_, timeout)
+    }
 
 }

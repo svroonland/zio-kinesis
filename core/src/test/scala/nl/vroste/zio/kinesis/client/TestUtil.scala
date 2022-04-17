@@ -12,24 +12,23 @@ import zio.aws.kinesis.Kinesis
 import zio.aws.kinesis.model._
 import zio.aws.kinesis.model.primitives._
 import zio.stream.ZStream
-import zio.{ Clock, Console, Random, _ }
+import zio._
 
 import java.util.UUID
-import scala.annotation.nowarn
 
 object TestUtil {
 
   def withStream[R, A](name: String, shards: Int)(
     f: ZIO[R, Throwable, A]
-  ): ZIO[Kinesis with Clock with Console with R, Throwable, A] =
-    ZIO.scoped[Kinesis with Clock with Console with R] {
+  ): ZIO[Kinesis with R, Throwable, A] =
+    ZIO.scoped[Kinesis with R] {
       (createStream(name, shards) <* getShards(name)) *> f
     }
 
   def withRandomStreamEnv[R, A](shards: Int = 2)(
     f: (String, String) => ZIO[R, Throwable, A]
-  ): ZIO[Kinesis with DynamoDb with Clock with Console with Random with R, Throwable, A] =
-    ZIO.scoped[Kinesis with DynamoDb with Clock with Console with Random with R] {
+  ): ZIO[Kinesis with DynamoDb with R, Throwable, A] =
+    ZIO.scoped[Kinesis with DynamoDb with R] {
       (for {
         streamName      <- Random.nextUUID.map("zio-test-stream-" + _.toString)
         applicationName <- Random.nextUUID.map("zio-test-" + _.toString)
@@ -41,7 +40,7 @@ object TestUtil {
       }
     }
 
-  def getShards(name: String): ZIO[Kinesis with Clock, Throwable, Chunk[Shard.ReadOnly]] =
+  def getShards(name: String): ZIO[Kinesis, Throwable, Chunk[Shard.ReadOnly]] =
     Kinesis
       .listShards(ListShardsRequest(streamName = Some(StreamName(name))))
       .mapError(_.toThrowable)
@@ -52,7 +51,7 @@ object TestUtil {
   def createStream(
     streamName: String,
     nrShards: Int
-  ): ZIO[Scope with Console with Clock with Kinesis, Throwable, Unit] =
+  ): ZIO[Scope with Kinesis, Throwable, Unit] =
     ZIO.acquireRelease(createStreamUnmanaged(streamName, nrShards))(_ =>
       Kinesis
         .deleteStream(DeleteStreamRequest(StreamName(streamName), enforceConsumerDeletion = Some(true)))
@@ -63,7 +62,7 @@ object TestUtil {
         .orDie
     ) <* waitForStreamActive(streamName)
 
-  def waitForStreamActive(streamName: String): ZIO[Kinesis with Clock, Throwable, Unit] =
+  def waitForStreamActive(streamName: String): ZIO[Kinesis, Throwable, Unit] =
     Kinesis
       .describeStream(DescribeStreamRequest(StreamName(streamName)))
       .mapError(_.toThrowable)
@@ -78,11 +77,10 @@ object TestUtil {
       .repeatUntilEquals(StreamStatus.ACTIVE)
       .unit
 
-  @nowarn("msg=a type was inferred to be `Any`")
   def createStreamUnmanaged(
     streamName: String,
     nrShards: Int
-  ): ZIO[Console with Clock with Kinesis, Throwable, Unit] =
+  ): ZIO[Kinesis, Throwable, Unit] =
     Kinesis
       .createStream(CreateStreamRequest(StreamName(streamName), Some(PositiveIntegerObject(nrShards))))
       .mapError(_.toThrowable)
@@ -91,7 +89,6 @@ object TestUtil {
       }
       .retry(Schedule.exponential(1.second) && Schedule.recurs(10))
 
-  @nowarn("msg=a type was inferred to be `Any`")
   val retryOnResourceNotFound: WithState[((Unit, Long), Long), Any, Throwable, (Throwable, Long, zio.Duration)] =
     Schedule.recurWhile[Throwable] {
       case _: ResourceNotFoundException => true
@@ -112,7 +109,7 @@ object TestUtil {
     produceRate: Int,
     maxRecordSize: Int,
     producerSettings: ProducerSettings = ProducerSettings()
-  ): ZIO[Random with Console with Clock with Kinesis with Any, Throwable, Unit] =
+  ): ZIO[Kinesis, Throwable, Unit] =
     ZIO.scoped {
       for {
         totalMetrics <- Ref.make(ProducerMetrics.empty)
@@ -164,7 +161,7 @@ object TestUtil {
     nrRecords: Int,
     produceRate: Option[Int] = None,
     maxRecordSize: Int
-  ): ZIO[Clock with Random, Throwable, Unit] = {
+  ): ZIO[Any, Throwable, Unit] = {
     val value     = Chunk.fill(maxRecordSize)(0x01.toByte)
     val chunkSize = produceRate.fold(defaultChunkSize)(Math.min(_, defaultChunkSize))
     val chunk     = Chunk.fill(chunkSize)(
@@ -180,8 +177,8 @@ object TestUtil {
 
   private def throttle[R, E, A](
     produceRate: Option[Int],
-    s: ZStream[R with Clock, E, A]
-  ): ZStream[R with Clock, E, A] = {
+    s: ZStream[R, E, A]
+  ): ZStream[R, E, A] = {
     val intervals = 10
     produceRate.fold(s) { produceRate =>
       s.throttleShape(
@@ -199,7 +196,7 @@ object TestUtil {
     nrRecords: Int,
     produceRate: Option[Int] = None,
     maxRecordSize: Int
-  ): ZIO[Clock with Random, Throwable, Unit] = {
+  ): ZIO[Any, Throwable, Unit] = {
     val records = ZStream.repeatZIO {
       for {
         key   <- Random
@@ -218,7 +215,7 @@ object TestUtil {
   def massProduceRecords[R, T](
     producer: Producer[T],
     records: ZStream[R, Throwable, ProducerRecord[T]]
-  ): ZIO[Clock with R, Throwable, Unit] =
+  ): ZIO[R, Throwable, Unit] =
     records
       .mapChunks(Chunk.single)
       .buffer(20)

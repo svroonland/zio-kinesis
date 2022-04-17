@@ -4,7 +4,7 @@ import nl.vroste.zio.kinesis.client.Util
 import nl.vroste.zio.kinesis.client.zionative.Consumer.childShardToShard
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
 import nl.vroste.zio.kinesis.client.zionative.{ Consumer, DiagnosticEvent, FetchMode, Fetcher }
-import zio.{ Clock, _ }
+import zio._
 import zio.aws.kinesis.Kinesis
 import zio.aws.kinesis.model._
 import zio.aws.kinesis.model.primitives.{ GetRecordsInputLimit, MillisBehindLatest, ShardIterator, StreamName }
@@ -30,9 +30,9 @@ object PollingFetcher {
     streamName: StreamName,
     config: FetchMode.Polling,
     emitDiagnostic: DiagnosticEvent => UIO[Unit]
-  ): ZIO[Scope with Clock with Kinesis, Throwable, Fetcher] =
+  ): ZIO[Scope with Kinesis, Throwable, Fetcher] =
     for {
-      env              <- ZIO.environment[Kinesis with Clock]
+      env              <- ZIO.environment[Kinesis]
       getShardIterator <- throttledFunction(getShardIteratorRateLimit, 1.second)(Kinesis.getShardIterator)
     } yield Fetcher { (shardId, startingPosition: StartingPosition) =>
       ZStream.unwrapScoped {
@@ -48,29 +48,32 @@ object PollingFetcher {
               .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
               .mapError(Left(_): Either[Throwable, EndOfShard])
 
-          getRecordsThrottled <- throttledFunction(getRecordsRateLimit, 1.second)(Kinesis.getRecords)
-          shardIterator       <- Ref.make[Option[ShardIterator]](Some(initialShardIterator))
+          getRecordsThrottled =
+            Kinesis.getRecords(_) // <- throttledFunction(getRecordsRateLimit, 1.second)(Kinesis.getRecords)
+          shardIterator      <- Ref.make[Option[ShardIterator]](Some(initialShardIterator))
 
           // Failure with None indicates that there's no next shard iterator and the shard has ended
           doPoll = for {
+                     _                    <- ZIO.debug("Do poll")
                      currentIterator      <- shardIterator.get
                      currentIterator      <- ZIO.fromOption(currentIterator)
+                     _                    <- ZIO.debug("Do poll 2")
                      responseWithDuration <-
-                       getRecordsThrottled(
-                         GetRecordsRequest(
-                           currentIterator,
-                           Some(GetRecordsInputLimit(config.batchSize))
+                       Kinesis
+                         .getRecords(
+                           GetRecordsRequest(
+                             currentIterator,
+                             Some(GetRecordsInputLimit(config.batchSize))
+                           )
                          )
-                       ).mapError(_.toThrowable)
-                         .tapError(e =>
-                           ZIO.logWarning(
+                         .mapError(_.toThrowable)
+                         .tap(r => ZIO.debug(s"POll for shard ${shardId} got ${r.records.size}"))
+                         .tapErrorCause(e =>
+                           ZIO.debug(
                              s"Error GetRecords for shard ${shardId}: ${e}"
                            )
                          )
-                         .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
-                         .retry(
-                           Schedule.fixed(100.millis) && Schedule.recurs(3)
-                         ) // There is a race condition in kinesalite, see https://github.com/mhart/kinesalite/issues/25
+//                         .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
                          .asSomeError
                          .timed
                      (duration, response)  = responseWithDuration
@@ -88,9 +91,10 @@ object PollingFetcher {
                    } yield response
 
           shardStream = ZStream
-                          .repeatZIOWithSchedule(doPoll, config.pollSchedule)
+                          .repeatZIO(doPoll)
                           .catchAll {
                             case None    => // TODO do we still need the None in combination with nextShardIterator?
+                              println("GOT NONE!")
                               ZStream.empty
                             case Some(e) =>
                               ZStream.fromZIO(
@@ -121,5 +125,5 @@ object PollingFetcher {
     }
 
   private val getShardIteratorRateLimit = 5
-  private val getRecordsRateLimit       = 5
+//  private val getRecordsRateLimit       = 5
 }

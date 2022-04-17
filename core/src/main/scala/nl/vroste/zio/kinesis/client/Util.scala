@@ -2,9 +2,6 @@ package nl.vroste.zio.kinesis.client
 
 import zio._
 import zio.stream.ZStream
-import zio.Clock
-
-import scala.annotation.nowarn
 
 object Util {
   implicit class ZStreamExtensions[-R, +E, +O](val stream: ZStream[R, E, O]) extends AnyVal {
@@ -75,13 +72,12 @@ object Util {
    * @tparam A
    *   Schedule input
    */
-  @nowarn("msg=a type was inferred to be `Any`")
   def exponentialBackoff[A](
     min: Duration,
     max: Duration,
     factor: Double = 2.0,
     maxRecurs: Option[Int] = None
-  ): Schedule[Clock, A, (Duration, Long)] =
+  ): Schedule[Any, A, (Duration, Long)] =
     (Schedule.exponential(min, factor).whileOutput(_ <= max) andThen Schedule.fixed(max).as(max)) &&
       maxRecurs.map(Schedule.recurs).getOrElse(Schedule.forever)
 
@@ -99,11 +95,12 @@ object Util {
    */
   def throttledFunction[R, I, E, A](units: Int, duration: Duration)(
     f: I => ZIO[R, E, A]
-  ): ZIO[Scope with Clock, Nothing, I => ZIO[R, E, A]] =
+  ): ZIO[Scope, Nothing, I => ZIO[R, E, A]] =
     for {
       requestsQueue <- Queue.bounded[(IO[E, A], Promise[E, A])](units / 2 * 2)
       _             <- ZStream
                          .fromQueueWithShutdown(requestsQueue)
+                         .rechunk(1)
                          .throttleShape(units.toLong, duration, units.toLong)(_ => 1)
                          .mapZIO { case (effect, promise) => promise.completeWith(effect) }
                          .runDrain
@@ -120,14 +117,14 @@ object Util {
     ThrottledFunctionPartial(units, duration)
 
   final case class ThrottledFunctionPartial(units: Int, duration: Duration) {
-    def apply[R, I0, I1, E, A](f: (I0, I1) => ZIO[R, E, A]): ZIO[Scope with Clock, Nothing, (I0, I1) => ZIO[R, E, A]] =
+    def apply[R, I0, I1, E, A](f: (I0, I1) => ZIO[R, E, A]): ZIO[Scope, Nothing, (I0, I1) => ZIO[R, E, A]] =
       throttledFunction[R, (I0, I1), E, A](units, duration) { case (i0, i1) =>
         f(i0, i1)
       }.map(Function.untupled(_))
 
     def apply[R, I0, I1, I2, E, A](
       f: (I0, I1, I2) => ZIO[R, E, A]
-    ): ZIO[Scope with Clock, Nothing, (I0, I1, I2) => ZIO[R, E, A]] =
+    ): ZIO[Scope, Nothing, (I0, I1, I2) => ZIO[R, E, A]] =
       throttledFunction[R, (I0, I1, I2), E, A](units, duration) { case (i0, i1, i2) =>
         f(i0, i1, i2)
       }.map(Function.untupled(_))
@@ -145,7 +142,7 @@ object Util {
   def periodicAndTriggerableOperation[R, A](
     effect: ZIO[R, Nothing, A],
     period: Duration
-  ): ZIO[Scope with R with Clock, Nothing, UIO[Unit]] =
+  ): ZIO[Scope with R, Nothing, UIO[Unit]] =
     for {
       queue <- ZIO.acquireRelease(Queue.dropping[Unit](1))(_.shutdown)
       _     <- ((queue.take raceFirst ZIO.sleep(period)) *> effect *> queue.takeAll).forever.forkScoped

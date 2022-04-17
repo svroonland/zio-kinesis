@@ -7,10 +7,8 @@ import zio.{ Promise, Ref, Schedule, Semaphore, Task, ZIO }
 import zio.test._
 import zio.test.Assertion._
 
-import scala.annotation.nowarn
 import scala.concurrent.TimeoutException
 
-@nowarn("msg=a type was inferred to be `Any`")
 object DefaultCheckpointerTest extends ZIOSpecDefault {
   type Checkpoint = Either[SpecialCheckpoint, ExtendedSequenceNumber]
   val record1 = Record("shard1", "0", Instant.now, "bla", "bla", None, None, None, false)

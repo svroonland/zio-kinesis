@@ -2,8 +2,6 @@ package nl.vroste.zio.kinesis.client.producer
 import nl.vroste.zio.kinesis.client.producer.ShardThrottler.DynamicThrottler
 import zio.{ UIO, _ }
 
-import zio.Clock
-
 private[client] trait ShardThrottler {
   // TODO deprecate
   def throughputFactor(shard: String): UIO[Double]
@@ -16,10 +14,9 @@ private[client] object ShardThrottler {
   def make(
     updatePeriod: Duration = 5.seconds,
     allowedError: Double = 0.02
-  ): ZIO[Scope with Clock, Nothing, ShardThrottler] =
+  ): ZIO[Scope, Nothing, ShardThrottler] =
     for {
       scope  <- ZIO.scope
-      clock  <- ZIO.environment[Clock]
       shards <- Ref.make(Map.empty[String, DynamicThrottler])
     } yield new ShardThrottler {
       override def throughputFactor(shard: String): UIO[Double] = withShard(shard, _.throughputFactor)
@@ -38,7 +35,7 @@ private[client] object ShardThrottler {
               throttler <- scope.extend(DynamicThrottler.make(updatePeriod, allowedError))
               _         <- shards.update(_ + (shardId -> throttler))
             } yield throttler
-        }.provideEnvironment(clock)
+        }
     }
 
   trait DynamicThrottler {
@@ -53,7 +50,7 @@ private[client] object ShardThrottler {
     def make(
       updatePeriod: Duration = 5.seconds,
       allowedError: Double = 0.1
-    ): ZIO[Scope with Clock, Nothing, DynamicThrottler] =
+    ): ZIO[Scope, Nothing, DynamicThrottler] =
       for {
         counter          <- Ref.make[(Long, Long)]((0, 0))
         successRate      <- Ref.make(1.0d)

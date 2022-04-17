@@ -51,9 +51,9 @@ object FetchMode {
    */
   final case class Polling(
     batchSize: Int = 1000,
-    pollSchedule: Schedule[Clock, GetRecordsResponse.ReadOnly, Any] = Polling.dynamicSchedule(1.second),
-    throttlingBackoff: Schedule[Clock, Any, (Duration, Long)] = Util.exponentialBackoff(5.seconds, 30.seconds),
-    retrySchedule: Schedule[Clock, Any, (Duration, Long)] = Util.exponentialBackoff(1.second, 1.minute),
+    pollSchedule: Schedule[Any, GetRecordsResponse.ReadOnly, Any] = Polling.dynamicSchedule(1.second),
+    throttlingBackoff: Schedule[Any, Any, (Duration, Long)] = Util.exponentialBackoff(5.seconds, 30.seconds),
+    retrySchedule: Schedule[Any, Any, (Duration, Long)] = Util.exponentialBackoff(1.second, 1.minute),
     bufferNrBatches: Int = 2
   ) extends FetchMode
 
@@ -66,7 +66,7 @@ object FetchMode {
      * @param interval
      *   Fixed interval for polling when no more records are currently available
      */
-    def dynamicSchedule(interval: Duration): Schedule[Clock, GetRecordsResponse.ReadOnly, Any] =
+    def dynamicSchedule(interval: Duration): Schedule[Any, GetRecordsResponse.ReadOnly, Any] =
       (Schedule.recurWhile[Boolean](_ == true) || Schedule.fixed(interval))
         .contramap((_: GetRecordsResponse.ReadOnly).millisBehindLatest.getOrElse(0) != 0)
   }
@@ -80,7 +80,7 @@ object FetchMode {
   final case class EnhancedFanOut(
     deregisterConsumerAtShutdown: Boolean = false, // TODO
     maxSubscriptionsPerSecond: Int = 10,
-    retrySchedule: Schedule[Clock, Any, (Duration, Long)] = Util.exponentialBackoff(5.second, 1.minute)
+    retrySchedule: Schedule[Any, Any, (Duration, Long)] = Util.exponentialBackoff(5.second, 1.minute)
   ) extends FetchMode
 }
 
@@ -165,7 +165,7 @@ object Consumer {
     emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit,
     shardAssignmentStrategy: ShardAssignmentStrategy = ShardAssignmentStrategy.balanced()
   ): ZStream[
-    Clock with Random with Kinesis with LeaseRepository with R,
+    Kinesis with LeaseRepository with R,
     Throwable,
     (
       String,
@@ -231,7 +231,7 @@ object Consumer {
 
     def makeFetcher(
       streamDescription: StreamDescription.ReadOnly
-    ): ZIO[Scope with Clock with Kinesis, Throwable, Fetcher] =
+    ): ZIO[Scope with Kinesis, Throwable, Fetcher] =
       fetchMode match {
         case c: Polling        => PollingFetcher.make(streamDescription.streamName, c, emitDiagnostic)
         case c: EnhancedFanOut => EnhancedFanOutFetcher.make(streamDescription, workerIdentifier, c, emitDiagnostic)
@@ -247,8 +247,7 @@ object Consumer {
         else ZIO.succeed(shards)
       }
 
-    def createDependencies
-      : ZIO[Scope with Clock with Random with LeaseRepository with Kinesis, Throwable, (Fetcher, LeaseCoordinator)] =
+    def createDependencies: ZIO[Scope with LeaseRepository with Kinesis, Throwable, (Fetcher, LeaseCoordinator)] =
       Kinesis
         .describeStream(DescribeStreamRequest(StreamName(streamName)))
         .mapError(_.toThrowable)
@@ -273,7 +272,7 @@ object Consumer {
             // additional information to the lease coordinator, and the list of leases is used
             // as the list of shards.
             for {
-              env              <- ZIO.environment[Clock with Kinesis]
+              env              <- ZIO.environment[Kinesis]
               leaseCoordinator <- DefaultLeaseCoordinator
                                     .make(
                                       applicationName,
@@ -301,7 +300,7 @@ object Consumer {
         }.mapZIOParUnordered(leaseCoordinationSettings.maxParallelLeaseAcquisitions) { case (shardId, leaseLost) =>
           for {
             checkpointer    <- leaseCoordinator.makeCheckpointer(shardId)
-            env             <- ZIO.environment[Clock with Random with R]
+            env             <- ZIO.environment[R]
             checkpointOpt   <- leaseCoordinator.getCheckpointForShard(shardId)
             startingPosition = checkpointOpt
                                  .map(checkpointToStartingPosition(_, initialPosition))
@@ -394,7 +393,7 @@ object Consumer {
   )(
     recordProcessor: Record[T] => RIO[RC, Unit]
   ): ZIO[
-    R with RC with Clock with Random with Kinesis with LeaseRepository,
+    R with RC with Kinesis with LeaseRepository,
     Throwable,
     Unit
   ] =

@@ -2,7 +2,7 @@ package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
 import nl.vroste.zio.kinesis.client.Record
 import nl.vroste.zio.kinesis.client.zionative._
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultCheckpointer.{ State, UpdateCheckpoint }
-import zio.{ Clock, _ }
+import zio._
 
 import scala.annotation.nowarn
 
@@ -14,10 +14,9 @@ private[zionative] class DefaultCheckpointer(
   releaseLease: ZIO[Any, Throwable, Unit]
 ) extends Checkpointer
     with CheckpointerInternal {
-  @nowarn("msg=a type was inferred to be `Any`")
   override def checkpoint[R](
-    retrySchedule: Schedule[Clock with R, Throwable, Any]
-  ): ZIO[Clock with R, Either[Throwable, ShardLeaseLost.type], Unit] =
+    retrySchedule: Schedule[R, Throwable, Any]
+  ): ZIO[R, Either[Throwable, ShardLeaseLost.type], Unit] =
     doCheckpoint(false)
       .retry(retrySchedule +++ Schedule.stop) // Only retry Left[Throwable]
 

@@ -5,7 +5,7 @@ import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.Consumer
 import nl.vroste.zio.kinesis.client.zionative.metrics.{ CloudWatchMetricsPublisher, CloudWatchMetricsPublisherConfig }
 import zio.Console.printLine
-import zio.{ Console, _ }
+import zio._
 
 object NativeConsumerWithMetricsExample extends zio.ZIOAppDefault {
 
@@ -14,7 +14,7 @@ object NativeConsumerWithMetricsExample extends zio.ZIOAppDefault {
 
   val metricsConfig = CloudWatchMetricsPublisherConfig()
 
-  override def run: ZIO[zio.ZEnv with ZIOAppArgs, Any, Any] =
+  override def run: ZIO[Any with ZIOAppArgs with Scope, Any, Any] =
     CloudWatchMetricsPublisher
       .make(applicationName, workerIdentifier)
       .flatMap { metrics =>
@@ -30,11 +30,11 @@ object NativeConsumerWithMetricsExample extends zio.ZIOAppDefault {
             shardStream
               .tap(record => printLine(s"Processing record ${record} on shard ${shardId}"))
               .tap(checkpointer.stage(_))
-              .viaFunction(checkpointer.checkpointBatched[Console](nr = 1000, interval = 5.minutes))
+              .viaFunction(checkpointer.checkpointBatched[Any](nr = 1000, interval = 5.minutes))
           }
           .runDrain
       }
-      .provideCustomLayer(
+      .provideLayer(
         (HttpClientBuilder.make() >>> Consumer.defaultEnvironment) ++
           ZLayer.succeed(metricsConfig) ++ Scope.default
       )

@@ -3,8 +3,8 @@ package nl.vroste.zio.kinesis.client.examples
 import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.{ Producer, ProducerRecord }
-import zio._
 import zio.Console.printLine
+import zio._
 
 object ProducerExample extends zio.ZIOAppDefault {
   val streamName      = "my_stream"
@@ -21,6 +21,6 @@ object ProducerExample extends zio.ZIOAppDefault {
     } yield ()
   }
 
-  override def run: ZIO[zio.ZEnv with ZIOAppArgs, Any, Any] =
-    program.provideCustomLayer(env).exitCode
+  override def run: ZIO[Any with ZIOAppArgs with Scope, Any, Any] =
+    program.provideLayer(env).exitCode
 }

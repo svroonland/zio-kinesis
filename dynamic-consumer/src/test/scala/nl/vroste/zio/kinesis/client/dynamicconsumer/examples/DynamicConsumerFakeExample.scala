@@ -6,7 +6,7 @@ import nl.vroste.zio.kinesis.client.dynamicconsumer.fake.DynamicConsumerFake
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio.Console.printLine
 import zio.stream.ZStream
-import zio.{ durationInt, Chunk, Ref, ZEnv, ZIO, ZIOAppArgs }
+import zio.{ durationInt, Chunk, Ref, Scope, ZIO, ZIOAppArgs }
 
 /**
  * Basic usage example for `DynamicConsumerFake`
@@ -15,7 +15,7 @@ object DynamicConsumerFakeExample extends zio.ZIOAppDefault {
   private val shards: ZStream[Any, Nothing, (String, ZStream[Any, Throwable, Chunk[Byte]])] =
     DynamicConsumerFake.shardsFromStreams(Serde.asciiString, ZStream("msg1", "msg2"), ZStream("msg3", "msg4"))
 
-  override def run: ZIO[ZEnv with ZIOAppArgs, Any, Any] =
+  override def run: ZIO[Any with ZIOAppArgs with Scope, Any, Any] =
     for {
       refCheckpointedList <- Ref.make[Seq[Record[Any]]](Seq.empty)
       exitCode            <- DynamicConsumer
@@ -27,7 +27,7 @@ object DynamicConsumerFakeExample extends zio.ZIOAppDefault {
                                  checkpointBatchSize = 1000L,
                                  checkpointDuration = 5.minutes
                                )(record => printLine(s"Processing record $record").orDie)
-                               .provideCustomLayer(DynamicConsumer.fake(shards, refCheckpointedList))
+                               .provideLayer(DynamicConsumer.fake(shards, refCheckpointedList))
                                .exitCode
       _                   <- printLine(s"refCheckpointedList=$refCheckpointedList").orDie
     } yield exitCode

@@ -47,12 +47,12 @@ object NativeConsumerTest extends ZIOSpecDefault {
     suite("ZIO Native Kinesis Stream Consumer")(
       test("retrieve records from all shards") {
         val nrRecords = 2000
-        val nrShards  = 5
+        val nrShards  = 1
 
         withRandomStreamAndApplicationName(nrShards) { (streamName, applicationName) =>
           for {
             _        <- ZIO.logInfo("Starting producer")
-            _        <- produceSampleRecords(streamName, nrRecords, chunkSize = 500)
+            producer <- produceSampleRecords(streamName, nrRecords, chunkSize = 500).fork
             _        <- ZIO.logInfo("Starting consumer")
             records  <- Consumer
                           .shardedStream(
@@ -68,8 +68,10 @@ object NativeConsumerTest extends ZIOSpecDefault {
                           }
                           .take(nrRecords.toLong)
                           .zipWithIndex
+                          .debug
                           .map(_._1)
                           .runCollect
+            _        <- producer.interrupt
             shardIds <- Kinesis
                           .describeStream(DescribeStreamRequest(StreamName(streamName)))
                           .mapError(_.toThrowable)
@@ -535,7 +537,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
                      .runDrain
                      .tapErrorCause(c => ZIO.logError(s"${c.prettyPrint}"))
                    )
-                   .withFinalizer {
+                   .withFinalizer { _ =>
                      events.get
                        .map(
                          _.filterNot(_._3.isInstanceOf[PollComplete])
@@ -813,7 +815,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
     throttle: Option[Duration] = None,
     indexStart: Int = 1,
     aggregated: Boolean = false
-  ): ZIO[Kinesis with Clock with Any, Throwable, Chunk[ProduceResponse]] = ZIO.scoped {
+  ): ZIO[Kinesis with Any, Throwable, Chunk[ProduceResponse]] = ZIO.scoped {
     Producer
       .make(streamName, Serde.asciiString, ProducerSettings(maxParallelRequests = 1, aggregate = aggregated))
       .flatMap { producer =>
@@ -840,7 +842,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
     nrRecords: Int,
     chunkSize: Int = 100,
     indexStart: Int = 1
-  ): ZIO[Kinesis with Clock with Any, Throwable, Chunk[ProduceResponse]] = ZIO.scoped {
+  ): ZIO[Kinesis with Any, Throwable, Chunk[ProduceResponse]] = ZIO.scoped {
     Producer.make(streamName, Serde.asciiString).flatMap { producer =>
       val records =
         (indexStart until (nrRecords + indexStart)).map(i => ProducerRecord(s"key$i", s"msg$i"))
@@ -875,7 +877,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
 
   def getCheckpoints(
     applicationName: String
-  ): ZIO[Clock with LeaseRepository.Service, Throwable, Map[String, String]] =
+  ): ZIO[LeaseRepository.Service, Throwable, Map[String, String]] =
     for {
       table      <- ZIO.service[LeaseRepository.Service]
       leases     <- table.getLeases(applicationName).runCollect
@@ -895,11 +897,11 @@ object NativeConsumerTest extends ZIOSpecDefault {
 
   def withRandomStreamAndApplicationName[R, A](nrShards: Int)(
     f: (String, String) => ZIO[R, Throwable, A]
-  ): ZIO[Kinesis with Clock with Console with Console with LeaseRepository.Service with R, Throwable, A] =
+  ): ZIO[Kinesis with LeaseRepository.Service with R, Throwable, A] =
     ZIO.succeed((streamPrefix + "testStream", streamPrefix + "testApplication")).flatMap {
       case (streamName, applicationName) =>
         withStream(streamName, shards = nrShards) {
-          ZIO.scoped[R with Clock with LeaseRepository.Service] {
+          ZIO.scoped[R with LeaseRepository.Service] {
             ZIO.addFinalizer(deleteTable(applicationName).ignore) *> { // Table may not have been created
               f(streamName, applicationName)
             }

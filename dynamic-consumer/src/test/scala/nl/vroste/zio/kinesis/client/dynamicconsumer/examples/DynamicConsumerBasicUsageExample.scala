@@ -4,13 +4,13 @@ import nl.vroste.zio.kinesis.client.defaultAwsLayer
 import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio.Console.printLine
-import zio.{ durationInt, Console, ZEnv, ZIO, ZIOAppArgs }
+import zio.{ durationInt, Scope, ZIO, ZIOAppArgs }
 
 /**
  * Basic usage example for DynamicConsumer
  */
 object DynamicConsumerBasicUsageExample extends zio.ZIOAppDefault {
-  override def run: ZIO[ZEnv with ZIOAppArgs, Any, Any] =
+  override def run: ZIO[Any with ZIOAppArgs with Scope, Any, Any] =
     DynamicConsumer
       .shardedStream(
         streamName = "my-stream",
@@ -22,9 +22,9 @@ object DynamicConsumerBasicUsageExample extends zio.ZIOAppDefault {
         shardStream
           .tap(record => printLine(s"Processing record ${record} on shard ${shardId}"))
           .tap(checkpointer.stage(_))
-          .viaFunction(checkpointer.checkpointBatched[Console](nr = 1000, interval = 5.minutes))
+          .viaFunction(checkpointer.checkpointBatched[Any](nr = 1000, interval = 5.minutes))
       }
       .runDrain
-      .provideCustomLayer(defaultAwsLayer >>> DynamicConsumer.live)
+      .provideLayer(defaultAwsLayer >>> DynamicConsumer.live)
       .exitCode
 }

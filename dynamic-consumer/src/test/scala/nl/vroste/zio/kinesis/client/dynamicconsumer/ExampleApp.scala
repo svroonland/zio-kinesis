@@ -46,15 +46,7 @@ object ExampleApp extends zio.ZIOAppDefault {
   )
 
   val program: ZIO[
-    Clock
-      with Any
-      with Random
-      with Console
-      with Kinesis
-      with CloudWatch
-      with CloudWatchMetricsPublisherConfig
-      with DynamicConsumer
-      with LeaseRepository,
+    Kinesis with CloudWatch with CloudWatchMetricsPublisherConfig with DynamicConsumer with LeaseRepository,
     Throwable,
     ExitCode
   ] =
@@ -103,16 +95,16 @@ object ExampleApp extends zio.ZIOAppDefault {
                     })
     } yield ExitCode.success
 
-  override def run: ZIO[ZEnv with ZIOAppArgs, Any, Any] =
+  override def run: ZIO[Any with ZIOAppArgs with Scope, Nothing, ExitCode] =
     program
       .foldCauseZIO(
         e => ZIO.logSpan(s"Program failed: ${e.prettyPrint}")(ZIO.logErrorCause(e)).exitCode,
         ZIO.succeed(_)
       )
-      .provideCustomLayer(awsEnv)
+      .provideLayer(awsEnv)
 
   def worker(id: String) =
-    ZStream.unwrapManaged {
+    ZStream.unwrapScoped {
       for {
         metrics <- CloudWatchMetricsPublisher.make(applicationName, id)
         delay   <- zio.Random.nextIntBetween(0, maxRandomWorkerStartDelayMillis).map(_.millis)
@@ -167,7 +159,7 @@ object ExampleApp extends zio.ZIOAppDefault {
   def kclWorker(
     id: String,
     requestShutdown: Promise[Nothing, Unit]
-  ): ZStream[DynamicConsumer with Any with Clock with Random, Throwable, DynamicConsumer.Record[
+  ): ZStream[DynamicConsumer with Any, Throwable, DynamicConsumer.Record[
     String
   ]] =
     ZStream.fromZIO(

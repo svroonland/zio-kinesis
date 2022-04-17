@@ -5,13 +5,12 @@ import nl.vroste.zio.kinesis.client.dynamicconsumer.{ DynamicConsumer, ExtendedS
 import nl.vroste.zio.kinesis.client.serde.{ Deserializer, Serializer }
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import software.amazon.kinesis.common.InitialPositionInStreamExtended
-import zio.{ Clock, _ }
 import zio.stream.ZStream
+import zio.{ Clock, _ }
 
 private[client] class DynamicConsumerFake(
   shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, Chunk[Byte]])],
-  refCheckpointedList: Ref[Seq[Record[Any]]],
-  clock: Clock
+  refCheckpointedList: Ref[Seq[Record[Any]]]
 ) extends DynamicConsumer.Service {
   override def shardedStream[R, T](
     streamName: String,
@@ -31,7 +30,7 @@ private[client] class DynamicConsumerFake(
   ] = {
     def record(shardName: String, i: Long, recData: T): UIO[Record[T]] =
       for {
-        dateTime <- clock.currentDateTime
+        dateTime <- Clock.currentDateTime
       } yield new Record[T](
         sequenceNumber = s"$i",
         approximateArrivalTimestamp = dateTime.toInstant,

@@ -25,9 +25,9 @@ object DynamicConsumerTest extends ZIOSpecDefault {
   private val env: ZLayer[
     Any,
     Nothing,
-    CloudWatch with Kinesis with DynamoDb with DynamicConsumer with Clock with Random with Console with System
+    CloudWatch with Kinesis with DynamoDb with DynamicConsumer
   ] = (if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()).orDie >+>
-    (DynamicConsumer.live ++ Clock.live ++ Random.live ++ Console.live ++ zio.System.live)
+    DynamicConsumer.live
 
   def testConsumePolling =
     test("consume records produced on all shards produced on the stream with polling") {
@@ -112,7 +112,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
         def streamConsumer(
           workerIdentifier: String,
           activeConsumers: Ref.Synchronized[Set[String]]
-        ): ZStream[Console with Any with DynamicConsumer with Clock, Throwable, (String, String)] =
+        ): ZStream[Any with DynamicConsumer, Throwable, (String, String)] =
           for {
             service <- ZStream.service[DynamicConsumer.Service]
             stream  <- ZStream
@@ -128,11 +128,11 @@ object DynamicConsumerTest extends ZIOSpecDefault {
                              )
                              .flatMapPar(Int.MaxValue) { case (shardId, shardStream, checkpointer @ _) =>
                                shardStream
-                                 .viaFunction(checkpointer.checkpointBatched[Clock](1000, 1.second))
+                                 .viaFunction(checkpointer.checkpointBatched[Any](1000, 1.second))
                                  .as((workerIdentifier, shardId))
                                  // Background and a bit delayed so we get a chance to actually emit some records
                                  .tap(_ =>
-                                   activeConsumers.updateZIO(s => ZIO(s + workerIdentifier)).delay(1.second).fork
+                                   activeConsumers.updateZIO(s => ZIO.succeed(s + workerIdentifier)).delay(1.second).fork
                                  )
                                  .ensuring(printLine(s"Shard $shardId completed for consumer $workerIdentifier").orDie)
                                  .catchSome {
@@ -151,8 +151,8 @@ object DynamicConsumerTest extends ZIOSpecDefault {
           _                     <- printLine("Starting dynamic consumers").orDie
           activeConsumers       <- SubscriptionRef.make(Set.empty[String])
           allConsumersGotAShard <- activeConsumers.changes.takeUntil(_ == Set("1", "2")).runDrain.fork
-          _                     <- (streamConsumer("1", activeConsumers.ref)
-                                     merge delayStream(streamConsumer("2", activeConsumers.ref), 5.seconds))
+          _                     <- (streamConsumer("1", activeConsumers)
+                                     merge delayStream(streamConsumer("2", activeConsumers), 5.seconds))
                                      .interruptWhen(allConsumersGotAShard.join)
                                      .runCollect
         } yield assertCompletes
@@ -171,7 +171,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
           lastProcessedRecords: Ref[Map[String, String]],
           lastCheckpointedRecords: Ref[Map[String, String]]
         ): ZStream[
-          Console with Any with Clock with DynamicConsumer with Kinesis,
+          Any with DynamicConsumer with Kinesis,
           Throwable,
           DynamicConsumer.Record[
             String
@@ -185,7 +185,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
                            applicationName = applicationName,
                            deserializer = Serde.asciiString,
                            configureKcl = _.withPolling,
-                           requestShutdown = interrupted.await *> UIO(println("Interrupting shardedStream"))
+                           requestShutdown = interrupted.await *> UIO.succeed(println("Interrupting shardedStream"))
                          )
                          .flatMapPar(Int.MaxValue) { case (shardId, shardStream, checkpointer @ _) =>
                            ZStream.fromZIO(consumerAlive.succeed(())) *>
@@ -212,38 +212,39 @@ object DynamicConsumerTest extends ZIOSpecDefault {
                                  (printLine(s"Shard ${r.shardId}: checkpointing for record $r $interrupted").orDie *>
                                    checkpointer.checkpoint)
                                    .unlessZIO(interrupted.isDone)
-                                   .tapError(e => ZIO(println(s"Checkpointing failed: ${e}")))
+                                   .tapError(e => ZIO.attempt(println(s"Checkpointing failed: ${e}")))
                                    .tap(_ => lastCheckpointedRecords.update(_ + (shardId -> r.sequenceNumber)))
-                                   .tap(_ => ZIO(println(s"Checkpointing for shard ${r.shardId} done")))
+                                   .tap(_ => ZIO.attempt(println(s"Checkpointing for shard ${r.shardId} done")))
                                }
                          }
           } yield stream)
 
         for {
-          started                   <- Clock.instant
-          interrupted               <- Promise.make[Nothing, Unit]
-          consumerAlive             <- Promise.make[Nothing, Unit]
-          nrRecordsSeen             <- Ref.make(0)
-          lastProcessedRecords      <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
-          lastCheckpointedRecords   <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
-          consumer                  <- streamConsumer(
-                                         interrupted,
-                                         consumerAlive,
-                                         nrRecordsSeen,
-                                         lastProcessedRecords,
-                                         lastCheckpointedRecords
-                                       ).runCollect.fork
-          _                         <- consumerAlive.await
-          _                         <- Clock.instant.tap(now =>
-                                         UIO(println(s"Consumer has started after ${java.time.Duration.between(started, now)}"))
-                                       )
-          _                         <- TestUtil
-                                         .produceRecords(streamName, 10000, 25, 10)
-                                         .tap(_ => ZIO(println("PRODUCING RECORDS DONE")))
-                                         .fork
-          _                         <- interrupted.await
-          _                         <- consumer.join
-          (processed, checkpointed) <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
+          started                  <- Clock.instant
+          interrupted              <- Promise.make[Nothing, Unit]
+          consumerAlive            <- Promise.make[Nothing, Unit]
+          nrRecordsSeen            <- Ref.make(0)
+          lastProcessedRecords     <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
+          lastCheckpointedRecords  <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
+          consumer                 <- streamConsumer(
+                                        interrupted,
+                                        consumerAlive,
+                                        nrRecordsSeen,
+                                        lastProcessedRecords,
+                                        lastCheckpointedRecords
+                                      ).runCollect.fork
+          _                        <- consumerAlive.await
+          _                        <- Clock.instant.tap(now =>
+                                        UIO.attempt(println(s"Consumer has started after ${java.time.Duration.between(started, now)}"))
+                                      )
+          _                        <- TestUtil
+                                        .produceRecords(streamName, 10000, 25, 10)
+                                        .tap(_ => ZIO.attempt(println("PRODUCING RECORDS DONE")))
+                                        .fork
+          _                        <- interrupted.await
+          _                        <- consumer.join
+          r                        <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
+          (processed, checkpointed) = r
         } yield assert(processed)(equalTo(checkpointed))
       }
     } @@ TestAspect.timeout(5.minutes)
@@ -258,7 +259,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
           firstRecordProcessed: Promise[Nothing, Unit],
           newShardDetected: Queue[Unit]
         ): ZStream[
-          Console with Any with Clock with DynamicConsumer with Kinesis,
+          DynamicConsumer with Kinesis,
           Throwable,
           DynamicConsumer.Record[
             String
@@ -272,7 +273,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
                            applicationName = applicationName,
                            deserializer = Serde.asciiString,
                            configureKcl = _.withPolling,
-                           requestShutdown = requestShutdown.await *> UIO(println("Interrupting shardedStream"))
+                           requestShutdown = requestShutdown.await *> UIO.succeed(println("Interrupting shardedStream"))
                          )
                          .tap(_ => newShardDetected.offer(()))
                          .flatMapPar(Int.MaxValue) { case (shardId @ _, shardStream, checkpointer @ _) =>
@@ -287,9 +288,11 @@ object DynamicConsumerTest extends ZIOSpecDefault {
                              .tap { r =>
                                printLine(s"Shard ${r.shardId}: checkpointing for record $r").orDie *>
                                  checkpointer.checkpoint
-                                   .tapError(e => ZIO(println(s"Checkpointing failed: ${e}")))
+                                   .tapError(e => ZIO.succeed(println(s"Checkpointing failed: ${e}")))
                                    .tap(_ =>
-                                     ZIO(println(s"Checkpointing for shard ${r.shardId} done (${r.sequenceNumber}"))
+                                     ZIO.succeed(
+                                       println(s"Checkpointing for shard ${r.shardId} done (${r.sequenceNumber}")
+                                     )
                                    )
                              }
                          }

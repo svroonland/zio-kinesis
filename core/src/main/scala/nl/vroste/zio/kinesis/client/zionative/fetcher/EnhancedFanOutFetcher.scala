@@ -1,18 +1,17 @@
 package nl.vroste.zio.kinesis.client.zionative.fetcher
 
-import zio.aws.kinesis.Kinesis
-import zio.aws.kinesis.model._
 import nl.vroste.zio.kinesis.client.Util
 import nl.vroste.zio.kinesis.client.zionative.Consumer.childShardToShard
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
 import nl.vroste.zio.kinesis.client.zionative.{ DiagnosticEvent, FetchMode, Fetcher }
 import software.amazon.awssdk.services.kinesis.model.ResourceInUseException
 import zio._
+import zio.aws.kinesis.Kinesis
+import zio.aws.kinesis.model._
+import zio.aws.kinesis.model.primitives.{ ConsumerName, ShardId, StreamARN }
 import zio.stream.ZStream
 
 import scala.util.control.NonFatal
-import zio.Clock
-import zio.aws.kinesis.model.primitives.{ ConsumerName, ShardId, StreamARN }
 
 object EnhancedFanOutFetcher {
   import FetchUtil.repeatWhileNotNone
@@ -22,9 +21,9 @@ object EnhancedFanOutFetcher {
     workerId: String,
     config: FetchMode.EnhancedFanOut,
     emitDiagnostic: DiagnosticEvent => UIO[Unit]
-  ): ZIO[Scope with Clock with Kinesis, Throwable, Fetcher] =
+  ): ZIO[Scope with Kinesis, Throwable, Fetcher] =
     for {
-      env                <- ZIO.environment[Clock with Kinesis]
+      env                <- ZIO.environment[Kinesis]
       consumerARN        <- registerConsumerIfNotExists(streamDescription.streamARN, workerId)
       subscribeThrottled <- Util.throttledFunctionN(config.maxSubscriptionsPerSecond, 1.second) {
                               (pos: StartingPosition, shardId: String) =>

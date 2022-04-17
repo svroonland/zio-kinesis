@@ -54,7 +54,7 @@ object DynamicConsumerFakeTest extends ZIOSpecDefault {
                                  checkpointBatchSize = 1000L,
                                  checkpointDuration = 5.minutes
                                )(record => q.offer(record).unit)
-                               .provideCustomLayer(DynamicConsumer.fake(shards, refCheckpointedList))
+                               .provideLayer(DynamicConsumer.fake(shards, refCheckpointedList))
                                .exitCode
       checkpointedList    <- refCheckpointedList.get
       xs                  <- q.takeAll
@@ -72,7 +72,7 @@ object DynamicConsumerFakeTest extends ZIOSpecDefault {
                 checkpointBatchSize = 1000L,
                 checkpointDuration = 5.minutes
               )(record => q.offer(record).unit)
-              .provideCustomLayer(DynamicConsumer.fake(shards))
+              .provideLayer(DynamicConsumer.fake(shards))
               .exitCode
       xs <- q.takeAll
     } yield xs

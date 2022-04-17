@@ -1,18 +1,17 @@
 package nl.vroste.zio.kinesis.client
-import java.time.Instant
-import zio.aws.kinesis.model.{ ListShardsRequest, ShardFilter, ShardFilterType }
-import zio.aws.kinesis.Kinesis
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.producer.ProducerLive.ProduceRequest
 import nl.vroste.zio.kinesis.client.producer._
 import nl.vroste.zio.kinesis.client.serde.Serializer
-import zio._
-import zio.stream.ZSink
-import zio.Clock
 import zio.Clock.instant
+import zio._
+import zio.aws.kinesis.Kinesis
 import zio.aws.kinesis.model.primitives.StreamName
+import zio.aws.kinesis.model.{ ListShardsRequest, ShardFilter, ShardFilterType }
+import zio.stream.ZSink
 
 import java.security.MessageDigest
+import java.time.Instant
 
 /**
  * Producer for Kinesis records
@@ -97,7 +96,7 @@ trait Producer[T] {
 final case class ProducerSettings(
   bufferSize: Int = 8192,
   maxParallelRequests: Int = 24,
-  backoffRequests: Schedule[Clock, Throwable, Any] = Schedule.exponential(500.millis) && Schedule.recurs(5),
+  backoffRequests: Schedule[Any, Throwable, Any] = Schedule.exponential(500.millis) && Schedule.recurs(5),
   failedDelay: Duration = 100.millis,
   metricsInterval: Duration = 30.seconds,
   updateShardInterval: Duration = 30.seconds,
@@ -134,10 +133,10 @@ object Producer {
     serializer: Serializer[R, T],
     settings: ProducerSettings = ProducerSettings(),
     metricsCollector: ProducerMetrics => ZIO[R1, Nothing, Unit] = (_: ProducerMetrics) => ZIO.unit
-  ): ZIO[Scope with R with R1 with Clock with Kinesis, Throwable, Producer[T]] =
+  ): ZIO[Scope with R with R1 with Kinesis, Throwable, Producer[T]] =
     for {
       client          <- ZIO.service[Kinesis]
-      env             <- ZIO.environment[R with Clock]
+      env             <- ZIO.environment[R]
       queue           <- ZIO.acquireRelease(Queue.bounded[ProduceRequest](settings.bufferSize))(_.shutdown)
       currentMetrics  <- instant.map(CurrentMetrics.empty).flatMap(Ref.make(_))
       shardMap        <- getShardMap(StreamName(streamName))
@@ -177,7 +176,7 @@ object Producer {
       _       <- producer.metricsCollection.forkScoped.ensuring(producer.collectMetrics)
     } yield producer
 
-  private def getShardMap(streamName: StreamName): ZIO[Clock with Kinesis, Throwable, ShardMap] = {
+  private def getShardMap(streamName: StreamName): ZIO[Kinesis, Throwable, ShardMap] = {
     val shardFilter = ShardFilter(ShardFilterType.AT_LATEST) // Currently open shards
     Kinesis
       .listShards(ListShardsRequest(Some(streamName), shardFilter = Some(shardFilter)))

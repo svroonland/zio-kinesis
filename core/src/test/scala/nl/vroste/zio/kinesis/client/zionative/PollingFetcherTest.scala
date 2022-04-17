@@ -62,7 +62,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
                          .fork
           chunks    <- chunksFib.join
         } yield assert(chunks.headOption)(isSome(hasSize(equalTo(batchSize)))))
-          .provideSomeLayer[ZEnv with Scope](ZLayer.succeed(stubClient(records)))
+          .provideSomeLayer[Scope](ZLayer.succeed(stubClient(records)))
       },
       test("immediately polls again when there are more records available") {
         val batchSize = 10
@@ -83,7 +83,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
                            .fork
             _         <- chunksFib.join
           } yield assertCompletes // The fact that we don't have to adjust our test clock suffices
-        ).provideSomeLayer[ZEnv with Scope](ZLayer.succeed(stubClient(records)))
+        ).provideSomeLayer[Scope](ZLayer.succeed(stubClient(records)))
       },
       test("delay polling when there are no more records available") {
         val batchSize    = 10
@@ -116,7 +116,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
           _                         <- chunksFib.join
         } yield assert(chunksReceivedImmediately)(equalTo(nrBatches)) && assert(chunksReceivedLater)(
           equalTo(nrBatches + 1)
-        )).provideSomeLayer[ZEnv with TestClock with Scope](ZLayer.succeed(stubClient(records)))
+        )).provideSomeLayer[Scope](ZLayer.succeed(stubClient(records)))
       },
       test("make no more than 5 calls per second per shard to GetRecords") {
         val batchSize    = 10
@@ -149,7 +149,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
           _                         <- chunksFib.join
         } yield assert(chunksReceivedImmediately)(equalTo(5L)) && assert(chunksReceivedLater)(
           equalTo(nrBatches)
-        )).provideSomeLayer[ZEnv with TestClock with Scope](ZLayer.succeed(stubClient(records)))
+        )).provideSomeLayer[Scope](ZLayer.succeed(stubClient(records)))
       },
       test("make the next call with the previous response's nextShardIterator") {
         val batchSize = 10
@@ -170,7 +170,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
                             }
           partitionKeys = fetched.map(_.partitionKey)
         } yield assert(partitionKeys)(equalTo(records.map(_.partitionKey))))
-          .provideSomeLayer[ZEnv with Scope](ZLayer.succeed(stubClient(records)))
+          .provideSomeLayer[Scope](ZLayer.succeed(stubClient(records)))
       },
       test("end the shard stream when the shard has ended") {
         val batchSize = 10
@@ -191,7 +191,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
                      .runCollect
                  }
         } yield assertCompletes)
-          .provideSomeLayer[ZEnv with Scope](
+          .provideSomeLayer[Scope](
             ZLayer.succeed(stubClient(records, endAfterRecords = true))
           )
       },
@@ -215,7 +215,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
                              }
           emittedEvents <- events.get
         } yield assert(emittedEvents)(forall(isSubtype[PollComplete](anything))))
-          .provideSomeLayer[ZEnv with Scope](ZLayer.succeed(stubClient(records)))
+          .provideSomeLayer[Scope](ZLayer.succeed(stubClient(records)))
       },
       test("retry after some time when throttled") {
         val batchSize    = 10
@@ -242,7 +242,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
                                              .take(nrBatches)
                                              .runDrain
                                          }
-                                         .provideSomeLayer[ZEnv with TestClock with Scope](
+                                         .provideSomeLayer[Scope](
                                            ZLayer.succeed(stubClient(records, doThrottle = doThrottle))
                                          )
                                          .fork
@@ -255,7 +255,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
           equalTo(nrBatches)
         ))
       }
-    ).provideCustomLayer(TestClock.default ++ Scope.default)
+    )
 
   private def makeRecords(nrRecords: Long): Seq[Record] =
     (0 until nrRecords.toInt).map { i =>

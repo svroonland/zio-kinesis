@@ -1,15 +1,14 @@
 package nl.vroste.zio.kinesis.client.zionative
 
 import nl.vroste.zio.kinesis.client.serde.Serde
-import zio._
-
 import zio.Console.printLine
+import zio._
 
 /**
  * Basic usage example for `Consumer.consumeWith` convenience method
  */
 object ConsumeWithExample extends zio.ZIOAppDefault {
-  override def run: ZIO[zio.ZEnv with ZIOAppArgs, Any, Any] =
+  override def run: ZIO[Any with ZIOAppArgs with Scope, Any, Any] =
     Consumer
       .consumeWith(
         streamName = "my-stream",
@@ -19,6 +18,6 @@ object ConsumeWithExample extends zio.ZIOAppDefault {
         checkpointBatchSize = 1000L,
         checkpointDuration = 5.minutes
       )(record => printLine(s"Processing record $record"))
-      .provideCustomLayer(Consumer.defaultEnvironment)
+      .provideLayer(Consumer.defaultEnvironment)
       .exitCode
 }

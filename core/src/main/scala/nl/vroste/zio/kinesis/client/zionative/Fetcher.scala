@@ -1,7 +1,6 @@
 package nl.vroste.zio.kinesis.client.zionative
 
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
-import zio.Clock
 import zio.aws.kinesis.model.{ primitives, Record, Shard, StartingPosition }
 import zio.stream.ZStream
 
@@ -17,7 +16,7 @@ private[zionative] trait Fetcher {
   def shardRecordStream(
     shardId: primitives.ShardId,
     startingPosition: StartingPosition
-  ): ZStream[Clock, Either[Throwable, EndOfShard], Record.ReadOnly]
+  ): ZStream[Any, Either[Throwable, EndOfShard], Record.ReadOnly]
 }
 
 private[zionative] object Fetcher {
@@ -27,7 +26,7 @@ private[zionative] object Fetcher {
     f: (
       primitives.ShardId,
       StartingPosition
-    ) => ZStream[Clock, Either[Throwable, EndOfShard], Record.ReadOnly]
+    ) => ZStream[Any, Either[Throwable, EndOfShard], Record.ReadOnly]
   ): Fetcher =
     (shard, startingPosition) => f(shard, startingPosition)
 }

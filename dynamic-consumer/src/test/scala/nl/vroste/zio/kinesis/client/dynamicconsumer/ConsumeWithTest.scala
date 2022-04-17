@@ -19,7 +19,7 @@ object ConsumeWithTest extends ZIOSpecDefault {
   private val env: ZLayer[
     Any,
     Throwable,
-    Console with Clock with Any with Random with CloudWatch with Kinesis with DynamoDb with DynamicConsumer
+    Any with CloudWatch with Kinesis with DynamoDb with DynamicConsumer
   ] =
     (Console.live ++ Clock.live ++ Random.live) >+> LocalStackServices.localStackAwsLayer() >+> DynamicConsumer.live
 

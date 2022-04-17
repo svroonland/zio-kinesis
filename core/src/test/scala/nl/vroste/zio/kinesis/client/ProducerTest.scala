@@ -16,7 +16,7 @@ import zio.stream.{ ZPipeline, ZStream }
 import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test.{ Gen, _ }
-import zio.{ Chunk, Clock, Console, Queue, Ref, ZIO, ZLayer, _ }
+import zio.{ Chunk, Queue, Ref, ZIO, ZLayer, _ }
 
 import java.security.MessageDigest
 import java.time.Instant
@@ -320,7 +320,7 @@ object ProducerTest extends ZIOSpecDefault {
         def makeProducer(
           workerId: String,
           totalMetrics: Ref[ProducerMetrics]
-        ): ZIO[Scope with Any with Console with Clock with Kinesis with Any, Throwable, Producer[
+        ): ZIO[Scope with Kinesis, Throwable, Producer[
           Chunk[Byte]
         ]] =
           Producer
@@ -414,8 +414,9 @@ object ProducerTest extends ZIOSpecDefault {
           } yield assertCompletes
         }
       } @@ TestAspect.timeout(2.minute)
-    ).provideCustomLayerShared(env ++ Scope.default ++ Clock.live) @@
+    ).provideCustomLayer(env ++ Scope.default) @@
       sequential @@
+      withLiveClock @@
       TestAspect.timeout(2.minute) @@
       TestAspect.runtimeConfig(
         RuntimeConfigAspect.addLogger(ZLogger.default.map(println(_)).filterLogLevel(_ > LogLevel.Debug))

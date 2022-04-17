@@ -3,11 +3,11 @@ package nl.vroste.zio.kinesis.client.zionative.metrics
 import nl.vroste.zio.kinesis.client.Util
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent._
+import zio._
 import zio.aws.cloudwatch.CloudWatch
 import zio.aws.cloudwatch.model.primitives._
 import zio.aws.cloudwatch.model.{ Dimension, MetricDatum, PutMetricDataRequest, StandardUnit }
 import zio.stream.{ ZSink, ZStream }
-import zio.{ Clock, _ }
 
 import java.time.Instant
 
@@ -29,7 +29,7 @@ final case class CloudWatchMetricsPublisherConfig(
   maxFlushInterval: Duration = 20.seconds,
   maxBatchSize: Int = 20,
   periodicMetricInterval: Duration = 30.seconds,
-  retrySchedule: Schedule[Clock, Any, (Duration, Long)] = Util.exponentialBackoff(1.second, 1.minute),
+  retrySchedule: Schedule[Any, Any, (Duration, Long)] = Util.exponentialBackoff(1.second, 1.minute),
   maxParallelUploads: Int = 3
 ) {
   require(maxBatchSize <= 20, "maxBatchSize must be <= 20 (AWS SDK limit)")
@@ -212,7 +212,7 @@ object CloudWatchMetricsPublisher {
   def make(
     applicationName: String,
     workerId: String
-  ): ZIO[Scope with Clock with CloudWatch with CloudWatchMetricsPublisherConfig, Nothing, Service] =
+  ): ZIO[Scope with CloudWatch with CloudWatchMetricsPublisherConfig, Nothing, Service] =
     for {
       client  <- ZIO.service[CloudWatch]
       config  <- ZIO.service[CloudWatchMetricsPublisherConfig]

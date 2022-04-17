@@ -22,7 +22,7 @@ import zio.{ Clock, Random }
  * A scala-native Future based interface to the zio-kinesis Consumer
  */
 class Consumer private (
-  runtime: zio.Runtime.Scoped[Clock with Random with Kinesis with LeaseRepository]
+  runtime: zio.Runtime.Scoped[Clock with Kinesis with LeaseRepository]
 ) {
 
   /**
