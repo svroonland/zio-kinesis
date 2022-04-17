@@ -48,34 +48,29 @@ object PollingFetcher {
               .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
               .mapError(Left(_): Either[Throwable, EndOfShard])
 
-          getRecordsThrottled =
-            Kinesis.getRecords(_) // <- throttledFunction(getRecordsRateLimit, 1.second)(Kinesis.getRecords)
-          shardIterator      <- Ref.make[Option[ShardIterator]](Some(initialShardIterator))
+          getRecordsThrottled <- throttledFunction(getRecordsRateLimit, 1.second)(Kinesis.getRecords)
+          shardIterator       <- Ref.make[Option[ShardIterator]](Some(initialShardIterator))
 
           // Failure with None indicates that there's no next shard iterator and the shard has ended
           doPoll = for {
-                     _                    <- ZIO.debug("Do poll")
                      currentIterator      <- shardIterator.get
                      currentIterator      <- ZIO.fromOption(currentIterator)
-                     _                    <- ZIO.debug("Do poll 2")
-                     responseWithDuration <-
-                       Kinesis
-                         .getRecords(
-                           GetRecordsRequest(
-                             currentIterator,
-                             Some(GetRecordsInputLimit(config.batchSize))
-                           )
-                         )
-                         .mapError(_.toThrowable)
-                         .tap(r => ZIO.debug(s"POll for shard ${shardId} got ${r.records.size}"))
-                         .tapErrorCause(e =>
-                           ZIO.debug(
-                             s"Error GetRecords for shard ${shardId}: ${e}"
-                           )
-                         )
-//                         .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
-                         .asSomeError
-                         .timed
+                     responseWithDuration <- getRecordsThrottled(
+                                               GetRecordsRequest(
+                                                 currentIterator,
+                                                 Some(GetRecordsInputLimit(config.batchSize))
+                                               )
+                                             )
+                                               .mapError(_.toThrowable)
+                                               .tap(r => ZIO.debug(s"POll for shard ${shardId} got ${r.records.size}"))
+                                               .tapErrorCause(e =>
+                                                 ZIO.debug(
+                                                   s"Error GetRecords for shard ${shardId}: ${e}"
+                                                 )
+                                               )
+                                               .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
+                                               .asSomeError
+                                               .timed
                      (duration, response)  = responseWithDuration
                      _                    <- shardIterator.set(response.nextShardIterator.toOption)
                      millisBehindLatest   <-
@@ -91,10 +86,9 @@ object PollingFetcher {
                    } yield response
 
           shardStream = ZStream
-                          .repeatZIO(doPoll)
+                          .repeatZIOWithSchedule(doPoll, config.pollSchedule)
                           .catchAll {
                             case None    => // TODO do we still need the None in combination with nextShardIterator?
-                              println("GOT NONE!")
                               ZStream.empty
                             case Some(e) =>
                               ZStream.fromZIO(
@@ -125,5 +119,5 @@ object PollingFetcher {
     }
 
   private val getShardIteratorRateLimit = 5
-//  private val getRecordsRateLimit       = 5
+  private val getRecordsRateLimit       = 5
 }

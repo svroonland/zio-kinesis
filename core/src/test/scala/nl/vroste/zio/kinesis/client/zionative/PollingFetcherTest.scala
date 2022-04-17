@@ -110,6 +110,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
                                          }
                                          .fork
           _                         <- TestClock.adjust(0.seconds)
+          _                          = println("Checking 1")
           chunksReceivedImmediately <- chunksReceived.get
           _                         <- TestClock.adjust(pollInterval)
           chunksReceivedLater       <- chunksReceived.get
