@@ -4,8 +4,6 @@ import nl.vroste.zio.kinesis.client.zionative._
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultCheckpointer.{ State, UpdateCheckpoint }
 import zio._
 
-import scala.annotation.nowarn
-
 private[zionative] class DefaultCheckpointer(
   shardId: String,
   state: Ref[State],
