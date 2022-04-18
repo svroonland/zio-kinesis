@@ -62,12 +62,6 @@ object PollingFetcher {
                                                )
                                              )
                                                .mapError(_.toThrowable)
-                                               .tap(r => ZIO.debug(s"POll for shard ${shardId} got ${r.records.size}"))
-                                               .tapErrorCause(e =>
-                                                 ZIO.debug(
-                                                   s"Error GetRecords for shard ${shardId}: ${e}"
-                                                 )
-                                               )
                                                .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
                                                .asSomeError
                                                .timed
@@ -96,7 +90,7 @@ object PollingFetcher {
                               ) *> ZStream.fail(e)
                           }
                           .retry(config.throttlingBackoff)
-                          .buffer(config.bufferNrBatches)
+//                          .buffer(config.bufferNrBatches) // TODO see https://github.com/zio/zio/issues/6649
                           .mapError(Left(_): Either[Throwable, EndOfShard])
                           .flatMap { response =>
                             if (response.childShards.toList.flatten.nonEmpty && response.nextShardIterator.isEmpty)

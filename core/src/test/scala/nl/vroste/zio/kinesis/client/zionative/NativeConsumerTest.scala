@@ -68,7 +68,6 @@ object NativeConsumerTest extends ZIOSpecDefault {
                           }
                           .take(nrRecords.toLong)
                           .zipWithIndex
-                          .debug
                           .map(_._1)
                           .runCollect
             _        <- producer.interrupt
@@ -793,6 +792,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
       }
     ).provideSomeLayerShared(env) @@
       TestAspect.timed @@
+      TestAspect.withLiveClock @@
 //      TestAspect.sequential @@ // For CircleCI
 //      TestAspect.nonFlaky(10)
       TestAspect.timeoutWarning(45.seconds) @@
