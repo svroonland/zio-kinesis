@@ -1,6 +1,6 @@
 package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
-import zio.stm.TMap
-import zio.{ Scope, Semaphore, ZIO }
+import zio.stm.{ TMap, TSemaphore, ZSTM }
+import zio.{ Scope, ZIO }
 
 /**
  * Ensures that effects are run serially per key
@@ -15,25 +15,22 @@ trait SerialExecution[K] {
 object SerialExecution {
   def keyed[K]: ZIO[Scope, Nothing, SerialExecution[K]] =
     for {
-      locks <- TMap.empty[K, Semaphore].commit
+      locks <- TMap.empty[K, TSemaphore].commit
     } yield new SerialExecution[K] {
       override def apply[R, E, A](key: K)(f: ZIO[R, E, A]): ZIO[R, E, A] =
         for {
-          lockOpt <- locks.get(key).commit
-          lock    <- lockOpt.fold(createLockForKey(key))(ZIO.succeed(_))
-          result  <- lock.withPermit(f)
+          lock   <- createOrGetLockForKey(key).commit
+          result <- lock.withPermit(f)
         } yield result
 
-      private def createLockForKey(key: K): ZIO[Any, Nothing, Semaphore] =
+      private def createOrGetLockForKey(key: K): ZSTM[Any, Nothing, TSemaphore] =
         for {
-          // There's a race condition between getting a None from the locks map and putting the new Semaphore there, hence we
-          // atomically check again. The unused created Semaphore will get GC'd
-          newLock        <- Semaphore.make(1)
-          newLockUpdated <- (for {
-                              _              <- locks.putIfAbsent(key, newLock)
-                              newLockUpdated <- locks.getOrElse(key, newLock)
-                            } yield newLockUpdated).commit
-        } yield newLockUpdated
+          lockOpt <- locks.get(key)
+          newLock <- lockOpt match {
+                       case Some(lock) => ZSTM.succeed(lock)
+                       case None       => TSemaphore.make(1).tap(locks.put(key, _))
+                     }
+        } yield newLock
     }
 
 }
