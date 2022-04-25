@@ -126,7 +126,7 @@ object TestUtil {
       }
       .use(massProduceRecords(_, nrRecords, produceRate = Some(produceRate), maxRecordSize))
 
-  val defaultChunkSize = 1000
+  val defaultChunkSize = 2048
 
   def putRecords[R, T](
     streamName: String,

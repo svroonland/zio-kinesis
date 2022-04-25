@@ -148,6 +148,7 @@ object Producer {
                                settings.updateShardInterval
                              )
       throttler           <- ShardThrottler.make(allowedError = settings.allowedErrorRate)
+      md5Pool             <- ZPool.make(ShardMap.md5, 60)
 
       producer = new ProducerLive[R, R1, T](
                    client,
@@ -163,7 +164,8 @@ object Producer {
                    settings.aggregate,
                    inFlightCalls,
                    triggerUpdateShards,
-                   throttler
+                   throttler,
+                   md5Pool
                  )
       _       <- producer.runloop.forkManaged                                             // Fiber cannot fail
       _       <- producer.metricsCollection.forkManaged.ensuring(producer.collectMetrics) // Fiber cannot fail
