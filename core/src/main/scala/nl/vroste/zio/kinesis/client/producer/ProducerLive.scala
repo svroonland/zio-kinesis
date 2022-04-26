@@ -55,12 +55,14 @@ private[client] final class ProducerLive[R, R1, T](
     (retries merge ZStream
       .fromQueue(queue, maxChunkSize)
       .mapChunksM(chunk => log.trace(s"Dequeued chunk of size ${chunk.size}").as(Chunk.single(chunk)))
-      .mapMPar(8) { chunk =>
-        (shards.get.toManaged_ zip md5Pool.get).use { case (shardMap, md5) =>
-          chunk.mapM { r =>
-            ZIO
-              .effect(shardMap.shardForPartitionKey(md5, r.partitionKey))
-              .map(shard => r.copy(predictedShard = shard))
+      .mapMPar(settings.maxParallelRequests) { chunk =>
+        md5Pool.get.use { md5 =>
+          shards.get.flatMap { shardMap =>
+            chunk.mapM { r =>
+              ZIO
+                .effect(shardMap.shardForPartitionKey(md5, r.partitionKey))
+                .map(shard => r.copy(predictedShard = shard))
+            }
           }
         }
       }

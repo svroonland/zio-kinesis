@@ -97,7 +97,8 @@ final case class ProducerSettings(
   metricsInterval: Duration = 30.seconds,
   updateShardInterval: Duration = 30.seconds,
   aggregate: Boolean = false,
-  allowedErrorRate: Double = 0.05
+  allowedErrorRate: Double = 0.05,
+  md5PoolSize: Int = 48 // TODO if not big enough, producer stalls..
 ) {
   require(allowedErrorRate > 0 && allowedErrorRate <= 1.0, "allowedErrorRate must be between 0 and 1 (inclusive)")
 }
@@ -148,7 +149,7 @@ object Producer {
                                settings.updateShardInterval
                              )
       throttler           <- ShardThrottler.make(allowedError = settings.allowedErrorRate)
-      md5Pool             <- ZPool.make(ShardMap.md5, 60)
+      md5Pool             <- ZPool.make(ShardMap.md5, settings.md5PoolSize)
 
       producer = new ProducerLive[R, R1, T](
                    client,
