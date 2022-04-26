@@ -55,19 +55,8 @@ private[client] final class ProducerLive[R, R1, T](
     (retries merge ZStream
       .fromQueue(queue, maxChunkSize)
       .mapChunksM(chunk => log.trace(s"Dequeued chunk of size ${chunk.size}").as(Chunk.single(chunk)))
-      .mapMPar(settings.maxParallelRequests) { chunk =>
-        md5Pool.get.use { md5 =>
-          shards.get.flatMap { shardMap =>
-            chunk.mapM { r =>
-              ZIO
-                .effect(shardMap.shardForPartitionKey(md5, r.partitionKey))
-                .map(shard => r.copy(predictedShard = shard))
-            }
-          }
-        }
-      }
+      .mapMParUnordered(settings.maxParallelRequests)(addPredictedShardToRequestsChunk)
       .flattenChunks
-
       // Aggregate records per shard
       .groupByKey2(_.predictedShard, chunkBufferSize)
       .flatMapPar(Int.MaxValue, chunkBufferSize) { case (shardId @ _, requests) =>
@@ -92,6 +81,17 @@ private[client] final class ProducerLive[R, R1, T](
       .runDrain
       .orDie
   }
+
+  private def addPredictedShardToRequestsChunk(chunk: Chunk[ProduceRequest]) =
+    md5Pool.get.use { md5 =>
+      shards.get.flatMap { shardMap =>
+        chunk.mapM { r =>
+          ZIO
+            .effect(shardMap.shardForPartitionKey(md5, r.partitionKey))
+            .map(shard => r.copy(predictedShard = shard))
+        }
+      }
+    }
 
   private def throttleShardRequests(shardId: ShardId, requests: ZStream[Any, Throwable, ProduceRequest]) =
     ZStream.fromEffect(throttler.getForShard(shardId)).flatMap { throttlerForShard =>
