@@ -88,6 +88,8 @@ trait Producer[T] {
  *   records/s limit per shard.
  * @param allowedErrorRate
  *   The maximum allowed rate of errors before throttling is applied
+ * @param shardPredictionParallelism
+ *   Max number of parallel shard predictions (MD5 hashing)
  */
 final case class ProducerSettings(
   bufferSize: Int = 8192,
@@ -98,7 +100,7 @@ final case class ProducerSettings(
   updateShardInterval: Duration = 30.seconds,
   aggregate: Boolean = false,
   allowedErrorRate: Double = 0.05,
-  md5PoolSize: Int = 48 // TODO if not big enough, producer stalls..
+  shardPredictionParallelism: Int = 8
 ) {
   require(allowedErrorRate > 0 && allowedErrorRate <= 1.0, "allowedErrorRate must be between 0 and 1 (inclusive)")
 }
@@ -149,7 +151,7 @@ object Producer {
                                settings.updateShardInterval
                              )
       throttler           <- ShardThrottler.make(allowedError = settings.allowedErrorRate)
-      md5Pool             <- ZPool.make(ShardMap.md5, settings.md5PoolSize)
+      md5Pool             <- ZPool.make(ShardMap.md5, settings.shardPredictionParallelism + settings.maxParallelRequests)
 
       producer = new ProducerLive[R, R1, T](
                    client,

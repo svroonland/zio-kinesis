@@ -55,7 +55,7 @@ private[client] final class ProducerLive[R, R1, T](
     (retries merge ZStream
       .fromQueue(queue, maxChunkSize)
       .mapChunksM(chunk => log.trace(s"Dequeued chunk of size ${chunk.size}").as(Chunk.single(chunk)))
-      .mapMParUnordered(settings.maxParallelRequests)(addPredictedShardToRequestsChunk)
+      .mapMParUnordered(settings.shardPredictionParallelism)(addPredictedShardToRequestsChunk)
       .flattenChunks
       // Aggregate records per shard
       .groupByKey2(_.predictedShard, chunkBufferSize)
