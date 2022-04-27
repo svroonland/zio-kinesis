@@ -10,7 +10,6 @@ import zio.aws.kinesis.model.primitives.StreamName
 import zio.aws.kinesis.model.{ ListShardsRequest, ShardFilter, ShardFilterType }
 import zio.stream.ZSink
 
-import java.security.MessageDigest
 import java.time.Instant
 
 /**
