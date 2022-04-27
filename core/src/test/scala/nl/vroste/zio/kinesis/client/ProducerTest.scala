@@ -26,6 +26,7 @@ import zio.{ system, Chunk, Queue, Ref, Runtime, ZIO, ZLayer, ZManaged }
 import java.security.MessageDigest
 import java.time.Instant
 import java.util.UUID
+import scala.annotation.unused
 
 object ProducerTest extends DefaultRunnableSpec {
   import TestUtil._
@@ -367,13 +368,13 @@ object ProducerTest extends DefaultRunnableSpec {
     ).provideCustomLayerShared(env) @@ sequential
 
   def aggregatingBatcherForProducerRecord[R, T](
-    shardMap: ShardMap,
+    @unused shardMap: ShardMap,
     serializer: Serializer[R, T]
   ): ZTransducer[R with Logging, Throwable, ProducerRecord[T], Seq[ProduceRequest]] =
     ProducerLive
       .aggregator(MessageDigest.getInstance("MD5"))
       .contramapM((r: ProducerRecord[T]) =>
-        ProducerLive.makeProduceRequest(r, serializer, Instant.now, shardMap).map(_._2)
+        ProducerLive.makeProduceRequest(r, serializer, Instant.now).map(_._2)
       ) >>> ProducerLive.batcher
 
   def runTransducer[R, E, I, O](parser: ZTransducer[R, E, I, O], input: Iterable[I]): ZIO[R, E, Chunk[O]] =
