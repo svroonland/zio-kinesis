@@ -145,7 +145,7 @@ private class CloudWatchMetricsPublisher(
       case WorkerLeft(workerId)      => workers.update(_ - workerId)
     }
 
-  val processQueue =
+  val processQueue: ZIO[Any, Nothing, Unit] =
     (ZStream
       .fromQueue(eventQueue)
       .mapZIO(event => now.map((event, _)))
@@ -164,7 +164,7 @@ private class CloudWatchMetricsPublisher(
       .runDrain
       .tapErrorCause(e => ZIO.logSpan("Metrics uploading has stopped with error")(ZIO.logErrorCause(e)))
 
-  val generatePeriodicMetrics =
+  val generatePeriodicMetrics: ZIO[Any, Nothing, Long] =
     (for {
       now            <- now
       nrWorkers      <- workers.get.map(_.size)
@@ -221,8 +221,8 @@ object CloudWatchMetricsPublisher {
       leases  <- Ref.make[Set[String]](Set.empty)
       workers <- Ref.make[Set[String]](Set.empty)
       c        = new CloudWatchMetricsPublisher(client, q, q2, applicationName, workerId, leases, workers, config)
-      _       <- c.processQueue.forkScoped
-      _       <- c.generatePeriodicMetrics.forkScoped
+      _       <- c.processQueue.forkScoped            // Fiber cannot fail
+      _       <- c.generatePeriodicMetrics.forkScoped // Fiber cannot fail
       // Shutdown the queues first
       _       <- ZIO.addFinalizer(q.shutdown)
       _       <- ZIO.addFinalizer(q2.shutdown)

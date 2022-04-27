@@ -6,18 +6,19 @@ import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.Consumer.InitialPosition
 import nl.vroste.zio.kinesis.client.zionative._
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
+import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository.TableParameters
 import nl.vroste.zio.kinesis.client.zionative.metrics.{ CloudWatchMetricsPublisher, CloudWatchMetricsPublisherConfig }
 import software.amazon.awssdk.http.SdkHttpConfigurationOption
 import software.amazon.awssdk.utils.AttributeMap
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio.aws.cloudwatch.CloudWatch
-import zio.aws.core.aspects.callLogging
 import zio.aws.dynamodb
+import zio.aws.dynamodb.model.primitives.{ TagKeyString, TagValueString }
 import zio.aws.kinesis.Kinesis
 import zio.aws.kinesis.model.primitives.{ PositiveIntegerObject, StreamName }
 import zio.aws.kinesis.model.{ ScalingType, UpdateShardCountRequest }
 import zio.stream.{ ZSink, ZStream }
-import zio.{ Clock, Console, Random, _ }
+import zio.{ Clock, _ }
 
 /**
  * Runnable used for manually testing various features
@@ -31,7 +32,7 @@ object ExampleApp extends zio.ZIOAppDefault {
   val nrShards                        = 2
   val reshardFactor                   = 2
   val reshardAfter: Option[Duration]  = None                // Some(10.seconds)
-  val enhancedFanout                  = true
+  val enhancedFanout                  = false
   val nrNativeWorkers                 = 1
   val nrKclWorkers                    = 0
   val runLength                       = 10.minute
@@ -223,7 +224,11 @@ object ExampleApp extends zio.ZIOAppDefault {
       zio.aws.core.config.AwsConfig.default >>>
       (kinesisClient ++ cloudWatch ++ dynamo)).orDie
 
-    val leaseRepo       = DynamoDbLeaseRepository.live
+    val leaseRepo       = DynamoDbLeaseRepository.make(
+      DynamoDbLeaseRepository.Settings(
+        TableParameters(tags = Seq(dynamodb.model.Tag(TagKeyString("app"), TagValueString("zio-kinesis"))))
+      )
+    )
     val dynamicConsumer = DynamicConsumer.live
 
     val metricsPublisherConfig = ZLayer.succeed(CloudWatchMetricsPublisherConfig())

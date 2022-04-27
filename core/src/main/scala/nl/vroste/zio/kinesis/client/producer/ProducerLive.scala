@@ -47,7 +47,9 @@ private[client] final class ProducerLive[R, R1, T](
     // Failed records get precedence
     (retries merge ZStream
       .fromQueue(queue, maxChunkSize)
-      .mapChunksZIO(chunk => ZIO.logDebug(s"Dequeued chunk of size ${chunk.size}").as(chunk))
+      .mapChunksZIO(chunk => ZIO.logDebug(s"Dequeued chunk of size ${chunk.size}").as(Chunk.single(chunk)))
+      .mapZIOParUnordered(settings.shardPredictionParallelism)(addPredictedShardToRequestsChunk)
+      .flattenChunks
       // Aggregate records per shard
       .groupByKey2(_.predictedShard, chunkBufferSize)
       .flatMapPar(Int.MaxValue, chunkBufferSize) { case (shardId @ _, requests) =>
@@ -59,7 +61,7 @@ private[client] final class ProducerLive[R, R1, T](
       })
       .groupByKey2(_.predictedShard, chunkBufferSize) // TODO can we avoid this second group by?
       .flatMapPar(Int.MaxValue, chunkBufferSize)(
-        Function.tupled(throttleShardRequests _)
+        Function.tupled(throttleShardRequests)
       )
       // Batch records up to the Kinesis PutRecords request limits as long as downstream is busy
       .aggregateAsync(batcher)
@@ -70,9 +72,21 @@ private[client] final class ProducerLive[R, R1, T](
       .mapZIO((processBatchResponse _).tupled)
       .tap(metrics => currentMetrics.update(_ append metrics))
       .runDrain
+      .orDie
   }
 
-  private def throttleShardRequests(shardId: ShardId, requests: ZStream[Any, Nothing, ProduceRequest]) =
+  private def addPredictedShardToRequestsChunk(chunk: Chunk[ProduceRequest]) =
+    ZIO.scoped {
+      (md5Pool.get zip shards.get).flatMap { case (md5, shardMap) =>
+        chunk.mapZIO { r =>
+          ZIO
+            .attempt(shardMap.shardForPartitionKey(md5, r.partitionKey))
+            .map(shard => r.copy(predictedShard = shard))
+        }
+      }
+    }
+
+  private def throttleShardRequests(shardId: ShardId, requests: ZStream[Any, Throwable, ProduceRequest]) =
     ZStream.fromZIO(throttler.getForShard(shardId)).flatMap { throttlerForShard =>
       requests
         .mapChunks(
@@ -211,7 +225,7 @@ private[client] final class ProducerLive[R, R1, T](
             s"on a different shard than expected and/or " +
             s"${failed.map(_._2.aggregateCount).sum} records (aggregated as ${failed.size}) would end up " +
             s"on a different shard than expected if they had succeeded. This may happen after a reshard."
-        ) *> triggerUpdateShards.fork.whenZIO {
+        ) *> triggerUpdateShards.fork.whenZIO { // Fiber cannot fail
           shards
             .getAndUpdate(_.invalidate)
             .map(shardMap => !shardMap.invalid && shardMap.lastUpdated.toEpochMilli < maxProduceRequestTimestamp)
@@ -253,12 +267,8 @@ private[client] final class ProducerLive[R, R1, T](
 
   override def produce(r: ProducerRecord[T]): Task[ProduceResponse] =
     (for {
-      shardMap        <- shards.get
       now             <- instant
-      ar              <- ZIO.scoped[R] {
-                           md5Pool.get
-                             .flatMap(digest => makeProduceRequest(r, serializer, now, shardMap, digest))
-                         }
+      ar              <- makeProduceRequest(r, serializer, now)
       (await, request) = ar
       _               <- queue.offer(request)
       response        <- await
@@ -268,8 +278,7 @@ private[client] final class ProducerLive[R, R1, T](
 
   override def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[Chunk[ProduceResponse]] =
     (for {
-      shardMap <- shards.get
-      now      <- instant
+      now <- instant
 
       done              <- Promise.make[Throwable, Chunk[ProduceResponse]]
       resultsCollection <- Ref.make[Chunk[ProduceResponse]](Chunk.empty)
@@ -285,21 +294,13 @@ private[client] final class ProducerLive[R, R1, T](
                                    } yield ()
                                )
                                .unit
-      requests          <- ZIO.scoped[R] {
-                             md5Pool.get.flatMap { digest =>
-                               ZIO.foreach(chunk) { r =>
-                                 for {
-                                   data          <- serializer.serialize(r.data)
-                                   predictedShard = shardMap.shardForPartitionKey(digest, PartitionKey(r.partitionKey))
-                                 } yield (
-                                   done.await,
-                                   ProduceRequest(data, PartitionKey(r.partitionKey), onDone, now, predictedShard)
-                                 )
-                               }
-                             }
+      requests          <- ZIO.foreach(chunk) { r =>
+                             for {
+                               data <- serializer.serialize(r.data)
+                             } yield (done.await, ProduceRequest(data, PartitionKey(r.partitionKey), onDone, now, null))
                            }
       _                 <- queue.offerAll(requests.map(_._2))
-      results           <- done.await
+      results           <- if (chunk.nonEmpty) done.await else ZIO.succeed(Chunk.empty)
       latencies          = results.map(r => java.time.Duration.between(now, r.completed))
       _                 <- currentMetrics.getAndUpdate(_.addSuccesses(results.map(_.attempts), latencies))
     } yield results)
@@ -342,18 +343,14 @@ private[client] object ProducerLive {
   def makeProduceRequest[R, T](
     r: ProducerRecord[T],
     serializer: Serializer[R, T],
-    now: Instant,
-    shardMap: ShardMap,
-    md5: MessageDigest
+    now: Instant
   ): ZIO[R, Throwable, (ZIO[Any, Throwable, ProduceResponse], ProduceRequest)] =
     for {
       done <- Promise.make[Throwable, ProduceResponse]
       data <- serializer.serialize(r.data)
-
-      predictedShard <- ZIO.succeed(shardMap.shardForPartitionKey(md5, PartitionKey(r.partitionKey)))
     } yield (
       done.await,
-      ProduceRequest(data, PartitionKey(r.partitionKey), done.completeWith(_).unit, now, predictedShard)
+      ProduceRequest(data, PartitionKey(r.partitionKey), done.completeWith(_).unit, now, predictedShard = null)
     )
 
   final def scheduleCatchRecoverable: Schedule[Any, Throwable, Throwable] =

@@ -1,5 +1,6 @@
 package nl.vroste.zio.kinesis.client.dynamicconsumer
 
+import nl.vroste.zio.kinesis.client.Util.ZStreamExtensions
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
@@ -223,33 +224,34 @@ private[client] class DynamicConsumerLive(
                          )
         env           <- ZIO.environment[R]
 
-        scheduler <- Task.attempt(
-                       new Scheduler(
-                         config.checkpoint,
-                         config.coordinator,
-                         config.leaseManagement,
-                         config.lifecycle,
-                         config.metrics,
-                         config.processor,
-                         config.retrieval
-                       )
-                     )
-        doShutdown = ZIO.logDebug("Starting graceful shutdown") *>
-                       ZIO.fromFutureJava(scheduler.startGracefulShutdown()).unit.orDie <*
-                       queues.shutdown
-        _         <- zio.ZIO
-                       .blocking(ZIO.attempt(scheduler.run()))
-                       .fork
-                       .flatMap(_.join)
-                       .onInterrupt(doShutdown)
-                       .forkScoped
-        _         <- (requestShutdown *> doShutdown).forkScoped
+        scheduler    <- Task.attempt(
+                          new Scheduler(
+                            config.checkpoint,
+                            config.coordinator,
+                            config.leaseManagement,
+                            config.lifecycle,
+                            config.metrics,
+                            config.processor,
+                            config.retrieval
+                          )
+                        )
+        doShutdown    = ZIO.logDebug("Starting graceful shutdown") *>
+                          ZIO.fromFutureJava(scheduler.startGracefulShutdown()).unit.orDie <*
+                          queues.shutdown
+        schedulerFib <- zio.ZIO
+                          .blocking(ZIO.attempt(scheduler.run()))
+                          .fork
+                          .flatMap(_.join)
+                          .onInterrupt(doShutdown)
+                          .forkScoped
+        _            <- (requestShutdown *> doShutdown).forkScoped
       } yield ZStream
         .fromQueue(queues.shards)
         .flattenExitOption
         .map { case (shardId, shardQueue, checkpointer) =>
           val stream = ZStream
             .fromQueue(shardQueue.q)
+            .terminateOnFiberFailure(schedulerFib)
             .ensuring(shardQueue.shutdownQueue)
             .flattenExitOption
             .mapChunksZIO(_.mapZIO(toRecord(shardId, _)))

@@ -88,10 +88,8 @@ trait Producer[T] {
  *   records/s limit per shard.
  * @param allowedErrorRate
  *   The maximum allowed rate of errors before throttling is applied
- * @param md5DigestPoolSize
- *   Size of the pool of MessageDigest instances used for shard prediction. The MessageDigest is too costly to
- *   instantiate for each record, hence a `ZPool` of them is used. This MessageDigest is used in `produce` and
- *   `produceChunk` calls.
+ * @param shardPredictionParallelism
+ *   Max number of parallel shard predictions (MD5 hashing)
  */
 final case class ProducerSettings(
   bufferSize: Int = 8192,
@@ -102,7 +100,7 @@ final case class ProducerSettings(
   updateShardInterval: Duration = 30.seconds,
   aggregate: Boolean = false,
   allowedErrorRate: Double = 0.05,
-  md5DigestPoolSize: Int = 8
+  shardPredictionParallelism: Int = 8
 ) {
   require(allowedErrorRate > 0 && allowedErrorRate <= 1.0, "allowedErrorRate must be between 0 and 1 (inclusive)")
 }
@@ -142,7 +140,6 @@ object Producer {
       shardMap        <- getShardMap(StreamName(streamName))
       currentShardMap <- Ref.make(shardMap)
       inFlightCalls   <- Ref.make(0)
-      md5Pool         <- ZPool.make(ZIO.attempt(MessageDigest.getInstance("MD5")), settings.md5DigestPoolSize)
       failedQueue     <- ZIO.acquireRelease(Queue.bounded[ProduceRequest](settings.bufferSize))(_.shutdown)
 
       triggerUpdateShards <- Util.periodicAndTriggerableOperation(
@@ -154,6 +151,7 @@ object Producer {
                                settings.updateShardInterval
                              )
       throttler           <- ShardThrottler.make(allowedError = settings.allowedErrorRate)
+      md5Pool             <- ZPool.make(ShardMap.md5, settings.shardPredictionParallelism + settings.maxParallelRequests)
 
       producer = new ProducerLive[R, R1, T](
                    client,
@@ -172,8 +170,8 @@ object Producer {
                    throttler,
                    md5Pool
                  )
-      _       <- producer.runloop.forkScoped
-      _       <- producer.metricsCollection.forkScoped.ensuring(producer.collectMetrics)
+      _       <- producer.runloop.forkScoped                                             // Fiber cannot fail
+      _       <- producer.metricsCollection.forkScoped.ensuring(producer.collectMetrics) // Fiber cannot fail
     } yield producer
 
   private def getShardMap(streamName: StreamName): ZIO[Kinesis, Throwable, ShardMap] = {

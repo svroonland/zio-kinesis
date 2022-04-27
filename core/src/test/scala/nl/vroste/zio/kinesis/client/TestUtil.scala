@@ -128,7 +128,7 @@ object TestUtil {
       } yield ()
     }
 
-  val defaultChunkSize = 10000
+  val defaultChunkSize = 1024
 
   def putRecords[R, T](
     streamName: String,
@@ -208,7 +208,10 @@ object TestUtil {
                    .nextIntBetween(1, maxRecordSize)
                    .map(valueLength => Chunk.fromIterable(List.fill(valueLength)(0x01.toByte)))
       } yield ProducerRecord(key, value)
-    }.rechunk(defaultChunkSize).take(nrRecords.toLong).viaFunction(throttle(produceRate, _)).buffer(defaultChunkSize)
+    }.rechunk(defaultChunkSize)
+      .take(nrRecords.toLong)
+      .viaFunction(throttle(produceRate, _))
+      .buffer(defaultChunkSize)
     massProduceRecords(producer, records)
   }
 

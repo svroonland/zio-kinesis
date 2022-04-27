@@ -1,5 +1,6 @@
 package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
 
+import nl.vroste.zio.kinesis.client.Util.ZStreamExtensions
 import nl.vroste.zio.kinesis.client.zionative.Consumer.InitialPosition
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.{
@@ -12,10 +13,10 @@ import nl.vroste.zio.kinesis.client.zionative._
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator.State
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.ZioExtensions.foreachParNUninterrupted_
 import software.amazon.awssdk.services.dynamodb.model.ResourceNotFoundException
-import zio.aws.kinesis.model.Shard
-import zio.stream.ZStream
 import zio._
+import zio.aws.kinesis.model.Shard
 import zio.aws.kinesis.model.primitives.ShardId
+import zio.stream.ZStream
 
 import java.time.{ DateTimeException, Instant }
 
@@ -50,7 +51,8 @@ private class DefaultLeaseCoordinator(
   serialExecutionByShard: SerialExecution[String],
   settings: LeaseCoordinationSettings,
   strategy: ShardAssignmentStrategy,
-  initialPosition: InitialPosition
+  initialPosition: InitialPosition,
+  shards: Task[Map[ShardId, Shard.ReadOnly]]
 ) extends LeaseCoordinator {
 
   import DefaultLeaseCoordinator._
@@ -58,9 +60,7 @@ private class DefaultLeaseCoordinator(
 
   val now = zio.Clock.currentDateTime.map(_.toInstant())
 
-  def initialize(
-    shards: Task[Map[ShardId, Shard.ReadOnly]]
-  ): ZIO[Scope, Throwable, Unit] = {
+  private def initialize: ZIO[Scope, Throwable, Unit] = {
     val getLeasesOrInitializeLeaseTable = refreshLeases.catchSome { case _: ResourceNotFoundException =>
       table.createLeaseTableIfNotExists(applicationName) *> shards.flatMap(updateShards)
     }
@@ -78,7 +78,7 @@ private class DefaultLeaseCoordinator(
     (for {
       _ <- getLeasesOrInitializeLeaseTable
       // Initialization. If it fails, we will try in the loop
-      _ <- (takeLeases.ignore *> periodicRefreshAndTakeLeases).forkScoped.withFinalizer(_ =>
+      _ <- (takeLeases.retryN(1).ignore *> periodicRefreshAndTakeLeases).forkScoped.withFinalizer(_ =>
              ZIO.logDebug("Shutting down refresh & take lease loop")
            )
       _ <- repeatAndRetry(settings.renewInterval)(renewLeases).forkScoped
@@ -351,10 +351,17 @@ private class DefaultLeaseCoordinator(
                          }
     } yield ()
 
-  override def acquiredLeases: ZStream[Any, Throwable, AcquiredLease] =
-    ZStream
+  override def acquiredLeases: ZStream[Any, Throwable, AcquiredLease] = ZStream.unwrapScoped {
+    for {
+      runloopFiber <- initialize.fork
+      _            <- ZIO.addFinalizer(
+                        releaseLeases *> ZIO.logDebug("releaseLeases done")
+                      ) // We need the runloop to be alive for this operation
+    } yield ZStream
       .fromQueue(acquiredLeasesQueue)
       .map { case (lease, complete) => AcquiredLease(lease.key, complete) }
+      .terminateOnFiberFailure(runloopFiber)
+  }
 
   override def getCheckpointForShard(shardId: String): UIO[Option[Either[SpecialCheckpoint, ExtendedSequenceNumber]]] =
     for {
@@ -403,7 +410,7 @@ private class DefaultLeaseCoordinator(
                                         updateStateWithDiagnosticEvents(_.releaseLease(updatedLease, _)) *>
                                         emitDiagnostic(DiagnosticEvent.LeaseReleased(shard)) *>
                                         emitDiagnostic(DiagnosticEvent.ShardEnded(shard)).when(shardEnded) <*
-                                        takeLeases.fork.when(shardEnded)
+                                        takeLeases.ignore.fork.when(shardEnded) // When it fails, the runloop will try it again sooner
                                     ).when(release)).orDie
                                 }
     } yield ()
@@ -451,12 +458,9 @@ private[zionative] object DefaultLeaseCoordinator {
                            serialExecution,
                            settings,
                            strategy,
-                           initialPosition
+                           initialPosition,
+                           shards
                          )
-      _               <- c.initialize(shards).forkScoped
-      _               <- ZIO.addFinalizer(
-                           c.releaseLeases *> ZIO.logDebug("releaseLeases done")
-                         ) // We need the runloop to be alive for this operation
     } yield c)
       .tapErrorCause(c => ZIO.logSpan("Error creating DefaultLeaseCoordinator")(ZIO.logErrorCause(c)))
 
@@ -506,12 +510,13 @@ private[zionative] object DefaultLeaseCoordinator {
 
   private def repeatAndRetry[R, E, A](
     interval: Duration
-  )(effect: ZIO[R, E, A]): ZIO[R, E, Long] =
+  )(effect: ZIO[R, E, A]): ZIO[R, Nothing, Unit] =
     ZIO.interruptibleMask { restore =>
       restore(effect)
         .repeat(Schedule.fixed(interval))
         .delay(interval)
         .retry(Schedule.forever)
+        .ignore // Cannot fail
     }
 
   final case class LeaseState(lease: Lease, completed: Option[Promise[Nothing, Unit]], lastUpdated: Instant) {

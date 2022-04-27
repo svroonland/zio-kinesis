@@ -1,7 +1,7 @@
 import xerial.sbt.Sonatype.GitHubHosting
 
-val mainScala = "2.13.7"
-val allScala  = Seq("2.12.15", mainScala)
+val mainScala = "2.13.8"
+val allScala  = Seq("2.12.15", mainScala, "3.1.1")
 
 val excludeInferAny = { options: Seq[String] => options.filterNot(Set("-Xlint:infer-any")) }
 
@@ -12,6 +12,7 @@ inThisBuild(
     licenses                         := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
     scalaVersion                     := mainScala,
     crossScalaVersions               := allScala,
+    compileOrder                     := CompileOrder.JavaThenScala,
     Test / parallelExecution         := false,
     Global / cancelable              := true,
     Test / fork                      := true,
@@ -40,7 +41,7 @@ inThisBuild(
 )
 
 val zioVersion    = "2.0.0-RC5"
-val zioAwsVersion = "5.17.171.1"
+val zioAwsVersion = "5.17.177.1"
 
 lazy val root = project
   .in(file("."))
@@ -91,8 +92,8 @@ lazy val stdSettings: Seq[sbt.Def.SettingsDefinition] = Seq(
     "dev.zio"                %% "zio-test-sbt"                % zioVersion % "test",
     "dev.zio"                %% "zio-interop-reactivestreams" % "1.3.9",
 //    "dev.zio"                %% "zio-logging"                 % "0.5.14", // TODO upgrade when available for ZIO 2
-    "ch.qos.logback"          % "logback-classic"             % "1.2.10",
-    "org.scala-lang.modules" %% "scala-collection-compat"     % "2.6.0",
+    "ch.qos.logback"          % "logback-classic"             % "1.2.11",
+    "org.scala-lang.modules" %% "scala-collection-compat"     % "2.7.0",
     "org.hdrhistogram"        % "HdrHistogram"                % "2.1.12",
     "dev.zio"                %% "zio-aws-core"                % zioAwsVersion,
     "dev.zio"                %% "zio-aws-kinesis"             % zioAwsVersion,
@@ -123,7 +124,7 @@ lazy val dynamicConsumer = (project in file("dynamic-consumer"))
     name                       := "zio-kinesis-dynamic-consumer",
     assembly / assemblyJarName := "zio-kinesis-dynamic-consumer" + version.value + ".jar",
     libraryDependencies ++= Seq(
-      "software.amazon.kinesis" % "amazon-kinesis-client" % "2.3.10"
+      "software.amazon.kinesis" % "amazon-kinesis-client" % "2.4.1"
     )
   )
   .dependsOn(core % "compile->compile;test->test")

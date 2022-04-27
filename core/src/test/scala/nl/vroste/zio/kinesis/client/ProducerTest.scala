@@ -52,6 +52,20 @@ object ProducerTest extends ZIOSpecDefault {
             }
         }
       },
+      test("not block when passing an empty chunk to produceChunk") {
+
+        val streamName = "zio-test-stream-producer-2"
+
+        withStream(streamName, 1) {
+          Producer
+            .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 128))
+            .flatMap { producer =>
+              for {
+                _ <- producer.produceChunk(Chunk.empty)
+              } yield assertCompletes
+            }
+        }
+      },
       test("support a ramp load") {
         val streamName = "zio-test-stream-producer-ramp"
 
@@ -198,17 +212,16 @@ object ProducerTest extends ZIOSpecDefault {
           val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))
 
           for {
-            batches <- ShardMap.md5.flatMap { md5 =>
-                         ZStream
-                           .fromIterable(records)
-                           .mapZIO(r =>
-                             ProducerLive
-                               .makeProduceRequest(r, Serde.asciiString, Instant.now, shardMap, md5)
-                               .map(_._2)
-                           )
-                           .via(batcher)
-                           .runCollect
-                       }
+            batches <-
+              ZStream
+                .fromIterable(records)
+                .mapZIO(r =>
+                  ProducerLive
+                    .makeProduceRequest(r, Serde.asciiString, Instant.now)
+                    .map(_._2)
+                )
+                .via(batcher)
+                .runCollect
           } yield assert(batches.size)(equalTo(1)) &&
             assert(batches.flatten.map(_.aggregateCount).sum)(equalTo(nrRecords)) &&
             assert(batches.headOption)(isSome(hasSize(equalTo(1))))
@@ -227,17 +240,16 @@ object ProducerTest extends ZIOSpecDefault {
             val records = inputs.map { case (key, value) => ProducerRecord(key, value) }
 
             for {
-              batches           <- ShardMap.md5.flatMap { md5 =>
-                                     ZStream
-                                       .fromIterable(records)
-                                       .mapZIO(r =>
-                                         ProducerLive
-                                           .makeProduceRequest(r, Serde.asciiString, Instant.now, shardMap, md5)
-                                           .map(_._2)
-                                       )
-                                       .via(batcher)
-                                       .runCollect
-                                   }
+              batches           <-
+                ZStream
+                  .fromIterable(records)
+                  .mapZIO(r =>
+                    ProducerLive
+                      .makeProduceRequest(r, Serde.asciiString, Instant.now)
+                      .map(_._2)
+                  )
+                  .via(batcher)
+                  .runCollect
               recordPayloadSizes = batches.flatten.map(r => r.payloadSize)
             } yield assert(recordPayloadSizes)(forall(isLessThanEqualTo(ProducerLive.maxPayloadSizePerRecord)))
           }
@@ -249,17 +261,16 @@ object ProducerTest extends ZIOSpecDefault {
           val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))
 
           for {
-            batches          <- ShardMap.md5.flatMap { md5 =>
-                                  ZStream
-                                    .fromIterable(records)
-                                    .mapZIO(r =>
-                                      ProducerLive
-                                        .makeProduceRequest(r, Serde.asciiString, Instant.now, shardMap, md5)
-                                        .map(_._2)
-                                    )
-                                    .via(batcher)
-                                    .runCollect
-                                }
+            batches          <-
+              ZStream
+                .fromIterable(records)
+                .mapZIO(r =>
+                  ProducerLive
+                    .makeProduceRequest(r, Serde.asciiString, Instant.now)
+                    .map(_._2)
+                )
+                .via(batcher)
+                .runCollect
             batchPayloadSizes = batches.map(_.map(_.data.length).sum)
           } yield assert(batches.map(_.size))(forall(isLessThanEqualTo(ProducerLive.maxRecordsPerRequest))) &&
             assert(batchPayloadSizes)(forall(isLessThanEqualTo(ProducerLive.maxPayloadSizePerRequest)))

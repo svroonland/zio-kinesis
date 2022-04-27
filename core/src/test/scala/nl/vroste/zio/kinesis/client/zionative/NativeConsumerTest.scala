@@ -10,6 +10,8 @@ import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.LeaseCoordinationSettings
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
 import zio.Console._
+import zio.aws.cloudwatch.CloudWatch
+import zio.aws.dynamodb.DynamoDb
 import zio.aws.kinesis.Kinesis
 import zio.aws.kinesis.model.primitives.{ PositiveIntegerObject, ShardId, StreamName }
 import zio.aws.kinesis.model.{ DescribeStreamRequest, ScalingType, UpdateShardCountRequest }
@@ -18,7 +20,6 @@ import zio.test.Assertion._
 import zio.test._
 import zio.{ Clock, Console, System, _ }
 
-import scala.collection.compat._
 import java.time.Instant
 import java.{ util => ju }
 
@@ -175,7 +176,9 @@ object NativeConsumerTest extends ZIOSpecDefault {
                              .take(1)
                              .runHead
 
-          } yield assert(firstRecord)(isSome(hasField("key", _.partitionKey, equalTo(s"key${nrRecords + 3}"))))
+          } yield assert(firstRecord)(
+            isSome(hasField("key", (_: Record[String]).partitionKey, equalTo(s"key${nrRecords + 3}")))
+          )
         }
       },
       test("worker steals leases from other worker until they both have an equal share") {
@@ -790,7 +793,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
             )
         }
       }
-    ).provideSomeLayerShared(env) @@
+    ).provideCustomLayerShared(env) @@
       TestAspect.timed @@
       TestAspect.withLiveClock @@
 //      TestAspect.sequential @@ // For CircleCI
@@ -803,10 +806,12 @@ object NativeConsumerTest extends ZIOSpecDefault {
 
   val useAws = Runtime.default.unsafeRun(System.envOrElse("ENABLE_AWS", "0")).toInt == 1
 
-  val env = (((if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()).orDie) >+>
-    DynamoDbLeaseRepository.live ++
-    zio.test.testEnvironment ++
-    Clock.live)
+  val awsLayer: ZLayer[Any, Throwable, CloudWatch with Kinesis with DynamoDb] =
+    if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()
+
+  val env
+    : ZLayer[Any, Nothing, Scope with CloudWatch with Kinesis with DynamoDb with LeaseRepository with TestEnvironment] =
+    Scope.default >+> awsLayer.orDie >+> DynamoDbLeaseRepository.live ++ zio.test.testEnvironment
 
   def produceSampleRecords(
     streamName: String,

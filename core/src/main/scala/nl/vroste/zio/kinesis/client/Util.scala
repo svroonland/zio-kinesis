@@ -56,6 +56,15 @@ object Util {
             (key, substream)
         }
       }
+
+    def terminateOnFiberFailure[E1 >: E](fib: Fiber[E1, Any]): ZStream[R, E1, O] =
+      stream
+        .map(Exit.succeed)
+        .mergeTerminateEither(ZStream.fromZIO(fib.join).as(Exit.fail(None)) *> ZStream.never)
+        .flattenExitOption
+
+    def terminateOnPromiseCompleted[E1 >: E](p: Promise[Nothing, _]): ZStream[R, E1, O] =
+      stream.map(Exit.succeed).mergeTerminateEither(ZStream.fromZIO(p.await).as(Exit.fail(None))).flattenExitOption
   }
 
   /**
@@ -99,8 +108,7 @@ object Util {
     for {
       requestsQueue <- Queue.bounded[(IO[E, A], Promise[E, A])](units / 2 * 2)
       _             <- ZStream
-                         .fromQueueWithShutdown(requestsQueue)
-                         .rechunk(1)
+                         .fromQueueWithShutdown(requestsQueue, 1) // See https://github.com/zio/zio/issues/4190
                          .throttleShape(units.toLong, duration, units.toLong)(_ => 1)
                          .mapZIO { case (effect, promise) => promise.completeWith(effect) }
                          .runDrain
@@ -145,6 +153,6 @@ object Util {
   ): ZIO[Scope with R, Nothing, UIO[Unit]] =
     for {
       queue <- ZIO.acquireRelease(Queue.dropping[Unit](1))(_.shutdown)
-      _     <- ((queue.take raceFirst ZIO.sleep(period)) *> effect *> queue.takeAll).forever.forkScoped
+      _     <- ((queue.take raceFirst ZIO.sleep(period)) *> effect *> queue.takeAll).forever.forkScoped // Fiber cannot fail
     } yield queue.offer(()).unit
 }

@@ -6,6 +6,7 @@ import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.{
   LeaseObsolete,
   UnableToClaimLease
 }
+import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository.Settings
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbUtil._
 import nl.vroste.zio.kinesis.client.zionative.{ ExtendedSequenceNumber, LeaseRepository, SpecialCheckpoint }
 import software.amazon.awssdk.services.dynamodb.model.{
@@ -14,6 +15,7 @@ import software.amazon.awssdk.services.dynamodb.model.{
   ResourceNotFoundException
 }
 import zio._
+import zio.aws.dynamodb
 import zio.aws.dynamodb.model._
 import zio.aws.dynamodb.model.primitives.{ AttributeName, ConditionExpression, TableName }
 import zio.aws.dynamodb.{ model, DynamoDb }
@@ -21,12 +23,11 @@ import zio.stream.ZStream
 
 import java.util.concurrent.TimeoutException
 import scala.util.{ Failure, Try }
-import scala.collection.compat._
 
 // TODO this thing should have a global throttling / backoff
 // via a Tap that tries to find the optimal maximal throughput
 // See https://degoes.net/articles/zio-challenge
-private class DynamoDbLeaseRepository(client: DynamoDb, timeout: Duration) extends LeaseRepository.Service {
+private class DynamoDbLeaseRepository(client: DynamoDb, settings: Settings) extends LeaseRepository.Service {
 
   /**
    * Returns whether the table already existed
@@ -37,9 +38,13 @@ private class DynamoDbLeaseRepository(client: DynamoDb, timeout: Duration) exten
 
     val request = model.CreateTableRequest(
       tableName = TableName(tableName),
-      billingMode = Some(BillingMode.PAY_PER_REQUEST),
       keySchema = keySchema,
-      attributeDefinitions = attributeDefinitions
+      attributeDefinitions = attributeDefinitions,
+      billingMode = Some(settings.tableParameters.billingMode),
+      provisionedThroughput = settings.tableParameters.provisionedThroughput,
+      streamSpecification = settings.tableParameters.streamSpecification,
+      sseSpecification = settings.tableParameters.sse,
+      tags = Option(settings.tableParameters.tags)
     )
 
     val createTable =
@@ -70,15 +75,15 @@ private class DynamoDbLeaseRepository(client: DynamoDb, timeout: Duration) exten
         .unit
 
     // Optimistically assume the table already exists
-    ZIO.logDebug(s"Checking if lease table '${tableName}' exists") *>
+    ZIO.logDebug(s"Checking if lease table '$tableName' exists") *>
       describeTable.flatMap {
         case TableStatus.ACTIVE | TableStatus.UPDATING =>
-          ZIO.logDebug(s"Lease table '${tableName}' exists and is active").as(true)
+          ZIO.logDebug(s"Lease table '$tableName' exists and is active").as(true)
         case TableStatus.CREATING                      =>
-          ZIO.logDebug(s"Lease table '${tableName}' has CREATING status") *>
+          ZIO.logDebug(s"Lease table '$tableName' has CREATING status") *>
             awaitTableActive.delay(1.seconds).as(true)
         case s @ _                                     =>
-          ZIO.fail(new Exception(s"Could not create lease table '${tableName}'. Invalid table status: ${s}"))
+          ZIO.fail(new Exception(s"Could not create lease table '$tableName'. Invalid table status: $s"))
       }.catchSome { case _: ResourceNotFoundException =>
         createTable.catchSome {
           // Race condition: another worker is creating the table at the same time as we are, we lose
@@ -121,7 +126,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb, timeout: Duration) exten
         case e                                  =>
           ZIO.fail(Left(e))
       }
-      .tapError(e => ZIO.logInfo(s"Got error releasing lease ${lease.key}: ${e}"))
+      .tapError(e => ZIO.logInfo(s"Got error releasing lease ${lease.key}: $e"))
   }
 
   // Returns the updated lease
@@ -142,7 +147,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb, timeout: Duration) exten
     client
       .updateItem(request)
       .mapError(_.toThrowable)
-      .timeoutFail(new TimeoutException(s"Timeout claiming lease"))(timeout)
+      .timeoutFail(new TimeoutException(s"Timeout claiming lease"))(settings.timeout)
       // .tapError(e => ZIO.logWarning(s"Got error claiming lease: ${e}"))
       .unit
       .catchAll {
@@ -196,7 +201,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb, timeout: Duration) exten
     client
       .updateItem(request)
       .mapError(_.toThrowable)
-      .timeoutFail(new TimeoutException(s"Timeout updating checkpoint"))(timeout)
+      .timeoutFail(new TimeoutException(s"Timeout updating checkpoint"))(settings.timeout)
       .unit
       .catchAll {
         case _: ConditionalCheckFailedException =>
@@ -217,8 +222,8 @@ private class DynamoDbLeaseRepository(client: DynamoDb, timeout: Duration) exten
     client
       .updateItem(request)
       .mapError(_.toThrowable)
-      .timeoutFail(new TimeoutException(s"Timeout renewing lease"))(timeout)
-      .tapError(e => ZIO.logWarning(s"Got error updating lease: ${e}"))
+      .timeoutFail(new TimeoutException(s"Timeout renewing lease"))(settings.timeout)
+      .tapError(e => ZIO.logWarning(s"Got error updating lease: $e"))
       .unit
       .catchAll {
         case _: ConditionalCheckFailedException =>
@@ -242,7 +247,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb, timeout: Duration) exten
     client
       .putItem(request)
       .mapError(_.toThrowable)
-      .timeoutFail(new TimeoutException(s"Timeout creating lease"))(timeout)
+      .timeoutFail(new TimeoutException(s"Timeout creating lease"))(settings.timeout)
       .unit
       .mapError {
         case _: ConditionalCheckFailedException =>
@@ -259,7 +264,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb, timeout: Duration) exten
     client
       .deleteTable(request)
       .mapError(_.toThrowable)
-      .timeoutFail(new TimeoutException(s"Timeout creating lease"))(timeout)
+      .timeoutFail(new TimeoutException(s"Timeout creating lease"))(settings.timeout)
       .unit
   }
 
@@ -282,7 +287,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb, timeout: Duration) exten
         parentShardIds = getValue("parentShardIds").map(_.ss.toList.flatten).getOrElse(List.empty)
       )
     }.recoverWith { case e =>
-      println(s"Error deserializing lease: ${item} ${e}")
+      println(s"Error deserializing lease: $item $e")
       Failure(e)
     }
 
@@ -312,13 +317,20 @@ private class DynamoDbLeaseRepository(client: DynamoDb, timeout: Duration) exten
 }
 
 object DynamoDbLeaseRepository {
-  val defaultTimeout = 10.seconds
+  val defaultTimeout: zio.Duration = 10.seconds
 
-  val live: ZLayer[DynamoDb, Nothing, LeaseRepository] = make(defaultTimeout)
+  val live: ZLayer[DynamoDb, Nothing, LeaseRepository] = make(Settings())
 
-  def make(timeout: Duration = defaultTimeout): ZLayer[DynamoDb, Nothing, LeaseRepository] =
-    ZLayer.fromFunction {
-      new DynamoDbLeaseRepository(_, timeout)
-    }
+  def make(settings: Settings): ZLayer[DynamoDb, Nothing, LeaseRepository] =
+    ZLayer.fromFunction(new DynamoDbLeaseRepository(_, settings))
 
+  case class Settings(tableParameters: TableParameters = TableParameters(), timeout: Duration = defaultTimeout)
+
+  case class TableParameters(
+    billingMode: BillingMode = BillingMode.PAY_PER_REQUEST,
+    provisionedThroughput: Option[ProvisionedThroughput] = None,
+    tags: Seq[dynamodb.model.Tag] = Seq.empty,
+    streamSpecification: Option[StreamSpecification] = None,
+    sse: Option[SSESpecification] = None
+  )
 }

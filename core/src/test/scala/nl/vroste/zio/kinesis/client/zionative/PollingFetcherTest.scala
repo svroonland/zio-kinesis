@@ -2,7 +2,10 @@ package nl.vroste.zio.kinesis.client.zionative
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.Polling
 import nl.vroste.zio.kinesis.client.zionative.fetcher.PollingFetcher
-import software.amazon.awssdk.services.kinesis.model.ProvisionedThroughputExceededException
+import software.amazon.awssdk.services.kinesis.model.{
+  ExpiredIteratorException,
+  ProvisionedThroughputExceededException
+}
 import zio._
 import zio.aws.core.AwsError
 import zio.aws.core.aspects.AwsCallAspect
@@ -35,7 +38,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
    *   - [X] make the next call with the previous response's nextShardIterator
    *   - [X] end the shard stream when the shard has ended
    *   - [X] emit a diagnostic event for every completed poll
-   *
+   *   - [X] refresh an iterator if it expires
    * @return
    */
   override def spec =
@@ -62,7 +65,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
                          .fork
           chunks    <- chunksFib.join
         } yield assert(chunks.headOption)(isSome(hasSize(equalTo(batchSize)))))
-          .provideSomeLayer[Scope](ZLayer.succeed(stubClient(records)))
+          .provideSomeLayer[Scope](ZLayer.fromZIO(stubClient(records)))
       },
       test("immediately polls again when there are more records available") {
         val batchSize = 10
@@ -83,7 +86,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
                            .fork
             _         <- chunksFib.join
           } yield assertCompletes // The fact that we don't have to adjust our test clock suffices
-        ).provideSomeLayer[Scope](ZLayer.succeed(stubClient(records)))
+        ).provideSomeLayer[Scope](ZLayer.fromZIO(stubClient(records)))
       },
       test("delay polling when there are no more records available") {
         val batchSize    = 10
@@ -117,7 +120,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
           _                         <- chunksFib.join
         } yield assert(chunksReceivedImmediately)(equalTo(nrBatches)) && assert(chunksReceivedLater)(
           equalTo(nrBatches + 1)
-        )).provideSomeLayer[Scope](ZLayer.succeed(stubClient(records)))
+        )).provideSomeLayer[Scope](ZLayer.fromZIO(stubClient(records)))
       },
       test("make no more than 5 calls per second per shard to GetRecords") {
         val batchSize    = 10
@@ -150,7 +153,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
           _                         <- chunksFib.join
         } yield assert(chunksReceivedImmediately)(equalTo(5L)) && assert(chunksReceivedLater)(
           equalTo(nrBatches)
-        )).provideSomeLayer[Scope](ZLayer.succeed(stubClient(records)))
+        )).provideSomeLayer[Scope](ZLayer.fromZIO(stubClient(records)))
       },
       test("make the next call with the previous response's nextShardIterator") {
         val batchSize = 10
@@ -171,7 +174,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
                             }
           partitionKeys = fetched.map(_.partitionKey)
         } yield assert(partitionKeys)(equalTo(records.map(_.partitionKey))))
-          .provideSomeLayer[Scope](ZLayer.succeed(stubClient(records)))
+          .provideSomeLayer[Scope](ZLayer.fromZIO(stubClient(records)))
       },
       test("end the shard stream when the shard has ended") {
         val batchSize = 10
@@ -193,7 +196,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
                  }
         } yield assertCompletes)
           .provideSomeLayer[Scope](
-            ZLayer.succeed(stubClient(records, endAfterRecords = true))
+            ZLayer.fromZIO(stubClient(records, endAfterRecords = true))
           )
       },
       test("emit a diagnostic event for every poll") {
@@ -216,7 +219,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
                              }
           emittedEvents <- events.get
         } yield assert(emittedEvents)(forall(isSubtype[PollComplete](anything))))
-          .provideSomeLayer[Scope](ZLayer.succeed(stubClient(records)))
+          .provideSomeLayer[Scope](ZLayer.fromZIO(stubClient(records)))
       },
       test("retry after some time when throttled") {
         val batchSize    = 10
@@ -244,7 +247,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
                                              .runDrain
                                          }
                                          .provideSomeLayer[Scope](
-                                           ZLayer.succeed(stubClient(records, doThrottle = doThrottle))
+                                           ZLayer.fromZIO(stubClient(records, doThrottle = doThrottle))
                                          )
                                          .fork
           _                         <- TestClock.adjust(0.seconds)
@@ -255,8 +258,38 @@ object PollingFetcherTest extends ZIOSpecDefault {
         } yield assert(chunksReceivedImmediately)(equalTo(1L)) && assert(chunksReceivedLater)(
           equalTo(nrBatches)
         ))
+      },
+      test("restart from the correct sequence number when an iterator has expired") {
+        val batchSize    = 10
+        val nrBatches    = 3L
+        val pollInterval = 1.second
+
+        val records = makeRecords(nrBatches * batchSize)
+
+        val doExpire = (next: Int, count: Int) => ZIO.succeed(next == batchSize && count == 1)
+        for {
+          fetcherFib <-
+            PollingFetcher
+              .make("my-stream-1", FetchMode.Polling(batchSize, Polling.dynamicSchedule(pollInterval)), _ => UIO.unit)
+              .flatMap { fetcher =>
+                fetcher
+                  .shardRecordStream(ShardId("shard1"), StartingPosition(ShardIteratorType.TRIM_HORIZON))
+                  .mapChunks(Chunk.single)
+                  .take(nrBatches)
+                  .runCollect
+              }
+              .provideSomeLayer[Scope](
+                ZLayer.fromZIO(stubClient(records, doExpire = doExpire))
+              )
+              .fork
+          _          <- TestClock.adjust(0.seconds)
+
+          received <- fetcherFib.join
+        } yield assert(received)(hasSize(equalTo(nrBatches.toInt))) && assertTrue(
+          received.flatten.map(_.partitionKey) == Chunk.fromIterable(records.map(_.partitionKey))
+        )
       }
-    )
+    ) @@ TestAspect.timeout(30.seconds)
 
   private def makeRecords(nrRecords: Long): Seq[Record] =
     (0 until nrRecords.toInt).map { i =>
@@ -271,52 +304,74 @@ object PollingFetcherTest extends ZIOSpecDefault {
   private def stubClient(
     records: Seq[Record],
     endAfterRecords: Boolean = false,
-    doThrottle: (String, Int) => UIO[Boolean] = (_, _) => UIO.succeed(false)
-  ): Kinesis =
-    new StubClient { self =>
-      override def withAspect[R](newAspect: AwsCallAspect[R], r: ZEnvironment[R]): Kinesis = self
+    doThrottle: (String, Int) => UIO[Boolean] = (_, _) => UIO.succeed(false),
+    doExpire: (Int, Int) => UIO[Boolean] = (_, _) => UIO.succeed(false)
+  ): UIO[Kinesis] =
+    Ref.make[Map[Int, Int]](Map.empty.withDefaultValue(0)).map { issuedIterators =>
+      new StubClient { self =>
+        private def issueIterator(sequenceNumber: Int): UIO[String] =
+          issuedIterators.modify { old =>
+            (sequenceNumber.toString(), old + (sequenceNumber -> (old(sequenceNumber) + 1)))
+          }
 
-      override def getShardIterator(
-        request: model.GetShardIteratorRequest
-      ): IO[AwsError, GetShardIteratorResponse.ReadOnly] =
-        IO.succeed(GetShardIteratorResponse(Some(ShardIterator("0"))).asReadOnly)
+        override def withAspect[R](newAspect: AwsCallAspect[R], r: ZEnvironment[R]): Kinesis = self
 
-      override def getRecords(request: model.GetRecordsRequest): IO[AwsError, GetRecordsResponse.ReadOnly] = {
-        val shardIterator = request.shardIterator
-        val limit         = request.limit.getOrElse(0)
+        override def getShardIterator(
+          request: model.GetShardIteratorRequest
+        ): IO[AwsError, GetShardIteratorResponse.ReadOnly] = {
+          val baseSequenceNumber = request.startingSequenceNumber.map(_.toInt).getOrElse(0)
+          val sequenceNumber     =
+            if (request.shardIteratorType == ShardIteratorType.AFTER_SEQUENCE_NUMBER)
+              baseSequenceNumber + 1
+            else
+              baseSequenceNumber
+          issueIterator(sequenceNumber)
+            .map(iterator => GetShardIteratorResponse(Some(ShardIterator(iterator))).asReadOnly)
+        }
 
-        doThrottle(shardIterator, limit).flatMap { throttle =>
-          if (throttle)
-            IO.fail(
-              AwsError.fromThrowable(ProvisionedThroughputExceededException.builder.message("take it easy").build())
-            )
-          else {
-            val offset             = shardIterator.toInt
-            val lastRecordOffset   = offset + limit
-            val recordsInResponse  = records.slice(offset, offset + limit)
-            val shouldEnd          = lastRecordOffset >= records.size && endAfterRecords
-            val nextShardIterator  =
-              if (shouldEnd) null else lastRecordOffset.toString
-            val childShards        =
-              if (shouldEnd)
-                Some(
-                  Seq(
-                    ChildShard(ShardId("shard-002"), Seq(ShardId("001")), HashKeyRange(HashKey("123"), HashKey("456")))
+        override def getRecords(request: model.GetRecordsRequest): IO[AwsError, GetRecordsResponse.ReadOnly] = {
+          val shardIterator = request.shardIterator
+          val limit         = request.limit.getOrElse(0)
+          val offset        = shardIterator.toInt
+          val expire        = issuedIterators.get.flatMap[Any, Nothing, Boolean](issued => doExpire(offset, issued(offset)))
+
+          doThrottle(shardIterator, limit).zip(expire).flatMap { case (throttle, expire) =>
+            if (throttle)
+              IO.fail(
+                AwsError.fromThrowable(ProvisionedThroughputExceededException.builder.message("take it easy").build())
+              )
+            else if (expire)
+              IO.fail(AwsError.fromThrowable(ExpiredIteratorException.builder().message("too late").build()))
+            else {
+              val lastRecordOffset   = offset + limit
+              val recordsInResponse  = records.slice(offset, offset + limit)
+              val shouldEnd          = lastRecordOffset >= records.size && endAfterRecords
+              val childShards        =
+                if (shouldEnd)
+                  Some(
+                    Seq(
+                      ChildShard(
+                        ShardId("shard-002"),
+                        Seq(ShardId("001")),
+                        HashKeyRange(HashKey("123"), HashKey("456"))
+                      )
+                    )
                   )
-                )
-              else None
-            val millisBehindLatest = if (lastRecordOffset >= records.size) 0 else records.size - lastRecordOffset
+                else None
+              val millisBehindLatest = if (lastRecordOffset >= records.size) 0 else records.size - lastRecordOffset
 
-            //          println(s"GetRecords from ${shardIterator} (max ${limit}. Next iterator: ${nextShardIterator}")
+              val nextShardIterator = if (shouldEnd) ZIO.succeed(null) else issueIterator(lastRecordOffset)
 
-            val awsResponse = GetRecordsResponse(
-              recordsInResponse,
-              Some(ShardIterator(nextShardIterator)),
-              Some(MillisBehindLatest(millisBehindLatest.toLong)),
-              childShards
-            ).asReadOnly
-
-            IO.succeed(awsResponse)
+              //          println(s"GetRecords from ${shardIterator} (max ${limit}. Next iterator: ${nextShardIterator}")
+              nextShardIterator.map { iterator =>
+                GetRecordsResponse(
+                  recordsInResponse,
+                  Some(ShardIterator(iterator)),
+                  Some(MillisBehindLatest(millisBehindLatest.toLong)),
+                  childShards
+                ).asReadOnly
+              }
+            }
           }
         }
       }
