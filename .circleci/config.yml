@@ -64,7 +64,7 @@ workflows:
               only: << pipeline.parameters.tag_regex >>
       - run_with_localstack:
           name: test31
-          image: hseeberger/scala-sbt:17.0.2_1.6.2_3.1.1
+          image: hseeberger/scala-sbt:17.0.2_1.6.2_3.1.2
           sbt_command: ++3.1.1! core/test interopFutures/test
           requires:
             - lint
