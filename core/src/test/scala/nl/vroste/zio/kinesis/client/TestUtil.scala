@@ -128,7 +128,7 @@ object TestUtil {
       } yield ()
     }
 
-  val defaultChunkSize = 1024
+  val defaultChunkSize = 10000
 
   def putRecords[R, T](
     streamName: String,
