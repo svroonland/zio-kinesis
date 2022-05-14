@@ -2,7 +2,7 @@ package nl.vroste.zio.kinesis.client.producer
 import nl.vroste.zio.kinesis.client.producer.ProducerLive.ShardId
 import zio.aws.kinesis.model.Shard
 import zio.aws.kinesis.model.primitives.{ HashKey, PartitionKey }
-import zio.{ Chunk, Scope, Task, ZIO }
+import zio.{ Chunk, Scope, ZIO }
 
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
