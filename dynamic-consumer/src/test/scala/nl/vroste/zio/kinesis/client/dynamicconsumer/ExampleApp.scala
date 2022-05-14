@@ -216,7 +216,7 @@ object ExampleApp extends zio.ZIOAppDefault {
       )
     )
 
-    val kinesisClient = Clock.live >>> kinesisAsyncClientLayer() // / @@ (callLogging)
+    val kinesisClient = kinesisAsyncClientLayer() // / @@ (callLogging)
 
     val cloudWatch = cloudWatchAsyncClientLayer()
     val dynamo     = dynamoDbAsyncClientLayer()

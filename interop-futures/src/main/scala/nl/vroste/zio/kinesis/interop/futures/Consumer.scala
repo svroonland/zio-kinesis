@@ -22,7 +22,7 @@ import zio.{ Clock, Random }
  * A scala-native Future based interface to the zio-kinesis Consumer
  */
 class Consumer private (
-  runtime: zio.Runtime.Scoped[Clock with Kinesis with LeaseRepository]
+  runtime: zio.Runtime.Scoped[Kinesis with LeaseRepository]
 ) {
 
   /**
@@ -93,9 +93,7 @@ object Consumer {
         dynamoDbAsyncClientLayer(buildDynamoDbClient)
     )
 
-    val layer = Clock.live ++
-      Random.live ++
-      (sdkClients >+> DynamoDbLeaseRepository.live)
+    val layer = (sdkClients >+> DynamoDbLeaseRepository.live)
 
     val runtime = zio.Runtime.unsafeFromLayer(layer)
 

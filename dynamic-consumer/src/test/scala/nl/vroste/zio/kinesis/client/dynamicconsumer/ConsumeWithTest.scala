@@ -9,7 +9,7 @@ import zio.aws.cloudwatch.CloudWatch
 import zio.aws.dynamodb.DynamoDb
 import zio.aws.kinesis.Kinesis
 import zio.test.Assertion.equalTo
-import zio.test.TestAspect.timeout
+import zio.test.TestAspect.{ timeout, withLiveClock }
 import zio.test.{ assert, ZIOSpecDefault }
 import zio.{ durationInt, Clock, Console, Promise, Random, Ref, ZLayer }
 
@@ -21,7 +21,7 @@ object ConsumeWithTest extends ZIOSpecDefault {
     Throwable,
     Any with CloudWatch with Kinesis with DynamoDb with DynamicConsumer
   ] =
-    (Console.live ++ Clock.live ++ Random.live) >+> LocalStackServices.localStackAwsLayer() >+> DynamicConsumer.live
+    LocalStackServices.localStackAwsLayer() >+> DynamicConsumer.live
 
   def testConsume1 =
     test("consumeWith should consume records produced on all shards") {
@@ -37,7 +37,7 @@ object ConsumeWithTest extends ZIOSpecDefault {
             (for {
               _                <- printLine("Putting records")
               _                <- putRecords(streamName, Serde.asciiString, records)
-                                    .tapError(e => printLine(s"error1: $e").provideLayer(Console.live))
+                                    .tapError(e => printLine(s"error1: $e"))
                                     .retry(retryOnResourceNotFound)
               _                <- printLine("Starting dynamic consumer")
               consumerFiber    <- consumeWith[Any, Any, String](
@@ -81,7 +81,7 @@ object ConsumeWithTest extends ZIOSpecDefault {
             (for {
               _                <- printLine("Putting records")
               _                <- putRecords(streamName, Serde.asciiString, records)
-                                    .tapError(e => printLine(s"error1: $e").provideLayer(Console.live))
+                                    .tapError(e => printLine(s"error1: $e"))
                                     .retry(retryOnResourceNotFound)
               _                <- printLine("Starting dynamic consumer - about to fail")
               _                <- consumeWith[Any, Any, String](
@@ -127,6 +127,6 @@ object ConsumeWithTest extends ZIOSpecDefault {
     suite("ConsumeWithTest")(
       testConsume1,
       testConsume2
-    ).provideLayer(env.orDie) @@ timeout(7.minutes)
+    ).provideLayer(env.orDie) @@ withLiveClock @@ timeout(7.minutes)
 
 }

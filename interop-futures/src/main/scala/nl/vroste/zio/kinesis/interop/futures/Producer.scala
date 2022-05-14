@@ -91,7 +91,7 @@ object Producer {
         .make(streamName, serializer, settings, metricsCollector = m => ZIO.attempt(metricsCollector(m)).orDie)
     }
 
-    val layer   = (Clock.live ++ sdkClients) >>> producer
+    val layer   = sdkClients >>> producer
     val runtime = zio.Runtime.unsafeFromLayer(layer)
 
     new Producer[T](runtime, runtime.unsafeRun(ZIO.service[client.Producer[T]]))

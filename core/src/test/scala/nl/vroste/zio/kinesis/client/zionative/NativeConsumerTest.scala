@@ -368,7 +368,6 @@ object NativeConsumerTest extends ZIOSpecDefault {
                                    zio.Clock.currentDateTime
                                      .map(_.toInstant())
                                      .flatMap(time => events.update(_ :+ ((workerId, time, event))))
-                                     .provideLayer(Clock.live)
 
             _         <- {
               for {
@@ -511,8 +510,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
                               onDiagnostic(workerId)(event) *>
                                 zio.Clock.currentDateTime
                                   .map(_.toInstant())
-                                  .flatMap(time => events.update(_ :+ ((workerId, time, event))))
-                                  .provideLayer(Clock.live) *>
+                                  .flatMap(time => events.update(_ :+ ((workerId, time, event)))) *>
                                 events.get
                                   .flatMap(events => done.succeed(()).when(testIsComplete(events)))
                                   .unit
@@ -831,7 +829,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
           .mapChunksZIO { chunk =>
             producer
               .produceChunk(chunk)
-              .tapError(e => printLine(s"Error in producing fiber: $e").provideLayer(Console.live).orDie)
+              .tapError(e => printLine(s"Error in producing fiber: $e").orDie)
               .retry(retryOnResourceNotFound)
               .tap(_ => throttle.map(ZIO.sleep(_)).getOrElse(ZIO.unit))
               .map(Chunk.fromIterable)
@@ -856,7 +854,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
         .mapChunksZIO(chunk =>
           producer
             .produceChunk(chunk)
-            .tapError(e => printLine(s"Error in producing fiber: $e").provideLayer(Console.live).orDie)
+            .tapError(e => printLine(s"Error in producing fiber: $e").orDie)
             .retry(retryOnResourceNotFound)
             .fork
             .map(fib => Chunk.single(fib))
