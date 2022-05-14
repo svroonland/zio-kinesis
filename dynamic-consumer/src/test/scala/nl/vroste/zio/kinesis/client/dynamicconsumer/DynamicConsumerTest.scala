@@ -15,7 +15,7 @@ import zio.stream.{ SubscriptionRef, ZSink, ZStream }
 import zio.test.Assertion._
 import zio.test.TestAspect.{ timeout, withLiveClock }
 import zio.test._
-import zio.{ Clock, Console, Random, System, _ }
+import zio.{ Clock, System, _ }
 
 object DynamicConsumerTest extends ZIOSpecDefault {
   import TestUtil._

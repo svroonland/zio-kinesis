@@ -11,7 +11,7 @@ import zio.aws.kinesis.Kinesis
 import zio.test.Assertion.equalTo
 import zio.test.TestAspect.{ timeout, withLiveClock }
 import zio.test.{ assert, ZIOSpecDefault }
-import zio.{ durationInt, Clock, Console, Promise, Random, Ref, ZLayer }
+import zio.{ durationInt, Promise, Ref, ZLayer }
 
 object ConsumeWithTest extends ZIOSpecDefault {
   import TestUtil._

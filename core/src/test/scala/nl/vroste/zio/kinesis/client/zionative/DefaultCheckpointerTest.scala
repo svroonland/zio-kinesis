@@ -1,12 +1,12 @@
 package nl.vroste.zio.kinesis.client.zionative
-import java.time.Instant
 import nl.vroste.zio.kinesis.client.Record
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultCheckpointer
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultCheckpointer.UpdateCheckpoint
-import zio.{ Promise, Ref, Schedule, Semaphore, Task, ZIO }
-import zio.test._
 import zio.test.Assertion._
+import zio.test._
+import zio.{ Promise, Ref, Schedule, Semaphore, ZIO }
 
+import java.time.Instant
 import scala.concurrent.TimeoutException
 
 object DefaultCheckpointerTest extends ZIOSpecDefault {

@@ -18,7 +18,9 @@ import zio.aws.kinesis.model.{ DescribeStreamRequest, ScalingType, UpdateShardCo
 import zio.stream.{ ZSink, ZStream }
 import zio.test.Assertion._
 import zio.test._
-import zio.{ Clock, Console, System, _ }
+import zio.{ System, _ }
+
+import scala.collection.compat._
 
 import java.time.Instant
 import java.{ util => ju }
