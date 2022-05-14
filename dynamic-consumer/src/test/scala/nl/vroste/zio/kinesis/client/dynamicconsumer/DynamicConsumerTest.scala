@@ -13,7 +13,7 @@ import zio.aws.kinesis.model.primitives.{ PositiveIntegerObject, StreamName }
 import zio.aws.kinesis.{ model, Kinesis }
 import zio.stream.{ SubscriptionRef, ZSink, ZStream }
 import zio.test.Assertion._
-import zio.test.TestAspect.timeout
+import zio.test.TestAspect.{ timeout, withLiveClock }
 import zio.test._
 import zio.{ Clock, Console, Random, System, _ }
 
@@ -344,7 +344,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
       testConsume2,
       testCheckpointAtShutdown,
       testShardEnd
-    ).provideCustomLayer(env) @@ timeout(10.minutes)
+    ).provideCustomLayer(env) @@ timeout(10.minutes) @@ withLiveClock
 
   def delayStream[R, E, O](s: ZStream[R, E, O], delay: Duration) =
     ZStream.fromZIO(ZIO.sleep(delay)).flatMap(_ => s)
