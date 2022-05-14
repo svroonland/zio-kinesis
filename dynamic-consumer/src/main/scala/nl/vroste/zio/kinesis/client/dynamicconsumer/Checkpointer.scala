@@ -36,7 +36,7 @@ private[dynamicconsumer] object Checkpointer {
             for {
 //              _ <- ZIO.logTrace(s"about to checkpoint ${sequenceNumber}")
               _ <- ZIO.blocking {
-                     Task.attempt(
+                     ZIO.attempt(
                        kclCheckpointer
                          .checkpoint(sequenceNumber.sequenceNumber, sequenceNumber.subSequenceNumber.getOrElse(0L))
                      )
@@ -51,7 +51,7 @@ private[dynamicconsumer] object Checkpointer {
                        )
                    }
             } yield ()
-          case State(None, _, _, _)                 => UIO.unit
+          case State(None, _, _, _)                 => ZIO.unit
         }
 
       override private[client] def peek: UIO[Option[ExtendedSequenceNumber]] = state.get.map(_.latestStaged)

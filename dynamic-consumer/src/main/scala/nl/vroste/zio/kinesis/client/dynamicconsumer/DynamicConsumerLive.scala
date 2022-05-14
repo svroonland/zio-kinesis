@@ -224,7 +224,7 @@ private[client] class DynamicConsumerLive(
                          )
         env           <- ZIO.environment[R]
 
-        scheduler    <- Task.attempt(
+        scheduler    <- ZIO.attempt(
                           new Scheduler(
                             config.checkpoint,
                             config.coordinator,
@@ -257,7 +257,7 @@ private[client] class DynamicConsumerLive(
             .mapChunksZIO(_.mapZIO(toRecord(shardId, _)))
             .provideEnvironment(env)
             .ensuring((checkpointer.checkEndOfShardCheckpointed *> checkpointer.checkpoint).catchSome {
-              case _: ShutdownException => UIO.unit: ZIO[Any, Nothing, Unit]
+              case _: ShutdownException => ZIO.unit: ZIO[Any, Nothing, Unit]
             }.orDie)
 
           (shardId, stream, checkpointer)

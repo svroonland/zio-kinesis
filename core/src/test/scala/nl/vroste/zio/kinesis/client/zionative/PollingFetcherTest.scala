@@ -50,7 +50,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
 
         (for {
           chunksFib <- PollingFetcher
-                         .make(StreamName(StreamName("my-stream-1")), FetchMode.Polling(10), _ => UIO.unit)
+                         .make(StreamName(StreamName("my-stream-1")), FetchMode.Polling(10), _ => ZIO.unit)
                          .flatMap { fetcher =>
                            fetcher
                              .shardRecordStream(
@@ -75,7 +75,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
 
         (for {
             chunksFib <- PollingFetcher
-                           .make(StreamName("my-stream-1"), FetchMode.Polling(batchSize), _ => UIO.unit)
+                           .make(StreamName("my-stream-1"), FetchMode.Polling(batchSize), _ => ZIO.unit)
                            .flatMap { fetcher =>
                              fetcher
                                .shardRecordStream(ShardId("shard1"), StartingPosition(ShardIteratorType.TRIM_HORIZON))
@@ -101,7 +101,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
                                          .make(
                                            StreamName("my-stream-1"),
                                            FetchMode.Polling(batchSize, Polling.dynamicSchedule(pollInterval)),
-                                           _ => UIO.unit
+                                           _ => ZIO.unit
                                          )
                                          .flatMap { fetcher =>
                                            fetcher
@@ -135,7 +135,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
                                          .make(
                                            StreamName("my-stream-1"),
                                            FetchMode.Polling(batchSize, Polling.dynamicSchedule(pollInterval)),
-                                           _ => UIO.unit
+                                           _ => ZIO.unit
                                          )
                                          .flatMap { fetcher =>
                                            fetcher
@@ -163,7 +163,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
 
         (for {
           fetched      <- PollingFetcher
-                            .make(StreamName("my-stream-1"), FetchMode.Polling(batchSize), _ => UIO.unit)
+                            .make(StreamName("my-stream-1"), FetchMode.Polling(batchSize), _ => ZIO.unit)
                             .flatMap { fetcher =>
                               fetcher
                                 .shardRecordStream(ShardId("shard1"), StartingPosition(ShardIteratorType.TRIM_HORIZON))
@@ -183,7 +183,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
 
         (for {
           _ <- PollingFetcher
-                 .make(StreamName("my-stream-1"), FetchMode.Polling(batchSize), _ => UIO.unit)
+                 .make(StreamName("my-stream-1"), FetchMode.Polling(batchSize), _ => ZIO.unit)
                  .flatMap { fetcher =>
                    fetcher
                      .shardRecordStream(ShardId("shard1"), StartingPosition(ShardIteratorType.TRIM_HORIZON))
@@ -236,7 +236,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
                                          .make(
                                            StreamName("my-stream-1"),
                                            FetchMode.Polling(batchSize, Polling.dynamicSchedule(pollInterval)),
-                                           _ => UIO.unit
+                                           _ => ZIO.unit
                                          )
                                          .flatMap { fetcher =>
                                            fetcher
@@ -270,7 +270,7 @@ object PollingFetcherTest extends ZIOSpecDefault {
         for {
           fetcherFib <-
             PollingFetcher
-              .make("my-stream-1", FetchMode.Polling(batchSize, Polling.dynamicSchedule(pollInterval)), _ => UIO.unit)
+              .make("my-stream-1", FetchMode.Polling(batchSize, Polling.dynamicSchedule(pollInterval)), _ => ZIO.unit)
               .flatMap { fetcher =>
                 fetcher
                   .shardRecordStream(ShardId("shard1"), StartingPosition(ShardIteratorType.TRIM_HORIZON))
@@ -304,8 +304,8 @@ object PollingFetcherTest extends ZIOSpecDefault {
   private def stubClient(
     records: Seq[Record],
     endAfterRecords: Boolean = false,
-    doThrottle: (String, Int) => UIO[Boolean] = (_, _) => UIO.succeed(false),
-    doExpire: (Int, Int) => UIO[Boolean] = (_, _) => UIO.succeed(false)
+    doThrottle: (String, Int) => UIO[Boolean] = (_, _) => ZIO.succeed(false),
+    doExpire: (Int, Int) => UIO[Boolean] = (_, _) => ZIO.succeed(false)
   ): UIO[Kinesis] =
     Ref.make[Map[Int, Int]](Map.empty.withDefaultValue(0)).map { issuedIterators =>
       new StubClient { self =>
@@ -337,11 +337,11 @@ object PollingFetcherTest extends ZIOSpecDefault {
 
           doThrottle(shardIterator, limit).zip(expire).flatMap { case (throttle, expire) =>
             if (throttle)
-              IO.fail(
+              ZIO.fail(
                 AwsError.fromThrowable(ProvisionedThroughputExceededException.builder.message("take it easy").build())
               )
             else if (expire)
-              IO.fail(AwsError.fromThrowable(ExpiredIteratorException.builder().message("too late").build()))
+              ZIO.fail(AwsError.fromThrowable(ExpiredIteratorException.builder().message("too late").build()))
             else {
               val lastRecordOffset   = offset + limit
               val recordsInResponse  = records.slice(offset, offset + limit)

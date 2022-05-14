@@ -163,7 +163,7 @@ object Consumer {
     fetchMode: FetchMode = FetchMode.Polling(),
     leaseCoordinationSettings: LeaseCoordinationSettings = LeaseCoordinationSettings(),
     initialPosition: InitialPosition = InitialPosition.TrimHorizon,
-    emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit,
+    emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => ZIO.unit,
     shardAssignmentStrategy: ShardAssignmentStrategy = ShardAssignmentStrategy.balanced()
   ): ZStream[
     Kinesis with LeaseRepository with R,
@@ -393,7 +393,7 @@ object Consumer {
     fetchMode: FetchMode = FetchMode.Polling(),
     leaseCoordinationSettings: LeaseCoordinationSettings = LeaseCoordinationSettings(),
     initialPosition: InitialPosition = InitialPosition.TrimHorizon,
-    emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit,
+    emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => ZIO.unit,
     shardAssignmentStrategy: ShardAssignmentStrategy = ShardAssignmentStrategy.balanced(),
     checkpointBatchSize: Long = 200,
     checkpointDuration: Duration = 5.minutes

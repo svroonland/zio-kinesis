@@ -82,7 +82,7 @@ object CheckpointerFake {
                 case Some(r) if r == record => None
                 case r                      => r // A newer record may have been staged by now
               }
-          case None         => UIO.unit
+          case None         => ZIO.unit
         }
     }
 }

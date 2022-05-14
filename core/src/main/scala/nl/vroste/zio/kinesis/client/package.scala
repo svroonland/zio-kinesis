@@ -37,7 +37,7 @@ package object client {
     ZLayer.succeed {
       new AwsConfig {
         override def configure[Client, Builder <: AwsClientBuilder[Builder, Client]](builder: Builder): Task[Builder] =
-          Task.attempt {
+          ZIO.attempt {
             builder.overrideConfiguration(ClientOverrideConfiguration.builder().retryPolicy(RetryPolicy.none()).build())
           }
 

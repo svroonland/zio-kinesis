@@ -47,7 +47,7 @@ trait Checkpointer {
   def stageOnSuccess[R, E, A](effect: ZIO[R, E, A])(r: Record[_]): ZIO[R, E, A] =
     effect.onExit {
       case Exit.Success(_) => stage(r)
-      case _               => UIO.unit
+      case _               => ZIO.unit
     }
 
   /**

@@ -159,7 +159,7 @@ object ProducerTest extends ZIOSpecDefault {
       } @@ timeout(1.minute),
       suite("foldWhile")(
         test("empty")(
-          assertM(
+          assertZIO(
             ZStream.empty
               .transduce(
                 ProducerLive.foldWhile(0)(_ => true)((x, y: Int) => ZIO.succeed(x + y))
@@ -178,16 +178,16 @@ object ProducerTest extends ZIOSpecDefault {
               effects <- Ref.make[List[Int]](Nil)
               exit    <- stream
                            .transduce(ProducerLive.foldWhile(0)(_ => true) { (_, a: Int) =>
-                             effects.update(a :: _) *> UIO.succeed(30)
+                             effects.update(a :: _) *> ZIO.succeed(30)
                            })
                            .runCollect
               result  <- effects.get
             } yield exit -> result).exit
 
-          (assertM(run(empty))(succeeds(equalTo((Chunk(0), Nil)))) <*>
-            assertM(run(single))(succeeds(equalTo((Chunk(30), List(1))))) <*>
-            assertM(run(double))(succeeds(equalTo((Chunk(30), List(2, 1))))) <*>
-            assertM(run(failed))(fails(equalTo("Ouch")))).map { case (r1, r2, r3, r4) =>
+          (assertZIO(run(empty))(succeeds(equalTo((Chunk(0), Nil)))) <*>
+            assertZIO(run(single))(succeeds(equalTo((Chunk(30), List(1))))) <*>
+            assertZIO(run(double))(succeeds(equalTo((Chunk(30), List(2, 1))))) <*>
+            assertZIO(run(failed))(fails(equalTo("Ouch")))).map { case (r1, r2, r3, r4) =>
             r1 && r2 && r3 && r4
           }
         }
@@ -429,9 +429,8 @@ object ProducerTest extends ZIOSpecDefault {
       sequential @@
       withLiveClock @@
       TestAspect.timeout(2.minute) @@
-      TestAspect.runtimeConfig(
-        RuntimeConfigAspect.addLogger(ZLogger.default.map(println(_)).filterLogLevel(_ > LogLevel.Debug))
-      )
+      TestAspect
+        .fromLayer(Runtime.addLogger(ZLogger.default.map(println(_)).filterLogLevel(_ > LogLevel.Debug)))
 
   def aggregationPipeline(digest: MessageDigest): ZPipeline[Any, Nothing, ProduceRequest, Chunk[ProduceRequest]] = {
     // TODO will be in next ZIO 2.0 snapshot, see https://github.com/zio/zio/pull/6246

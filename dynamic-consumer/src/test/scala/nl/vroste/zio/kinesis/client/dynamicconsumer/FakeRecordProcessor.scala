@@ -35,7 +35,7 @@ object FakeRecordProcessor {
         _ <- failFunctionOrExpectedCount.fold(
                failFunction =>
                  if (failFunction(data))
-                   ZIO.logWarning(s"record $rec, about to return error") *> Task.fail(error(data))
+                   ZIO.logWarning(s"record $rec, about to return error") *> ZIO.fail(error(data))
                  else
                    updateRefProcessed,
                expectedCount =>

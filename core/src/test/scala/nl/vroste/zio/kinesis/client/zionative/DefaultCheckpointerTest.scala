@@ -176,6 +176,6 @@ object DefaultCheckpointerTest extends ZIOSpecDefault {
     for {
       state       <- Ref.make(DefaultCheckpointer.State.empty)
       permit      <- Semaphore.make(1)
-      checkpointer = new DefaultCheckpointer("shard1", state, permit, updateCheckpoint, Task.unit)
+      checkpointer = new DefaultCheckpointer("shard1", state, permit, updateCheckpoint, ZIO.unit)
     } yield checkpointer
 }

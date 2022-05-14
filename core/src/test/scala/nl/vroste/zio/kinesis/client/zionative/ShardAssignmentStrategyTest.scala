@@ -30,12 +30,12 @@ object ShardAssignmentStrategyTest extends ZIOSpecDefault {
     suite("Lease coordinator")(
       test("does not want to steal leases if its the only worker") {
         check(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.const(1))) { leases =>
-          assertM(leasesToTake(leases, workerId(1)))(isEmpty)
+          assertZIO(leasesToTake(leases, workerId(1)))(isEmpty)
         }
       },
       test("steals some leases when its not the only worker") {
         check(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.const(1))) { leases =>
-          assertM(leasesToTake(leases, workerId(2)))(isNonEmpty)
+          assertZIO(leasesToTake(leases, workerId(2)))(isNonEmpty)
         }
       },
       test("takes leases if it has less than its equal share") {

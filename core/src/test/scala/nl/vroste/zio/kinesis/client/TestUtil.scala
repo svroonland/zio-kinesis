@@ -66,7 +66,7 @@ object TestUtil {
     Kinesis
       .describeStream(DescribeStreamRequest(StreamName(streamName)))
       .mapError(_.toThrowable)
-      .tap(r => Task.succeed(println(r)))
+      .tap(r => ZIO.succeed(println(r)))
       .retryWhile {
         case _: ResourceNotFoundException => true
         case _                            => false
@@ -169,7 +169,7 @@ object TestUtil {
     )
 
     val records = ZStream
-      .repeatZIOChunk(UIO.succeed(chunk))
+      .repeatZIOChunk(ZIO.succeed(chunk))
       .take(nrRecords.toLong)
       .viaFunction(throttle(produceRate, _))
     massProduceRecords(producer, records)

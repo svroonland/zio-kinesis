@@ -384,20 +384,20 @@ private[client] object ProducerLive {
    */
   def foldWhile[Env, Err, In, S](z: => S)(contFn: S => Boolean)(
     f: (S, In) => ZIO[Env, Err, S]
-  )(implicit trace: ZTraceElement): ZSink[Env, Err, In, In, S] =
+  )(implicit trace: Trace): ZSink[Env, Err, In, In, S] =
     ZSink.suspend {
       def foldChunkSplitM(z: S, chunk: Chunk[In])(
         contFn: S => Boolean
       )(f: (S, In) => ZIO[Env, Err, S]): ZIO[Env, Err, (S, Option[Chunk[In]])] = {
 
         def fold(s: S, chunk: Chunk[In], idx: Int, len: Int): ZIO[Env, Err, (S, Option[Chunk[In]])] =
-          if (idx == len) UIO.succeed((s, None))
+          if (idx == len) ZIO.succeed((s, None))
           else
             f(s, chunk(idx)).flatMap { s1 =>
               if (contFn(s1))
                 fold(s1, chunk, idx + 1, len)
               else
-                UIO.succeed((s, Some(chunk.drop(idx))))
+                ZIO.succeed((s, Some(chunk.drop(idx))))
             }
 
         fold(z, chunk, 0, chunk.length)

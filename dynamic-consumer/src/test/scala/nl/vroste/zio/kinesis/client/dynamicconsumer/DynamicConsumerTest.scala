@@ -185,7 +185,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
                            applicationName = applicationName,
                            deserializer = Serde.asciiString,
                            configureKcl = _.withPolling,
-                           requestShutdown = interrupted.await *> UIO.succeed(println("Interrupting shardedStream"))
+                           requestShutdown = interrupted.await *> ZIO.succeed(println("Interrupting shardedStream"))
                          )
                          .flatMapPar(Int.MaxValue) { case (shardId, shardStream, checkpointer @ _) =>
                            ZStream.fromZIO(consumerAlive.succeed(())) *>
@@ -235,7 +235,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
                                       ).runCollect.fork
           _                        <- consumerAlive.await
           _                        <- Clock.instant.tap(now =>
-                                        UIO.attempt(println(s"Consumer has started after ${java.time.Duration.between(started, now)}"))
+                                        ZIO.attempt(println(s"Consumer has started after ${java.time.Duration.between(started, now)}"))
                                       )
           _                        <- TestUtil
                                         .produceRecords(streamName, 10000, 25, 10)
@@ -273,7 +273,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
                            applicationName = applicationName,
                            deserializer = Serde.asciiString,
                            configureKcl = _.withPolling,
-                           requestShutdown = requestShutdown.await *> UIO.succeed(println("Interrupting shardedStream"))
+                           requestShutdown = requestShutdown.await *> ZIO.succeed(println("Interrupting shardedStream"))
                          )
                          .tap(_ => newShardDetected.offer(()))
                          .flatMapPar(Int.MaxValue) { case (shardId @ _, shardStream, checkpointer @ _) =>

@@ -47,7 +47,7 @@ private class DefaultLeaseCoordinator(
   workerId: String,
   state: Ref[State],
   acquiredLeasesQueue: Queue[(Lease, Promise[Nothing, Unit])],
-  emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit,
+  emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => ZIO.unit,
   serialExecutionByShard: SerialExecution[String],
   settings: LeaseCoordinationSettings,
   strategy: ShardAssignmentStrategy,
@@ -432,7 +432,7 @@ private[zionative] object DefaultLeaseCoordinator {
   def make(
     applicationName: String,
     workerId: String,
-    emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => UIO.unit,
+    emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => ZIO.unit,
     settings: LeaseCoordinationSettings,
     shards: Task[Map[ShardId, Shard.ReadOnly]],
     strategy: ShardAssignmentStrategy,

@@ -44,7 +44,7 @@ object Util {
           }
           _                   <- ZIO.addFinalizer(
                                    substreamsQueuesMap.get.flatMap(map =>
-                                     ZIO.foreachDiscard(map.values)(_.offer(Exit.fail(None)).catchAllCause(_ => UIO.unit))
+                                     ZIO.foreachDiscard(map.values)(_.offer(Exit.fail(None)).catchAllCause(_ => ZIO.unit))
                                    )
                                  )
         } yield inStream mergeTerminateEither ZStream.fromQueueWithShutdown(substreamsQueue).flattenExitOption.map {

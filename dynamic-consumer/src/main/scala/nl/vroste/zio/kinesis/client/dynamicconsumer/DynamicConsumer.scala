@@ -118,7 +118,7 @@ object DynamicConsumer {
       streamName: String,
       applicationName: String,
       deserializer: Deserializer[R, T],
-      requestShutdown: UIO[Unit] = UIO.never,
+      requestShutdown: UIO[Unit] = ZIO.never,
       initialPosition: InitialPositionInStreamExtended =
         InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON),
       leaseTableName: Option[String] = None,
@@ -138,7 +138,7 @@ object DynamicConsumer {
     streamName: String,
     applicationName: String,
     deserializer: Deserializer[R, T],
-    requestShutdown: UIO[Unit] = UIO.never,
+    requestShutdown: UIO[Unit] = ZIO.never,
     initialPosition: InitialPositionInStreamExtended =
       InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON),
     leaseTableName: Option[String] = None,
@@ -214,7 +214,7 @@ object DynamicConsumer {
     streamName: String,
     applicationName: String,
     deserializer: Deserializer[R, T],
-    requestShutdown: UIO[Unit] = UIO.never,
+    requestShutdown: UIO[Unit] = ZIO.never,
     initialPosition: InitialPositionInStreamExtended =
       InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON),
     leaseTableName: Option[String] = None,
@@ -294,7 +294,7 @@ object DynamicConsumer {
     def stageOnSuccess[R, E, A](effect: ZIO[R, E, A])(r: Record[_]): ZIO[R, E, A] =
       effect.onExit {
         case Exit.Success(_) => stage(r)
-        case _               => UIO.unit
+        case _               => ZIO.unit
       }
 
     /**

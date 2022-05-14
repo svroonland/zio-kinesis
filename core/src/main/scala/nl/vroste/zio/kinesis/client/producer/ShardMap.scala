@@ -45,7 +45,7 @@ private[client] final case class ShardMap(
 private[client] object ShardMap {
   val minHashKey: BigInt                        = BigInt(0)
   val maxHashKey: BigInt                        = BigInt("340282366920938463463374607431768211455")
-  val md5: ZIO[Scope, Throwable, MessageDigest] = Task.attempt(MessageDigest.getInstance("MD5"))
+  val md5: ZIO[Scope, Throwable, MessageDigest] = ZIO.attempt(MessageDigest.getInstance("MD5"))
 
   def fromShards(shards: Chunk[Shard.ReadOnly], now: Instant): ShardMap = {
     if (shards.isEmpty) throw new IllegalArgumentException("Cannot create ShardMap from empty shards list")

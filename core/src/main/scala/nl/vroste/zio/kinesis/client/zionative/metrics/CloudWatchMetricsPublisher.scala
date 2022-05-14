@@ -131,16 +131,16 @@ private class CloudWatchMetricsPublisher(
 
   def collectPeriodicMetrics(event: DiagnosticEvent): UIO[Unit] =
     event match {
-      case PollComplete(_, _, _, _)       => UIO.unit
-      case SubscribeToShardEvent(_, _, _) => UIO.unit
+      case PollComplete(_, _, _, _)       => ZIO.unit
+      case SubscribeToShardEvent(_, _, _) => ZIO.unit
 
       case LeaseAcquired(shardId, _) => heldLeases.update(_ + shardId)
       case ShardLeaseLost(shardId)   => heldLeases.update(_ - shardId)
-      case LeaseRenewed(_, _)        => UIO.unit
+      case LeaseRenewed(_, _)        => ZIO.unit
       case LeaseReleased(shardId)    => heldLeases.update(_ - shardId)
-      case ShardEnded(_)             => UIO.unit
-      case NewShardDetected(_)       => UIO.unit
-      case Checkpoint(_, _)          => UIO.unit
+      case ShardEnded(_)             => ZIO.unit
+      case NewShardDetected(_)       => ZIO.unit
+      case Checkpoint(_, _)          => ZIO.unit
       case WorkerJoined(workerId)    => workers.update(_ + workerId)
       case WorkerLeft(workerId)      => workers.update(_ - workerId)
     }
