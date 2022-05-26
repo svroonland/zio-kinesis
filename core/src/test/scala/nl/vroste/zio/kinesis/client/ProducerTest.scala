@@ -32,26 +32,6 @@ object ProducerTest extends ZIOSpecDefault {
 
   def spec =
     suite("Producer")(
-      test("produce a single record immediately") {
-
-        val streamName = "zio-test-stream-producer"
-
-        withStream(streamName, 1) {
-          Producer
-            .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 128))
-            .flatMap { producer =>
-              for {
-                _         <- printLine("Producing record!").orDie
-                result    <- producer.produce(ProducerRecord("bla1", "bla1value")).timed
-                (time, _)  = result
-                _         <- printLine(time.toMillis.toString).orDie
-                result2   <- producer.produce(ProducerRecord("bla1", "bla1value")).timed
-                (time2, _) = result2
-                _         <- printLine(time2.toMillis.toString).orDie
-              } yield assertCompletes
-            }
-        }
-      },
       test("not block when passing an empty chunk to produceChunk") {
 
         val streamName = "zio-test-stream-producer-2"
@@ -157,53 +137,6 @@ object ProducerTest extends ZIOSpecDefault {
           .exit
           .map(r => assert(r)(fails(isSubtype[KinesisException](anything))))
       } @@ timeout(1.minute),
-      suite("foldWhile")(
-        test("empty")(
-          assertZIO(
-            ZStream.empty
-              .transduce(
-                ProducerLive.foldWhile(0)(_ => true)((x, y: Int) => ZIO.succeed(x + y))
-              )
-              .runCollect
-          )(equalTo(Chunk(0)))
-        ),
-        test("short circuits") {
-          val empty: ZStream[Any, Nothing, Int]     = ZStream.empty
-          val single: ZStream[Any, Nothing, Int]    = ZStream.succeed(1)
-          val double: ZStream[Any, Nothing, Int]    = ZStream(1, 2)
-          val failed: ZStream[Any, String, Nothing] = ZStream.fail("Ouch")
-
-          def run[E](stream: ZStream[Any, E, Int]) =
-            (for {
-              effects <- Ref.make[List[Int]](Nil)
-              exit    <- stream
-                           .transduce(ProducerLive.foldWhile(0)(_ => true) { (_, a: Int) =>
-                             effects.update(a :: _) *> ZIO.succeed(30)
-                           })
-                           .runCollect
-              result  <- effects.get
-            } yield exit -> result).exit
-
-          (assertZIO(run(empty))(succeeds(equalTo((Chunk(0), Nil)))) <*>
-            assertZIO(run(single))(succeeds(equalTo((Chunk(30), List(1))))) <*>
-            assertZIO(run(double))(succeeds(equalTo((Chunk(30), List(2, 1))))) <*>
-            assertZIO(run(failed))(fails(equalTo("Ouch")))).map { case (r1, r2, r3, r4) =>
-            r1 && r2 && r3 && r4
-          }
-        }
-//        test("equivalence with List#foldLeft") {
-//          val ioGen = ZStreamGen.successes(Gen.string)
-//          check(Gen.small(ZStreamGen.pureStreamGen(Gen.int, _)), Gen.function2(ioGen), ioGen) { (s, f, z) =>
-//            for {
-//              sinkResult <- z.flatMap(z => s.run(ZSink.foldLeftZIO(z)(f)))
-//              foldResult <- s.runFold(List[Int]())((acc, el) => el :: acc)
-//                              .map(_.reverse)
-//                              .flatMap(_.foldLeft(z)((acc, el) => acc.flatMap(f(_, el))))
-//                              .exit
-//            } yield assert(foldResult.isSuccess)(isTrue) implies assert(foldResult)(succeeds(equalTo(sinkResult)))
-//          }
-//        }
-      ),
       suite("aggregation")(
         test("batch aggregated records per shard") {
           val batcher = aggregationPipeline(MessageDigest.getInstance("MD5"))

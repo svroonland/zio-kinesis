@@ -3,23 +3,22 @@ package nl.vroste.zio.kinesis.client.producer
 import io.netty.handler.timeout.ReadTimeoutException
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client._
-import nl.vroste.zio.kinesis.client.producer.ProducerLive.ProduceRequest
+import nl.vroste.zio.kinesis.client.producer.ProducerLive.{ batcher, maxChunkSize, ProduceRequest }
 import nl.vroste.zio.kinesis.client.serde.Serializer
 import software.amazon.awssdk.core.exception.SdkException
 import software.amazon.awssdk.services.kinesis.model.{ KinesisException, ResourceInUseException }
 import zio.Clock.instant
 import zio._
 import zio.aws.kinesis.Kinesis
+import zio.aws.kinesis.model.PutRecordsRequestEntry
 import zio.aws.kinesis.model.primitives.{ PartitionKey, StreamName }
-import zio.aws.kinesis.model.{ PutRecordsRequest, PutRecordsRequestEntry, PutRecordsResponse, PutRecordsResultEntry }
-import zio.stream.{ ZChannel, ZSink, ZStream }
+import zio.stream.{ ZSink, ZStream }
 
 import java.io.IOException
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.time.Instant
 import scala.annotation.unused
-import scala.util.control.NonFatal
 
 private[client] final class ProducerLive[R, R1, T](
   @unused client: Kinesis,
@@ -39,30 +38,23 @@ private[client] final class ProducerLive[R, R1, T](
   md5Pool: ZPool[Throwable, MessageDigest]
 ) extends Producer[T] {
   import ProducerLive._
-  import Util.ZStreamExtensions
 
   val runloop: ZIO[Any, Nothing, Unit] =
     ZStream
       .fromQueue(queue, maxChunkSize)
-      .mapChunksZIO(chunk => ZIO.logDebug(s"Dequeued chunk of size ${chunk.size}").as(Chunk.single(chunk)))
+      .mapChunksZIO(chunk => ZIO.logInfo(s"Dequeued chunk of size ${chunk.size}").as(Chunk.single(chunk)))
       .mapZIO(addPredictedShardToRequestsChunk)
       .flattenChunks
       .aggregateAsync(batcher)
-      .mapZIO(processBatch)
+      .tap(batch => ZIO.debug(s"Got batch ${batch}"))
       .runDrain
-      .orDie
 
   private def addPredictedShardToRequestsChunk(chunk: Chunk[ProduceRequest]) =
     ZIO.scoped {
       md5Pool.get.flatMap { _ =>
         ZIO.attempt(chunk)
       }
-    }
-
-  private def processBatch(
-    @unused batch: Chunk[ProduceRequest]
-  ): ZIO[Any, Nothing, Unit] =
-    ZIO.logInfo("Downstream call")
+    }.tapErrorCause(e => ZIO.debug(e)).orDie
 
   override def produce(r: ProducerRecord[T]): Task[ProduceResponse] =
     (for {
@@ -106,7 +98,7 @@ private[client] final class ProducerLive[R, R1, T](
       .provideEnvironment(env)
 }
 
-private[client] object ProducerLive {
+object ProducerLive {
   type ShardId = String
 
   val maxChunkSize: Int        = 1024            // Stream-internal max chunk size
@@ -178,55 +170,15 @@ private[client] object ProducerLive {
       3 + 2 + // Partition key
       0       // entry.explicitHashKey.map(_.length + 2).getOrElse(1) + 3 // Explicit hash key
 
-  /**
-   * Like ZTransducer.foldM, but with 'while' instead of 'until' semantics regarding `contFn`
-   */
-  def foldWhile[Env, Err, In, S](z: => S)(contFn: S => Boolean)(
-    f: (S, In) => ZIO[Env, Err, S]
-  )(implicit trace: Trace): ZSink[Env, Err, In, In, S] =
-    ZSink.suspend {
-      def foldChunkSplitM(z: S, chunk: Chunk[In])(
-        contFn: S => Boolean
-      )(f: (S, In) => ZIO[Env, Err, S]): ZIO[Env, Err, (S, Option[Chunk[In]])] = {
-
-        def fold(s: S, chunk: Chunk[In], idx: Int, len: Int): ZIO[Env, Err, (S, Option[Chunk[In]])] =
-          if (idx == len) ZIO.succeed((s, None))
-          else
-            f(s, chunk(idx)).flatMap { s1 =>
-              if (contFn(s1))
-                fold(s1, chunk, idx + 1, len)
-              else
-                ZIO.succeed((s, Some(chunk.drop(idx))))
-            }
-
-        fold(z, chunk, 0, chunk.length)
-      }
-
-      def reader(s: S): ZChannel[Env, Err, Chunk[In], Any, Err, Chunk[In], S] =
-        if (!contFn(s)) ZChannel.succeedNow(s)
-        else
-          ZChannel.readWith(
-            (in: Chunk[In]) =>
-              ZChannel.fromZIO(foldChunkSplitM(s, in)(contFn)(f)).flatMap { case (nextS, leftovers) =>
-                leftovers match {
-                  case Some(l) => ZChannel.write(l).as(nextS)
-                  case None    => reader(nextS)
-                }
-              },
-            (err: Err) => ZChannel.fail(err),
-            (_: Any) => ZChannel.succeedNow(s)
-          )
-
-      new ZSink(reader(z))
-    }
-
   val batcher: ZSink[Any, Nothing, ProduceRequest, ProduceRequest, Chunk[ProduceRequest]] =
-    foldWhile(PutRecordsBatch.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
-      ZIO.succeed(batch.add(record))
-    }.map(_.entries)
+    ZSink
+      .foldZIO(PutRecordsBatch.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
+        ZIO.succeed(batch.add(record))
+      }
+      .map(_.entries)
 
   val aggregator: ZSink[Any, Nothing, ProduceRequest, ProduceRequest, PutRecordsAggregatedBatchForShard] =
-    foldWhile(PutRecordsAggregatedBatchForShard.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
+    ZSink.foldZIO(PutRecordsAggregatedBatchForShard.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
       ZIO.succeed(batch.add(record))
     }
 }
