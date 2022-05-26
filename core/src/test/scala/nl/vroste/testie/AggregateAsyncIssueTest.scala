@@ -1,13 +1,16 @@
 package nl.vroste.testie
 
 import nl.vroste.testie.AggregateAsyncIssueTest.TestProducer.batcher
-import nl.vroste.zio.kinesis.client.TestUtil.{ createStream, withStream }
+import nl.vroste.zio.kinesis.client.TestUtil.{ createStream, createStreamUnmanaged, withStream }
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
+import software.amazon.awssdk.services.kinesis.model.ResourceNotFoundException
 import zio.Console.printLine
 import zio.aws.kinesis.Kinesis
+import zio.aws.kinesis.model.primitives.StreamName
+import zio.aws.kinesis.model.{ DeleteStreamRequest, DescribeStreamRequest, StreamStatus }
 import zio.stream.{ ZSink, ZStream }
 import zio.test.{ assertCompletes, TestAspect, ZIOSpecDefault }
-import zio.{ Chunk, Queue, Scope, Task, ZIO, ZPool }
+import zio._
 
 object AggregateAsyncIssueTest extends ZIOSpecDefault {
 
@@ -62,6 +65,20 @@ object AggregateAsyncIssueTest extends ZIOSpecDefault {
     ZIO.scoped[Kinesis with R] {
       (createStream(name, shards)) *> f
     }
+
+  def createStream(
+    streamName: String,
+    nrShards: Int
+  ): ZIO[Scope with Kinesis, Throwable, Unit] =
+    ZIO.acquireRelease(createStreamUnmanaged(streamName, nrShards))(_ =>
+      Kinesis
+        .deleteStream(DeleteStreamRequest(StreamName(streamName), enforceConsumerDeletion = Some(true)))
+        .mapError(_.toThrowable)
+        .catchSome { case _: ResourceNotFoundException =>
+          ZIO.unit
+        }
+        .orDie
+    )
 
   override def spec = suite("AggregateAsync")(
     test("issue") {
