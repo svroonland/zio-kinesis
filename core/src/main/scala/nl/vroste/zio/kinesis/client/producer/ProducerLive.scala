@@ -18,62 +18,39 @@ import java.io.IOException
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.time.Instant
+import scala.annotation.unused
 import scala.util.control.NonFatal
 
 private[client] final class ProducerLive[R, R1, T](
-  client: Kinesis,
+  @unused client: Kinesis,
   env: ZEnvironment[R],
   queue: Queue[ProduceRequest],
-  failedQueue: Queue[ProduceRequest],
+  @unused failedQueue: Queue[ProduceRequest],
   serializer: Serializer[R, T],
   currentMetrics: Ref[CurrentMetrics],
   shards: Ref[ShardMap],
-  settings: ProducerSettings,
-  streamName: StreamName,
-  metricsCollector: ProducerMetrics => ZIO[R1, Nothing, Unit],
-  aggregate: Boolean = false,
-  inFlightCalls: Ref[Int],
-  triggerUpdateShards: UIO[Unit],
-  throttler: ShardThrottler,
+  @unused settings: ProducerSettings,
+  @unused streamName: StreamName,
+  @unused metricsCollector: ProducerMetrics => ZIO[R1, Nothing, Unit],
+  @unused aggregate: Boolean = false,
+  @unused inFlightCalls: Ref[Int],
+  @unused triggerUpdateShards: UIO[Unit],
+  @unused throttler: ShardThrottler,
   md5Pool: ZPool[Throwable, MessageDigest]
 ) extends Producer[T] {
   import ProducerLive._
   import Util.ZStreamExtensions
 
-  val runloop: ZIO[Any, Nothing, Unit] = {
-    val retries         = ZStream.fromQueue(failedQueue, maxChunkSize = maxChunkSize)
-    val chunkBufferSize = Math.ceil(settings.bufferSize * 1.0 / maxChunkSize).toInt
-
-    // Failed records get precedence
-    (retries merge ZStream
+  val runloop: ZIO[Any, Nothing, Unit] =
+    ZStream
       .fromQueue(queue, maxChunkSize)
       .mapChunksZIO(chunk => ZIO.logDebug(s"Dequeued chunk of size ${chunk.size}").as(Chunk.single(chunk)))
-      .mapZIOParUnordered(settings.shardPredictionParallelism)(addPredictedShardToRequestsChunk)
+      .mapZIO(addPredictedShardToRequestsChunk)
       .flattenChunks
-      // Aggregate records per shard
-      .groupByKey2(_.predictedShard, chunkBufferSize)
-      .flatMapPar(Int.MaxValue, chunkBufferSize) { case (shardId @ _, requests) =>
-        ZStream.scoped(ShardMap.md5.orDie).flatMap { digest =>
-          if (aggregate)
-            requests.aggregateAsync(aggregator).mapConcatZIO(_.toProduceRequest(digest).map(_.toList))
-          else requests
-        }
-      })
-      .groupByKey2(_.predictedShard, chunkBufferSize) // TODO can we avoid this second group by?
-      .flatMapPar(Int.MaxValue, chunkBufferSize)(
-        Function.tupled(throttleShardRequests)
-      )
-      // Batch records up to the Kinesis PutRecords request limits as long as downstream is busy
       .aggregateAsync(batcher)
-      .filter(_.nonEmpty)                             // TODO why would this be necessary?
-      // Several putRecords requests in parallel
-      .flatMapPar(settings.maxParallelRequests, chunkBufferSize)(b => ZStream.fromZIO(countInFlight(processBatch(b))))
-      .collect { case (Some(response), requests) => (response, requests) }
-      .mapZIO((processBatchResponse _).tupled)
-      .tap(metrics => currentMetrics.update(_ append metrics))
+      .mapZIO(processBatch)
       .runDrain
       .orDie
-  }
 
   private def addPredictedShardToRequestsChunk(chunk: Chunk[ProduceRequest]) =
     ZIO.scoped {
@@ -86,184 +63,10 @@ private[client] final class ProducerLive[R, R1, T](
       }
     }
 
-  private def throttleShardRequests(shardId: ShardId, requests: ZStream[Any, Throwable, ProduceRequest]) =
-    ZStream.fromZIO(throttler.getForShard(shardId)).flatMap { throttlerForShard =>
-      requests
-        .mapChunks(
-          _.map { request =>
-            request
-              .copy(complete =
-                result => request.complete(result) *> result.zipLeft(throttlerForShard.addSuccess).ignore
-              )
-          }
-        )
-        .throttleShapeZIO(maxRecordsPerShardPerSecond.toLong, 1.second)(chunk =>
-          throttlerForShard.throughputFactor.map(c => (chunk.size * 1.0 / c).toLong)
-        )
-        .throttleShapeZIO(maxIngestionPerShardPerSecond.toLong, 1.second)(chunk =>
-          throttlerForShard.throughputFactor.map(c => (chunk.map(_.payloadSize).sum * 1.0 / c).toLong)
-        )
-    }
-
   private def processBatch(
-    batch: Chunk[ProduceRequest]
-  ): ZIO[Any, Nothing, (Option[PutRecordsResponse.ReadOnly], Chunk[ProduceRequest])] = {
-    val totalPayload = batch.map(_.data.length).sum
-    (for {
-      _        <- ZIO.logInfo(
-                    s"PutRecords for batch of size ${batch.map(_.aggregateCount).sum} (${batch.size} aggregated). " +
-//               s"Payload sizes: ${batch.map(_.data.asByteArrayUnsafe().length).mkString(",")} " +
-                      s"(total = ${totalPayload} = ${totalPayload * 100.0 / maxPayloadSizePerRequest}%)."
-                  )
-
-      // Avoid an allocation
-      response <- client
-                    .putRecords(new PutRecordsRequest(batch.map(_.asPutRecordsRequestEntry), streamName))
-                    .mapError(_.toThrowable)
-                    .tapError(e => ZIO.logWarning(s"Error producing records, will retry if recoverable: $e"))
-                    .retry(scheduleCatchRecoverable && settings.backoffRequests)
-    } yield (Some(response), batch)).catchSome { case NonFatal(e) =>
-      ZIO.logWarning("Failed to process batch") *>
-        ZIO.foreachDiscard(batch)(_.complete(ZIO.fail(e))).as((None, batch))
-    }.orDie
-  }
-
-  private def processBatchResponse(
-    response: PutRecordsResponse.ReadOnly,
-    batch: Chunk[ProduceRequest]
-  ): ZIO[Any, Nothing, CurrentMetrics] = {
-    val totalPayload = batch.map(_.data.length).sum
-
-    val responseAndRequests    = Chunk.fromIterable(response.records).zip(batch)
-    val (newFailed, succeeded) =
-      if (response.failedRecordCount.getOrElse(0) > 0)
-        responseAndRequests.partition { case (result, _) =>
-          result.errorCode.exists(recoverableErrorCodes.contains)
-        }
-      else
-        (Chunk.empty, responseAndRequests)
-    for {
-
-      now                           <- instant
-      m1                             = CurrentMetrics.empty(now).addPayloadSize(totalPayload).addRecordSizes(batch.map(_.payloadSize))
-      r                             <- checkShardPredictionErrors(responseAndRequests, m1)
-      (hasShardPredictionErrors, m2) = r
-      m3                            <- handleFailures(newFailed, repredict = hasShardPredictionErrors, m2)
-      _                             <- ZIO.foreachDiscard(succeeded) { case (response, request) =>
-                                         request.complete(
-                                           ZIO.succeed(
-                                             ProduceResponse(
-                                               response.shardId.toOption.get,
-                                               response.sequenceNumber.toOption.get,
-                                               request.attemptNumber,
-                                               completed = now
-                                             )
-                                           )
-                                         )
-                                       }
-      // TODO handle connection failure
-    } yield m3
-  }
-
-  private def handleFailures(
-    newFailed: Chunk[(PutRecordsResultEntry.ReadOnly, ProduceRequest)],
-    repredict: Boolean,
-    metrics: CurrentMetrics
-  ) = {
-    val requests    = newFailed.map(_._2)
-    val responses   = newFailed.map(_._1)
-    val failedCount = requests.map(_.aggregateCount).sum
-
-    for {
-      _ <- ZIO.foreachDiscard(requests)(r => throttler.addFailure(r.predictedShard))
-      _ <- ZIO.logWarning(s"Failed to produce ${failedCount} records").when(newFailed.nonEmpty)
-      _ <- ZIO.logWarning(responses.take(10).flatMap(_.errorCode.toOption).mkString(", ")).when(newFailed.nonEmpty)
-
-      // The shard map may not yet be updated unless we're experiencing high latency
-      updatedFailed <- if (repredict)
-                         ZIO.scoped {
-                           ShardMap.md5.orDie.flatMap { digest =>
-                             shards.get.map(shardMap =>
-                               requests.map(r =>
-                                 r.newAttempt.copy(predictedShard =
-                                   shardMap.shardForPartitionKey(digest, r.partitionKey)
-                                 )
-                               )
-                             )
-                           }
-                         }
-                       else
-                         ZIO.succeed(requests.map(_.newAttempt))
-
-      // TODO backoff for shard limit stuff
-      _             <- failedQueue
-                         .offerAll(updatedFailed)
-                         .when(newFailed.nonEmpty)
-    } yield metrics.addFailures(failedCount)
-  }
-
-  private def checkShardPredictionErrors(
-    responseAndRequests: Chunk[(PutRecordsResultEntry.ReadOnly, ProduceRequest)],
-    metrics: CurrentMetrics
-  ): ZIO[Any, Nothing, (Boolean, CurrentMetrics)] = {
-    val shardPredictionErrors = responseAndRequests.filter { case (result, request) =>
-      result.shardId.exists(_ != request.predictedShard)
-    }
-
-    val (succeeded, failed) = shardPredictionErrors.partition(_._1.errorCode.isEmpty)
-
-    val updatedMetrics = metrics.addShardPredictionErrors(shardPredictionErrors.map(_._2.aggregateCount).sum.toLong)
-
-    ZIO
-      .when(shardPredictionErrors.nonEmpty) {
-        val maxProduceRequestTimestamp = shardPredictionErrors
-          .map(_._2.timestamp.toEpochMilli)
-          .max
-
-        ZIO.logWarning(
-          s"${succeeded.map(_._2.aggregateCount).sum} records (aggregated as ${succeeded.size}) ended up " +
-            s"on a different shard than expected and/or " +
-            s"${failed.map(_._2.aggregateCount).sum} records (aggregated as ${failed.size}) would end up " +
-            s"on a different shard than expected if they had succeeded. This may happen after a reshard."
-        ) *> triggerUpdateShards.fork.whenZIO { // Fiber cannot fail
-          shards
-            .getAndUpdate(_.invalidate)
-            .map(shardMap => !shardMap.invalid && shardMap.lastUpdated.toEpochMilli < maxProduceRequestTimestamp)
-        }
-      }
-      .as((shardPredictionErrors.nonEmpty, updatedMetrics))
-  }
-
-  private def countInFlight[R0, E, A](e: ZIO[R0, E, A]): ZIO[R0, E, A] =
-    ZIO.acquireReleaseWith(
-      inFlightCalls
-        .updateAndGet(_ + 1)
-        .tap(inFlightCalls => ZIO.logDebug(s"${inFlightCalls} PutRecords calls in flight"))
-    )(_ =>
-      inFlightCalls
-        .updateAndGet(_ - 1)
-        .tap(inFlightCalls => ZIO.logDebug(s"${inFlightCalls} PutRecords calls in flight"))
-    )(_ => e)
-
-  val collectMetrics: ZIO[R1, Nothing, Unit] = for {
-    now    <- instant
-    m      <- currentMetrics.getAndUpdate(_ => CurrentMetrics.empty(now))
-    metrics = ProducerMetrics(
-                java.time.Duration.between(m.start, now),
-                m.publishedHist,
-                m.nrFailed,
-                m.latencyHist,
-                m.shardPredictionErrors,
-                m.payloadSizeHist,
-                m.recordSizeHist
-              )
-    _      <- metricsCollector(metrics)
-  } yield ()
-
-// Repeatedly produce metrics
-  val metricsCollection: ZIO[R1, Nothing, Long] = collectMetrics
-    .delay(settings.metricsInterval)
-    .repeat(Schedule.fixed(settings.metricsInterval))
+    @unused batch: Chunk[ProduceRequest]
+  ): ZIO[Any, Nothing, Unit] =
+    ZIO.logInfo("Downstream call")
 
   override def produce(r: ProducerRecord[T]): Task[ProduceResponse] =
     (for {
