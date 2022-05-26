@@ -54,12 +54,8 @@ private[client] final class ProducerLive[R, R1, T](
 
   private def addPredictedShardToRequestsChunk(chunk: Chunk[ProduceRequest]) =
     ZIO.scoped {
-      (md5Pool.get zip shards.get).flatMap { case (md5, shardMap) =>
-        chunk.mapZIO { r =>
-          ZIO
-            .attempt(shardMap.shardForPartitionKey(md5, r.partitionKey))
-            .map(shard => r.copy(predictedShard = shard))
-        }
+      (md5Pool.get zip shards.get).flatMap { case (_, _) =>
+        ZIO.attempt(chunk)
       }
     }
 
