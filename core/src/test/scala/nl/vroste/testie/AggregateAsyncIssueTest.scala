@@ -1,18 +1,12 @@
 package nl.vroste.testie
 
 import nl.vroste.testie.AggregateAsyncIssueTest.TestProducer.batcher
-import nl.vroste.zio.kinesis.client.ProducerRecord
 import nl.vroste.zio.kinesis.client.TestUtil.withStream
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
-import nl.vroste.zio.kinesis.client.producer.ProducerLive.ProduceRequest
-import nl.vroste.zio.kinesis.client.producer.PutRecordsBatch
 import zio.Console.printLine
-import zio.aws.kinesis.model.primitives.PartitionKey
 import zio.stream.{ ZSink, ZStream }
 import zio.test.{ assertCompletes, TestAspect, ZIOSpecDefault }
-import zio.{ Chunk, Clock, Queue, Scope, Task, ZIO, ZPool }
-
-import java.time.Instant
+import zio.{ Chunk, Queue, Scope, Task, ZIO, ZPool }
 
 object AggregateAsyncIssueTest extends ZIOSpecDefault {
 
@@ -26,7 +20,7 @@ object AggregateAsyncIssueTest extends ZIOSpecDefault {
         .mapChunksZIO(chunk => ZIO.logInfo(s"Dequeued chunk of size ${chunk.size}").as(Chunk.single(chunk)))
         .mapZIO(addPredictedShardToRequestsChunk)
         .flattenChunks
-        .aggregateAsync(batcher)
+        .aggregateAsync(batcher[ProduceRequest])
         .tap(batch => ZIO.debug(s"Got batch ${batch}"))
         .runDrain
 
@@ -40,24 +34,25 @@ object AggregateAsyncIssueTest extends ZIOSpecDefault {
     def produce: Task[Unit] =
       queue
         .offer(
-          ProduceRequest(Chunk.empty, PartitionKey("123"), _ => ZIO.unit, Instant.now, null, 1)
+          ProduceRequest(Chunk.empty)
         ) *> ZIO.never.unit
   }
 
+  final case class ProduceRequest(data: Chunk[Byte])
+
   object TestProducer {
-    def make[T] = for {
+    def make = for {
       queue   <- ZIO.acquireRelease(Queue.bounded[ProduceRequest](1024))(_.shutdown)
       md5Pool <- ZPool.make(ZIO.unit, 2)
-      producer = TestProducer[T](queue, md5Pool)
+      producer = TestProducer[String](queue, md5Pool)
       _       <- producer.runloop.forkScoped
     } yield producer
 
-    val batcher: ZSink[Any, Nothing, ProduceRequest, ProduceRequest, Chunk[ProduceRequest]] =
+    def batcher[T]: ZSink[Any, Nothing, T, T, Chunk[T]] =
       ZSink
-        .foldZIO(PutRecordsBatch.empty)(_.isWithinLimits) { (batch, record: ProduceRequest) =>
-          ZIO.succeed(batch.add(record))
+        .foldZIO(Chunk.empty[T])(_.size < 10) { (batch, record: T) =>
+          ZIO.succeed(batch :+ record)
         }
-        .map(_.entries)
   }
 
   override def spec = suite("AggregateAsync")(
@@ -66,14 +61,12 @@ object AggregateAsyncIssueTest extends ZIOSpecDefault {
       val streamName = "zio-test-stream-producer"
 
       withStream(streamName, 1) {
-        TestProducer
-          .make[String]
-          .flatMap { producer =>
-            for {
-              _ <- printLine("Producing record!").orDie
-              _ <- producer.produce.timed
-            } yield assertCompletes
-          }
+        TestProducer.make.flatMap { producer =>
+          for {
+            _ <- printLine("Producing record!").orDie
+            _ <- producer.produce.timed
+          } yield assertCompletes
+        }
       }
     }
   ).provideCustomLayer(LocalStackServices.localStackAwsLayer() ++ Scope.default) @@ TestAspect.withLiveClock
