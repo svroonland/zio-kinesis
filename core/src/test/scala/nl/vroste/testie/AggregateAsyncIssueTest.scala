@@ -1,9 +1,10 @@
 package nl.vroste.testie
 
 import nl.vroste.testie.AggregateAsyncIssueTest.TestProducer.batcher
-import nl.vroste.zio.kinesis.client.TestUtil.withStream
+import nl.vroste.zio.kinesis.client.TestUtil.{ createStream, withStream }
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import zio.Console.printLine
+import zio.aws.kinesis.Kinesis
 import zio.stream.{ ZSink, ZStream }
 import zio.test.{ assertCompletes, TestAspect, ZIOSpecDefault }
 import zio.{ Chunk, Queue, Scope, Task, ZIO, ZPool }
@@ -54,6 +55,13 @@ object AggregateAsyncIssueTest extends ZIOSpecDefault {
           ZIO.succeed(batch :+ record)
         }
   }
+
+  def withStream[R, A](name: String, shards: Int)(
+    f: ZIO[R, Throwable, A]
+  ): ZIO[Kinesis with R, Throwable, A] =
+    ZIO.scoped[Kinesis with R] {
+      (createStream(name, shards)) *> f
+    }
 
   override def spec = suite("AggregateAsync")(
     test("issue") {
