@@ -28,7 +28,7 @@ private[client] final class ProducerLive[R, R1, T](
   @unused failedQueue: Queue[ProduceRequest],
   serializer: Serializer[R, T],
   currentMetrics: Ref[CurrentMetrics],
-  shards: Ref[ShardMap],
+  @unused shards: Ref[ShardMap],
   @unused settings: ProducerSettings,
   @unused streamName: StreamName,
   @unused metricsCollector: ProducerMetrics => ZIO[R1, Nothing, Unit],
@@ -54,7 +54,7 @@ private[client] final class ProducerLive[R, R1, T](
 
   private def addPredictedShardToRequestsChunk(chunk: Chunk[ProduceRequest]) =
     ZIO.scoped {
-      (md5Pool.get zip shards.get).flatMap { case (_, _) =>
+      md5Pool.get.flatMap { _ =>
         ZIO.attempt(chunk)
       }
     }
