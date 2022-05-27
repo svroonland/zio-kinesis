@@ -12,6 +12,7 @@ jobs:
         type: string
       sbt_command:
         type: string
+    resource_class: large
     docker:
       - image: << parameters.image >>
       - image: localstack/localstack
