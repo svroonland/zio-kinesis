@@ -1,16 +1,17 @@
 package nl.vroste.testie
 
-import nl.vroste.testie.AggregateAsyncIssueTest.TestProducer.batcher
-import nl.vroste.zio.kinesis.client.TestUtil.{ createStream, createStreamUnmanaged, withStream }
-import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
-import software.amazon.awssdk.services.kinesis.model.ResourceNotFoundException
+import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException }
 import zio.Console.printLine
+import zio._
+import zio.aws.core.config.AwsConfig
 import zio.aws.kinesis.Kinesis
-import zio.aws.kinesis.model.primitives.StreamName
-import zio.aws.kinesis.model.{ DeleteStreamRequest, DescribeStreamRequest, StreamStatus }
+import zio.aws.kinesis.model.primitives.{ PositiveIntegerObject, StreamName }
+import zio.aws.kinesis.model.{ CreateStreamRequest, DeleteStreamRequest }
+import zio.aws.netty.NettyHttpClient
 import zio.stream.{ ZSink, ZStream }
 import zio.test.{ assertCompletes, TestAspect, ZIOSpecDefault }
-import zio._
+
+import java.net.URI
 
 object AggregateAsyncIssueTest extends ZIOSpecDefault {
 
@@ -21,18 +22,15 @@ object AggregateAsyncIssueTest extends ZIOSpecDefault {
     val runloop: ZIO[Any, Nothing, Unit] =
       ZStream
         .fromQueue(queue, 10)
-        .mapChunksZIO(chunk => ZIO.logInfo(s"Dequeued chunk of size ${chunk.size}").as(Chunk.single(chunk)))
+        .tap(_ => ZIO.logInfo(s"Dequeued element"))
         .mapZIO(addPredictedShardToRequestsChunk)
-        .flattenChunks
         .aggregateAsync(batcher[ProduceRequest])
-        .tap(batch => ZIO.debug(s"Got batch ${batch}"))
+        .tap(_ => ZIO.debug(s"Got past aggregateAsync"))
         .runDrain
 
-    private def addPredictedShardToRequestsChunk(chunk: Chunk[ProduceRequest]) =
+    private def addPredictedShardToRequestsChunk(r: ProduceRequest) =
       ZIO.scoped {
-        md5Pool.get.flatMap { _ =>
-          ZIO.attempt(chunk)
-        }
+        md5Pool.get *> ZIO.attempt(r)
       }.tapErrorCause(e => ZIO.debug(e)).orDie
 
     def produce: Task[Unit] =
@@ -51,13 +49,13 @@ object AggregateAsyncIssueTest extends ZIOSpecDefault {
       producer = TestProducer[String](queue, md5Pool)
       _       <- producer.runloop.forkScoped
     } yield producer
-
-    def batcher[T]: ZSink[Any, Nothing, T, T, Chunk[T]] =
-      ZSink
-        .foldZIO(Chunk.empty[T])(_.size < 10) { (batch, record: T) =>
-          ZIO.succeed(batch :+ record)
-        }
   }
+
+  def batcher[T]: ZSink[Any, Nothing, T, T, Chunk[T]] =
+    ZSink
+      .foldZIO(Chunk.empty[T])(_.size < 10) { (batch, record: T) =>
+        ZIO.succeed(batch :+ record)
+      }
 
   def withStream[R, A](name: String, shards: Int)(
     f: ZIO[R, Throwable, A]
@@ -80,19 +78,37 @@ object AggregateAsyncIssueTest extends ZIOSpecDefault {
         .orDie
     )
 
+  def createStreamUnmanaged(
+    streamName: String,
+    nrShards: Int
+  ): ZIO[Kinesis, Throwable, Unit] =
+    Kinesis
+      .createStream(CreateStreamRequest(StreamName(streamName), Some(PositiveIntegerObject(nrShards))))
+      .mapError(_.toThrowable)
+      .catchSome { case _: ResourceInUseException =>
+        println("STREAM ALREADY EXISTS!")
+        ZIO.unit
+      }
+
   override def spec = suite("AggregateAsync")(
     test("issue") {
 
-      val streamName = "zio-test-stream-producer"
+      val streamName = "zio-test-stream-producer4"
 
       withStream(streamName, 1) {
         TestProducer.make.flatMap { producer =>
           for {
-            _ <- printLine("Producing record!").orDie
-            _ <- producer.produce.timed
+            _ <- printLine("Producing record!")
+            _ <- producer.produce
           } yield assertCompletes
         }
       }
     }
-  ).provideCustomLayer(LocalStackServices.localStackAwsLayer() ++ Scope.default) @@ TestAspect.withLiveClock
+  ).provideCustomLayer(
+    NettyHttpClient.default >>>
+      AwsConfig.default >>>
+      Kinesis.customized(_.endpointOverride(URI.create("http://localhost:4566"))) ++
+      Scope.default
+  ) @@ TestAspect.withLiveClock
+
 }

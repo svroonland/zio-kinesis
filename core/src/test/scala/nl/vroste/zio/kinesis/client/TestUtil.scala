@@ -85,7 +85,8 @@ object TestUtil {
       .createStream(CreateStreamRequest(StreamName(streamName), Some(PositiveIntegerObject(nrShards))))
       .mapError(_.toThrowable)
       .catchSome { case _: ResourceInUseException =>
-        printLine("Stream already exists").orDie
+        println("STREAM ALREADY EXISTS!")
+        ZIO.unit
       }
       .retry(Schedule.exponential(1.second) && Schedule.recurs(10))
 
