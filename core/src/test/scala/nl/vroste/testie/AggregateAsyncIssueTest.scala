@@ -19,7 +19,7 @@ object AggregateAsyncIssueTest extends ZIOSpecDefault {
     queue: Queue[ProduceRequest],
     md5Pool: ZPool[Throwable, Unit]
   ) {
-    val runloop: ZIO[Any, Nothing, Unit] =
+    val runloop: ZIO[Any, Throwable, Unit] =
       ZStream
         .fromQueue(queue, 10)
         .tap(_ => ZIO.logInfo(s"Dequeued element"))
@@ -31,13 +31,10 @@ object AggregateAsyncIssueTest extends ZIOSpecDefault {
     private def addPredictedShardToRequestsChunk(r: ProduceRequest) =
       ZIO.scoped {
         md5Pool.get *> ZIO.attempt(r)
-      }.tapErrorCause(e => ZIO.debug(e)).orDie
+      }
 
     def produce: Task[Unit] =
-      queue
-        .offer(
-          ProduceRequest(Chunk.empty)
-        ) *> ZIO.never.unit
+      queue.offer(ProduceRequest(Chunk.empty)) *> ZIO.never.unit
   }
 
   final case class ProduceRequest(data: Chunk[Byte])
