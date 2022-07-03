@@ -418,7 +418,7 @@ private[client] object ProducerLive {
             (_: Any) => ZChannel.succeedNow(s)
           )
 
-      new ZSink(reader(z))
+      ZSink.fromChannel(reader(z))
     }
 
   val batcher: ZSink[Any, Nothing, ProduceRequest, ProduceRequest, Chunk[ProduceRequest]] =

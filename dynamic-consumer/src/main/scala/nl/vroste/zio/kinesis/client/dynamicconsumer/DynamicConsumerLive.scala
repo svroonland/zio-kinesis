@@ -23,7 +23,8 @@ import scala.jdk.CollectionConverters._
 private[client] class DynamicConsumerLive(
   kinesisAsyncClient: KinesisAsyncClient,
   cloudWatchAsyncClient: CloudWatchAsyncClient,
-  dynamoDbAsyncClient: DynamoDbAsyncClient
+  dynamoDbAsyncClient: DynamoDbAsyncClient,
+  implicit val unsafe: Unsafe
 ) extends DynamicConsumer.Service {
   override def shardedStream[R, T](
     streamName: String,
@@ -65,7 +66,7 @@ private[client] class DynamicConsumerLive(
       def offerRecords(r: java.util.List[KinesisClientRecord]): Unit =
         // We must make sure never to throw an exception here, because KCL will consider the records processed
         // See https://github.com/awslabs/amazon-kinesis-client/issues/10
-        runtime.unsafeRun {
+        runtime.unsafe.run {
           val records = r.asScala
           for {
             queueShutdown <- q.isShutdown
@@ -92,7 +93,7 @@ private[client] class DynamicConsumerLive(
                              }
 //            _             <- logger.trace(s"offerRecords for ${shardId} COMPLETE")
           } yield ()
-        }
+        }.getOrThrow()
 
       def shutdownQueue: UIO[Unit] =
         ZIO.logDebug(s"shutdownQueue for ${shardId}") *>
@@ -105,7 +106,7 @@ private[client] class DynamicConsumerLive(
        * and await stream completion (in-flight messages processed)
        */
       def stop(reason: ShardQueueStopReason): Unit =
-        runtime.unsafeRun {
+        runtime.unsafe.run {
           // Clear the queue so it doesn't have to be drained fully
           def drainQueueUnlessShardEnded =
             q.takeAll.unit.unless(reason == ShardQueueStopReason.ShardEnded)
@@ -118,7 +119,7 @@ private[client] class DynamicConsumerLive(
                    q.awaitShutdown).race(q.awaitShutdown)
 //            _ <- ZIO.logTrace(s"stop() for ${shardId} because of ${reason} - COMPLETE")
           } yield ()
-        }
+        }.getOrThrow()
     }
 
     class ZioShardProcessorFactory(queues: Queues) extends ShardRecordProcessorFactory {
@@ -156,7 +157,7 @@ private[client] class DynamicConsumerLive(
       val shards: Queue[Exit[Option[Throwable], (String, ShardQueue, CheckpointerInternal)]]
     ) {
       def newShard(shard: String, checkpointer: RecordProcessorCheckpointer): ShardQueue =
-        runtime.unsafeRun {
+        runtime.unsafe.run {
           for {
             checkpointer <- Checkpointer.make(checkpointer)
             queue        <- Queue
@@ -166,7 +167,7 @@ private[client] class DynamicConsumerLive(
                               .map(new ShardQueue(shard, runtime, _, checkpointer))
             _            <- shards.offer(Exit.succeed((shard, queue, checkpointer))).unit
           } yield queue
-        }
+        }.getOrThrow()
 
       def shutdown: UIO[Unit] =
         shards.offer(Exit.fail(None)).unit

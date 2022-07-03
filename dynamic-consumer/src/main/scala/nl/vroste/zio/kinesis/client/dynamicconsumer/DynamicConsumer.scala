@@ -33,11 +33,13 @@ object DynamicConsumer {
   )
 
   val live: ZLayer[Kinesis with CloudWatch with DynamoDb, Nothing, DynamicConsumer] = ZLayer {
-    for {
-      kinesis    <- ZIO.service[Kinesis]
-      cloudwatch <- ZIO.service[CloudWatch]
-      dynamodb   <- ZIO.service[DynamoDb]
-    } yield new DynamicConsumerLive(kinesis.api, cloudwatch.api, dynamodb.api): DynamicConsumer
+    Unsafe.unsafe { implicit unsafe =>
+      for {
+        kinesis    <- ZIO.service[Kinesis]
+        cloudwatch <- ZIO.service[CloudWatch]
+        dynamodb   <- ZIO.service[DynamoDb]
+      } yield new DynamicConsumerLive(kinesis.api, cloudwatch.api, dynamodb.api, unsafe): DynamicConsumer
+    }
   }
 
   /**

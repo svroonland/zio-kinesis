@@ -803,7 +803,9 @@ object NativeConsumerTest extends ZIOSpecDefault {
       TestAspect
         .fromLayer(Runtime.addLogger(ZLogger.default.map(println(_)).filterLogLevel(_ > LogLevel.Debug)))
 
-  val useAws = Runtime.default.unsafeRun(System.envOrElse("ENABLE_AWS", "0")).toInt == 1
+  val useAws = Unsafe.unsafe { implicit unsafe =>
+    Runtime.default.unsafe.run(System.envOrElse("ENABLE_AWS", "0")).getOrThrow().toInt == 1
+  }
 
   val awsLayer: ZLayer[Any, Throwable, CloudWatch with Kinesis with DynamoDb] =
     if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()

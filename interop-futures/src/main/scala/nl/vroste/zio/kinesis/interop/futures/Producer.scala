@@ -21,7 +21,8 @@ import scala.annotation.nowarn
  */
 class Producer[T] private (
   runtime: zio.Runtime.Scoped[Any],
-  producer: client.Producer[T]
+  producer: client.Producer[T],
+  implicit val unsafe: Unsafe
 ) {
 
   /**
@@ -34,7 +35,7 @@ class Producer[T] private (
    *   Task that fails if the records fail to be produced with a non-recoverable error
    */
   def produce(r: ProducerRecord[T]): CancelableFuture[ProduceResponse] =
-    runtime.unsafeRunToFuture(producer.produce(r))
+    runtime.unsafe.runToFuture(producer.produce(r))
 
   /**
    * Backpressures when too many requests are in flight
@@ -43,12 +44,12 @@ class Producer[T] private (
    *   Task that fails if any of the records fail to be produced with a non-recoverable error
    */
   def produceMany(records: Iterable[ProducerRecord[T]]): CancelableFuture[Seq[ProduceResponse]] =
-    runtime.unsafeRunToFuture(producer.produceChunk(Chunk.fromIterable(records)))
+    runtime.unsafe.runToFuture(producer.produceChunk(Chunk.fromIterable(records)))
 
   /**
    * Shutdown the Producer
    */
-  def close(): Unit = runtime.shutdown()
+  def close(): Unit = runtime.shutdown0()
 }
 
 object Producer {
@@ -91,9 +92,11 @@ object Producer {
         .make(streamName, serializer, settings, metricsCollector = m => ZIO.attempt(metricsCollector(m)).orDie)
     }
 
-    val layer   = sdkClients >>> producer
-    val runtime = zio.Runtime.unsafeFromLayer(layer)
+    val layer = sdkClients >>> producer
+    Unsafe.unsafe { implicit unsafe =>
+      val runtime = zio.Runtime.unsafe.fromLayer(layer)
 
-    new Producer[T](runtime, runtime.unsafeRun(ZIO.service[client.Producer[T]]))
+      new Producer[T](runtime, runtime.unsafe.run(ZIO.service[client.Producer[T]]).getOrThrow(), unsafe)
+    }
   }
 }

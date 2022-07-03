@@ -12,7 +12,7 @@ import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClientBuilder
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClientBuilder
 import zio.aws.core.config
 import zio.aws.kinesis.Kinesis
-import zio.{ CancelableFuture, ZIO }
+import zio.{ CancelableFuture, Unsafe, ZIO }
 
 import scala.concurrent.duration._
 import scala.concurrent.{ ExecutionContext, Future }
@@ -21,7 +21,8 @@ import scala.concurrent.{ ExecutionContext, Future }
  * A scala-native Future based interface to the zio-kinesis Consumer
  */
 class Consumer private (
-  runtime: zio.Runtime.Scoped[Kinesis with LeaseRepository]
+  runtime: zio.Runtime.Scoped[Kinesis with LeaseRepository],
+  implicit val unsafe: Unsafe
 ) {
 
   /**
@@ -59,7 +60,7 @@ class Consumer private (
   )(
     recordProcessor: Record[T] => ExecutionContext => Future[Unit]
   ): CancelableFuture[Unit] =
-    runtime.unsafeRunToFuture {
+    runtime.unsafe.runToFuture {
       zionative.Consumer.consumeWith(
         streamName,
         applicationName,
@@ -75,7 +76,7 @@ class Consumer private (
       )(record => ZIO.fromFuture(recordProcessor(record)))
     }
 
-  def close(): Unit = runtime.shutdown()
+  def close(): Unit = runtime.shutdown0()
 }
 
 object Consumer {
@@ -94,8 +95,10 @@ object Consumer {
 
     val layer = (sdkClients >+> DynamoDbLeaseRepository.live)
 
-    val runtime = zio.Runtime.unsafeFromLayer(layer)
+    Unsafe.unsafe { implicit unsafe =>
+      val runtime = zio.Runtime.unsafe.fromLayer(layer)
 
-    new Consumer(runtime)
+      new Consumer(runtime, unsafe)
+    }
   }
 }

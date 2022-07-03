@@ -20,7 +20,9 @@ import zio.{ Clock, System, _ }
 object DynamicConsumerTest extends ZIOSpecDefault {
   import TestUtil._
 
-  val useAws = Runtime.default.unsafeRun(System.envOrElse("ENABLE_AWS", "0")).toInt == 1
+  val useAws = Unsafe.unsafe { implicit unsafe =>
+    Runtime.default.unsafe.run(System.envOrElse("ENABLE_AWS", "0")).getOrThrow().toInt == 1
+  }
 
   private val env: ZLayer[
     Any,

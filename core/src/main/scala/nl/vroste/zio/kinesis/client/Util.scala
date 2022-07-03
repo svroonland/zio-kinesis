@@ -47,7 +47,7 @@ object Util {
                                      ZIO.foreachDiscard(map.values)(_.offer(Exit.fail(None)).catchAllCause(_ => ZIO.unit))
                                    )
                                  )
-        } yield inStream mergeTerminateEither ZStream.fromQueueWithShutdown(substreamsQueue).flattenExitOption.map {
+        } yield inStream mergeHaltEither ZStream.fromQueueWithShutdown(substreamsQueue).flattenExitOption.map {
           case (key, substreamQueue) =>
             val substream = ZStream
               .fromQueueWithShutdown(substreamQueue)
@@ -60,11 +60,11 @@ object Util {
     def terminateOnFiberFailure[E1 >: E](fib: Fiber[E1, Any]): ZStream[R, E1, O] =
       stream
         .map(Exit.succeed)
-        .mergeTerminateEither(ZStream.fromZIO(fib.join).as(Exit.fail(None)) *> ZStream.never)
+        .mergeHaltEither(ZStream.fromZIO(fib.join).as(Exit.fail(None)) *> ZStream.never)
         .flattenExitOption
 
     def terminateOnPromiseCompleted[E1 >: E](p: Promise[Nothing, _]): ZStream[R, E1, O] =
-      stream.map(Exit.succeed).mergeTerminateEither(ZStream.fromZIO(p.await).as(Exit.fail(None))).flattenExitOption
+      stream.map(Exit.succeed).mergeHaltEither(ZStream.fromZIO(p.await).as(Exit.fail(None))).flattenExitOption
   }
 
   /**
