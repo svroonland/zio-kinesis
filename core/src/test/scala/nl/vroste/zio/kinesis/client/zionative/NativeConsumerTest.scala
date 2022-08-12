@@ -365,55 +365,55 @@ object NativeConsumerTest extends DefaultRunnableSpec {
                                      .provideLayer(Clock.live)
 
             _         <- {
-              for {
+                           for {
 
-                worker1 <- (consumer(streamName, applicationName, "worker1", emitDiagnostic("worker1"))
-                             .take(10) // Such that it has had time to claim some leases
-                             .runDrain
-                             .tapError(e => log.error(s"Worker1 failed with error: ${e}"))
-                             .tapError(consumer1Done.fail(_))
-                             *> log.warn("worker1 done") *> consumer1Done.succeed(())).fork
+                             worker1 <- (consumer(streamName, applicationName, "worker1", emitDiagnostic("worker1"))
+                                          .take(10) // Such that it has had time to claim some leases
+                                          .runDrain
+                                          .tapError(e => log.error(s"Worker1 failed with error: ${e}"))
+                                          .tapError(consumer1Done.fail(_))
+                                          *> log.warn("worker1 done") *> consumer1Done.succeed(())).fork
 
-                worker2 <- consumer(streamName, applicationName, "worker2", emitDiagnostic("worker2"))
-                             .ensuringFirst(
-                               log.warn("worker2 DONE")
+                             worker2 <- consumer(streamName, applicationName, "worker2", emitDiagnostic("worker2"))
+                                          .ensuringFirst(
+                                            log.warn("worker2 DONE")
+                                          )
+                                          .runDrain
+                                          .delay(5.seconds)
+                                          .fork
+                             worker3 <- consumer(streamName, applicationName, "worker3", emitDiagnostic("worker3"))
+                                          .ensuringFirst(
+                                            log.warn("worker3 DONE")
+                                          )
+                                          .runDrain
+                                          .delay(5.seconds)
+                                          .fork
+
+                             _ <- consumer1Done.await
+                             _ <- log.debug("Consumer1 is done")
+                             _ <- ZIO.sleep(10.seconds)
+                             _ <- log.debug("Interrupting producer")
+                             _ <- producer.interrupt
+                             _ <- log.debug("Interrupting streams")
+                             _ <- worker2.interrupt
+                                    .tap(_ => log.info("Done interrupting worker 2"))
+                                    .tapCause(e => log.error("Error interrupting worker 2:", e))
+                                    .ignore zipPar worker3.interrupt
+                                    .tap(_ => log.info("Done interrupting worker 3"))
+                                    .tapCause(e => log.error("Error interrupting worker 3:", e))
+                                    .ignore zipPar worker1.join
+                                    .tap(_ => log.info("Done interrupting worker 1"))
+                                    .tapCause(e => log.error("Error joining worker 1:", e))
+                                    .ignore
+                           } yield ()
+                         }.onInterrupt(
+                           events.get
+                             .map(
+                               _.filterNot(_._3.isInstanceOf[PollComplete])
+                                 .filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
                              )
-                             .runDrain
-                             .delay(5.seconds)
-                             .fork
-                worker3 <- consumer(streamName, applicationName, "worker3", emitDiagnostic("worker3"))
-                             .ensuringFirst(
-                               log.warn("worker3 DONE")
-                             )
-                             .runDrain
-                             .delay(5.seconds)
-                             .fork
-
-                _ <- consumer1Done.await
-                _ <- log.debug("Consumer1 is done")
-                _ <- ZIO.sleep(10.seconds)
-                _ <- log.debug("Interrupting producer")
-                _ <- producer.interrupt
-                _ <- log.debug("Interrupting streams")
-                _ <- worker2.interrupt
-                       .tap(_ => log.info("Done interrupting worker 2"))
-                       .tapCause(e => log.error("Error interrupting worker 2:", e))
-                       .ignore zipPar worker3.interrupt
-                       .tap(_ => log.info("Done interrupting worker 3"))
-                       .tapCause(e => log.error("Error interrupting worker 3:", e))
-                       .ignore zipPar worker1.join
-                       .tap(_ => log.info("Done interrupting worker 1"))
-                       .tapCause(e => log.error("Error joining worker 1:", e))
-                       .ignore
-              } yield ()
-            }.onInterrupt(
-              events.get
-                .map(
-                  _.filterNot(_._3.isInstanceOf[PollComplete])
-                    .filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
-                )
-                .tap(allEvents => UIO(println(allEvents.mkString("\n"))))
-            )
+                             .tap(allEvents => UIO(println(allEvents.mkString("\n"))))
+                         )
             allEvents <- events.get.map(
                            _.filterNot(_._3.isInstanceOf[PollComplete])
                              .filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
