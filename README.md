@@ -107,7 +107,7 @@ object ConsumeWithExample extends zio.App {
               checkpointBatchSize = 1000L,
               checkpointDuration = 5.minutes
             )(record => putStrLn(s"Processing record $record"))
-            .provideCustomLayer(Consumer.defaultEnvironment ++ loggingLayer)
+            .provideLayer(Consumer.defaultEnvironment ++ loggingLayer)
             .exitCode
 }
 ``` 
@@ -140,7 +140,7 @@ object NativeConsumerBasicUsageExample extends zio.App {
                         .via(checkpointer.checkpointBatched[Console](nr = 1000, interval = 5.minutes))
             }
             .runDrain
-            .provideCustomLayer(Consumer.defaultEnvironment ++ loggingLayer)
+            .provideLayer(Consumer.defaultEnvironment ++ loggingLayer)
             .exitCode
 
   val loggingLayer = Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
@@ -154,7 +154,7 @@ for example, JSON data using a JSON library of your choice.
 * After processing the record (here: printing to the console), the record is staged for checkpointing. This is useful to ensure that when the shard stream is interrupted or fails, a checkpoint call is made. 
 * The `checkpointBatched` method on the `Checkpointer` is a helper method that batches records up to 1000 or within 5 seconds, whichever comes earlier. At the end of that window, the last staged record will be checkpointed. It also takes care of ending the shard stream when the lease has been lost or there is some other error in checkpointing. The `Console` type parameter is unfortunately necessary for correct type inference.
 * `runDrain` will run the stream until the application is interrupted or until the stream fails.
-* `provideCustomLayer` provides the environment (dependencies via [ZLayer](https://zio.dev/docs/howto/howto_use_layers)) necessary to run the `Consumer`. The default environment uses AWS SDK default settings (i.e. default credential provider)
+* `provideLayer` provides the environment (dependencies via [ZLayer](https://zio.dev/docs/howto/howto_use_layers)) necessary to run the `Consumer`. The default environment uses AWS SDK default settings (i.e. default credential provider)
 * `exitCode` maps the failure or success of the stream to a system exit code. 
 * A logging environment is provided for debug logging. See [zio-logging](https://github.com/zio/zio-logging) for more information on how to customize this.
 
@@ -292,7 +292,7 @@ object ProducerExample extends zio.App {
   }
 
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
-    program.provideCustomLayer(env).exitCode
+    program.provideLayer(env).exitCode
 }
 ```
 
@@ -364,7 +364,7 @@ object ProducerWithMetricsExample extends zio.App {
   }
 
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
-    program.provideCustomLayer(env).exitCode
+    program.provideLayer(env).exitCode
 }
 ```
 
@@ -455,7 +455,7 @@ object DynamicConsumerConsumeWithExample extends zio.App {
               checkpointBatchSize = 1000L,
               checkpointDuration = 5.minutes
             )(record => putStrLn(s"Processing record $record"))
-            .provideCustomLayer((loggingLayer ++ defaultAwsLayer) >+> DynamicConsumer.live)
+            .provideLayer((loggingLayer ++ defaultAwsLayer) >+> DynamicConsumer.live)
             .exitCode
 }
 ``` 
@@ -501,7 +501,7 @@ object DynamicConsumerFakeExample extends zio.App {
                 checkpointBatchSize = 1000L,
                 checkpointDuration = 5.minutes
               )(record => putStrLn(s"Processing record $record"))
-              .provideCustomLayer(DynamicConsumer.fake(shards, refCheckpointedList) ++ loggingLayer)
+              .provideLayer(DynamicConsumer.fake(shards, refCheckpointedList) ++ loggingLayer)
               .exitCode
       _ <- putStrLn(s"refCheckpointedList=$refCheckpointedList")
     } yield exitCode
@@ -548,7 +548,7 @@ object DynamicConsumerBasicUsageExample extends zio.App {
                         .via(checkpointer.checkpointBatched[Blocking with Console](nr = 1000, interval = 5.minutes))
             }
             .runDrain
-            .provideCustomLayer((loggingLayer ++ defaultAwsLayer) >>> DynamicConsumer.live)
+            .provideLayer((loggingLayer ++ defaultAwsLayer) >>> DynamicConsumer.live)
             .exitCode
 }
 ```

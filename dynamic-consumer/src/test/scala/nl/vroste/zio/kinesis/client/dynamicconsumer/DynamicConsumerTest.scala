@@ -346,7 +346,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
       testConsume2,
       testCheckpointAtShutdown,
       testShardEnd
-    ).provideCustomLayer(env) @@ timeout(10.minutes) @@ withLiveClock
+    ).provideLayer(env) @@ timeout(10.minutes) @@ withLiveClock
 
   def delayStream[R, E, O](s: ZStream[R, E, O], delay: Duration) =
     ZStream.fromZIO(ZIO.sleep(delay)).flatMap(_ => s)

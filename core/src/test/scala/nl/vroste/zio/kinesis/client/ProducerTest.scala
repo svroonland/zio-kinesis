@@ -425,7 +425,7 @@ object ProducerTest extends ZIOSpecDefault {
           } yield assertCompletes
         }
       } @@ TestAspect.timeout(2.minute)
-    ).provideCustomLayer(env ++ Scope.default) @@
+    ).provideLayer(env ++ Scope.default) @@
       sequential @@
       withLiveClock @@
       TestAspect.timeout(2.minute) @@

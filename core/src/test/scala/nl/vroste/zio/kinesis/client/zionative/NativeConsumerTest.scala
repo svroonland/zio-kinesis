@@ -793,7 +793,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
             )
         }
       }
-    ).provideCustomLayerShared(env) @@
+    ).provideLayerShared(env) @@
       TestAspect.timed @@
       TestAspect.withLiveClock @@
 //      TestAspect.sequential @@ // For CircleCI
