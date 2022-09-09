@@ -20,6 +20,8 @@ import zio.test.Assertion._
 import zio.test._
 import zio.{ System, _ }
 
+import scala.collection.compat._
+
 import java.time.Instant
 import java.{ util => ju }
 
