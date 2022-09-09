@@ -79,7 +79,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
                           .mapError(_.toThrowable)
                           .map(_.streamDescription.shards.map(_.shardId))
 
-          } yield assert(records.map(_.shardId).toSet)(equalTo(shardIds.toSet))
+          } yield assert(records.map(_.shardId).toSet)(equalTo(shardIds.map(_.toString).toSet))
         }
       },
       test("release leases at shutdown") {
