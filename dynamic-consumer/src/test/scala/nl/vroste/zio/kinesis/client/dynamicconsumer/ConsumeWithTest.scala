@@ -3,7 +3,7 @@ package nl.vroste.zio.kinesis.client.dynamicconsumer
 import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.consumeWith
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
-import nl.vroste.zio.kinesis.client.{ProducerRecord, TestUtil}
+import nl.vroste.zio.kinesis.client.{ ProducerRecord, TestUtil }
 import zio.Console.printLine
 import zio.aws.cloudwatch.CloudWatch
 import zio.aws.dynamodb.DynamoDb
@@ -11,9 +11,9 @@ import zio.aws.kinesis.Kinesis
 import zio.logging.LogFormat
 import zio.logging.backend.SLF4J
 import zio.test.Assertion.equalTo
-import zio.test.TestAspect.{timeout, withLiveClock}
-import zio.test.{ZIOSpecDefault, assert}
-import zio.{Promise, Ref, ZLayer, durationInt}
+import zio.test.TestAspect.{ timeout, withLiveClock }
+import zio.test.{ assert, ZIOSpecDefault }
+import zio.{ durationInt, Promise, Ref, ZLayer }
 
 object ConsumeWithTest extends ZIOSpecDefault {
   import TestUtil._

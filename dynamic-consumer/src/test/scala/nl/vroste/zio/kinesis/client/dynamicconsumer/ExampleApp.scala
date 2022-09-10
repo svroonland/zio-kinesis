@@ -7,20 +7,20 @@ import nl.vroste.zio.kinesis.client.zionative.Consumer.InitialPosition
 import nl.vroste.zio.kinesis.client.zionative._
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository.TableParameters
-import nl.vroste.zio.kinesis.client.zionative.metrics.{CloudWatchMetricsPublisher, CloudWatchMetricsPublisherConfig}
+import nl.vroste.zio.kinesis.client.zionative.metrics.{ CloudWatchMetricsPublisher, CloudWatchMetricsPublisherConfig }
 import software.amazon.awssdk.http.SdkHttpConfigurationOption
 import software.amazon.awssdk.utils.AttributeMap
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio._
 import zio.aws.cloudwatch.CloudWatch
 import zio.aws.dynamodb
-import zio.aws.dynamodb.model.primitives.{TagKeyString, TagValueString}
+import zio.aws.dynamodb.model.primitives.{ TagKeyString, TagValueString }
 import zio.aws.kinesis.Kinesis
-import zio.aws.kinesis.model.primitives.{PositiveIntegerObject, StreamName}
-import zio.aws.kinesis.model.{ScalingType, UpdateShardCountRequest}
+import zio.aws.kinesis.model.primitives.{ PositiveIntegerObject, StreamName }
+import zio.aws.kinesis.model.{ ScalingType, UpdateShardCountRequest }
 import zio.logging.LogFormat
 import zio.logging.backend.SLF4J
-import zio.stream.{ZSink, ZStream}
+import zio.stream.{ ZSink, ZStream }
 
 /**
  * Runnable used for manually testing various features
@@ -98,14 +98,13 @@ object ExampleApp extends zio.ZIOAppDefault {
                     })
     } yield ExitCode.success
 
-  override def run: ZIO[Any with ZIOAppArgs with Scope, Nothing, ExitCode] = {
+  override def run: ZIO[Any with ZIOAppArgs with Scope, Nothing, ExitCode] =
     program
       .foldCauseZIO(
         e => ZIO.logSpan(s"Program failed: ${e.prettyPrint}")(ZIO.logErrorCause(e)).exitCode,
         ZIO.succeed(_)
       )
       .provideLayer(awsEnv)
-  }
 
   def worker(id: String) =
     ZStream.unwrapScoped {
@@ -127,7 +126,8 @@ object ExampleApp extends zio.ZIOAppDefault {
                 ZIO
                   .logInfo(
                     id + s": PollComplete for ${ev.nrRecords} records of ${ev.shardId}, behind latest: ${ev.behindLatest.toMillis} ms (took ${ev.duration.toMillis} ms)"
-                  ).provideLayer(loggingLayer)
+                  )
+                  .provideLayer(loggingLayer)
               case ev                               => ZIO.logInfo(id + ": " + ev.toString).provideLayer(loggingLayer)
             }) *> metrics.processEvent(ev)
         )

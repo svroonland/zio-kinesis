@@ -9,15 +9,15 @@ import zio.Console.printLine
 import zio.aws.cloudwatch.CloudWatch
 import zio.aws.dynamodb.DynamoDb
 import zio.aws.kinesis.model.ScalingType
-import zio.aws.kinesis.model.primitives.{PositiveIntegerObject, StreamName}
-import zio.aws.kinesis.{Kinesis, model}
+import zio.aws.kinesis.model.primitives.{ PositiveIntegerObject, StreamName }
+import zio.aws.kinesis.{ model, Kinesis }
 import zio.logging.LogFormat
 import zio.logging.backend.SLF4J
-import zio.stream.{SubscriptionRef, ZSink, ZStream}
+import zio.stream.{ SubscriptionRef, ZSink, ZStream }
 import zio.test.Assertion._
-import zio.test.TestAspect.{timeout, withLiveClock}
+import zio.test.TestAspect.{ timeout, withLiveClock }
 import zio.test._
-import zio.{Clock, System, _}
+import zio.{ Clock, System, _ }
 
 object DynamicConsumerTest extends ZIOSpecDefault {
   import TestUtil._
