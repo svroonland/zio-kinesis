@@ -213,12 +213,10 @@ object DynamicConsumerTest extends ZIOSpecDefault {
                                )
                                .mapConcat(_.toList)
                                .tap { r =>
-                                 (printLine(s"Shard ${r.shardId}: checkpointing for record $r $interrupted").orDie *>
+                                 (ZIO.logDebug(s"Shard ${r.shardId}: checkpointing for record $r $interrupted") *>
                                    checkpointer.checkpoint)
                                    .unlessZIO(interrupted.isDone)
-                                   .tapError(e => ZIO.attempt(println(s"Checkpointing failed: ${e}")))
                                    .tap(_ => lastCheckpointedRecords.update(_ + (shardId -> r.sequenceNumber)))
-                                   .tap(_ => ZIO.attempt(println(s"Checkpointing for shard ${r.shardId} done")))
                                }
                          }
           } yield stream)
@@ -231,6 +229,9 @@ object DynamicConsumerTest extends ZIOSpecDefault {
             nrRecordsSeen            <- Ref.make(0)
             lastProcessedRecords     <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
             lastCheckpointedRecords  <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
+            _                        <- TestUtil
+                                          .produceRecords(streamName, 10000, 25, 10)
+                                          .forkScoped
             consumer                 <- streamConsumer(
                                           interrupted,
                                           consumerAlive,
@@ -240,12 +241,8 @@ object DynamicConsumerTest extends ZIOSpecDefault {
                                         ).runCollect.forkScoped
             _                        <- consumerAlive.await
             _                        <- Clock.instant.tap(now =>
-                                          ZIO.attempt(println(s"Consumer has started after ${java.time.Duration.between(started, now)}"))
+                                          ZIO.logInfo(s"Consumer has started after ${java.time.Duration.between(started, now)}")
                                         )
-            _                        <- TestUtil
-                                          .produceRecords(streamName, 10000, 25, 10)
-                                          .tap(_ => ZIO.attempt(println("PRODUCING RECORDS DONE")))
-                                          .forkScoped
             _                        <- interrupted.await
             _                        <- consumer.join
             r                        <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)

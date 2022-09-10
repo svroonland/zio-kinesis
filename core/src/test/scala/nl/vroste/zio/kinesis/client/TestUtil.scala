@@ -119,8 +119,11 @@ object TestUtil {
                             metrics =>
                               totalMetrics
                                 .updateAndGet(_ + metrics)
-                                .flatMap(m => printLine(s"""${metrics.toString}
-                                                       |Total metrics: ${m.toString}""".stripMargin).orDie)
+                                .flatMap(m =>
+                                  ZIO
+                                    .logDebug(s"""${metrics.toString}
+                                             |Total metrics: ${m.toString}""".stripMargin)
+                                )
                           )
         _            <- massProduceRecords(producer, nrRecords, produceRate = Some(produceRate), maxRecordSize)
       } yield ()
