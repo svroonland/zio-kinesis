@@ -10,6 +10,6 @@
     </root>
 
     <logger name="nl.vroste" level="DEBUG"/>
-    <logger name="software.amazon.kinesis" level="DEBUG"/>
+    <logger name="software.amazon.kinesis" level="INFO"/>
     <logger name="io.netty.channel.DefaultChannelPipeline" level="ERROR"/>
 </configuration>
