@@ -11,6 +11,8 @@ import zio.aws.dynamodb.DynamoDb
 import zio.aws.kinesis.model.ScalingType
 import zio.aws.kinesis.model.primitives.{ PositiveIntegerObject, StreamName }
 import zio.aws.kinesis.{ model, Kinesis }
+import zio.logging.LogFormat
+import zio.logging.backend.SLF4J
 import zio.stream.{ SubscriptionRef, ZSink, ZStream }
 import zio.test.Assertion._
 import zio.test.TestAspect.{ timeout, withLiveClock }
@@ -20,7 +22,12 @@ import zio.{ Clock, System, _ }
 object DynamicConsumerTest extends ZIOSpecDefault {
   import TestUtil._
 
-  val useAws = Unsafe.unsafe { implicit unsafe =>
+  private val loggingLayer: ZLayer[Any, Nothing, Unit] = SLF4J
+    .slf4j(
+      format = LogFormat.colored
+    )
+
+  private val useAws = Unsafe.unsafe { implicit unsafe =>
     Runtime.default.unsafe.run(System.envOrElse("ENABLE_AWS", "0")).getOrThrow().toInt == 1
   }
 
@@ -28,7 +35,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
     Any,
     Nothing,
     CloudWatch with Kinesis with DynamoDb with DynamicConsumer
-  ] = (if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()).orDie >+>
+  ] = (if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()).orDie >+> loggingLayer >+>
     DynamicConsumer.live
 
   def testConsumePolling =

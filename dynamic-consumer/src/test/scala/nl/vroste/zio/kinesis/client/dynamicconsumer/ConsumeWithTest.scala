@@ -8,6 +8,8 @@ import zio.Console.printLine
 import zio.aws.cloudwatch.CloudWatch
 import zio.aws.dynamodb.DynamoDb
 import zio.aws.kinesis.Kinesis
+import zio.logging.LogFormat
+import zio.logging.backend.SLF4J
 import zio.test.Assertion.equalTo
 import zio.test.TestAspect.{ timeout, withLiveClock }
 import zio.test.{ assert, ZIOSpecDefault }
@@ -16,12 +18,17 @@ import zio.{ durationInt, Promise, Ref, ZLayer }
 object ConsumeWithTest extends ZIOSpecDefault {
   import TestUtil._
 
+  private val loggingLayer: ZLayer[Any, Nothing, Unit] = SLF4J
+    .slf4j(
+      format = LogFormat.colored
+    )
+
   private val env: ZLayer[
     Any,
     Throwable,
     Any with CloudWatch with Kinesis with DynamoDb with DynamicConsumer
   ] =
-    LocalStackServices.localStackAwsLayer() >+> DynamicConsumer.live
+    loggingLayer >+> LocalStackServices.localStackAwsLayer() >+> DynamicConsumer.live
 
   def testConsume1 =
     test("consumeWith should consume records produced on all shards") {
