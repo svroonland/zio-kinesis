@@ -151,17 +151,19 @@ object DynamicConsumerTest extends ZIOSpecDefault {
 
           } yield stream
 
-        val produceEffect = TestUtil.produceRecords(streamName, 20000, 80, 10)
+        ZIO.scoped {
+          val produceEffect = TestUtil.produceRecords(streamName, 20000, 80, 10)
 
-        for {
-          _                    <- printLine("Putting records").orDie
-          _                    <- printLine("Starting dynamic consumers").orDie
-          activeConsumers      <- SubscriptionRef.make(Set.empty[String])
-          allConsumersGotAShard = activeConsumers.changes.takeUntil(_ == Set("1", "2")).runDrain
-          _                    <- (streamConsumer("1", activeConsumers)
-                                    merge delayStream(streamConsumer("2", activeConsumers), 5.seconds)).runCollect raceFirst
-                                    allConsumersGotAShard raceFirst produceEffect
-        } yield assertCompletes
+          for {
+            _                    <- printLine("Putting records").orDie
+            _                    <- printLine("Starting dynamic consumers").orDie
+            activeConsumers      <- SubscriptionRef.make(Set.empty[String])
+            allConsumersGotAShard = activeConsumers.changes.takeUntil(_ == Set("1", "2")).runDrain
+            _                    <- (streamConsumer("1", activeConsumers)
+                                      merge delayStream(streamConsumer("2", activeConsumers), 5.seconds)).runCollect raceFirst
+                                      allConsumersGotAShard raceFirst produceEffect
+          } yield assertCompletes
+        }
       }
     }
 
