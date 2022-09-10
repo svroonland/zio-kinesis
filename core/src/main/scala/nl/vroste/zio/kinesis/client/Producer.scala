@@ -170,7 +170,7 @@ object Producer {
                    md5Pool
                  )
       _       <- producer.runloop.forkScoped                                             // Fiber cannot fail
-      _       <- producer.metricsCollection.forkScoped.ensuring(producer.collectMetrics) // Fiber cannot fail
+      _       <- producer.metricsCollection.ensuring(producer.collectMetrics).forkScoped // Fiber cannot fail
     } yield producer
 
   private def getShardMap(streamName: StreamName): ZIO[Kinesis, Throwable, ShardMap] = {

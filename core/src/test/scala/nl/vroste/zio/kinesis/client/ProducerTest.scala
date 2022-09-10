@@ -312,14 +312,16 @@ object ProducerTest extends ZIOSpecDefault {
             .make(ProducerMetrics.empty)
             .flatMap { totalMetrics =>
               for {
-                _          <- Producer
-                                .make(
-                                  streamName,
-                                  Serde.asciiString,
-                                  ProducerSettings(aggregate = true),
-                                  metricsCollector = m => totalMetrics.update(_ + m)
-                                )
-                                .flatMap(_.produceChunk(Chunk.fromIterable(records)))
+                _          <- ZIO.scoped {
+                                Producer
+                                  .make(
+                                    streamName,
+                                    Serde.asciiString,
+                                    ProducerSettings(aggregate = true),
+                                    metricsCollector = m => totalMetrics.update(_ + m)
+                                  )
+                                  .flatMap(_.produceChunk(Chunk.fromIterable(records)))
+                              }
                 endMetrics <- totalMetrics.get
               } yield assert(endMetrics.nrRecordsPublished)(equalTo(nrRecords.toLong))
             }
