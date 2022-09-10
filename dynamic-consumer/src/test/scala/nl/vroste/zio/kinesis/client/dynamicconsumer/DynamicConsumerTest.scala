@@ -340,7 +340,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
           } yield assertCompletes
         }
       }
-    } @@ TestAspect.timeout(5.minutes) @@ TestAspect.ifEnvSet("ENABLE_AWS")
+    } @@ TestAspect.timeout(10.minutes) @@ TestAspect.ifEnvSet("ENABLE_AWS")
 
   // TODO check the order of received records is correct
 
