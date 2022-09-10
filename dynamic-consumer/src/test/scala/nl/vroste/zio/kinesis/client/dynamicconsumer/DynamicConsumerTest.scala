@@ -35,7 +35,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
     Any,
     Nothing,
     CloudWatch with Kinesis with DynamoDb with DynamicConsumer
-  ] = (if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()).orDie >+> loggingLayer >+>
+  ] = (if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()).orDie >+>
     DynamicConsumer.live
 
   def testConsumePolling =
@@ -81,37 +81,32 @@ object DynamicConsumerTest extends ZIOSpecDefault {
     test("consume records produced on all shards produced on the stream with enhanced fanout") {
       val nrShards = 2
       withRandomStreamEnv(nrShards) { (streamName, applicationName) =>
-        for {
-          _ <- printLine("Putting records").orDie
-          _ <- TestUtil
-                 .produceRecords(
-                   streamName,
-                   1000,
-                   10,
-                   10
-                 )
-                 .forkScoped
+        ZIO.scoped {
+          for {
+            _ <- printLine("Putting records").orDie
+            _ <- TestUtil.produceRecords(streamName, 1000, 10, 10).forkScoped
 
-          service <- ZIO.service[DynamicConsumer.Service]
-          records <- service
-                       .shardedStream(
-                         streamName,
-                         applicationName = applicationName,
-                         deserializer = Serde.asciiString
-                       )
-                       .flatMapPar(Int.MaxValue) { case (shardId @ _, shardStream, checkpointer) =>
-                         shardStream
-                           .tap(r =>
-                             printLine(s"Got record $r").orDie *> checkpointer
-                               .checkpointNow(r)
-                               .retry(Schedule.exponential(100.millis))
-                           )
-                           .take(2)
-                       }
-                       .take(nrShards * 2.toLong)
-                       .runCollect
+            service <- ZIO.service[DynamicConsumer.Service]
+            records <- service
+                         .shardedStream(
+                           streamName,
+                           applicationName = applicationName,
+                           deserializer = Serde.asciiString
+                         )
+                         .flatMapPar(Int.MaxValue) { case (shardId @ _, shardStream, checkpointer) =>
+                           shardStream
+                             .tap(r =>
+                               printLine(s"Got record $r").orDie *> checkpointer
+                                 .checkpointNow(r)
+                                 .retry(Schedule.exponential(100.millis))
+                             )
+                             .take(2)
+                         }
+                         .take(nrShards * 2.toLong)
+                         .runCollect
 
-        } yield assert(records)(hasSize(equalTo(nrShards * 2)))
+          } yield assert(records)(hasSize(equalTo(nrShards * 2)))
+        }
       }
     }
 
@@ -228,33 +223,35 @@ object DynamicConsumerTest extends ZIOSpecDefault {
                          }
           } yield stream)
 
-        for {
-          started                  <- Clock.instant
-          interrupted              <- Promise.make[Nothing, Unit]
-          consumerAlive            <- Promise.make[Nothing, Unit]
-          nrRecordsSeen            <- Ref.make(0)
-          lastProcessedRecords     <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
-          lastCheckpointedRecords  <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
-          consumer                 <- streamConsumer(
-                                        interrupted,
-                                        consumerAlive,
-                                        nrRecordsSeen,
-                                        lastProcessedRecords,
-                                        lastCheckpointedRecords
-                                      ).runCollect.forkScoped
-          _                        <- consumerAlive.await
-          _                        <- Clock.instant.tap(now =>
-                                        ZIO.attempt(println(s"Consumer has started after ${java.time.Duration.between(started, now)}"))
-                                      )
-          _                        <- TestUtil
-                                        .produceRecords(streamName, 10000, 25, 10)
-                                        .tap(_ => ZIO.attempt(println("PRODUCING RECORDS DONE")))
-                                        .forkScoped
-          _                        <- interrupted.await
-          _                        <- consumer.join
-          r                        <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
-          (processed, checkpointed) = r
-        } yield assert(processed)(equalTo(checkpointed))
+        ZIO.scoped {
+          for {
+            started                  <- Clock.instant
+            interrupted              <- Promise.make[Nothing, Unit]
+            consumerAlive            <- Promise.make[Nothing, Unit]
+            nrRecordsSeen            <- Ref.make(0)
+            lastProcessedRecords     <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
+            lastCheckpointedRecords  <- Ref.make[Map[String, String]](Map.empty) // Shard -> Sequence Nr
+            consumer                 <- streamConsumer(
+                                          interrupted,
+                                          consumerAlive,
+                                          nrRecordsSeen,
+                                          lastProcessedRecords,
+                                          lastCheckpointedRecords
+                                        ).runCollect.forkScoped
+            _                        <- consumerAlive.await
+            _                        <- Clock.instant.tap(now =>
+                                          ZIO.attempt(println(s"Consumer has started after ${java.time.Duration.between(started, now)}"))
+                                        )
+            _                        <- TestUtil
+                                          .produceRecords(streamName, 10000, 25, 10)
+                                          .tap(_ => ZIO.attempt(println("PRODUCING RECORDS DONE")))
+                                          .forkScoped
+            _                        <- interrupted.await
+            _                        <- consumer.join
+            r                        <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
+            (processed, checkpointed) = r
+          } yield assert(processed)(equalTo(checkpointed))
+        }
       }
     } @@ TestAspect.timeout(5.minutes)
 
@@ -307,40 +304,42 @@ object DynamicConsumerTest extends ZIOSpecDefault {
                          }
           } yield stream
 
-        for {
-          newShards            <- Queue.unbounded[Unit]
-          requestShutdown      <- Promise.make[Nothing, Unit]
-          firstRecordProcessed <- Promise.make[Nothing, Unit]
+        ZIO.scoped {
+          for {
+            newShards            <- Queue.unbounded[Unit]
+            requestShutdown      <- Promise.make[Nothing, Unit]
+            firstRecordProcessed <- Promise.make[Nothing, Unit]
 
-          // Act
-          _        <- TestUtil
-                        .produceRecords(streamName, 20000, 10, 10)
-                        .forkScoped
-          consumer <- streamConsumer(
-                        requestShutdown,
-                        firstRecordProcessed,
-                        newShards
-                      ).runCollect
-                        .tapError(e => ZIO.logError(s"Error in stream consumer,: ${e}"))
-                        .forkScoped
-          _        <- firstRecordProcessed.await
-          _         = println("Resharding")
-          _        <- Kinesis
-                        .updateShardCount(
-                          model.UpdateShardCountRequest(
-                            StreamName(streamName),
-                            PositiveIntegerObject(nrShards * 2),
-                            ScalingType.UNIFORM_SCALING
+            // Act
+            _        <- TestUtil
+                          .produceRecords(streamName, 20000, 10, 10)
+                          .forkScoped
+            consumer <- streamConsumer(
+                          requestShutdown,
+                          firstRecordProcessed,
+                          newShards
+                        ).runCollect
+                          .tapError(e => ZIO.logError(s"Error in stream consumer,: ${e}"))
+                          .forkScoped
+            _        <- firstRecordProcessed.await
+            _         = println("Resharding")
+            _        <- Kinesis
+                          .updateShardCount(
+                            model.UpdateShardCountRequest(
+                              StreamName(streamName),
+                              PositiveIntegerObject(nrShards * 2),
+                              ScalingType.UNIFORM_SCALING
+                            )
                           )
-                        )
-                        .mapError(_.toThrowable)
-          _        <- ZStream.fromQueue(newShards).take(nrShards * 3L).runDrain
-          _         = println("All (new) shards seen")
-          // The long timeout is related to LeaseCleanupConfig.completedLeaseCleanupIntervalMillis which currently cannot be configured in zio-kinesis
-          _        <- ZIO.sleep(360.seconds)
-          _        <- requestShutdown.succeed(())
-          _        <- consumer.join
-        } yield assertCompletes
+                          .mapError(_.toThrowable)
+            _        <- ZStream.fromQueue(newShards).take(nrShards * 3L).runDrain
+            _         = println("All (new) shards seen")
+            // The long timeout is related to LeaseCleanupConfig.completedLeaseCleanupIntervalMillis which currently cannot be configured in zio-kinesis
+            _        <- ZIO.sleep(360.seconds)
+            _        <- requestShutdown.succeed(())
+            _        <- consumer.join
+          } yield assertCompletes
+        }
       }
     } @@ TestAspect.timeout(5.minutes) @@ TestAspect.ifEnvSet("ENABLE_AWS")
 
@@ -354,7 +353,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
       testCheckpointAtShutdown,
       testShardEnd
     ).provideLayer(env ++ Scope.default ++ Runtime.removeDefaultLoggers ++ loggingLayer) @@ timeout(
-      10.minutes
+      3.minutes
     ) @@ withLiveClock
 
   def delayStream[R, E, O](s: ZStream[R, E, O], delay: Duration) =
