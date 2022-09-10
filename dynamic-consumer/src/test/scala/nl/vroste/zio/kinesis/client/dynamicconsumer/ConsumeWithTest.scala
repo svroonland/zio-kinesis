@@ -13,7 +13,7 @@ import zio.logging.backend.SLF4J
 import zio.test.Assertion.equalTo
 import zio.test.TestAspect.{ timeout, withLiveClock }
 import zio.test.{ assert, ZIOSpecDefault }
-import zio.{ durationInt, Promise, Ref, ZLayer }
+import zio.{ durationInt, Promise, Ref, ZIO, ZLayer }
 
 object ConsumeWithTest extends ZIOSpecDefault {
   import TestUtil._
@@ -35,38 +35,42 @@ object ConsumeWithTest extends ZIOSpecDefault {
       withRandomStreamEnv(2) { (streamName, applicationName) =>
         val nrRecords = 4
 
-        for {
-          refProcessed      <- Ref.make(Seq.empty[String])
-          finishedConsuming <- Promise.make[Nothing, Unit]
-          assert            <- {
-            val records =
-              (1 to nrRecords).map(i => ProducerRecord(s"key$i", s"msg$i"))
-            (for {
-              _                <- printLine("Putting records")
-              _                <- putRecords(streamName, Serde.asciiString, records)
-                                    .tapError(e => printLine(s"error1: $e"))
-                                    .retry(retryOnResourceNotFound)
-              _                <- printLine("Starting dynamic consumer")
-              consumerFiber    <- consumeWith[Any, Any, String](
-                                    streamName,
-                                    applicationName = applicationName,
-                                    deserializer = Serde.asciiString,
-                                    checkpointBatchSize = 2,
-                                    configureKcl = _.withPolling
-                                  ) {
-                                    FakeRecordProcessor
-                                      .make(
-                                        refProcessed,
-                                        finishedConsuming,
-                                        expectedCount = nrRecords
-                                      )
-                                  }.fork
-              _                <- finishedConsuming.await
-              _                <- consumerFiber.interrupt
-              processedRecords <- refProcessed.get
-            } yield assert(processedRecords.distinct.size)(equalTo(nrRecords)))
-          }
-        } yield assert
+        ZIO.scoped {
+          for {
+            refProcessed      <- Ref.make(Seq.empty[String])
+            finishedConsuming <- Promise.make[Nothing, Unit]
+            assert            <- {
+              val records =
+                (1 to nrRecords).map(i => ProducerRecord(s"key$i", s"msg$i"))
+              (for {
+                _                <- printLine("Putting records")
+                _                <- putRecords(streamName, Serde.asciiString, records)
+                                      .tapError(e => printLine(s"error1: $e"))
+                                      .retry(retryOnResourceNotFound)
+                _                <- printLine("Starting dynamic consumer")
+                consumerFiber    <- consumeWith[Any, Any, String](
+                                      streamName,
+                                      applicationName = applicationName,
+                                      deserializer = Serde.asciiString,
+                                      checkpointBatchSize = 2,
+                                      configureKcl = _.withPolling
+                                    ) {
+                                      FakeRecordProcessor
+                                        .make(
+                                          refProcessed,
+                                          finishedConsuming,
+                                          expectedCount = nrRecords
+                                        )
+                                    }.fork
+                _                <- finishedConsuming.await
+                _                <- consumerFiber.interrupt
+                processedRecords <- refProcessed.get
+              } yield assert(processedRecords.distinct.size)(equalTo(nrRecords)))
+
+            }
+
+          } yield assert
+        }
 
       }
     }
@@ -79,54 +83,56 @@ object ConsumeWithTest extends ZIOSpecDefault {
         val nrRecords = 50
         val batchSize = 10L
 
-        for {
-          refProcessed      <- Ref.make(Seq.empty[String])
-          finishedConsuming <- Promise.make[Nothing, Unit]
-          assert            <- {
-            val records =
-              (1 to nrRecords).map(i => ProducerRecord(s"key$i", s"msg$i"))
-            (for {
-              _                <- printLine("Putting records")
-              _                <- putRecords(streamName, Serde.asciiString, records)
-                                    .tapError(e => printLine(s"error1: $e"))
-                                    .retry(retryOnResourceNotFound)
-              _                <- printLine("Starting dynamic consumer - about to fail")
-              _                <- consumeWith[Any, Any, String](
-                                    streamName,
-                                    applicationName = applicationName,
-                                    deserializer = Serde.asciiString,
-                                    checkpointBatchSize = batchSize,
-                                    configureKcl = _.withPolling
-                                  ) {
-                                    FakeRecordProcessor
-                                      .makeFailing(
-                                        refProcessed,
-                                        finishedConsuming,
-                                        failFunction = (_: Any) == "msg31"
-                                      )
-                                  }.ignore
-              _                <- printLine("Starting dynamic consumer - about to succeed")
-              consumerFiber    <- consumeWith[Any, Any, String](
-                                    streamName,
-                                    applicationName = applicationName,
-                                    deserializer = Serde.asciiString,
-                                    checkpointBatchSize = batchSize,
-                                    configureKcl = _.withPolling
-                                  ) {
-                                    FakeRecordProcessor
-                                      .make(
-                                        refProcessed,
-                                        finishedConsuming,
-                                        expectedCount = nrRecords
-                                      )
-                                  }.fork
-              _                <- finishedConsuming.await
-              _                <- consumerFiber.interrupt
-              processedRecords <- refProcessed.get
-            } yield assert(processedRecords.distinct.size)(equalTo(nrRecords)))
-          }
-        } yield assert
+        ZIO.scoped {
+          for {
+            refProcessed      <- Ref.make(Seq.empty[String])
+            finishedConsuming <- Promise.make[Nothing, Unit]
+            assert            <- {
+              val records =
+                (1 to nrRecords).map(i => ProducerRecord(s"key$i", s"msg$i"))
+              (for {
+                _                <- printLine("Putting records")
+                _                <- putRecords(streamName, Serde.asciiString, records)
+                                      .tapError(e => printLine(s"error1: $e"))
+                                      .retry(retryOnResourceNotFound)
+                _                <- printLine("Starting dynamic consumer - about to fail")
+                _                <- consumeWith[Any, Any, String](
+                                      streamName,
+                                      applicationName = applicationName,
+                                      deserializer = Serde.asciiString,
+                                      checkpointBatchSize = batchSize,
+                                      configureKcl = _.withPolling
+                                    ) {
+                                      FakeRecordProcessor
+                                        .makeFailing(
+                                          refProcessed,
+                                          finishedConsuming,
+                                          failFunction = (_: Any) == "msg31"
+                                        )
+                                    }.ignore
+                _                <- printLine("Starting dynamic consumer - about to succeed")
+                consumerFiber    <- consumeWith[Any, Any, String](
+                                      streamName,
+                                      applicationName = applicationName,
+                                      deserializer = Serde.asciiString,
+                                      checkpointBatchSize = batchSize,
+                                      configureKcl = _.withPolling
+                                    ) {
+                                      FakeRecordProcessor
+                                        .make(
+                                          refProcessed,
+                                          finishedConsuming,
+                                          expectedCount = nrRecords
+                                        )
+                                    }.fork
+                _                <- finishedConsuming.await
+                _                <- consumerFiber.interrupt
+                processedRecords <- refProcessed.get
+              } yield assert(processedRecords.distinct.size)(equalTo(nrRecords)))
+            }
+          } yield assert
 
+        }
       }
     }
 
