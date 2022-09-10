@@ -228,35 +228,37 @@ object DynamicConsumer {
     configureKcl: SchedulerConfig => SchedulerConfig = identity
   )(
     recordProcessor: Record[T] => RIO[RC, Unit]
-  ): ZIO[R with RC with Any with DynamicConsumer, Throwable, Unit] =
-    for {
-      consumer <- ZIO.service[DynamicConsumer.Service]
-      _        <- consumer
-                    .shardedStream(
-                      streamName,
-                      applicationName,
-                      deserializer,
-                      requestShutdown,
-                      initialPosition,
-                      leaseTableName,
-                      metricsNamespace,
-                      workerIdentifier,
-                      maxShardBufferSize,
-                      configureKcl
-                    )
-                    .flatMapPar(Int.MaxValue) { case (_, shardStream, checkpointer) =>
-                      shardStream
-                        .tap(record => recordProcessor(record) *> checkpointer.stage(record))
-                        .viaFunction(
-                          checkpointer
-                            .checkpointBatched[Any with RC](
-                              nr = checkpointBatchSize,
-                              interval = checkpointDuration
-                            )
-                        )
-                    }
-                    .runDrain
-    } yield ()
+  ): ZIO[R with RC with DynamicConsumer, Throwable, Unit] =
+    ZIO.scoped[R with RC with DynamicConsumer] {
+      for {
+        consumer <- ZIO.service[DynamicConsumer.Service]
+        _        <- consumer
+                      .shardedStream(
+                        streamName,
+                        applicationName,
+                        deserializer,
+                        requestShutdown,
+                        initialPosition,
+                        leaseTableName,
+                        metricsNamespace,
+                        workerIdentifier,
+                        maxShardBufferSize,
+                        configureKcl
+                      )
+                      .flatMapPar(Int.MaxValue) { case (_, shardStream, checkpointer) =>
+                        shardStream
+                          .tap(record => recordProcessor(record) *> checkpointer.stage(record))
+                          .viaFunction(
+                            checkpointer
+                              .checkpointBatched[Any with RC](
+                                nr = checkpointBatchSize,
+                                interval = checkpointDuration
+                              )
+                          )
+                      }
+                      .runDrain
+      } yield ()
+    }
 
   /**
    * Staging area for checkpoints

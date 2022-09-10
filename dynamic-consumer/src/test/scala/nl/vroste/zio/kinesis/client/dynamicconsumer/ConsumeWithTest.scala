@@ -11,7 +11,7 @@ import zio.aws.kinesis.Kinesis
 import zio.logging.LogFormat
 import zio.logging.backend.SLF4J
 import zio.test.Assertion.equalTo
-import zio.test.TestAspect.{ timeout, withLiveClock }
+import zio.test.TestAspect.{ timeout, withLiveClock, withLiveRandom }
 import zio.test.{ assert, ZIOSpecDefault }
 import zio.{ durationInt, Promise, Ref, ZIO, ZLayer }
 
@@ -48,7 +48,7 @@ object ConsumeWithTest extends ZIOSpecDefault {
                                       .tapError(e => printLine(s"error1: $e"))
                                       .retry(retryOnResourceNotFound)
                 _                <- printLine("Starting dynamic consumer")
-                consumerFiber    <- consumeWith[Any, Any, String](
+                _                <- consumeWith[Any, Any, String](
                                       streamName,
                                       applicationName = applicationName,
                                       deserializer = Serde.asciiString,
@@ -61,9 +61,7 @@ object ConsumeWithTest extends ZIOSpecDefault {
                                           finishedConsuming,
                                           expectedCount = nrRecords
                                         )
-                                    }.forkScoped
-                _                <- finishedConsuming.await
-                _                <- consumerFiber.interrupt
+                                    } raceFirst finishedConsuming.await
                 processedRecords <- refProcessed.get
               } yield assert(processedRecords.distinct.size)(equalTo(nrRecords)))
 
@@ -111,7 +109,7 @@ object ConsumeWithTest extends ZIOSpecDefault {
                                         )
                                     }.ignore
                 _                <- printLine("Starting dynamic consumer - about to succeed")
-                consumerFiber    <- consumeWith[Any, Any, String](
+                _                <- consumeWith[Any, Any, String](
                                       streamName,
                                       applicationName = applicationName,
                                       deserializer = Serde.asciiString,
@@ -124,9 +122,7 @@ object ConsumeWithTest extends ZIOSpecDefault {
                                           finishedConsuming,
                                           expectedCount = nrRecords
                                         )
-                                    }.forkScoped
-                _                <- finishedConsuming.await
-                _                <- consumerFiber.interrupt
+                                    } raceFirst finishedConsuming.await
                 processedRecords <- refProcessed.get
               } yield assert(processedRecords.distinct.size)(equalTo(nrRecords)))
             }
@@ -140,6 +136,6 @@ object ConsumeWithTest extends ZIOSpecDefault {
     suite("ConsumeWithTest")(
       testConsume1,
       testConsume2
-    ).provideLayer(env.orDie) @@ withLiveClock @@ timeout(7.minutes)
+    ).provideLayer(env.orDie) @@ withLiveClock @@ timeout(7.minutes) @@ withLiveRandom
 
 }
