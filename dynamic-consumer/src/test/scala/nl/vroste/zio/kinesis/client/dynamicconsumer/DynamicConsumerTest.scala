@@ -154,16 +154,16 @@ object DynamicConsumerTest extends ZIOSpecDefault {
 
           } yield stream
 
+        val produceEffect = TestUtil.produceRecords(streamName, 20000, 80, 10)
+
         for {
-          _                     <- printLine("Putting records").orDie
-          _                     <- TestUtil.produceRecords(streamName, 20000, 80, 10).forkScoped
-          _                     <- printLine("Starting dynamic consumers").orDie
-          activeConsumers       <- SubscriptionRef.make(Set.empty[String])
-          allConsumersGotAShard <- activeConsumers.changes.takeUntil(_ == Set("1", "2")).runDrain.forkScoped
-          _                     <- (streamConsumer("1", activeConsumers)
-                                     merge delayStream(streamConsumer("2", activeConsumers), 5.seconds))
-                                     .interruptWhen(allConsumersGotAShard.join)
-                                     .runCollect
+          _                    <- printLine("Putting records").orDie
+          _                    <- printLine("Starting dynamic consumers").orDie
+          activeConsumers      <- SubscriptionRef.make(Set.empty[String])
+          allConsumersGotAShard = activeConsumers.changes.takeUntil(_ == Set("1", "2")).runDrain
+          _                    <- (streamConsumer("1", activeConsumers)
+                                    merge delayStream(streamConsumer("2", activeConsumers), 5.seconds)).runCollect raceFirst
+                                    allConsumersGotAShard raceFirst produceEffect
         } yield assertCompletes
       }
     }
@@ -353,7 +353,9 @@ object DynamicConsumerTest extends ZIOSpecDefault {
       testConsume2,
       testCheckpointAtShutdown,
       testShardEnd
-    ).provideLayer(env ++ Scope.default) @@ timeout(10.minutes) @@ withLiveClock
+    ).provideLayer(env ++ Scope.default ++ Runtime.removeDefaultLoggers ++ loggingLayer) @@ timeout(
+      10.minutes
+    ) @@ withLiveClock
 
   def delayStream[R, E, O](s: ZStream[R, E, O], delay: Duration) =
     ZStream.fromZIO(ZIO.sleep(delay)).flatMap(_ => s)

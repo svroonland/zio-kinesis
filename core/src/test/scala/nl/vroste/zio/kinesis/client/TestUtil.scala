@@ -29,15 +29,14 @@ object TestUtil {
     f: (String, String) => ZIO[R, Throwable, A]
   ): ZIO[Kinesis with DynamoDb with R, Throwable, A] =
     ZIO.scoped[Kinesis with DynamoDb with R] {
-      (for {
+      for {
         streamName      <- Random.nextUUID.map("zio-test-stream-" + _.toString)
         applicationName <- Random.nextUUID.map("zio-test-" + _.toString)
         _               <- createStream(streamName, shards)
         _               <- getShards(streamName)
         _               <- ZIO.addFinalizer(DynamoDb.deleteTable(DeleteTableRequest(TableName(applicationName))).ignore)
-      } yield (streamName, applicationName)).flatMap { case (streamName, applicationName) =>
-        f(streamName, applicationName).fork.flatMap(_.join)
-      }
+        result          <- f(streamName, applicationName)
+      } yield result
     }
 
   def getShards(name: String): ZIO[Kinesis, Throwable, Chunk[Shard.ReadOnly]] =
@@ -66,7 +65,6 @@ object TestUtil {
     Kinesis
       .describeStream(DescribeStreamRequest(StreamName(streamName)))
       .mapError(_.toThrowable)
-      .tap(r => ZIO.succeed(println(r)))
       .retryWhile {
         case _: ResourceNotFoundException => true
         case _                            => false
