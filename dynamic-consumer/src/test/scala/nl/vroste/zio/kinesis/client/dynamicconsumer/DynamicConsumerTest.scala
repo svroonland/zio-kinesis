@@ -54,25 +54,25 @@ object DynamicConsumerTest extends ZIOSpecDefault {
                    )
                    .forkScoped
 
-          service <- ZIO.service[DynamicConsumer.Service]
-          records <- service
-                       .shardedStream(
-                         streamName,
-                         applicationName = applicationName,
-                         deserializer = Serde.asciiString,
-                         configureKcl = _.withPolling
-                       )
-                       .flatMapPar(Int.MaxValue) { case (shardId @ _, shardStream, checkpointer) =>
-                         shardStream
-                           .tap(r =>
-                             printLine(s"Got record $r").orDie *> checkpointer
-                               .checkpointNow(r)
-                               .retry(Schedule.exponential(100.millis))
-                           )
-                           .take(2)
-                       }
-                       .take(nrShards * 2.toLong)
-                       .runCollect
+            service <- ZIO.service[DynamicConsumer.Service]
+            records <- service
+                         .shardedStream(
+                           streamName,
+                           applicationName = applicationName,
+                           deserializer = Serde.asciiString,
+                           configureKcl = _.withPolling
+                         )
+                         .flatMapPar(Int.MaxValue) { case (shardId @ _, shardStream, checkpointer) =>
+                           shardStream
+                             .tap(r =>
+                               printLine(s"Got record $r").orDie *> checkpointer
+                                 .checkpointNow(r)
+                                 .retry(Schedule.exponential(100.millis))
+                             )
+                             .take(2)
+                         }
+                         .take(nrShards * 2.toLong)
+                         .runCollect
 
           } yield assert(records)(hasSize(equalTo(nrShards * 2)))
         }
