@@ -78,11 +78,12 @@ private class DefaultLeaseCoordinator(
     (for {
       _ <- getLeasesOrInitializeLeaseTable
       // Initialization. If it fails, we will try in the loop
-      _ <- (takeLeases.retryN(1).ignore *> periodicRefreshAndTakeLeases).forkScoped.withFinalizer(_ =>
-             ZIO.logDebug("Shutting down refresh & take lease loop")
-           )
-      _ <- repeatAndRetry(settings.renewInterval)(renewLeases).forkScoped
-             .withFinalizer(_ => ZIO.logDebug("Shutting down renew lease loop"))
+      _ <- (takeLeases.retryN(1).ignore *> periodicRefreshAndTakeLeases)
+             .ensuring(ZIO.logDebug("Shutting down refresh & take lease loop"))
+             .forkScoped
+      _ <- repeatAndRetry(settings.renewInterval)(renewLeases)
+             .ensuring(ZIO.logDebug("Shutting down renew lease loop"))
+             .forkScoped
     } yield ())
       .tapErrorCause(c => ZIO.logError("Error in DefaultLeaseCoordinator initialize") *> ZIO.logErrorCause(c))
   }
@@ -447,7 +448,7 @@ private[zionative] object DefaultLeaseCoordinator {
                            .ensuring(ZIO.logDebug("Acquired leases queue shutdown"))
       table           <- ZIO.service[LeaseRepository.Service]
       state           <- Ref.make(State.empty)
-      serialExecution <- SerialExecution.keyed[String].withFinalizer(_ => ZIO.logDebug("Shutting down runloop"))
+      serialExecution <- SerialExecution.keyed[String].ensuring(ZIO.logDebug("Shutting down runloop"))
       c                = new DefaultLeaseCoordinator(
                            table,
                            applicationName,
