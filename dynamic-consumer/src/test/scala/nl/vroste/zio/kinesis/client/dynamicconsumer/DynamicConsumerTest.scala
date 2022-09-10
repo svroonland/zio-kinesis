@@ -44,7 +44,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
                    10,
                    10
                  )
-                 .fork
+                 .forkScoped
 
           service <- ZIO.service[DynamicConsumer.Service]
           records <- service
@@ -83,7 +83,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
                    10,
                    10
                  )
-                 .fork
+                 .forkScoped
 
           service <- ZIO.service[DynamicConsumer.Service]
           records <- service
@@ -149,10 +149,10 @@ object DynamicConsumerTest extends ZIOSpecDefault {
 
         for {
           _                     <- printLine("Putting records").orDie
-          _                     <- TestUtil.produceRecords(streamName, 20000, 80, 10).fork
+          _                     <- TestUtil.produceRecords(streamName, 20000, 80, 10).forkScoped
           _                     <- printLine("Starting dynamic consumers").orDie
           activeConsumers       <- SubscriptionRef.make(Set.empty[String])
-          allConsumersGotAShard <- activeConsumers.changes.takeUntil(_ == Set("1", "2")).runDrain.fork
+          allConsumersGotAShard <- activeConsumers.changes.takeUntil(_ == Set("1", "2")).runDrain.forkScoped
           _                     <- (streamConsumer("1", activeConsumers)
                                      merge delayStream(streamConsumer("2", activeConsumers), 5.seconds))
                                      .interruptWhen(allConsumersGotAShard.join)
@@ -234,7 +234,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
                                         nrRecordsSeen,
                                         lastProcessedRecords,
                                         lastCheckpointedRecords
-                                      ).runCollect.fork
+                                      ).runCollect.forkScoped
           _                        <- consumerAlive.await
           _                        <- Clock.instant.tap(now =>
                                         ZIO.attempt(println(s"Consumer has started after ${java.time.Duration.between(started, now)}"))
@@ -242,7 +242,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
           _                        <- TestUtil
                                         .produceRecords(streamName, 10000, 25, 10)
                                         .tap(_ => ZIO.attempt(println("PRODUCING RECORDS DONE")))
-                                        .fork
+                                        .forkScoped
           _                        <- interrupted.await
           _                        <- consumer.join
           r                        <- (lastProcessedRecords.get zip lastCheckpointedRecords.get)
@@ -308,14 +308,14 @@ object DynamicConsumerTest extends ZIOSpecDefault {
           // Act
           _        <- TestUtil
                         .produceRecords(streamName, 20000, 10, 10)
-                        .fork
+                        .forkScoped
           consumer <- streamConsumer(
                         requestShutdown,
                         firstRecordProcessed,
                         newShards
                       ).runCollect
                         .tapError(e => ZIO.logError(s"Error in stream consumer,: ${e}"))
-                        .fork
+                        .forkScoped
           _        <- firstRecordProcessed.await
           _         = println("Resharding")
           _        <- Kinesis
@@ -346,7 +346,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
       testConsume2,
       testCheckpointAtShutdown,
       testShardEnd
-    ).provideLayer(env) @@ timeout(10.minutes) @@ withLiveClock
+    ).provideLayer(env ++ Scope.default) @@ timeout(10.minutes) @@ withLiveClock
 
   def delayStream[R, E, O](s: ZStream[R, E, O], delay: Duration) =
     ZStream.fromZIO(ZIO.sleep(delay)).flatMap(_ => s)
