@@ -42,16 +42,17 @@ object DynamicConsumerTest extends ZIOSpecDefault {
     test("consume records produced on all shards produced on the stream with polling") {
       val nrShards = 2
       withRandomStreamEnv(nrShards) { (streamName, applicationName) =>
-        for {
-          _ <- printLine("Putting records").orDie
-          _ <- TestUtil
-                 .produceRecords(
-                   streamName,
-                   1000,
-                   10,
-                   10
-                 )
-                 .forkScoped
+        ZIO.scoped {
+          for {
+            _ <- printLine("Putting records").orDie
+            _ <- TestUtil
+                   .produceRecords(
+                     streamName,
+                     1000,
+                     10,
+                     10
+                   )
+                   .forkScoped
 
           service <- ZIO.service[DynamicConsumer.Service]
           records <- service
@@ -73,7 +74,8 @@ object DynamicConsumerTest extends ZIOSpecDefault {
                        .take(nrShards * 2.toLong)
                        .runCollect
 
-        } yield assert(records)(hasSize(equalTo(nrShards * 2)))
+          } yield assert(records)(hasSize(equalTo(nrShards * 2)))
+        }
       }
     }
 
