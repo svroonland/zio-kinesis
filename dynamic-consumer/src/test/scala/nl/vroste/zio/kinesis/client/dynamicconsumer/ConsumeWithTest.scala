@@ -61,7 +61,7 @@ object ConsumeWithTest extends ZIOSpecDefault {
                                           finishedConsuming,
                                           expectedCount = nrRecords
                                         )
-                                    }.fork
+                                    }.forkScoped
                 _                <- finishedConsuming.await
                 _                <- consumerFiber.interrupt
                 processedRecords <- refProcessed.get
@@ -124,7 +124,7 @@ object ConsumeWithTest extends ZIOSpecDefault {
                                           finishedConsuming,
                                           expectedCount = nrRecords
                                         )
-                                    }.fork
+                                    }.forkScoped
                 _                <- finishedConsuming.await
                 _                <- consumerFiber.interrupt
                 processedRecords <- refProcessed.get
