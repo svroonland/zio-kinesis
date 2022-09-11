@@ -201,7 +201,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
                                   )
                                   .flatMapPar(Int.MaxValue) { case (shard @ _, shardStream, checkpointer) =>
                                     shardStream
-                                      // .tap(r => ZIO.succeed(println(s"Worker 1 got record on shard ${r.shardId}")))
+                                      // .tap(r => ZIO.logDebug(s"Worker 1 got record on shard ${r.shardId}"))
                                       .tap(checkpointer.stage)
                                       .tap(_ => consumer1Started.succeed(()))
                                       .aggregateAsyncWithin(
@@ -278,7 +278,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
                                   ZStream.empty
                                 case Left(e)  => ZStream.fail(e)
                               }
-                              .ensuring(ZIO.succeed(println(s"Shard stream worker 1 ${shard} completed")))
+                              .ensuring(ZIO.logDebug(s"Shard stream worker 1 ${shard} completed"))
                           }
                           .tap(_ => ZIO.logInfo("WORKER1 GOT A BATCH"))
                           .take(10)
@@ -306,7 +306,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
                                     ZStream.empty
                                   case Left(e)  => ZStream.fail(e)
                                 }
-                                .ensuring(ZIO.succeed(println(s"Shard stream worker 2 ${shard} completed")))
+                                .ensuring(ZIO.logDebug(s"Shard stream worker 2 ${shard} completed"))
                           }
                           .tap(_ => ZIO.logInfo("WORKER2 GOT A BATCH"))
                           .take(10)
@@ -419,7 +419,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
                   _.filterNot(_._3.isInstanceOf[PollComplete])
                     .filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
                 )
-                .tap(allEvents => ZIO.succeed(println(allEvents.mkString("\n"))))
+                .tap(allEvents => ZIO.logDebug(allEvents.mkString("\n")))
             )
             allEvents <- events.get.map(
                            _.filterNot(_._3.isInstanceOf[PollComplete])
@@ -545,7 +545,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
                          _.filterNot(_._3.isInstanceOf[PollComplete])
                            .filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
                        )
-                       .tap(allEvents => ZIO.succeed(println(allEvents.mkString("\n"))))
+                       .tap(allEvents => ZIO.logDebug(allEvents.mkString("\n")))
                    } raceFirst done.await
           } yield assertCompletes
         }
@@ -645,8 +645,8 @@ object NativeConsumerTest extends ZIOSpecDefault {
           for {
             producer      <- produceSampleRecords(streamName, nrRecords, chunkSize = 50, throttle = Some(1.second)).fork
             stream        <-
-              consumer("worker1", e => ZIO.succeed(println(e.toString))).runCollect
-                .tapErrorCause(e => ZIO.succeed(println(e)))
+              consumer("worker1", e => ZIO.logDebug(e.toString)).runCollect
+                .tapErrorCause(ZIO.logErrorCause(_))
                 .fork
             _             <- ZIO.sleep(20.seconds)
             _              = println("Resharding")
@@ -705,8 +705,8 @@ object NativeConsumerTest extends ZIOSpecDefault {
             producer <- produceSampleRecords(streamName, nrRecords, chunkSize = 50, throttle = Some(1.second)).fork
 
             stream  <-
-              consumer("worker1", e => ZIO.succeed(println(e.toString))).runCollect
-                .tapErrorCause(e => ZIO.succeed(println(e)))
+              consumer("worker1", e => ZIO.logDebug(e.toString)).runCollect
+                .tapErrorCause(ZIO.logErrorCause(_))
                 .fork
             _       <- ZIO.sleep(10.seconds)
             _        = println("Resharding")
@@ -724,8 +724,8 @@ object NativeConsumerTest extends ZIOSpecDefault {
             shards  <- TestUtil.getShards(streamName)
             _        = println(shards.mkString(", "))
             stream2 <-
-              consumer("worker1", e => ZIO.succeed(println(e.toString))).runCollect
-                .tapErrorCause(e => ZIO.succeed(println(e)))
+              consumer("worker1", e => ZIO.logDebug(e.toString)).runCollect
+                .tapErrorCause(ZIO.logErrorCause(_))
                 .fork
             _       <- ZIO.sleep(30.seconds)
             _       <- stream2.interrupt
@@ -744,7 +744,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
                 streamName,
                 applicationName,
                 Serde.asciiString,
-                emitDiagnostic = e => ZIO.succeed(println(e.toString))
+                emitDiagnostic = e => ZIO.logDebug(e.toString)
               )
               .flatMapPar(nrShards) { case (shard @ _, shardStream, checkpointer @ _) => shardStream }
               .take(nrRecords.toLong)
@@ -769,7 +769,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
                 streamName,
                 applicationName,
                 Serde.asciiString,
-                emitDiagnostic = e => ZIO.succeed(println(e.toString))
+                emitDiagnostic = e => ZIO.logDebug(e.toString)
               )
               .mapZIOParUnordered(nrShards) { case (shard @ _, shardStream, checkpointer @ _) =>
                 shardStream

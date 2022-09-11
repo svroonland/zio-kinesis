@@ -193,7 +193,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
                            applicationName = applicationName,
                            deserializer = Serde.asciiString,
                            configureKcl = _.withPolling,
-                           requestShutdown = interrupted.await *> ZIO.succeed(println("Interrupting shardedStream"))
+                           requestShutdown = interrupted.await *> ZIO.logDebug("Interrupting shardedStream")
                          )
                          .flatMapPar(Int.MaxValue) { case (shardId, shardStream, checkpointer @ _) =>
                            ZStream.fromZIO(consumerAlive.succeed(())) *>
@@ -280,7 +280,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
                            applicationName = applicationName,
                            deserializer = Serde.asciiString,
                            configureKcl = _.withPolling,
-                           requestShutdown = requestShutdown.await *> ZIO.succeed(println("Interrupting shardedStream"))
+                           requestShutdown = requestShutdown.await *> ZIO.logDebug("Interrupting shardedStream")
                          )
                          .tap(_ => newShardDetected.offer(()))
                          .flatMapPar(Int.MaxValue) { case (shardId @ _, shardStream, checkpointer @ _) =>
@@ -295,7 +295,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
                              .tap { r =>
                                printLine(s"Shard ${r.shardId}: checkpointing for record $r").orDie *>
                                  checkpointer.checkpoint
-                                   .tapError(e => ZIO.succeed(println(s"Checkpointing failed: ${e}")))
+                                   .tapError(e => ZIO.logDebug(s"Checkpointing failed: ${e}"))
                                    .tap(_ =>
                                      ZIO.succeed(
                                        println(s"Checkpointing for shard ${r.shardId} done (${r.sequenceNumber}")

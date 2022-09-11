@@ -175,7 +175,7 @@ private[client] final class ProducerLive[R, R1, T](
     val failedCount = requests.map(_.aggregateCount).sum
 
     for {
-      _ <- ZIO.foreachDiscard(requests)(r => throttler.addFailure(r.predictedShard))
+      _ <- ZIO.foreachDiscard(requests)(r => throttler.getForShard(r.predictedShard).flatMap(_.addFailure))
       _ <- ZIO.logWarning(s"Failed to produce ${failedCount} records").when(newFailed.nonEmpty)
       _ <- ZIO.logWarning(responses.take(10).flatMap(_.errorCode.toOption).mkString(", ")).when(newFailed.nonEmpty)
 

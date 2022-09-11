@@ -38,21 +38,6 @@ object ShardThrottlerTest extends ZIOSpecDefault {
             rate2 <- throttler.throughputFactor
           } yield assert((rate1, rate2))(equalTo((0.5d + errorRate, 0.4)))
         }
-      },
-      test("throttles the correct shard") {
-        val errorRate = 0.1
-        ShardThrottler.make(1.second, errorRate).flatMap { throttler =>
-          for {
-            _      <- ZIO.collectAllDiscard(ZIO.replicate(100)(throttler.addSuccess("1")))
-            _      <- ZIO.collectAllDiscard(ZIO.replicate(100)(throttler.addFailure("1")))
-            _      <- TestClock.adjust(1.second)
-            rates1 <- throttler.throughputFactor("1") <*> throttler.throughputFactor("2")
-            _      <- ZIO.collectAllDiscard(ZIO.replicate(100)(throttler.addSuccess("2")))
-            _      <- ZIO.collectAllDiscard(ZIO.replicate(100)(throttler.addFailure("2")))
-            _      <- TestClock.adjust(1.second)
-            rates2 <- throttler.throughputFactor("1") <*> throttler.throughputFactor("2")
-          } yield assert((rates1, rates2))(equalTo(((0.6d, 1.0d), (0.7d, 0.6d))))
-        }
       }
     )
 }
