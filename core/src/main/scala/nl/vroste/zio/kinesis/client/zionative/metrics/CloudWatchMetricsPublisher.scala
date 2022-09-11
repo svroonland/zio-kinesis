@@ -35,10 +35,14 @@ final case class CloudWatchMetricsPublisherConfig(
   require(maxBatchSize <= 20, "maxBatchSize must be <= 20 (AWS SDK limit)")
 }
 
+trait CloudWatchMetricsPublisher {
+  def processEvent(e: DiagnosticEvent): UIO[Unit]
+}
+
 /**
  * Publishes KCL compatible metrics to CloudWatch
  */
-private class CloudWatchMetricsPublisher(
+private class CloudWatchMetricsPublisherLive(
   client: CloudWatch,
   eventQueue: Queue[DiagnosticEvent],
   periodicMetricsQueue: Queue[MetricDatum],
@@ -47,7 +51,7 @@ private class CloudWatchMetricsPublisher(
   heldLeases: Ref[Set[String]],
   workers: Ref[Set[String]],
   config: CloudWatchMetricsPublisherConfig
-) extends CloudWatchMetricsPublisher.Service {
+) extends CloudWatchMetricsPublisher {
   import CloudWatchMetricsPublisher._
 
   def processEvent(e: DiagnosticEvent): UIO[Unit] = eventQueue.offer(e).unit
@@ -205,14 +209,11 @@ private class CloudWatchMetricsPublisher(
 }
 
 object CloudWatchMetricsPublisher {
-  trait Service {
-    def processEvent(e: DiagnosticEvent): UIO[Unit]
-  }
 
   def make(
     applicationName: String,
     workerId: String
-  ): ZIO[Scope with CloudWatch with CloudWatchMetricsPublisherConfig, Nothing, Service] =
+  ): ZIO[Scope with CloudWatch with CloudWatchMetricsPublisherConfig, Nothing, CloudWatchMetricsPublisher] =
     for {
       client  <- ZIO.service[CloudWatch]
       config  <- ZIO.service[CloudWatchMetricsPublisherConfig]
@@ -220,7 +221,7 @@ object CloudWatchMetricsPublisher {
       q2      <- Queue.bounded[MetricDatum](1000)
       leases  <- Ref.make[Set[String]](Set.empty)
       workers <- Ref.make[Set[String]](Set.empty)
-      c        = new CloudWatchMetricsPublisher(client, q, q2, applicationName, workerId, leases, workers, config)
+      c        = new CloudWatchMetricsPublisherLive(client, q, q2, applicationName, workerId, leases, workers, config)
       _       <- c.processQueue.forkScoped            // Fiber cannot fail
       _       <- c.generatePeriodicMetrics.forkScoped // Fiber cannot fail
       // Shutdown the queues first
@@ -228,7 +229,7 @@ object CloudWatchMetricsPublisher {
       _       <- ZIO.addFinalizer(q2.shutdown)
     } yield c
 
-  private def metric(
+  private[metrics] def metric(
     name: String,
     value: Double,
     timestamp: Instant,

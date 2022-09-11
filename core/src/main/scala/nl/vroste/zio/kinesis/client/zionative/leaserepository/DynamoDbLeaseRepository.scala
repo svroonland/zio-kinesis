@@ -28,7 +28,7 @@ import scala.collection.compat._
 // TODO this thing should have a global throttling / backoff
 // via a Tap that tries to find the optimal maximal throughput
 // See https://degoes.net/articles/zio-challenge
-private class DynamoDbLeaseRepository(client: DynamoDb, settings: Settings) extends LeaseRepository.Service {
+private class DynamoDbLeaseRepository(client: DynamoDb, settings: Settings) extends LeaseRepository {
 
   /**
    * Returns whether the table already existed

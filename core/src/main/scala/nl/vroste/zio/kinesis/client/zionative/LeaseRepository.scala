@@ -1,5 +1,11 @@
 package nl.vroste.zio.kinesis.client.zionative
 
+import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.{
+  Lease,
+  LeaseAlreadyExists,
+  LeaseObsolete,
+  UnableToClaimLease
+}
 import zio.ZIO
 import zio.stream.ZStream
 
@@ -25,6 +31,56 @@ object SpecialCheckpoint {
   }
 }
 
+/**
+ * Service for storage and retrieval of leases TODO cleanup
+ */
+trait LeaseRepository {
+
+  /**
+   * Returns whether the table already existed
+   */
+  def createLeaseTableIfNotExists(tableName: String): ZIO[Any, Throwable, Boolean]
+
+  def deleteTable(tableName: String): ZIO[Any, Throwable, Unit]
+
+  def getLeases(tableName: String): ZStream[Any, Throwable, Lease]
+
+  /**
+   * Removes the leaseOwner property
+   *
+   * Expects the given lease's counter - 1
+   *
+   * @param lease
+   * @return
+   */
+  def releaseLease(
+    tableName: String,
+    lease: Lease
+  ): ZIO[Any, Either[Throwable, LeaseObsolete.type], Unit]
+
+  // Returns the updated lease
+  def claimLease(
+    tableName: String,
+    lease: Lease
+  ): ZIO[Any, Either[Throwable, UnableToClaimLease.type], Unit]
+
+  // Puts the lease counter to the given lease's counter and expects counter - 1
+  def updateCheckpoint(
+    tableName: String,
+    lease: Lease
+  ): ZIO[Any, Either[Throwable, LeaseObsolete.type], Unit]
+
+  def renewLease(
+    tableName: String,
+    lease: Lease
+  ): ZIO[Any, Either[Throwable, LeaseObsolete.type], Unit]
+
+  def createLease(
+    tableName: String,
+    lease: Lease
+  ): ZIO[Any, Either[Throwable, LeaseAlreadyExists.type], Unit]
+}
+
 object LeaseRepository {
   final case class Lease(
     key: String,
@@ -40,56 +96,6 @@ object LeaseRepository {
 
     def release: Lease =
       copy(owner = None)
-  }
-
-  /**
-   * Service for storage and retrieval of leases TODO cleanup
-   */
-  trait Service {
-
-    /**
-     * Returns whether the table already existed
-     */
-    def createLeaseTableIfNotExists(tableName: String): ZIO[Any, Throwable, Boolean]
-
-    def deleteTable(tableName: String): ZIO[Any, Throwable, Unit]
-
-    def getLeases(tableName: String): ZStream[Any, Throwable, Lease]
-
-    /**
-     * Removes the leaseOwner property
-     *
-     * Expects the given lease's counter - 1
-     *
-     * @param lease
-     * @return
-     */
-    def releaseLease(
-      tableName: String,
-      lease: Lease
-    ): ZIO[Any, Either[Throwable, LeaseObsolete.type], Unit]
-
-// Returns the updated lease
-    def claimLease(
-      tableName: String,
-      lease: Lease
-    ): ZIO[Any, Either[Throwable, UnableToClaimLease.type], Unit]
-
-// Puts the lease counter to the given lease's counter and expects counter - 1
-    def updateCheckpoint(
-      tableName: String,
-      lease: Lease
-    ): ZIO[Any, Either[Throwable, LeaseObsolete.type], Unit]
-
-    def renewLease(
-      tableName: String,
-      lease: Lease
-    ): ZIO[Any, Either[Throwable, LeaseObsolete.type], Unit]
-
-    def createLease(
-      tableName: String,
-      lease: Lease
-    ): ZIO[Any, Either[Throwable, LeaseAlreadyExists.type], Unit]
   }
 
   case object LeaseAlreadyExists

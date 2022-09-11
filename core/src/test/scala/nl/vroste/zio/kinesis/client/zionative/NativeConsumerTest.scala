@@ -877,15 +877,15 @@ object NativeConsumerTest extends ZIOSpecDefault {
 
   def assertAllLeasesReleased(applicationName: String) =
     for {
-      table  <- ZIO.service[LeaseRepository.Service]
+      table  <- ZIO.service[LeaseRepository]
       leases <- table.getLeases(applicationName).runCollect
     } yield assert(leases)(forall(hasField("owner", _.owner, isNone)))
 
   def getCheckpoints(
     applicationName: String
-  ): ZIO[LeaseRepository.Service, Throwable, Map[String, String]] =
+  ): ZIO[LeaseRepository, Throwable, Map[String, String]] =
     for {
-      table      <- ZIO.service[LeaseRepository.Service]
+      table      <- ZIO.service[LeaseRepository]
       leases     <- table.getLeases(applicationName).runCollect
       checkpoints = leases.collect {
                       case l if l.checkpoint.isDefined =>
@@ -898,16 +898,16 @@ object NativeConsumerTest extends ZIOSpecDefault {
 
   def deleteTable(tableName: String) =
     ZIO
-      .service[LeaseRepository.Service]
+      .service[LeaseRepository]
       .flatMap(_.deleteTable(tableName).unit)
 
   def withRandomStreamAndApplicationName[R, A](nrShards: Int)(
     f: (String, String) => ZIO[R, Throwable, A]
-  ): ZIO[Kinesis with LeaseRepository.Service with R, Throwable, A] =
+  ): ZIO[Kinesis with LeaseRepository with R, Throwable, A] =
     ZIO.succeed((streamPrefix + "testStream", streamPrefix + "testApplication")).flatMap {
       case (streamName, applicationName) =>
         withStream(streamName, shards = nrShards) {
-          ZIO.scoped[R with LeaseRepository.Service] {
+          ZIO.scoped[R with LeaseRepository] {
             ZIO.addFinalizer(deleteTable(applicationName).ignore) *> { // Table may not have been created
               f(streamName, applicationName)
             }

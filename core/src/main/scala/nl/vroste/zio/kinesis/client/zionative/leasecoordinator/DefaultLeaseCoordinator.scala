@@ -42,7 +42,7 @@ import java.time.{ DateTimeException, Instant }
  *   - held lease: a lease held by this worker
  */
 private class DefaultLeaseCoordinator(
-  table: LeaseRepository.Service,
+  table: LeaseRepository,
   applicationName: String,
   workerId: String,
   state: Ref[State],
@@ -446,7 +446,7 @@ private[zionative] object DefaultLeaseCoordinator {
                                .bounded[(Lease, Promise[Nothing, Unit])](128)
                            )(_.shutdown)
                            .ensuring(ZIO.logDebug("Acquired leases queue shutdown"))
-      table           <- ZIO.service[LeaseRepository.Service]
+      table           <- ZIO.service[LeaseRepository]
       state           <- Ref.make(State.empty)
       serialExecution <- SerialExecution.keyed[String].ensuring(ZIO.logDebug("Shutting down runloop"))
       c                = new DefaultLeaseCoordinator(
