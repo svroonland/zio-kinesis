@@ -34,7 +34,7 @@ private[dynamicconsumer] object Checkpointer {
         state.get.flatMap {
           case State(Some(sequenceNumber), _, _, _) =>
             for {
-//              _ <- ZIO.logTrace(s"about to checkpoint ${sequenceNumber}")
+              _ <- ZIO.logTrace(s"about to checkpoint ${sequenceNumber}")
               _ <- ZIO.blocking {
                      ZIO.attempt(
                        kclCheckpointer
