@@ -1,7 +1,7 @@
 import xerial.sbt.Sonatype.GitHubHosting
 
 val mainScala = "2.13.8"
-val allScala  = Seq("2.12.15", mainScala, "3.2.0")
+val allScala  = Seq("2.12.16", mainScala, "3.2.0")
 
 val excludeInferAny = { options: Seq[String] => options.filterNot(Set("-Xlint:infer-any")) }
 
@@ -125,7 +125,7 @@ lazy val dynamicConsumer = (project in file("dynamic-consumer"))
     name                       := "zio-kinesis-dynamic-consumer",
     assembly / assemblyJarName := "zio-kinesis-dynamic-consumer" + version.value + ".jar",
     libraryDependencies ++= Seq(
-      "software.amazon.kinesis" % "amazon-kinesis-client" % "2.4.2"
+      "software.amazon.kinesis" % "amazon-kinesis-client" % "2.4.3"
     )
   )
   .dependsOn(core % "compile->compile;test->test")
