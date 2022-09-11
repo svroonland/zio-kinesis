@@ -49,7 +49,7 @@ object ExampleApp extends ZIOAppDefault {
   )
 
   val program: ZIO[
-    Kinesis with CloudWatch with CloudWatchMetricsPublisherConfig with DynamicConsumer with LeaseRepository,
+    Kinesis with CloudWatch with CloudWatchMetricsPublisherConfig with DynamicConsumer with LeaseRepository with Scope,
     Throwable,
     ExitCode
   ] =
@@ -104,7 +104,7 @@ object ExampleApp extends ZIOAppDefault {
         e => ZIO.logSpan(s"Program failed: ${e.prettyPrint}")(ZIO.logErrorCause(e)).exitCode,
         ZIO.succeed(_)
       )
-      .provideLayer(awsEnv)
+      .provideLayer(awsEnv ++ Scope.default)
 
   def worker(id: String) =
     ZStream.unwrapScoped {
