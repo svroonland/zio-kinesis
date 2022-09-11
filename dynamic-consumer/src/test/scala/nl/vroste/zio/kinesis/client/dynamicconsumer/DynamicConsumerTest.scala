@@ -54,7 +54,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
                    )
                    .forkScoped
 
-            service <- ZIO.service[DynamicConsumer.Service]
+            service <- ZIO.service[DynamicConsumer]
             records <- service
                          .shardedStream(
                            streamName,
@@ -88,7 +88,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
             _ <- printLine("Putting records").orDie
             _ <- TestUtil.produceRecords(streamName, 1000, 10, 10).forkScoped
 
-            service <- ZIO.service[DynamicConsumer.Service]
+            service <- ZIO.service[DynamicConsumer]
             records <- service
                          .shardedStream(
                            streamName,
@@ -120,7 +120,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
           activeConsumers: Ref.Synchronized[Set[String]]
         ): ZStream[Any with DynamicConsumer, Throwable, (String, String)] =
           for {
-            service <- ZStream.service[DynamicConsumer.Service]
+            service <- ZStream.service[DynamicConsumer]
             stream  <- ZStream
                          .fromZIO(printLine(s"Starting consumer $workerIdentifier").orDie)
                          .flatMap(_ =>
@@ -186,7 +186,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
           ]
         ] =
           (for {
-            service <- ZStream.service[DynamicConsumer.Service]
+            service <- ZStream.service[DynamicConsumer]
             stream  <- service
                          .shardedStream(
                            streamName,
@@ -273,7 +273,7 @@ object DynamicConsumerTest extends ZIOSpecDefault {
           ]
         ] =
           for {
-            service <- ZStream.service[DynamicConsumer.Service]
+            service <- ZStream.service[DynamicConsumer]
             stream  <- service
                          .shardedStream(
                            streamName,

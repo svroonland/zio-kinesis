@@ -11,7 +11,7 @@ import zio.{ Clock, _ }
 private[client] class DynamicConsumerFake(
   shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, Chunk[Byte]])],
   refCheckpointedList: Ref[Seq[Record[Any]]]
-) extends DynamicConsumer.Service {
+) extends DynamicConsumer {
   override def shardedStream[R, T](
     streamName: String,
     applicationName: String,

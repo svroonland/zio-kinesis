@@ -25,7 +25,7 @@ private[client] class DynamicConsumerLive(
   cloudWatchAsyncClient: CloudWatchAsyncClient,
   dynamoDbAsyncClient: DynamoDbAsyncClient,
   implicit val unsafe: Unsafe
-) extends DynamicConsumer.Service {
+) extends DynamicConsumer {
   override def shardedStream[R, T](
     streamName: String,
     applicationName: String,
