@@ -191,18 +191,6 @@ object ProducerTest extends ZIOSpecDefault {
             r1 && r2 && r3 && r4
           }
         }
-//        test("equivalence with List#foldLeft") {
-//          val ioGen = ZStreamGen.successes(Gen.string)
-//          check(Gen.small(ZStreamGen.pureStreamGen(Gen.int, _)), Gen.function2(ioGen), ioGen) { (s, f, z) =>
-//            for {
-//              sinkResult <- z.flatMap(z => s.run(ZSink.foldLeftZIO(z)(f)))
-//              foldResult <- s.runFold(List[Int]())((acc, el) => el :: acc)
-//                              .map(_.reverse)
-//                              .flatMap(_.foldLeft(z)((acc, el) => acc.flatMap(f(_, el))))
-//                              .exit
-//            } yield assert(foldResult.isSuccess)(isTrue) implies assert(foldResult)(succeeds(equalTo(sinkResult)))
-//          }
-//        }
       ),
       suite("aggregation")(
         test("batch aggregated records per shard") {
@@ -355,7 +343,7 @@ object ProducerTest extends ZIOSpecDefault {
                     ).orDie
                   )
             )
-//            .updateService[Logger[String]](l => l.named(workerId))
+            .logSpan(workerId)
 
         val nrRecords = 200000
 
@@ -374,7 +362,7 @@ object ProducerTest extends ZIOSpecDefault {
           _          <- printLine(metrics.toString).orDie
           endMetrics <- metrics.get
         } yield assert(endMetrics.successRate)(isGreaterThan(0.75)))
-      } @@ timeout(5.minute) @@ TestAspect.ifEnvSet("ENABLE_AWS"),
+      } @@ timeout(5.minute),
       test("updates the shard map after a reshard is detected") {
         val nrRecords = 1000
         val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))

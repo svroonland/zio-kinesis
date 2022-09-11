@@ -7,7 +7,7 @@ import zio._
 /**
  * Basic usage example for `Consumer.consumeWith` convenience method
  */
-object ConsumeWithExample extends zio.ZIOAppDefault {
+object ConsumeWithExample extends ZIOAppDefault {
   override def run: ZIO[Any with ZIOAppArgs with Scope, Any, Any] =
     Consumer
       .consumeWith(

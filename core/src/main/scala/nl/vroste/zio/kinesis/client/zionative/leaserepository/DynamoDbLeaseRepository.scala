@@ -54,7 +54,6 @@ private class DynamoDbLeaseRepository(client: DynamoDb, settings: Settings) exte
         .mapError(_.toThrowable)
         .unit
 
-    // TODO should be Option[TableStatus]
     def describeTable: Task[model.TableStatus] =
       client
         .describeTable(DescribeTableRequest(TableName(tableName)))

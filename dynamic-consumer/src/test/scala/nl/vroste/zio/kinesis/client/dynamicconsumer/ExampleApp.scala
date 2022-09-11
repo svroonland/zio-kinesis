@@ -25,7 +25,7 @@ import zio.stream.{ ZSink, ZStream }
 /**
  * Runnable used for manually testing various features
  */
-object ExampleApp extends zio.ZIOAppDefault {
+object ExampleApp extends ZIOAppDefault {
   val streamName                      = "zio-test-stream-6" // + java.util.UUID.randomUUID().toString
   val applicationName                 = "testApp-10"        // + java.util.UUID.randomUUID().toString(),
   val nrRecords                       = 300000

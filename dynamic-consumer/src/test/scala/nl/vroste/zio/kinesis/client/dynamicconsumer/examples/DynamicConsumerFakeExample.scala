@@ -6,12 +6,12 @@ import nl.vroste.zio.kinesis.client.dynamicconsumer.fake.DynamicConsumerFake
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio.Console.printLine
 import zio.stream.ZStream
-import zio.{ durationInt, Chunk, Ref, Scope, ZIO, ZIOAppArgs }
+import zio._
 
 /**
  * Basic usage example for `DynamicConsumerFake`
  */
-object DynamicConsumerFakeExample extends zio.ZIOAppDefault {
+object DynamicConsumerFakeExample extends ZIOAppDefault {
   private val shards: ZStream[Any, Nothing, (String, ZStream[Any, Throwable, Chunk[Byte]])] =
     DynamicConsumerFake.shardsFromStreams(Serde.asciiString, ZStream("msg1", "msg2"), ZStream("msg3", "msg4"))
 

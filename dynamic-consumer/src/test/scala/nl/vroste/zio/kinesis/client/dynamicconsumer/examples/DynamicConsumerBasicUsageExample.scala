@@ -4,12 +4,12 @@ import nl.vroste.zio.kinesis.client.defaultAwsLayer
 import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio.Console.printLine
-import zio.{ durationInt, Scope, ZIO, ZIOAppArgs }
+import zio._
 
 /**
  * Basic usage example for DynamicConsumer
  */
-object DynamicConsumerBasicUsageExample extends zio.ZIOAppDefault {
+object DynamicConsumerBasicUsageExample extends ZIOAppDefault {
   override def run: ZIO[Any with ZIOAppArgs with Scope, Any, Any] =
     DynamicConsumer
       .shardedStream(

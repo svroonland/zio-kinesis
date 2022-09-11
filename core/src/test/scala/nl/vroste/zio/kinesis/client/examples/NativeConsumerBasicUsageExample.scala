@@ -5,8 +5,8 @@ import nl.vroste.zio.kinesis.client.zionative.Consumer
 import zio.Console.printLine
 import zio._
 
-object NativeConsumerBasicUsageExample extends zio.ZIOAppDefault {
-  override def run: ZIO[Any with ZIOAppArgs with Scope, Any, Any] =
+object NativeConsumerBasicUsageExample extends ZIOAppDefault {
+  override def run: ZIO[ZIOAppArgs with Scope, Any, Any] =
     Consumer
       .shardedStream(
         streamName = "my-stream",

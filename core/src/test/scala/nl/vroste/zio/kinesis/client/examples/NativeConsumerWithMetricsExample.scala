@@ -7,14 +7,14 @@ import nl.vroste.zio.kinesis.client.zionative.metrics.{ CloudWatchMetricsPublish
 import zio.Console.printLine
 import zio._
 
-object NativeConsumerWithMetricsExample extends zio.ZIOAppDefault {
+object NativeConsumerWithMetricsExample extends ZIOAppDefault {
 
   val applicationName  = "my-application"
   val workerIdentifier = "worker1"
 
   val metricsConfig = CloudWatchMetricsPublisherConfig()
 
-  override def run: ZIO[Any with ZIOAppArgs with Scope, Any, Any] =
+  override def run: ZIO[ZIOAppArgs with Scope, Any, Any] =
     CloudWatchMetricsPublisher
       .make(applicationName, workerIdentifier)
       .flatMap { metrics =>
@@ -35,8 +35,7 @@ object NativeConsumerWithMetricsExample extends zio.ZIOAppDefault {
           .runDrain
       }
       .provideLayer(
-        (HttpClientBuilder.make() >>> Consumer.defaultEnvironment) ++
-          ZLayer.succeed(metricsConfig) ++ Scope.default
+        (HttpClientBuilder.make() >>> Consumer.defaultEnvironment) ++ ZLayer.succeed(metricsConfig) ++ Scope.default
       )
       .exitCode
 

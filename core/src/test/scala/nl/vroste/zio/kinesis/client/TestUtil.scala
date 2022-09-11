@@ -232,6 +232,6 @@ object TestUtil {
           .retry(Schedule.exponential(1.second))
       }
       .runDrain
-      .tapErrorCause(e => ZIO.logError(s"Producing records chunk failed: ${e.prettyPrint}")) *> // TODO log cause
+      .tapErrorCause(e => ZIO.logErrorCause(s"Producing records chunk failed", e)) *>
       ZIO.logInfo("Producing records is done!")
 }

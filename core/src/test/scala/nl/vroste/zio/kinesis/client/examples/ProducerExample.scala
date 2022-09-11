@@ -6,7 +6,7 @@ import nl.vroste.zio.kinesis.client.{ Producer, ProducerRecord }
 import zio.Console.printLine
 import zio._
 
-object ProducerExample extends zio.ZIOAppDefault {
+object ProducerExample extends ZIOAppDefault {
   val streamName      = "my_stream"
   val applicationName = "my_awesome_zio_application"
 
@@ -21,6 +21,6 @@ object ProducerExample extends zio.ZIOAppDefault {
     } yield ()
   }
 
-  override def run: ZIO[Any with ZIOAppArgs with Scope, Any, Any] =
+  override def run: ZIO[ZIOAppArgs with Scope, Any, Any] =
     program.provideLayer(env).exitCode
 }
