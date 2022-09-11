@@ -362,7 +362,7 @@ object ProducerTest extends ZIOSpecDefault {
           _          <- printLine(metrics.toString).orDie
           endMetrics <- metrics.get
         } yield assert(endMetrics.successRate)(isGreaterThan(0.75)))
-      } @@ timeout(5.minute),
+      } @@ timeout(5.minute) @@ TestAspect.ifEnvSet("ENABLE_AWS"),
       test("updates the shard map after a reshard is detected") {
         val nrRecords = 1000
         val records   = (1 to nrRecords).map(j => ProducerRecord(UUID.randomUUID().toString, s"message$j-$j"))

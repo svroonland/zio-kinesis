@@ -91,7 +91,7 @@ private[client] class DynamicConsumerLive(
                                  // completed but the main stream keeps running, the KCL will keep offering us records to process.
                                  ZIO.unit
                              }
-//            _             <- logger.trace(s"offerRecords for ${shardId} COMPLETE")
+            _             <- ZIO.logTrace(s"offerRecords for ${shardId} COMPLETE")
           } yield ()
         }.getOrThrow()
 
@@ -117,7 +117,7 @@ private[client] class DynamicConsumerLive(
             _ <- (drainQueueUnlessShardEnded *>
                    q.offer(Exit.fail(None)).unit <* // Pass an exit signal in the queue to stop the stream
                    q.awaitShutdown).race(q.awaitShutdown)
-//            _ <- ZIO.logTrace(s"stop() for ${shardId} because of ${reason} - COMPLETE")
+            _ <- ZIO.logTrace(s"stop() for ${shardId} because of ${reason} - COMPLETE")
           } yield ()
         }.getOrThrow()
     }
@@ -258,7 +258,7 @@ private[client] class DynamicConsumerLive(
             .mapChunksZIO(_.mapZIO(toRecord(shardId, _)))
             .provideEnvironment(env)
             .ensuring((checkpointer.checkEndOfShardCheckpointed *> checkpointer.checkpoint).catchSome {
-              case _: ShutdownException => ZIO.unit: ZIO[Any, Nothing, Unit]
+              case _: ShutdownException => ZIO.unit
             }.orDie)
 
           (shardId, stream, checkpointer)

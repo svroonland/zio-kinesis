@@ -59,9 +59,9 @@ object ExampleApp extends ZIOAppDefault {
       producer   <- TestUtil
                       .produceRecords(streamName, nrRecords, produceRate, maxRecordSize, producerSettings)
                       .tapError(e => ZIO.logError(s"Producer error: ${e}"))
-                      .fork
+                      .forkScoped
 //      _          <- producer.join
-      workers    <- ZIO.foreach((1 to nrNativeWorkers).toList)(id => worker(s"worker${id}").runCount.fork)
+      workers    <- ZIO.foreach((1 to nrNativeWorkers).toList)(id => worker(s"worker${id}").runCount.forkScoped)
       kclWorkers <-
         ZIO.foreach(((1 + nrNativeWorkers) to (nrKclWorkers + nrNativeWorkers)).toList)(id =>
           (for {
@@ -71,7 +71,7 @@ object ExampleApp extends ZIOAppDefault {
               ZIO.never.unit.ensuring(
                 ZIO.logWarning(s"Requesting shutdown for worker worker${id}!") *> shutdown.succeed(()) <* fib.join.orDie
               )
-          } yield ()).fork
+          } yield ()).forkScoped
         )
       // Sleep, but abort early if one of our children dies
       _          <- reshardAfter
@@ -87,7 +87,7 @@ object ExampleApp extends ZIOAppDefault {
                           .delay(delay)
                       )
                       .getOrElse(ZIO.unit)
-                      .fork
+                      .forkScoped
       _          <- ZIO.sleep(runLength) raceFirst ZIO.foreachParDiscard(kclWorkers ++ workers)(_.join) raceFirst producer.join
       _           = println("Interrupting app")
       _          <- producer.interruptFork
