@@ -435,8 +435,6 @@ object ProducerTest extends ZIOSpecDefault {
         .fromLayer(Runtime.addLogger(ZLogger.default.map(println(_)).filterLogLevel(_ > LogLevel.Debug)))
 
   def aggregationPipeline(digest: MessageDigest): ZPipeline[Any, Nothing, ProduceRequest, Chunk[ProduceRequest]] = {
-    // TODO will be in next ZIO 2.0 snapshot, see https://github.com/zio/zio/pull/6246
-
     val p1: ZPipeline[Any, Nothing, ProduceRequest, ProduceRequest] = ZPipeline
       .fromSink(ProducerLive.aggregator)
       .channel

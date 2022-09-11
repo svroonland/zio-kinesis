@@ -170,7 +170,7 @@ object DefaultCheckpointerTest extends ZIOSpecDefault {
           values       <- checkpoints.get
         } yield assert(values)(equalTo(List(Left(SpecialCheckpoint.ShardEnd))))
       }
-    ) // .provideLayerShared(Logging.ignore)
+    )
 
   private def makeCheckpointer(updateCheckpoint: UpdateCheckpoint): ZIO[Any, Nothing, DefaultCheckpointer] =
     for {
