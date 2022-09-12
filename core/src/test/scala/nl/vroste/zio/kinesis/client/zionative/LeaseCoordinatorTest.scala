@@ -3,22 +3,33 @@ package nl.vroste.zio.kinesis.client.zionative
 import nl.vroste.zio.kinesis.client.zionative.Consumer.InitialPosition
 import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.Lease
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator
-import io.github.vigoo.zioaws.kinesis.model.{ HashKeyRange, SequenceNumberRange, Shard }
+import zio.aws.kinesis.model.primitives.{ HashKey, SequenceNumber, ShardId }
+import zio.aws.kinesis.model.{ HashKeyRange, SequenceNumberRange, Shard }
 import zio.test.Assertion._
 import zio.test._
 
-object LeaseCoordinatorTest extends DefaultRunnableSpec {
+object LeaseCoordinatorTest extends ZIOSpecDefault {
+  def toShardMapWithStringKey(shards: Seq[Shard.ReadOnly]): Map[String, Shard.ReadOnly] =
+    shards.map(s => ShardId.unwrap(s.shardId) -> s).toMap
 
   val shard1 =
-    Shard("001", hashKeyRange = HashKeyRange("0", "0"), sequenceNumberRange = SequenceNumberRange("1")).asReadOnly
+    Shard(
+      ShardId("001"),
+      hashKeyRange = HashKeyRange(HashKey("0"), HashKey("0")),
+      sequenceNumberRange = SequenceNumberRange(SequenceNumber("1"))
+    ).asReadOnly
   val shard2 =
-    Shard("002", hashKeyRange = HashKeyRange("0", "0"), sequenceNumberRange = SequenceNumberRange("1")).asReadOnly
+    Shard(
+      ShardId("002"),
+      hashKeyRange = HashKeyRange(HashKey("0"), HashKey("0")),
+      sequenceNumberRange = SequenceNumberRange(SequenceNumber("1"))
+    ).asReadOnly
   val shard3 = Shard(
-    "003",
-    parentShardId = Some("001"),
-    adjacentParentShardId = Some("002"),
-    hashKeyRange = HashKeyRange("0", "0"),
-    sequenceNumberRange = SequenceNumberRange("1")
+    ShardId("003"),
+    parentShardId = Some(ShardId("001")),
+    adjacentParentShardId = Some(ShardId("002")),
+    hashKeyRange = HashKeyRange(HashKey("0"), HashKey("0")),
+    sequenceNumberRange = SequenceNumberRange(SequenceNumber("1"))
   ).asReadOnly
 
   override def spec =
@@ -66,16 +77,17 @@ object LeaseCoordinatorTest extends DefaultRunnableSpec {
       ),
       suite("shardsReadyToConsume")(
         test("shards without parents and no leases ready to consume") {
-          val shards = Seq(shard1, shard2).map(s => s.shardIdValue -> s).toMap
+          val shards = Seq(shard1, shard2)
 
           val leases: Map[String, Lease] = Map.empty
 
-          val readyToConsume = DefaultLeaseCoordinator.shardsReadyToConsume(shards, leases).keySet
+          val readyToConsume =
+            DefaultLeaseCoordinator.shardsReadyToConsume(toShardMapWithStringKey(shards), leases).keySet
 
           assert(readyToConsume)(equalTo(Set("001", "002")))
         },
         test("shards without parents and open leases ready to consume") {
-          val shards = Seq(shard1, shard2).map(s => s.shardIdValue -> s).toMap
+          val shards = Seq(shard1, shard2)
 
           val leases = Map(
             "001" -> Lease(
@@ -94,12 +106,13 @@ object LeaseCoordinatorTest extends DefaultRunnableSpec {
             )
           )
 
-          val readyToConsume = DefaultLeaseCoordinator.shardsReadyToConsume(shards, leases).keySet
+          val readyToConsume =
+            DefaultLeaseCoordinator.shardsReadyToConsume(toShardMapWithStringKey(shards), leases).keySet
 
           assert(readyToConsume)(equalTo(Set("001", "002")))
         },
         test("shards without parents and ended leases not ready to consume") {
-          val shards = Seq(shard1, shard2).map(s => s.shardIdValue -> s).toMap
+          val shards = Seq(shard1, shard2)
 
           val leases = Map(
             "001" -> Lease(
@@ -118,30 +131,33 @@ object LeaseCoordinatorTest extends DefaultRunnableSpec {
             )
           )
 
-          val readyToConsume = DefaultLeaseCoordinator.shardsReadyToConsume(shards, leases).keySet
+          val readyToConsume =
+            DefaultLeaseCoordinator.shardsReadyToConsume(toShardMapWithStringKey(shards), leases).keySet
 
           assert(readyToConsume)(equalTo(Set.empty[String]))
         },
         test("shards with open parents but no leases not ready to consume") {
-          val shards = Seq(shard1, shard2, shard3).map(s => s.shardIdValue -> s).toMap
+          val shards = Seq(shard1, shard2, shard3)
 
           val leases: Map[String, Lease] = Map.empty
 
-          val readyToConsume = DefaultLeaseCoordinator.shardsReadyToConsume(shards, leases).keySet
+          val readyToConsume =
+            DefaultLeaseCoordinator.shardsReadyToConsume(toShardMapWithStringKey(shards), leases).keySet
 
           assert(readyToConsume)(not(contains("003")))
         },
         test("shards with expired parents ready to consume") {
-          val shards = Seq(shard3).map(s => s.shardIdValue -> s).toMap
+          val shards = Seq(shard3)
 
           val leases: Map[String, Lease] = Map.empty
 
-          val readyToConsume = DefaultLeaseCoordinator.shardsReadyToConsume(shards, leases).keySet
+          val readyToConsume =
+            DefaultLeaseCoordinator.shardsReadyToConsume(toShardMapWithStringKey(shards), leases).keySet
 
           assert(readyToConsume)(contains("003"))
         },
         test("shards with open parents and open leases not ready to consume") {
-          val shards = Seq(shard1, shard2, shard3).map(s => s.shardIdValue -> s).toMap
+          val shards = Seq(shard1, shard2, shard3)
 
           val leases = Map(
             "001" -> Lease(
@@ -160,16 +176,18 @@ object LeaseCoordinatorTest extends DefaultRunnableSpec {
             )
           )
 
-          val readyToConsume = DefaultLeaseCoordinator.shardsReadyToConsume(shards, leases).keySet
+          val readyToConsume =
+            DefaultLeaseCoordinator.shardsReadyToConsume(toShardMapWithStringKey(shards), leases).keySet
 
           assert(readyToConsume)(not(contains("003")))
         },
         test("shards with two parents of which one has expired not ready to consume") {
-          val shards = Seq(shard2, shard3).map(s => s.shardIdValue -> s).toMap
+          val shards = Seq(shard2, shard3)
 
           val leases: Map[String, Lease] = Map.empty
 
-          val readyToConsume = DefaultLeaseCoordinator.shardsReadyToConsume(shards, leases).keySet
+          val readyToConsume =
+            DefaultLeaseCoordinator.shardsReadyToConsume(toShardMapWithStringKey(shards), leases).keySet
 
           assert(readyToConsume)(not(contains("003")))
         }

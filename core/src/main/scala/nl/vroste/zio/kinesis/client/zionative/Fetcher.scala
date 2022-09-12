@@ -1,11 +1,9 @@
 package nl.vroste.zio.kinesis.client.zionative
 
-import io.github.vigoo.zioaws.kinesis.model.{ Record, Shard, StartingPosition }
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
-import zio.clock.Clock
+import zio.aws.kinesis.model.{ primitives, Record, Shard, StartingPosition }
 import zio.stream.ZStream
 
-// TODO make all private stuff private
 private[zionative] trait Fetcher {
 
   /**
@@ -16,9 +14,9 @@ private[zionative] trait Fetcher {
    * Can fail with a Throwable or an end-of-shard indicator
    */
   def shardRecordStream(
-    shardId: String,
+    shardId: primitives.ShardId,
     startingPosition: StartingPosition
-  ): ZStream[Clock, Either[Throwable, EndOfShard], Record.ReadOnly]
+  ): ZStream[Any, Either[Throwable, EndOfShard], Record.ReadOnly]
 }
 
 private[zionative] object Fetcher {
@@ -26,9 +24,9 @@ private[zionative] object Fetcher {
 
   def apply(
     f: (
-      String,
+      primitives.ShardId,
       StartingPosition
-    ) => ZStream[Clock, Either[Throwable, EndOfShard], Record.ReadOnly]
+    ) => ZStream[Any, Either[Throwable, EndOfShard], Record.ReadOnly]
   ): Fetcher =
     (shard, startingPosition) => f(shard, startingPosition)
 }

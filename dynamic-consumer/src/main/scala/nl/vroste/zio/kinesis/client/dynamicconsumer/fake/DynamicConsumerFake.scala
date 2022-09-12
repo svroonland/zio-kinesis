@@ -1,20 +1,17 @@
 package nl.vroste.zio.kinesis.client.dynamicconsumer.fake
 
-import nl.vroste.zio.kinesis.client.dynamicconsumer.{ DynamicConsumer, ExtendedSequenceNumber, SchedulerConfig }
 import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.{ Checkpointer, Record }
+import nl.vroste.zio.kinesis.client.dynamicconsumer.{ DynamicConsumer, ExtendedSequenceNumber, SchedulerConfig }
 import nl.vroste.zio.kinesis.client.serde.{ Deserializer, Serializer }
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import software.amazon.kinesis.common.InitialPositionInStreamExtended
-import zio._
-import zio.blocking.Blocking
-import zio.clock.Clock
 import zio.stream.ZStream
+import zio.{ Clock, _ }
 
 private[client] class DynamicConsumerFake(
   shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, Chunk[Byte]])],
-  refCheckpointedList: Ref[Seq[Record[Any]]],
-  clock: Clock.Service
-) extends DynamicConsumer.Service {
+  refCheckpointedList: Ref[Seq[Record[Any]]]
+) extends DynamicConsumer {
   override def shardedStream[R, T](
     streamName: String,
     applicationName: String,
@@ -32,8 +29,8 @@ private[client] class DynamicConsumerFake(
     (String, ZStream[Any, Throwable, Record[T]], DynamicConsumer.Checkpointer)
   ] = {
     def record(shardName: String, i: Long, recData: T): UIO[Record[T]] =
-      (for {
-        dateTime <- clock.currentDateTime
+      for {
+        dateTime <- Clock.currentDateTime
       } yield new Record[T](
         sequenceNumber = s"$i",
         approximateArrivalTimestamp = dateTime.toInstant,
@@ -44,16 +41,16 @@ private[client] class DynamicConsumerFake(
         explicitHashKey = None,
         aggregated = false,
         shardId = shardName
-      )).orDie
+      )
 
     shards.flatMap { case (shardName, stream) =>
-      ZStream.fromEffect {
+      ZStream.fromZIO {
         ZIO.environment[R].flatMap { env =>
           CheckpointerFake.make(refCheckpointedList).map { checkpointer =>
             (
               shardName,
-              stream.zipWithIndex.mapM { case (byteBuffer, i) =>
-                deserializer.deserialize(byteBuffer).flatMap(record(shardName, i, _)).provide(env)
+              stream.zipWithIndex.mapZIO { case (byteBuffer, i) =>
+                deserializer.deserialize(byteBuffer).flatMap(record(shardName, i, _)).provideEnvironment(env)
               },
               checkpointer
             )
@@ -77,7 +74,7 @@ object CheckpointerFake {
 
       override def stage(r: Record[_]): UIO[Unit] = latestStaged.set(Some(r))
 
-      override def checkpoint: ZIO[Blocking, Throwable, Unit] =
+      override def checkpoint: ZIO[Any, Throwable, Unit] =
         latestStaged.get.flatMap {
           case Some(record) =>
             refCheckpointedList.update(seq => seq :+ record) *>
@@ -85,7 +82,7 @@ object CheckpointerFake {
                 case Some(r) if r == record => None
                 case r                      => r // A newer record may have been staged by now
               }
-          case None         => UIO.unit
+          case None         => ZIO.unit
         }
     }
 }
@@ -113,7 +110,7 @@ object DynamicConsumerFake {
     lists: List[T]*
   ): ZStream[Any, Nothing, (String, ZStream[R, Throwable, Chunk[Byte]])] = {
     val listOfShards = lists.zipWithIndex.map { case (xs, i) =>
-      (s"shard$i", ZStream.fromIterable(xs).mapM(serializer.serialize))
+      (s"shard$i", ZStream.fromIterable(xs).mapZIO(serializer.serialize))
     }
     ZStream.fromIterable(listOfShards)
   }
@@ -139,7 +136,7 @@ object DynamicConsumerFake {
     streams: ZStream[R, Throwable, T]*
   ): ZStream[Any, Nothing, (String, ZStream[R, Throwable, Chunk[Byte]])] = {
     val listOfShards = streams.zipWithIndex.map { case (stream, i) =>
-      (s"shard$i", stream.mapM(serializer.serialize))
+      (s"shard$i", stream.mapZIO(serializer.serialize))
     }
     ZStream.fromIterable(listOfShards)
   }

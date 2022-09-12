@@ -1,7 +1,8 @@
 package nl.vroste.zio.kinesis.client.producer
 
 import org.HdrHistogram.{ AbstractHistogram, Histogram, IntCountsHistogram }
-import zio.duration._
+
+import zio._
 
 /**
  * Kinesis record producing metrics

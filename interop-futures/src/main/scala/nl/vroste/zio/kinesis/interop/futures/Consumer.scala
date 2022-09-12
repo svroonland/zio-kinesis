@@ -1,6 +1,4 @@
 package nl.vroste.zio.kinesis.interop.futures
-import io.github.vigoo.zioaws.core.config
-import io.github.vigoo.zioaws.kinesis.Kinesis
 import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import nl.vroste.zio.kinesis.client.zionative.Consumer.InitialPosition
@@ -12,10 +10,9 @@ import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClientBuilder
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClientBuilder
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClientBuilder
-import zio.clock.Clock
-import zio.logging.Logging
-import zio.random.Random
-import zio.{ CancelableFuture, ZIO }
+import zio.aws.core.config
+import zio.aws.kinesis.Kinesis
+import zio.{ CancelableFuture, Unsafe, ZIO }
 
 import scala.concurrent.duration._
 import scala.concurrent.{ ExecutionContext, Future }
@@ -24,7 +21,8 @@ import scala.concurrent.{ ExecutionContext, Future }
  * A scala-native Future based interface to the zio-kinesis Consumer
  */
 class Consumer private (
-  runtime: zio.Runtime.Managed[Clock with Random with Kinesis with LeaseRepository with Logging]
+  runtime: zio.Runtime.Scoped[Kinesis with LeaseRepository],
+  implicit val unsafe: Unsafe
 ) {
 
   /**
@@ -62,7 +60,7 @@ class Consumer private (
   )(
     recordProcessor: Record[T] => ExecutionContext => Future[Unit]
   ): CancelableFuture[Unit] =
-    runtime.unsafeRunToFuture {
+    runtime.unsafe.runToFuture {
       zionative.Consumer.consumeWith(
         streamName,
         applicationName,
@@ -71,14 +69,14 @@ class Consumer private (
         fetchMode,
         leaseCoordinationSettings,
         initialPosition,
-        emitDiagnostic = e => ZIO(emitDiagnostic(e)).orDie,
+        emitDiagnostic = e => ZIO.attempt(emitDiagnostic(e)).orDie,
         shardAssignmentStrategy,
         checkpointBatchSize,
-        zio.duration.Duration.fromScala(checkpointDuration)
+        zio.Duration.fromScala(checkpointDuration)
       )(record => ZIO.fromFuture(recordProcessor(record)))
     }
 
-  def close(): Unit = runtime.shutdown()
+  def close(): Unit = runtime.shutdown0()
 }
 
 object Consumer {
@@ -89,19 +87,18 @@ object Consumer {
     buildHttpClient: NettyNioAsyncHttpClient.Builder => SdkAsyncHttpClient = _.build()
   ): Consumer = {
 
-    val sdkClients = HttpClientBuilder.make(build = buildHttpClient) >>> config.default >>> (
+    val sdkClients = HttpClientBuilder.make(build = buildHttpClient) >>> config.AwsConfig.default >>> (
       kinesisAsyncClientLayer(buildKinesisClient) ++
         cloudWatchAsyncClientLayer(buildCloudWatchClient) ++
         dynamoDbAsyncClientLayer(buildDynamoDbClient)
     )
 
-    val layer = Clock.live ++
-      Random.live ++
-      Logging.ignore ++
-      (sdkClients >+> DynamoDbLeaseRepository.live)
+    val layer = (sdkClients >+> DynamoDbLeaseRepository.live)
 
-    val runtime = zio.Runtime.unsafeFromLayer(layer)
+    Unsafe.unsafe { implicit unsafe =>
+      val runtime = zio.Runtime.unsafe.fromLayer(layer)
 
-    new Consumer(runtime)
+      new Consumer(runtime, unsafe)
+    }
   }
 }
