@@ -85,7 +85,7 @@ private class DefaultLeaseCoordinator(
              .ensuring(ZIO.logDebug("Shutting down renew lease loop"))
              .forkScoped
     } yield ())
-      .tapErrorCause(c => ZIO.logError("Error in DefaultLeaseCoordinator initialize") *> ZIO.logErrorCause(c))
+      .tapErrorCause(c => ZIO.logErrorCause("Error in DefaultLeaseCoordinator initialize", c))
   }
 
   override def updateShards(shards: Map[ShardId, Shard.ReadOnly]): UIO[Unit] =
