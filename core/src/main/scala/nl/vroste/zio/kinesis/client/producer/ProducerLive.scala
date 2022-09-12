@@ -47,7 +47,7 @@ private[client] final class ProducerLive[R, R1, T](
     // Failed records get precedence
     (retries merge ZStream
       .fromQueue(queue, maxChunkSize)
-      .mapChunksZIO(chunk => ZIO.logDebug(s"Dequeued chunk of size ${chunk.size}").as(Chunk.single(chunk)))
+      .mapChunksZIO(chunk => ZIO.logTrace(s"Dequeued chunk of size ${chunk.size}").as(Chunk.single(chunk)))
       .mapZIOParUnordered(settings.shardPredictionParallelism)(addPredictedShardToRequestsChunk)
       .flattenChunks
       // Aggregate records per shard
