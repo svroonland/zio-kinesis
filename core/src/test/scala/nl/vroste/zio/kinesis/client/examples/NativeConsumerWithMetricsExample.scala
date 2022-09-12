@@ -4,22 +4,20 @@ import nl.vroste.zio.kinesis.client.HttpClientBuilder
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.Consumer
 import nl.vroste.zio.kinesis.client.zionative.metrics.{ CloudWatchMetricsPublisher, CloudWatchMetricsPublisherConfig }
+import zio.Console.printLine
 import zio._
-import zio.console.{ putStrLn, Console }
-import zio.duration._
-import zio.logging.Logging
 
-object NativeConsumerWithMetricsExample extends zio.App {
+object NativeConsumerWithMetricsExample extends ZIOAppDefault {
 
   val applicationName  = "my-application"
   val workerIdentifier = "worker1"
 
   val metricsConfig = CloudWatchMetricsPublisherConfig()
 
-  override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
+  override def run: ZIO[ZIOAppArgs with Scope, Any, Any] =
     CloudWatchMetricsPublisher
       .make(applicationName, workerIdentifier)
-      .use { metrics =>
+      .flatMap { metrics =>
         Consumer
           .shardedStream(
             streamName = "my-stream",
@@ -30,17 +28,15 @@ object NativeConsumerWithMetricsExample extends zio.App {
           )
           .flatMapPar(Int.MaxValue) { case (shardId, shardStream, checkpointer) =>
             shardStream
-              .tap(record => putStrLn(s"Processing record ${record} on shard ${shardId}"))
+              .tap(record => printLine(s"Processing record ${record} on shard ${shardId}"))
               .tap(checkpointer.stage(_))
-              .via(checkpointer.checkpointBatched[Console](nr = 1000, interval = 5.minutes))
+              .viaFunction(checkpointer.checkpointBatched[Any](nr = 1000, interval = 5.minutes))
           }
           .runDrain
       }
-      .provideCustomLayer(
-        (HttpClientBuilder.make() >>> Consumer.defaultEnvironment) ++ loggingLayer ++ ZLayer
-          .succeed(metricsConfig)
+      .provideLayer(
+        (HttpClientBuilder.make() >>> Consumer.defaultEnvironment) ++ ZLayer.succeed(metricsConfig) ++ Scope.default
       )
       .exitCode
 
-  val loggingLayer = Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
 }

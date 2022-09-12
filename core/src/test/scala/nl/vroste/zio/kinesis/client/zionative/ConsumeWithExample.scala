@@ -1,20 +1,14 @@
 package nl.vroste.zio.kinesis.client.zionative
 
 import nl.vroste.zio.kinesis.client.serde.Serde
+import zio.Console.printLine
 import zio._
-import zio.clock.Clock
-import zio.console.{ putStrLn, Console }
-import zio.duration._
-import zio.logging.Logging
 
 /**
  * Basic usage example for `Consumer.consumeWith` convenience method
  */
-object ConsumeWithExample extends zio.App {
-  val loggingLayer: ZLayer[Any, Nothing, Logging] =
-    (Console.live ++ Clock.live) >>> Logging.console() >>> Logging.withRootLoggerName(getClass.getName)
-
-  override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
+object ConsumeWithExample extends ZIOAppDefault {
+  override def run: ZIO[Any with ZIOAppArgs with Scope, Any, Any] =
     Consumer
       .consumeWith(
         streamName = "my-stream",
@@ -23,7 +17,7 @@ object ConsumeWithExample extends zio.App {
         workerIdentifier = "worker1",
         checkpointBatchSize = 1000L,
         checkpointDuration = 5.minutes
-      )(record => putStrLn(s"Processing record $record"))
-      .provideCustomLayer(Consumer.defaultEnvironment ++ loggingLayer)
+      )(record => printLine(s"Processing record $record"))
+      .provideLayer(Consumer.defaultEnvironment)
       .exitCode
 }

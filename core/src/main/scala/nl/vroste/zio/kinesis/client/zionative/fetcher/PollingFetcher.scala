@@ -1,18 +1,20 @@
 package nl.vroste.zio.kinesis.client.zionative.fetcher
-import io.github.vigoo.zioaws.core.AwsError
-import io.github.vigoo.zioaws.kinesis
-import io.github.vigoo.zioaws.kinesis.Kinesis
-import io.github.vigoo.zioaws.kinesis.model._
-import io.github.vigoo.zioaws.kinesis.model.primitives.{ SequenceNumber, ShardIterator }
 import nl.vroste.zio.kinesis.client.Util._
 import nl.vroste.zio.kinesis.client.zionative.Consumer.{ childShardToShard, retryOnThrottledWithSchedule }
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
 import nl.vroste.zio.kinesis.client.zionative.{ DiagnosticEvent, FetchMode, Fetcher }
 import software.amazon.awssdk.services.kinesis.model.ExpiredIteratorException
 import zio._
-import zio.clock.Clock
-import zio.duration._
-import zio.logging.{ log, Logging }
+import zio.aws.core.AwsError
+import zio.aws.kinesis.Kinesis
+import zio.aws.kinesis.model._
+import zio.aws.kinesis.model.primitives.{
+  GetRecordsInputLimit,
+  MillisBehindLatest,
+  SequenceNumber,
+  ShardIterator,
+  StreamName
+}
 import zio.stream.ZStream
 
 /**
@@ -34,38 +36,35 @@ object PollingFetcher {
     streamName: String,
     config: FetchMode.Polling,
     emitDiagnostic: DiagnosticEvent => UIO[Unit]
-  ): ZManaged[Clock with Kinesis with Logging, Throwable, Fetcher] =
+  ): ZIO[Scope with Kinesis, Throwable, Fetcher] =
     for {
-      env              <- ZIO.environment[Kinesis with Clock with Logging].toManaged_
-      getShardIterator <- throttledFunction(getShardIteratorRateLimit, 1.second)(kinesis.getShardIterator)
+      env              <- ZIO.environment[Kinesis]
+      getShardIterator <- throttledFunction(getShardIteratorRateLimit, 1.second)(Kinesis.getShardIterator)
     } yield Fetcher { (shardId, startingPosition: StartingPosition) =>
-      val initialize: ZManaged[
-        Clock with Logging,
+      val initialize: ZIO[
+        Scope,
         Nothing,
         (Ref[PollState], GetRecordsRequest => ZIO[Kinesis, AwsError, GetRecordsResponse.ReadOnly])
       ] = for {
-        _                   <- log
-                                 .info(s"Creating PollingFetcher for shard ${shardId} with starting position ${startingPosition}")
-                                 .toManaged_
-        pollState           <- Ref.make(PollState(startingPosition.`type`, startingPosition.sequenceNumber)).toManaged_
-        getRecordsThrottled <- throttledFunction(getRecordsRateLimit, 1.second)(kinesis.getRecords)
+        _                   <- ZIO.logInfo(s"Creating PollingFetcher for shard ${shardId} with starting position ${startingPosition}")
+        pollState           <- Ref.make(PollState(startingPosition.`type`, startingPosition.sequenceNumber.toOption))
+        getRecordsThrottled <- throttledFunction(getRecordsRateLimit, 1.second)(Kinesis.getRecords)
       } yield (pollState, getRecordsThrottled)
 
       def streamFromSequenceNumber(
         iteratorType: ShardIteratorType,
         sequenceNr: Option[SequenceNumber],
         getRecordsThrottled: GetRecordsRequest => ZIO[Kinesis, AwsError, GetRecordsResponse.ReadOnly]
-      ): ZStream[Clock with Logging with Kinesis, Throwable, GetRecordsResponse.ReadOnly] = ZStream.unwrapManaged {
+      ): ZStream[Kinesis, Throwable, GetRecordsResponse.ReadOnly] = ZStream.unwrapScoped {
         for {
           initialShardIterator <-
-            getShardIterator(GetShardIteratorRequest(streamName, shardId, iteratorType, sequenceNr))
-              .map(_.shardIteratorValue.get)
+            getShardIterator(GetShardIteratorRequest(StreamName(streamName), shardId, iteratorType, sequenceNr))
+              .map(_.shardIterator.toOption.get)
               .mapError(_.toThrowable)
               .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
-              .toManaged_
           doPoll               <- makePollEffectWithShardIterator(initialShardIterator, doPoll(_, getRecordsThrottled))
         } yield ZStream
-          .repeatEffectWith(doPoll, config.pollSchedule)
+          .repeatZIOWithSchedule(doPoll, config.pollSchedule)
           .catchAll {
             case None    =>
               ZStream.empty
@@ -77,16 +76,15 @@ object PollingFetcher {
       def makePollEffectWithShardIterator[R](
         initialShardIterator: ShardIterator,
         poll: ShardIterator => ZIO[R, Option[Throwable], GetRecordsResponse.ReadOnly]
-      ): ZManaged[Any, Nothing, ZIO[R, Option[Throwable], GetRecordsResponse.ReadOnly]] =
+      ): ZIO[Scope, Nothing, ZIO[R, Option[Throwable], GetRecordsResponse.ReadOnly]] =
         Ref
           .make(Option(initialShardIterator))
-          .toManaged_
           .map { shardIterator =>
             for {
               currentIterator <- shardIterator.get
               currentIterator <- ZIO.fromOption(currentIterator)
               response        <- poll(currentIterator)
-              _               <- shardIterator.set(response.nextShardIteratorValue)
+              _               <- shardIterator.set(response.nextShardIterator.toOption)
             } yield response
           }
 
@@ -94,58 +92,60 @@ object PollingFetcher {
       def doPoll(
         currentIterator: ShardIterator,
         getRecordsThrottled: GetRecordsRequest => ZIO[Kinesis, AwsError, GetRecordsResponse.ReadOnly]
-      ): ZIO[Clock with Logging with Kinesis, Option[Throwable], GetRecordsResponse.ReadOnly] =
+      ): ZIO[Kinesis, Option[Throwable], GetRecordsResponse.ReadOnly] =
         for {
-          responseWithDuration <- getRecordsThrottled(GetRecordsRequest(currentIterator, Some(config.batchSize)))
-                                    .mapError(_.toThrowable)
-                                    .tapError(e => log.warn(s"Error GetRecords for shard ${shardId}: ${e}"))
-                                    .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
-                                    .asSomeError
-                                    .timed
+          responseWithDuration <-
+            getRecordsThrottled(GetRecordsRequest(currentIterator, Some(GetRecordsInputLimit(config.batchSize))))
+              .mapError(_.toThrowable)
+              .tapError(e => ZIO.logWarning(s"Error GetRecords for shard ${shardId}: ${e}"))
+              .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
+              .asSomeError
+              .timed
           (duration, response)  = responseWithDuration
-          millisBehindLatest   <- response.millisBehindLatest.mapError(e => Some(e.toThrowable))
+          millisBehindLatest   <-
+            ZIO.fromOption(response.millisBehindLatest.toOption).orElse(ZIO.succeed(MillisBehindLatest(0)))
           _                    <- emitDiagnostic(
-                                    DiagnosticEvent.PollComplete(shardId, response.recordsValue.size, millisBehindLatest.millis, duration)
+                                    DiagnosticEvent.PollComplete(shardId, response.records.size, millisBehindLatest.millis, duration)
                                   )
         } yield response
 
       def detectEndOfShard =
-        (_: ZStream[Kinesis with Clock with Logging, Throwable, GetRecordsResponse.ReadOnly])
+        (_: ZStream[Kinesis, Throwable, GetRecordsResponse.ReadOnly])
           .mapError(Left(_): Either[Throwable, EndOfShard])
           .flatMap { response =>
-            if (response.childShardsValue.toList.flatten.nonEmpty && response.nextShardIteratorValue.isEmpty)
-              ZStream.succeed(response) ++ (ZStream.fromEffect(
-                log.debug(s"PollingFetcher found end of shard for ${shardId}")
+            if (response.childShards.toList.flatten.nonEmpty && response.nextShardIterator.isEmpty)
+              ZStream.succeed(response) ++ (ZStream.fromZIO(
+                ZIO.logDebug(s"PollingFetcher found end of shard for ${shardId}")
               ) *>
-                ZStream.fail(Right(EndOfShard(response.childShardsValue.toList.flatten.map(childShardToShard)))))
+                ZStream.fail(Right(EndOfShard(response.childShards.toList.flatten.map(childShardToShard)))))
             else
               ZStream.succeed(response)
           }
 
-      ZStream.unwrapManaged {
+      ZStream.unwrapScoped {
         initialize.map { case (pollState, getRecordsThrottled) =>
           val streamFromLastSequenceNr =
-            ZStream.fromEffect(pollState.get).flatMap { case PollState(iteratorType, sequenceNr) =>
+            ZStream.fromZIO(pollState.get).flatMap { case PollState(iteratorType, sequenceNr) =>
               streamFromSequenceNumber(iteratorType, sequenceNr, getRecordsThrottled)
                 .tap(response =>
-                  ZIO.foreach_(response.recordsValue.lastOption.map(_.sequenceNumberValue))(s =>
+                  ZIO.foreachDiscard(response.records.lastOption.map(_.sequenceNumber))(s =>
                     pollState.set(PollState(ShardIteratorType.AFTER_SEQUENCE_NUMBER, Some(s)))
                   )
                 )
             }
 
           streamFromLastSequenceNr.catchSome { case _: ExpiredIteratorException =>
-            ZStream.fromEffect(log.info("Iterator expired. Refreshing")) *> streamFromLastSequenceNr
+            ZStream.fromZIO(ZIO.logInfo("Iterator expired. Refreshing")) *> streamFromLastSequenceNr
           }
-            .onError(e => log.warn(s"Error in PollingFetcher for shard ${shardId}: ${e}"))
+            .onError(e => ZIO.logWarning(s"Error in PollingFetcher for shard ${shardId}: ${e}"))
             .retry(config.throttlingBackoff)
         }
       }
-        .via(detectEndOfShard)
+        .viaFunction(detectEndOfShard)
         .buffer(config.bufferNrBatches)
-        .mapConcat(_.recordsValue)
-        .ensuring(log.debug(s"PollingFetcher for shard ${shardId} closed"))
-        .provide(env)
+        .mapConcat(_.records)
+        .ensuring(ZIO.logDebug(s"PollingFetcher for shard ${shardId} closed"))
+        .provideEnvironment(env)
     }
 
   private val getShardIteratorRateLimit = 5

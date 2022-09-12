@@ -12,6 +12,9 @@ jobs:
         type: string
       sbt_command:
         type: string
+      resource_class:
+        default: medium
+        type: string
     docker:
       - image: << parameters.image >>
       - image: localstack/localstack
@@ -24,6 +27,7 @@ jobs:
           AWS_ACCESS_KEY_ID: dummy-key
           AWS_SECRET_ACCESS_KEY: dummy-key
           DEBUG: "1"
+    resource_class: << parameters.resource_class >>
 
     steps:
       - checkout
@@ -64,8 +68,8 @@ workflows:
               only: << pipeline.parameters.tag_regex >>
       - run_with_localstack:
           name: test31
-          image: hseeberger/scala-sbt:17.0.2_1.6.2_3.1.2
-          sbt_command: ++3.1.1! core/test interopFutures/test
+          image: hseeberger/scala-sbt:17.0.2_1.6.2_3.1.1
+          sbt_command: ++3.2.0! core/test interopFutures/test
           requires:
             - lint
           filters:
@@ -84,6 +88,7 @@ workflows:
           name: test213_dynamic_consumer
           image: hseeberger/scala-sbt:17.0.2_1.6.2_2.13.8
           sbt_command: ++2.13.8! dynamicConsumer/test
+          resource_class: large
           requires:
             - lint
           filters:

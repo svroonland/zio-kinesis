@@ -1,11 +1,12 @@
 package nl.vroste.zio.kinesis.client
-import io.github.vigoo.zioaws.core.httpclient
-import io.github.vigoo.zioaws.core.httpclient.HttpClient
+import zio.aws.core.httpclient
+import zio.aws.core.httpclient.HttpClient
 import software.amazon.awssdk.http.Protocol
 import software.amazon.awssdk.http.async.SdkAsyncHttpClient
 import software.amazon.awssdk.http.nio.netty.{ Http2Configuration, NettyNioAsyncHttpClient }
-import zio.duration._
+
 import zio.{ Task, ZIO, ZLayer }
+import zio._
 
 object HttpClientBuilder {
 
@@ -36,7 +37,7 @@ object HttpClientBuilder {
     build: NettyNioAsyncHttpClient.Builder => SdkAsyncHttpClient = _.build()
   ): ZLayer[Any, Nothing, HttpClient] =
     ZLayer.succeed {
-      new HttpClient.Service {
+      new HttpClient {
         override def clientFor(serviceCaps: httpclient.ServiceHttpCapabilities): Task[SdkAsyncHttpClient] = {
           val protocol = if (allowHttp2 && serviceCaps.supportsHttp2) Protocol.HTTP2 else Protocol.HTTP1_1
 
@@ -57,7 +58,7 @@ object HttpClientBuilder {
             )
             .protocol(protocol)
 
-          ZIO(build(builder))
+          ZIO.attempt(build(builder))
         }
       }
     }

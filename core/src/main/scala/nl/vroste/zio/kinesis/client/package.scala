@@ -1,12 +1,11 @@
 package nl.vroste.zio.kinesis
 
-import io.github.vigoo.zioaws.cloudwatch.CloudWatch
-import io.github.vigoo.zioaws.core.config.AwsConfig
-import io.github.vigoo.zioaws.core.httpclient
-import io.github.vigoo.zioaws.core.httpclient.HttpClient
-import io.github.vigoo.zioaws.dynamodb.DynamoDb
-import io.github.vigoo.zioaws.kinesis.Kinesis
-import io.github.vigoo.zioaws.{ cloudwatch, dynamodb, kinesis }
+import zio.aws.cloudwatch.CloudWatch
+import zio.aws.core.config.AwsConfig
+import zio.aws.core.httpclient
+import zio.aws.core.httpclient.HttpClient
+import zio.aws.dynamodb.DynamoDb
+import zio.aws.kinesis.Kinesis
 import software.amazon.awssdk.awscore.client.builder.{ AwsAsyncClientBuilder, AwsClientBuilder }
 import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
 import software.amazon.awssdk.core.retry.RetryPolicy
@@ -19,26 +18,26 @@ package object client {
   def kinesisAsyncClientLayer(
     build: KinesisAsyncClientBuilder => KinesisAsyncClientBuilder = identity
   ): ZLayer[AwsConfig, Throwable, Kinesis] =
-    kinesis.customized(build)
+    Kinesis.customized(build)
 
   def cloudWatchAsyncClientLayer(
     build: CloudWatchAsyncClientBuilder => CloudWatchAsyncClientBuilder = identity
   ): ZLayer[AwsConfig, Throwable, CloudWatch] =
-    cloudwatch.customized(build)
+    CloudWatch.customized(build)
 
   def dynamoDbAsyncClientLayer(
     build: DynamoDbAsyncClientBuilder => DynamoDbAsyncClientBuilder = identity
   ): ZLayer[AwsConfig, Throwable, DynamoDb] =
-    dynamodb.customized(build)
+    DynamoDb.customized(build)
 
   val sdkClientsLayer: ZLayer[AwsConfig, Throwable, Kinesis with CloudWatch with DynamoDb] =
     kinesisAsyncClientLayer() ++ cloudWatchAsyncClientLayer() ++ dynamoDbAsyncClientLayer()
 
   val customConfig: ZLayer[HttpClient, Nothing, AwsConfig] =
     ZLayer.succeed {
-      new AwsConfig.Service {
+      new AwsConfig {
         override def configure[Client, Builder <: AwsClientBuilder[Builder, Client]](builder: Builder): Task[Builder] =
-          Task {
+          ZIO.attempt {
             builder.overrideConfiguration(ClientOverrideConfiguration.builder().retryPolicy(RetryPolicy.none()).build())
           }
 

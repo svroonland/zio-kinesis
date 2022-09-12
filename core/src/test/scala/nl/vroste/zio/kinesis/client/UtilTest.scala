@@ -1,28 +1,28 @@
 package nl.vroste.zio.kinesis.client
 
-import zio.duration._
 import zio.test.Assertion._
 import zio.test._
+import zio._
 
-object UtilTest extends DefaultRunnableSpec {
+object UtilTest extends ZIOSpecDefault {
 
   override def spec =
     suite("Util")(
       suite("exponentialBackoff")(
-        testM("provides exponential backoff durations up to the max") {
+        test("provides exponential backoff durations up to the max") {
           val schedule = Util.exponentialBackoff[Int](100.millis, 1.second)
 
           for {
-            now     <- zio.clock.currentDateTime
+            now     <- zio.Clock.currentDateTime
             outputs <- schedule.run(now, (1 to 100))
           } yield assert(outputs.toList.map(_._1))(forall(Assertion.isLessThanEqualTo(1.second)))
         },
-        testM("stops after the max nr of recurs") {
+        test("stops after the max nr of recurs") {
           val maxRetries = 10
           val schedule   = Util.exponentialBackoff[Int](100.millis, 1.second, maxRecurs = Some(maxRetries))
 
           for {
-            now     <- zio.clock.currentDateTime
+            now     <- zio.Clock.currentDateTime
             outputs <- schedule.run(now, (1 to 100))
           } yield assert(outputs.toList)(hasSize(equalTo(maxRetries + 1)))
         }
