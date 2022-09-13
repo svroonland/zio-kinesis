@@ -1,22 +1,76 @@
 package nl.vroste.zio.kinesis.client.dynamicconsumer
 
-import io.github.vigoo.zioaws.cloudwatch.CloudWatch
-import io.github.vigoo.zioaws.dynamodb.DynamoDb
-import io.github.vigoo.zioaws.kinesis.Kinesis
+import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.{ Checkpointer, Record }
+import zio.aws.cloudwatch.CloudWatch
+import zio.aws.dynamodb.DynamoDb
+import zio.aws.kinesis.Kinesis
 import nl.vroste.zio.kinesis.client.dynamicconsumer.fake.DynamicConsumerFake
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import software.amazon.kinesis.common.{ InitialPositionInStream, InitialPositionInStreamExtended }
 import software.amazon.kinesis.exceptions.ShutdownException
+import zio.stream.{ ZSink, ZStream }
 import zio._
-import zio.blocking.Blocking
-import zio.clock.Clock
-import zio.duration.{ durationInt, Duration }
-import zio.logging.{ Logger, Logging }
-import zio.stream.{ ZStream, ZTransducer }
 
 import java.time.Instant
 import java.util.UUID
+
+trait DynamicConsumer {
+
+  /**
+   * Create a ZStream of records on a Kinesis stream with substreams per shard
+   *
+   * Uses DynamoDB for lease coordination between different instances of consumers with the same application name and
+   * for offset checkpointing.
+   *
+   * @param streamName
+   *   Name of the Kinesis stream
+   * @param applicationName
+   *   Application name for coordinating shard leases
+   * @param deserializer
+   *   Deserializer for record values
+   * @param requestShutdown
+   *   Effect that when completed will trigger a graceful shutdown of the KCL and the streams.
+   * @param initialPosition
+   *   Position in stream to start at when there is no previous checkpoint for this application
+   * @param leaseTableName
+   *   Optionally set the lease table name - defaults to None. If not specified the `applicationName` will be used.
+   * @param metricsNamespace
+   *   CloudWatch metrics namespace
+   * @param workerIdentifier
+   *   Identifier used for the worker in this application group. Used in logging and written to the lease table.
+   * @param maxShardBufferSize
+   *   The maximum number of records per shard to store in a queue before blocking the KCL record processor until
+   *   records have been dequeued. Note that the stream returned from this method will have internal chunk buffers as
+   *   well.
+   * @param configureKcl
+   *   Make additional KCL Scheduler configurations
+   * @tparam R
+   *   ZIO environment type required by the `deserializer`
+   * @tparam T
+   *   Type of record values
+   * @return
+   *   A nested ZStream - the outer ZStream represents the collection of shards, and the inner ZStream represents the
+   *   individual shard
+   */
+  def shardedStream[R, T](
+    streamName: String,
+    applicationName: String,
+    deserializer: Deserializer[R, T],
+    requestShutdown: UIO[Unit] = ZIO.never,
+    initialPosition: InitialPositionInStreamExtended =
+      InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON),
+    leaseTableName: Option[String] = None,
+    metricsNamespace: Option[String] = None,
+    workerIdentifier: String = UUID.randomUUID().toString,
+    maxShardBufferSize: Int = 1024, // Prefer powers of 2
+    configureKcl: SchedulerConfig => SchedulerConfig = identity
+  ): ZStream[
+    R,
+    Throwable,
+    (String, ZStream[Any, Throwable, Record[T]], Checkpointer)
+  ]
+}
 
 /**
  * Offers a ZStream based interface to the Amazon Kinesis Client Library (KCL)
@@ -36,14 +90,15 @@ object DynamicConsumer {
     aggregated: Boolean
   )
 
-  val live: ZLayer[Logging with Blocking with Kinesis with CloudWatch with DynamoDb, Nothing, DynamicConsumer] =
-    ZLayer
-      .fromServices[Logger[
-        String
-      ], Blocking.Service, Kinesis.Service, CloudWatch.Service, DynamoDb.Service, DynamicConsumer.Service] {
-        case (logger, blocking, kinesis, cloudwatch, dynamodb) =>
-          new DynamicConsumerLive(logger, blocking, kinesis.api, cloudwatch.api, dynamodb.api)
-      }
+  val live: ZLayer[Kinesis with CloudWatch with DynamoDb, Nothing, DynamicConsumer] = ZLayer {
+    Unsafe.unsafe { implicit unsafe =>
+      for {
+        kinesis    <- ZIO.service[Kinesis]
+        cloudwatch <- ZIO.service[CloudWatch]
+        dynamodb   <- ZIO.service[DynamoDb]
+      } yield new DynamicConsumerLive(kinesis.api, cloudwatch.api, dynamodb.api, unsafe): DynamicConsumer
+    }
+  }
 
   /**
    * Implements a fake `DynamicConsumer` that also offers fake checkpointing functionality that can be tracked using the
@@ -60,10 +115,9 @@ object DynamicConsumer {
   def fake(
     shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, Chunk[Byte]])],
     refCheckpointedList: Ref[Seq[Record[Any]]]
-  ): ZLayer[Clock, Nothing, Has[Service]] =
-    ZLayer.fromService[Clock.Service, DynamicConsumer.Service] { clock =>
-      new DynamicConsumerFake(shards, refCheckpointedList, clock)
-    }
+  ): ZLayer[Any, Nothing, DynamicConsumer] = ZLayer.succeed {
+    new DynamicConsumerFake(shards, refCheckpointedList)
+  }
 
   /**
    * Overloaded version of above but without fake checkpointing functionality
@@ -76,68 +130,10 @@ object DynamicConsumer {
    */
   def fake(
     shards: ZStream[Any, Throwable, (String, ZStream[Any, Throwable, Chunk[Byte]])]
-  ): ZLayer[Clock, Nothing, Has[Service]] =
-    ZLayer.fromServiceM[Clock.Service, Any, Nothing, DynamicConsumer.Service] { clock =>
-      Ref.make[Seq[Record[Any]]](Seq.empty).map { refCheckpointedList =>
-        new DynamicConsumerFake(shards, refCheckpointedList, clock)
-      }
+  ): ZLayer[Any, Nothing, DynamicConsumer] = ZLayer {
+    Ref.make[Seq[Record[Any]]](Seq.empty).map { refCheckpointedList =>
+      new DynamicConsumerFake(shards, refCheckpointedList)
     }
-
-  trait Service {
-
-    /**
-     * Create a ZStream of records on a Kinesis stream with substreams per shard
-     *
-     * Uses DynamoDB for lease coordination between different instances of consumers with the same application name and
-     * for offset checkpointing.
-     *
-     * @param streamName
-     *   Name of the Kinesis stream
-     * @param applicationName
-     *   Application name for coordinating shard leases
-     * @param deserializer
-     *   Deserializer for record values
-     * @param requestShutdown
-     *   Effect that when completed will trigger a graceful shutdown of the KCL and the streams.
-     * @param initialPosition
-     *   Position in stream to start at when there is no previous checkpoint for this application
-     * @param leaseTableName
-     *   Optionally set the lease table name - defaults to None. If not specified the `applicationName` will be used.
-     * @param metricsNamespace
-     *   CloudWatch metrics namespace
-     * @param workerIdentifier
-     *   Identifier used for the worker in this application group. Used in logging and written to the lease table.
-     * @param maxShardBufferSize
-     *   The maximum number of records per shard to store in a queue before blocking the KCL record processor until
-     *   records have been dequeued. Note that the stream returned from this method will have internal chunk buffers as
-     *   well. Prefer powers of 2 for efficiency.
-     * @param configureKcl
-     *   Make additional KCL Scheduler configurations
-     * @tparam R
-     *   ZIO environment type required by the `deserializer`
-     * @tparam T
-     *   Type of record values
-     * @return
-     *   A nested ZStream - the outer ZStream represents the collection of shards, and the inner ZStream represents the
-     *   individual shard
-     */
-    def shardedStream[R, T](
-      streamName: String,
-      applicationName: String,
-      deserializer: Deserializer[R, T],
-      requestShutdown: UIO[Unit] = UIO.never,
-      initialPosition: InitialPositionInStreamExtended =
-        InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON),
-      leaseTableName: Option[String] = None,
-      metricsNamespace: Option[String] = None,
-      workerIdentifier: String = UUID.randomUUID().toString,
-      maxShardBufferSize: Int = 1024, // Prefer powers of 2
-      configureKcl: SchedulerConfig => SchedulerConfig = identity
-    ): ZStream[
-      R,
-      Throwable,
-      (String, ZStream[Any, Throwable, Record[T]], Checkpointer)
-    ]
   }
 
   // Accessor
@@ -145,7 +141,7 @@ object DynamicConsumer {
     streamName: String,
     applicationName: String,
     deserializer: Deserializer[R, T],
-    requestShutdown: UIO[Unit] = UIO.never,
+    requestShutdown: UIO[Unit] = ZIO.never,
     initialPosition: InitialPositionInStreamExtended =
       InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON),
     leaseTableName: Option[String] = None,
@@ -160,7 +156,7 @@ object DynamicConsumer {
   ] =
     ZStream.unwrap(
       ZIO
-        .service[DynamicConsumer.Service]
+        .service[DynamicConsumer]
         .map(
           _.shardedStream(
             streamName,
@@ -221,7 +217,7 @@ object DynamicConsumer {
     streamName: String,
     applicationName: String,
     deserializer: Deserializer[R, T],
-    requestShutdown: UIO[Unit] = UIO.never,
+    requestShutdown: UIO[Unit] = ZIO.never,
     initialPosition: InitialPositionInStreamExtended =
       InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.TRIM_HORIZON),
     leaseTableName: Option[String] = None,
@@ -233,35 +229,37 @@ object DynamicConsumer {
     configureKcl: SchedulerConfig => SchedulerConfig = identity
   )(
     recordProcessor: Record[T] => RIO[RC, Unit]
-  ): ZIO[R with RC with Blocking with Logging with Clock with DynamicConsumer, Throwable, Unit] =
-    for {
-      consumer <- ZIO.service[DynamicConsumer.Service]
-      _        <- consumer
-                    .shardedStream(
-                      streamName,
-                      applicationName,
-                      deserializer,
-                      requestShutdown,
-                      initialPosition,
-                      leaseTableName,
-                      metricsNamespace,
-                      workerIdentifier,
-                      maxShardBufferSize,
-                      configureKcl
-                    )
-                    .flatMapPar(Int.MaxValue) { case (_, shardStream, checkpointer) =>
-                      shardStream
-                        .tap(record => recordProcessor(record) *> checkpointer.stage(record))
-                        .via(
-                          checkpointer
-                            .checkpointBatched[Blocking with Logging with RC](
-                              nr = checkpointBatchSize,
-                              interval = checkpointDuration
-                            )
-                        )
-                    }
-                    .runDrain
-    } yield ()
+  ): ZIO[R with RC with DynamicConsumer, Throwable, Unit] =
+    ZIO.scoped[R with RC with DynamicConsumer] {
+      for {
+        consumer <- ZIO.service[DynamicConsumer]
+        _        <- consumer
+                      .shardedStream(
+                        streamName,
+                        applicationName,
+                        deserializer,
+                        requestShutdown,
+                        initialPosition,
+                        leaseTableName,
+                        metricsNamespace,
+                        workerIdentifier,
+                        maxShardBufferSize,
+                        configureKcl
+                      )
+                      .flatMapPar(Int.MaxValue) { case (_, shardStream, checkpointer) =>
+                        shardStream
+                          .tap(record => recordProcessor(record) *> checkpointer.stage(record))
+                          .viaFunction(
+                            checkpointer
+                              .checkpointBatched[Any with RC](
+                                nr = checkpointBatchSize,
+                                interval = checkpointDuration
+                              )
+                          )
+                      }
+                      .runDrain
+      } yield ()
+    }
 
   /**
    * Staging area for checkpoints
@@ -301,7 +299,7 @@ object DynamicConsumer {
     def stageOnSuccess[R, E, A](effect: ZIO[R, E, A])(r: Record[_]): ZIO[R, E, A] =
       effect.onExit {
         case Exit.Success(_) => stage(r)
-        case _               => UIO.unit
+        case _               => ZIO.unit
       }
 
     /**
@@ -314,18 +312,18 @@ object DynamicConsumer {
      *
      * See also `software.amazon.kinesis.processor.RecordProcessorCheckpointer`
      */
-    def checkpoint: ZIO[Blocking, Throwable, Unit]
+    def checkpoint: ZIO[Any, Throwable, Unit]
 
     /**
      * Immediately checkpoint this record
      */
-    def checkpointNow(r: Record[_]): ZIO[Blocking, Throwable, Unit] =
+    def checkpointNow(r: Record[_]): ZIO[Any, Throwable, Unit] =
       stage(r) *> checkpoint
 
     /**
      * Helper method to add batch checkpointing to a shard stream
      *
-     * Usage: shardStream.via(checkpointer.checkpointBatched(1000, 1.second))
+     * Usage: shardStream.viaFunction(checkpointer.checkpointBatched(1000, 1.second))
      *
      * @param nr
      *   Maximum number of records before checkpointing
@@ -339,8 +337,8 @@ object DynamicConsumer {
     def checkpointBatched[R](
       nr: Long,
       interval: Duration
-    ): ZStream[R, Throwable, Any] => ZStream[R with Clock with Blocking, Throwable, Unit] =
-      _.aggregateAsyncWithin(ZTransducer.foldUntil((), nr)((_, _) => ()), Schedule.fixed(interval))
+    ): ZStream[R, Throwable, Any] => ZStream[R with Any, Throwable, Unit] =
+      _.aggregateAsyncWithin(ZSink.foldUntil[Any, Unit]((), nr)((_, _) => ()), Schedule.fixed(interval))
         .tap(_ => checkpoint)
         .catchAll {
           case _: ShutdownException =>

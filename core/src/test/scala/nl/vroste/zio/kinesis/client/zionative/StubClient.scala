@@ -1,14 +1,14 @@
 package nl.vroste.zio.kinesis.client.zionative
-import io.github.vigoo.zioaws.core.AwsError
-import io.github.vigoo.zioaws.core.aspects.AwsCallAspect
-import io.github.vigoo.zioaws.kinesis.model._
-import io.github.vigoo.zioaws.kinesis.{ model, Kinesis }
+import zio.aws.core.AwsError
+import zio.aws.core.aspects.AwsCallAspect
+import zio.aws.kinesis.model._
+import zio.aws.kinesis.{ model, Kinesis }
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
-import zio.IO
+import zio.{ IO, ZEnvironment }
 import zio.stream.ZStream
 
-class StubClient extends Kinesis.Service { self =>
-  override def withAspect[R](newAspect: AwsCallAspect[R], r: R): Kinesis.Service                                      = self
+class StubClient extends Kinesis { self =>
+  override def withAspect[R](newAspect: AwsCallAspect[R], r: ZEnvironment[R]): Kinesis                                = self
   override val api: KinesisAsyncClient                                                                                = null
   override def splitShard(request: model.SplitShardRequest): IO[AwsError, Unit]                                       = ???
   override def disableEnhancedMonitoring(
@@ -22,7 +22,7 @@ class StubClient extends Kinesis.Service { self =>
 
   override def listStreamConsumers(
     request: ListStreamConsumersRequest
-  ): ZStream[Any, AwsError, io.github.vigoo.zioaws.kinesis.model.Consumer.ReadOnly] = ???
+  ): ZStream[Any, AwsError, zio.aws.kinesis.model.Consumer.ReadOnly] = ???
   override def addTagsToStream(request: model.AddTagsToStreamRequest): IO[AwsError, Unit]                             = ???
   override def mergeShards(request: model.MergeShardsRequest): IO[AwsError, Unit]                                     = ???
   override def describeStreamSummary(
@@ -60,8 +60,10 @@ class StubClient extends Kinesis.Service { self =>
   override def subscribeToShard(
     request: SubscribeToShardRequest
   ): ZStream[Any, AwsError, SubscribeToShardEvent.ReadOnly] = ???
-
-  override def getRecords(request: model.GetRecordsRequest): IO[AwsError, GetRecordsResponse.ReadOnly] = ???
-
-  override def updateStreamMode(request: UpdateStreamModeRequest): IO[AwsError, Unit] = ???
+  override def getRecords(request: model.GetRecordsRequest): IO[AwsError, GetRecordsResponse.ReadOnly]                = ???
+  override def listShardsPaginated(request: ListShardsRequest): IO[AwsError, ListShardsResponse.ReadOnly]             = ???
+  override def updateStreamMode(request: UpdateStreamModeRequest): IO[AwsError, Unit]                                 = ???
+  override def listStreamConsumersPaginated(
+    request: ListStreamConsumersRequest
+  ): IO[AwsError, ListStreamConsumersResponse.ReadOnly] = ???
 }

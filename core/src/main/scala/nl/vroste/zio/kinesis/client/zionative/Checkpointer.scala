@@ -1,10 +1,8 @@
 package nl.vroste.zio.kinesis.client.zionative
 
-import zio.{ Exit, Schedule, UIO, ZIO }
 import nl.vroste.zio.kinesis.client.{ Record, Util }
-import zio.clock.Clock
-import zio.duration._
-import zio.stream.{ ZStream, ZTransducer }
+import zio.stream.{ ZSink, ZStream }
+import zio._
 
 /**
  * Error indicating that while checkpointing it was discovered that the lease for a shard was stolen
@@ -49,7 +47,7 @@ trait Checkpointer {
   def stageOnSuccess[R, E, A](effect: ZIO[R, E, A])(r: Record[_]): ZIO[R, E, A] =
     effect.onExit {
       case Exit.Success(_) => stage(r)
-      case _               => UIO.unit
+      case _               => ZIO.unit
     }
 
   /**
@@ -71,9 +69,8 @@ trait Checkpointer {
    *   ShardLeaseLost is not handled by this retry schedule.
    */
   def checkpoint[R](
-    retrySchedule: Schedule[Clock with R, Throwable, Any] =
-      Util.exponentialBackoff(1.second, 1.minute, maxRecurs = Some(5))
-  ): ZIO[Clock with R, Either[Throwable, ShardLeaseLost.type], Unit]
+    retrySchedule: Schedule[R, Throwable, Any] = Util.exponentialBackoff(1.second, 1.minute, maxRecurs = Some(5))
+  ): ZIO[R, Either[Throwable, ShardLeaseLost.type], Unit]
 
   private[client] def checkpointAndRelease: ZIO[Any, Either[Throwable, ShardLeaseLost.type], Unit]
 
@@ -90,15 +87,14 @@ trait Checkpointer {
    */
   def checkpointNow[R](
     r: Record[_],
-    retrySchedule: Schedule[Clock with R, Throwable, Any] =
-      Util.exponentialBackoff(1.second, 1.minute, maxRecurs = Some(5))
-  ): ZIO[Clock with R, Either[Throwable, ShardLeaseLost.type], Unit] =
+    retrySchedule: Schedule[R, Throwable, Any] = Util.exponentialBackoff(1.second, 1.minute, maxRecurs = Some(5))
+  ): ZIO[R, Either[Throwable, ShardLeaseLost.type], Unit] =
     stage(r) *> checkpoint[R](retrySchedule)
 
   /**
    * Helper method to add batch checkpointing to a shard stream
    *
-   * Usage: shardStream.via(checkpointer.checkpointBatched(1000, 1.second))
+   * Usage: shardStream.viaFunction(checkpointer.checkpointBatched(1000, 1.second))
    *
    * @param nr
    *   Maximum number of records before checkpointing
@@ -114,13 +110,11 @@ trait Checkpointer {
   def checkpointBatched[R](
     nr: Long,
     interval: Duration,
-    retrySchedule: Schedule[Clock, Throwable, Any] = Util.exponentialBackoff(1.second, 1.minute, maxRecurs = Some(5))
-  ): ZStream[R, Throwable, Any] => ZStream[R with Clock, Throwable, Unit] =
-    _.aggregateAsyncWithin(ZTransducer.foldUntil((), nr)((_, _) => ()), Schedule.fixed(interval))
+    retrySchedule: Schedule[Any, Throwable, Any] = Util.exponentialBackoff(1.second, 1.minute, maxRecurs = Some(5))
+  ): ZStream[R, Throwable, Any] => ZStream[R, Throwable, Unit] =
+    _.aggregateAsyncWithin(ZSink.foldUntil[Any, Unit]((), nr)((_, _) => ()), Schedule.fixed(interval))
       .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-      .tap { _ =>
-        checkpoint(retrySchedule)
-      }
+      .tap(_ => checkpoint(retrySchedule))
       .catchAll {
         case Left(e)               =>
           ZStream.fail(e)

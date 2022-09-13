@@ -1,7 +1,7 @@
 package nl.vroste.zio.kinesis.client
 import java.time.Instant
 
-import io.github.vigoo.zioaws.kinesis.model.EncryptionType
+import zio.aws.kinesis.model.EncryptionType
 
 final case class Record[+T](
   shardId: String,

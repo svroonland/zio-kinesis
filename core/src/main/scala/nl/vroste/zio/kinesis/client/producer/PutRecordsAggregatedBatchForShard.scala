@@ -8,6 +8,7 @@ import nl.vroste.zio.kinesis.client.producer.ProducerLive.{
 }
 import nl.vroste.zio.kinesis.client.zionative.protobuf.Messages
 import nl.vroste.zio.kinesis.client.zionative.protobuf.Messages.AggregatedRecord
+import zio.aws.kinesis.model.primitives.PartitionKey
 import zio.{ Chunk, UIO, ZIO }
 
 import java.security.MessageDigest
@@ -36,7 +37,7 @@ final case class PutRecordsAggregatedBatchForShard(
       .addAllExplicitHashKeyTable(
         entries.map(_ => "0").asJava
       ) // TODO optimize: only filled ones
-      .addAllPartitionKeyTable(entries.map(e => e.partitionKey).asJava)
+      .addAllPartitionKeyTable(entries.map(e => PartitionKey.unwrap(e.partitionKey)).asJava)
       .build()
   }
 
@@ -46,20 +47,24 @@ final case class PutRecordsAggregatedBatchForShard(
   def isWithinLimits: Boolean =
     payloadSize <= maxPayloadSizePerRecord
 
-  def toProduceRequest(digest: MessageDigest): UIO[ProduceRequest] =
-    UIO {
-      // Do not inline to avoid capturing the entire chunk in the closure below
-      val completes = entries.map(_.complete)
+  def toProduceRequest(digest: MessageDigest): UIO[Option[ProduceRequest]] =
+    ZIO.succeed {
+      entries.headOption.flatMap { firstEntry =>
+        // Do not inline to avoid capturing the entire chunk in the closure below
+        val completes = entries.map(_.complete)
 
-      ProduceRequest(
-        data = ProtobufAggregation.encodeAggregatedRecord(digest, builtAggregate),
-        partitionKey = entries.head.partitionKey, // First one?
-        complete = result => ZIO.foreach_(completes)(_(result)),
-        timestamp = entries.head.timestamp,
-        isAggregated = true,
-        aggregateCount = entries.size,
-        predictedShard = entries.head.predictedShard
-      )
+        Some(
+          ProduceRequest(
+            data = ProtobufAggregation.encodeAggregatedRecord(digest, builtAggregate),
+            partitionKey = firstEntry.partitionKey, // First one?
+            complete = result => ZIO.foreachDiscard(completes)(_(result)),
+            timestamp = firstEntry.timestamp,
+            isAggregated = true,
+            aggregateCount = entries.size,
+            predictedShard = firstEntry.predictedShard
+          )
+        )
+      }
     }
 }
 

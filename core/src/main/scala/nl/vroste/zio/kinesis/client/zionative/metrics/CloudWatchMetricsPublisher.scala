@@ -1,17 +1,15 @@
 package nl.vroste.zio.kinesis.client.zionative.metrics
 
-import java.time.Instant
-
-import io.github.vigoo.zioaws.cloudwatch.CloudWatch
-import io.github.vigoo.zioaws.cloudwatch.model.{ Dimension, MetricDatum, PutMetricDataRequest, StandardUnit }
 import nl.vroste.zio.kinesis.client.Util
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent._
 import zio._
-import zio.clock.Clock
-import zio.duration._
-import zio.logging.{ log, Logging }
-import zio.stream.{ ZStream, ZTransducer }
+import zio.aws.cloudwatch.CloudWatch
+import zio.aws.cloudwatch.model.primitives._
+import zio.aws.cloudwatch.model.{ Dimension, MetricDatum, PutMetricDataRequest, StandardUnit }
+import zio.stream.{ ZSink, ZStream }
+
+import java.time.Instant
 
 /**
  * Configuration for CloudWatch metrics publishing
@@ -31,17 +29,21 @@ final case class CloudWatchMetricsPublisherConfig(
   maxFlushInterval: Duration = 20.seconds,
   maxBatchSize: Int = 20,
   periodicMetricInterval: Duration = 30.seconds,
-  retrySchedule: Schedule[Clock, Any, (Duration, Long)] = Util.exponentialBackoff(1.second, 1.minute),
+  retrySchedule: Schedule[Any, Any, (Duration, Long)] = Util.exponentialBackoff(1.second, 1.minute),
   maxParallelUploads: Int = 3
 ) {
   require(maxBatchSize <= 20, "maxBatchSize must be <= 20 (AWS SDK limit)")
 }
 
+trait CloudWatchMetricsPublisher {
+  def processEvent(e: DiagnosticEvent): UIO[Unit]
+}
+
 /**
  * Publishes KCL compatible metrics to CloudWatch
  */
-private class CloudWatchMetricsPublisher(
-  client: CloudWatch.Service,
+private class CloudWatchMetricsPublisherLive(
+  client: CloudWatch,
   eventQueue: Queue[DiagnosticEvent],
   periodicMetricsQueue: Queue[MetricDatum],
   namespace: String,
@@ -49,7 +51,7 @@ private class CloudWatchMetricsPublisher(
   heldLeases: Ref[Set[String]],
   workers: Ref[Set[String]],
   config: CloudWatchMetricsPublisherConfig
-) extends CloudWatchMetricsPublisher.Service {
+) extends CloudWatchMetricsPublisher {
   import CloudWatchMetricsPublisher._
 
   def processEvent(e: DiagnosticEvent): UIO[Unit] = eventQueue.offer(e).unit
@@ -129,46 +131,46 @@ private class CloudWatchMetricsPublisher(
       )
     )
 
-  val now = zio.clock.currentDateTime.map(_.toInstant())
+  val now = zio.Clock.currentDateTime.map(_.toInstant())
 
   def collectPeriodicMetrics(event: DiagnosticEvent): UIO[Unit] =
     event match {
-      case PollComplete(_, _, _, _)       => UIO.unit
-      case SubscribeToShardEvent(_, _, _) => UIO.unit
+      case PollComplete(_, _, _, _)       => ZIO.unit
+      case SubscribeToShardEvent(_, _, _) => ZIO.unit
 
       case LeaseAcquired(shardId, _) => heldLeases.update(_ + shardId)
       case ShardLeaseLost(shardId)   => heldLeases.update(_ - shardId)
-      case LeaseRenewed(_, _)        => UIO.unit
+      case LeaseRenewed(_, _)        => ZIO.unit
       case LeaseReleased(shardId)    => heldLeases.update(_ - shardId)
-      case ShardEnded(_)             => UIO.unit
-      case NewShardDetected(_)       => UIO.unit
-      case Checkpoint(_, _)          => UIO.unit
+      case ShardEnded(_)             => ZIO.unit
+      case NewShardDetected(_)       => ZIO.unit
+      case Checkpoint(_, _)          => ZIO.unit
       case WorkerJoined(workerId)    => workers.update(_ + workerId)
       case WorkerLeft(workerId)      => workers.update(_ - workerId)
     }
 
-  val processQueue: ZIO[Clock with Logging, Nothing, Unit] =
+  val processQueue: ZIO[Any, Nothing, Unit] =
     (ZStream
       .fromQueue(eventQueue)
-      .mapM(event => now.orDie.map((event, _))) // Could be UIO, see comment on Clock.Service.currentDateTime
+      .mapZIO(event => now.map((event, _)))
       .tap { case (e, _) => collectPeriodicMetrics(e) }
       .mapConcat(Function.tupled(toMetrics)) merge ZStream.fromQueue(periodicMetricsQueue))
       .aggregateAsyncWithin(
-        ZTransducer.collectAllN(config.maxBatchSize),
+        ZSink.collectAllN[MetricDatum](config.maxBatchSize),
         Schedule.fixed(config.maxFlushInterval)
       )
-      .mapMParUnordered(config.maxParallelUploads) { metrics =>
+      .mapZIOParUnordered(config.maxParallelUploads) { metrics =>
         putMetricData(metrics)
-          .tapError(e => log.warn(s"Failed to upload metrics, will retry: ${e}"))
+          .tapError(e => ZIO.logWarning(s"Failed to upload metrics, will retry: ${e}"))
           .retry(config.retrySchedule)
           .orDie // orDie because schedule has Any as error type?
       }
       .runDrain
-      .tapCause(e => log.error("Metrics uploading has stopped with error", e))
+      .tapErrorCause(e => ZIO.logSpan("Metrics uploading has stopped with error")(ZIO.logErrorCause(e)))
 
-  val generatePeriodicMetrics: ZIO[Clock, Nothing, Long] =
+  val generatePeriodicMetrics: ZIO[Any, Nothing, Long] =
     (for {
-      now            <- now.orDie // Could be UIO, see comment on Clock.Service.currentDateTime
+      now            <- now
       nrWorkers      <- workers.get.map(_.size)
       nrLeases       <- heldLeases.get.map(_.size)
       _               = println(s"Worker ${workerId} has ${nrLeases} leases")
@@ -196,8 +198,8 @@ private class CloudWatchMetricsPublisher(
       _              <- periodicMetricsQueue.offerAll(List(nrWorkersMetric, nrLeasesMetric, nrLeasesMetric2))
     } yield ()).repeat(Schedule.fixed(config.periodicMetricInterval))
 
-  private def putMetricData(metricData: Seq[MetricDatum]): ZIO[Logging, Throwable, Unit] = {
-    val request = PutMetricDataRequest(namespace, metricData.toList)
+  private def putMetricData(metricData: Seq[MetricDatum]): ZIO[Any, Throwable, Unit] = {
+    val request = PutMetricDataRequest(Namespace(namespace), metricData.toList)
 
     client
       .putMetricData(request)
@@ -207,30 +209,27 @@ private class CloudWatchMetricsPublisher(
 }
 
 object CloudWatchMetricsPublisher {
-  trait Service {
-    def processEvent(e: DiagnosticEvent): UIO[Unit]
-  }
 
   def make(
     applicationName: String,
     workerId: String
-  ): ZManaged[Clock with Logging with CloudWatch with Has[CloudWatchMetricsPublisherConfig], Nothing, Service] =
+  ): ZIO[Scope with CloudWatch with CloudWatchMetricsPublisherConfig, Nothing, CloudWatchMetricsPublisher] =
     for {
-      client  <- ZManaged.service[CloudWatch.Service]
-      config  <- ZManaged.service[CloudWatchMetricsPublisherConfig]
-      q       <- Queue.bounded[DiagnosticEvent](1000).toManaged_
-      q2      <- Queue.bounded[MetricDatum](1000).toManaged_
-      leases  <- Ref.make[Set[String]](Set.empty).toManaged_
-      workers <- Ref.make[Set[String]](Set.empty).toManaged_
-      c        = new CloudWatchMetricsPublisher(client, q, q2, applicationName, workerId, leases, workers, config)
-      _       <- c.processQueue.forkManaged            // Fiber cannot fail
-      _       <- c.generatePeriodicMetrics.forkManaged // Fiber cannot fail
+      client  <- ZIO.service[CloudWatch]
+      config  <- ZIO.service[CloudWatchMetricsPublisherConfig]
+      q       <- Queue.bounded[DiagnosticEvent](1000)
+      q2      <- Queue.bounded[MetricDatum](1000)
+      leases  <- Ref.make[Set[String]](Set.empty)
+      workers <- Ref.make[Set[String]](Set.empty)
+      c        = new CloudWatchMetricsPublisherLive(client, q, q2, applicationName, workerId, leases, workers, config)
+      _       <- c.processQueue.forkScoped            // Fiber cannot fail
+      _       <- c.generatePeriodicMetrics.forkScoped // Fiber cannot fail
       // Shutdown the queues first
-      _       <- ZManaged.finalizer(q.shutdown)
-      _       <- ZManaged.finalizer(q2.shutdown)
+      _       <- ZIO.addFinalizer(q.shutdown)
+      _       <- ZIO.addFinalizer(q2.shutdown)
     } yield c
 
-  private def metric(
+  private[metrics] def metric(
     name: String,
     value: Double,
     timestamp: Instant,
@@ -238,10 +237,10 @@ object CloudWatchMetricsPublisher {
     unit: StandardUnit
   ): MetricDatum =
     MetricDatum(
-      name,
-      Some(dimensions.map(Function.tupled(Dimension.apply)).toList),
-      Some(timestamp),
-      Some(value),
+      MetricName(name),
+      Some(dimensions.map { case (name, value) => Dimension(DimensionName(name), DimensionValue(value)) }.toList),
+      Some(Timestamp(timestamp)),
+      Some(DatapointValue(value)),
       unit = Some(unit)
     )
 }

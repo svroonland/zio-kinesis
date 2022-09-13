@@ -1,7 +1,9 @@
 import xerial.sbt.Sonatype.GitHubHosting
 
 val mainScala = "2.13.8"
-val allScala  = Seq("2.12.15", mainScala, "3.1.2")
+val allScala  = Seq("2.12.16", mainScala, "3.2.0")
+
+val excludeInferAny = { options: Seq[String] => options.filterNot(Set("-Xlint:infer-any")) }
 
 inThisBuild(
   List(
@@ -38,8 +40,8 @@ inThisBuild(
   )
 )
 
-val zioVersion    = "1.0.14"
-val zioAwsVersion = "3.17.104.7"
+val zioVersion    = "2.0.2"
+val zioAwsVersion = "5.17.269.1"
 
 lazy val root = project
   .in(file("."))
@@ -80,23 +82,25 @@ lazy val stdSettings: Seq[sbt.Def.SettingsDefinition] = Seq(
       Seq("-Wconf:cat=unused-imports:silent")
     else Seq.empty
   },
-// Suppresses problems with Scaladoc @throws links
+  Compile / scalacOptions ~= excludeInferAny,
+  // Suppresses problems with Scaladoc @throws links
   testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework"),
   libraryDependencies ++= Seq(
     "dev.zio"                %% "zio"                         % zioVersion,
     "dev.zio"                %% "zio-streams"                 % zioVersion,
     "dev.zio"                %% "zio-test"                    % zioVersion % "test",
     "dev.zio"                %% "zio-test-sbt"                % zioVersion % "test",
-    "dev.zio"                %% "zio-interop-reactivestreams" % "1.3.10",
-    "dev.zio"                %% "zio-logging"                 % "0.5.14",
-    "ch.qos.logback"          % "logback-classic"             % "1.2.11",
-    "org.scala-lang.modules" %% "scala-collection-compat"     % "2.7.0",
+    "dev.zio"                %% "zio-interop-reactivestreams" % "2.0.0",
+    "dev.zio"                %% "zio-logging"                 % "2.1.0",
+    "dev.zio"                %% "zio-logging-slf4j"           % "2.1.0",
+    "ch.qos.logback"          % "logback-classic"             % "1.4.0",
+    "org.scala-lang.modules" %% "scala-collection-compat"     % "2.8.1",
     "org.hdrhistogram"        % "HdrHistogram"                % "2.1.12",
-    "io.github.vigoo"        %% "zio-aws-core"                % zioAwsVersion,
-    "io.github.vigoo"        %% "zio-aws-kinesis"             % zioAwsVersion,
-    "io.github.vigoo"        %% "zio-aws-dynamodb"            % zioAwsVersion,
-    "io.github.vigoo"        %% "zio-aws-cloudwatch"          % zioAwsVersion,
-    "io.github.vigoo"        %% "zio-aws-netty"               % zioAwsVersion,
+    "dev.zio"                %% "zio-aws-core"                % zioAwsVersion,
+    "dev.zio"                %% "zio-aws-kinesis"             % zioAwsVersion,
+    "dev.zio"                %% "zio-aws-dynamodb"            % zioAwsVersion,
+    "dev.zio"                %% "zio-aws-cloudwatch"          % zioAwsVersion,
+    "dev.zio"                %% "zio-aws-netty"               % zioAwsVersion,
     "javax.xml.bind"          % "jaxb-api"                    % "2.3.1"
   )
 )
@@ -121,7 +125,7 @@ lazy val dynamicConsumer = (project in file("dynamic-consumer"))
     name                       := "zio-kinesis-dynamic-consumer",
     assembly / assemblyJarName := "zio-kinesis-dynamic-consumer" + version.value + ".jar",
     libraryDependencies ++= Seq(
-      "software.amazon.kinesis" % "amazon-kinesis-client" % "2.4.1"
+      "software.amazon.kinesis" % "amazon-kinesis-client" % "2.4.3"
     )
   )
   .dependsOn(core % "compile->compile;test->test")
