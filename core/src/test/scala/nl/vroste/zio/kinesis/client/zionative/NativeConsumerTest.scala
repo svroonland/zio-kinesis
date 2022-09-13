@@ -372,55 +372,55 @@ object NativeConsumerTest extends ZIOSpecDefault {
                                      .flatMap(time => events.update(_ :+ ((workerId, time, event))))
 
             _         <- {
-              for {
+                           for {
 
-                worker1 <- (consumer(streamName, applicationName, "worker1", emitDiagnostic("worker1"))
-                             .take(10) // Such that it has had time to claim some leases
-                             .runDrain
-                             .tapError(e => ZIO.logError(s"Worker1 failed with error: ${e}"))
-                             .tapError(consumer1Done.fail(_))
-                             *> ZIO.logWarning("worker1 done") *> consumer1Done.succeed(())).fork
+                             worker1 <- (consumer(streamName, applicationName, "worker1", emitDiagnostic("worker1"))
+                                          .take(10) // Such that it has had time to claim some leases
+                                          .runDrain
+                                          .tapError(e => ZIO.logError(s"Worker1 failed with error: ${e}"))
+                                          .tapError(consumer1Done.fail(_))
+                                          *> ZIO.logWarning("worker1 done") *> consumer1Done.succeed(())).fork
 
-                worker2 <- consumer(streamName, applicationName, "worker2", emitDiagnostic("worker2"))
-                             .ensuring(
-                               ZIO.logWarning("worker2 DONE")
+                             worker2 <- consumer(streamName, applicationName, "worker2", emitDiagnostic("worker2"))
+                                          .ensuring(
+                                            ZIO.logWarning("worker2 DONE")
+                                          )
+                                          .runDrain
+                                          .delay(5.seconds)
+                                          .fork
+                             worker3 <- consumer(streamName, applicationName, "worker3", emitDiagnostic("worker3"))
+                                          .ensuring(
+                                            ZIO.logWarning("worker3 DONE")
+                                          )
+                                          .runDrain
+                                          .delay(5.seconds)
+                                          .fork
+
+                             _ <- consumer1Done.await
+                             _ <- ZIO.logDebug("Consumer1 is done")
+                             _ <- ZIO.sleep(10.seconds)
+                             _ <- ZIO.logDebug("Interrupting producer")
+                             _ <- producer.interrupt
+                             _ <- ZIO.logDebug("Interrupting streams")
+                             _ <- worker2.interrupt
+                                    .tap(_ => ZIO.logInfo("Done interrupting worker 2"))
+                                    //                         .tapErrorCause(e => ZIO.logError("Error interrupting worker 2:", e))
+                                    .ignore zipPar worker3.interrupt
+                                    .tap(_ => ZIO.logInfo("Done interrupting worker 3"))
+                                    //                         .tapErrorCause(e => ZIO.logError("Error interrupting worker 3:", e))
+                                    .ignore zipPar worker1.join
+                                    .tap(_ => ZIO.logInfo("Done interrupting worker 1"))
+                                    //                         .tapErrorCause(e => ZIO.logError("Error joining worker 1:", e))
+                                    .ignore
+                           } yield ()
+                         }.onInterrupt(
+                           events.get
+                             .map(
+                               _.filterNot(_._3.isInstanceOf[PollComplete])
+                                 .filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
                              )
-                             .runDrain
-                             .delay(5.seconds)
-                             .fork
-                worker3 <- consumer(streamName, applicationName, "worker3", emitDiagnostic("worker3"))
-                             .ensuring(
-                               ZIO.logWarning("worker3 DONE")
-                             )
-                             .runDrain
-                             .delay(5.seconds)
-                             .fork
-
-                _ <- consumer1Done.await
-                _ <- ZIO.logDebug("Consumer1 is done")
-                _ <- ZIO.sleep(10.seconds)
-                _ <- ZIO.logDebug("Interrupting producer")
-                _ <- producer.interrupt
-                _ <- ZIO.logDebug("Interrupting streams")
-                _ <- worker2.interrupt
-                       .tap(_ => ZIO.logInfo("Done interrupting worker 2"))
-                       //                         .tapErrorCause(e => ZIO.logError("Error interrupting worker 2:", e))
-                       .ignore zipPar worker3.interrupt
-                       .tap(_ => ZIO.logInfo("Done interrupting worker 3"))
-                       //                         .tapErrorCause(e => ZIO.logError("Error interrupting worker 3:", e))
-                       .ignore zipPar worker1.join
-                       .tap(_ => ZIO.logInfo("Done interrupting worker 1"))
-                       //                         .tapErrorCause(e => ZIO.logError("Error joining worker 1:", e))
-                       .ignore
-              } yield ()
-            }.onInterrupt(
-              events.get
-                .map(
-                  _.filterNot(_._3.isInstanceOf[PollComplete])
-                    .filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
-                )
-                .tap(allEvents => ZIO.logDebug(allEvents.mkString("\n")))
-            )
+                             .tap(allEvents => ZIO.logDebug(allEvents.mkString("\n")))
+                         )
             allEvents <- events.get.map(
                            _.filterNot(_._3.isInstanceOf[PollComplete])
                              .filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
