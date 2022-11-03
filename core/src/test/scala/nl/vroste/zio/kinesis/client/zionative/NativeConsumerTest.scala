@@ -810,9 +810,8 @@ object NativeConsumerTest extends ZIOSpecDefault {
   val awsLayer: ZLayer[Any, Throwable, CloudWatch with Kinesis with DynamoDb] =
     if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()
 
-  val env
-    : ZLayer[Any, Nothing, Scope with CloudWatch with Kinesis with DynamoDb with LeaseRepository with TestEnvironment] =
-    Scope.default >+> awsLayer.orDie >+> DynamoDbLeaseRepository.live ++ zio.test.testEnvironment
+  val env: ZLayer[Any, Nothing, Scope with CloudWatch with Kinesis with DynamoDb with LeaseRepository] =
+    Scope.default >+> awsLayer.orDie >+> DynamoDbLeaseRepository.live
 
   def produceSampleRecords(
     streamName: String,
