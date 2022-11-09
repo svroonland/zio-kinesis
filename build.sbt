@@ -1,7 +1,7 @@
 import xerial.sbt.Sonatype.GitHubHosting
 
 val mainScala = "2.13.8"
-val allScala  = Seq("2.12.16", mainScala, "3.2.0")
+val allScala  = Seq("2.12.16", mainScala, "3.2.1")
 
 val excludeInferAny = { options: Seq[String] => options.filterNot(Set("-Xlint:infer-any")) }
 
