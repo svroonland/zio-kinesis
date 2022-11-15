@@ -66,8 +66,15 @@ trait Producer[T] {
   /**
    * ZSink interface to the Producer
    */
+  @deprecated("use `sink`")
   def sinkChunked: ZSink[Any, Throwable, Chunk[ProducerRecord[T]], Nothing, Unit] =
     ZSink.drain.contramapZIO(produceChunk)
+
+  /**
+   * ZSink interface to the Producer
+   */
+  def sink: ZSink[Any, Throwable, ProducerRecord[T], Nothing, Unit] =
+    ZSink.foreachChunk(produceChunk)
 }
 
 /**
