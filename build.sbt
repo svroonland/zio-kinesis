@@ -61,12 +61,13 @@ lazy val core = (project in file("core"))
   )
 
 lazy val stdSettings: Seq[sbt.Def.SettingsDefinition] = Seq(
+  Compile / compile / javacOptions ++= Seq("--release", "8"),
   Compile / compile / scalacOptions ++= {
     // This is for scala.collection.compat._
     if (scalaBinaryVersion.value == "2.13")
       Seq("-Wconf:cat=unused-imports:silent")
     else Seq.empty
-  },
+  } ++ Seq("-release", "8"),
   Test / compile / scalacOptions ++= {
     // This is for scala.collection.compat._
     if (scalaBinaryVersion.value == "2.13")
