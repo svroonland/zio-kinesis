@@ -22,7 +22,7 @@ import zio.aws.dynamodb.{ model, DynamoDb }
 import zio.stream.ZStream
 
 import java.util.concurrent.TimeoutException
-import scala.util.{ Failure, Try }
+import scala.util.Try
 import scala.collection.compat._
 
 // TODO this thing should have a global throttling / backoff
