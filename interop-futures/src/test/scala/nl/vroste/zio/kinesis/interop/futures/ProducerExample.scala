@@ -14,7 +14,7 @@ object ProducerExample extends App {
     producer.produce(ProducerRecord("key1", s"msg${i}"))
   }
 
-  Await.result(done, 30.seconds)
+  Await.result(done, 30.seconds): Unit
 
   producer.close()
 }

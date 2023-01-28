@@ -286,9 +286,6 @@ private class DynamoDbLeaseRepository(client: DynamoDb, settings: Settings) exte
           ),
         parentShardIds = getValue("parentShardIds").map(_.ss.toList.flatten).getOrElse(List.empty)
       )
-    }.recoverWith { case e =>
-      ZIO.logErrorCause(s"Error deserializing lease: $item", Cause.fail(e))
-      Failure(e)
     }
 
   private def toSequenceNumberOrSpecialCheckpoint(
