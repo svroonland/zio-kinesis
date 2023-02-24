@@ -91,7 +91,7 @@ lazy val stdSettings: Seq[sbt.Def.SettingsDefinition] = Seq(
     "dev.zio"                %% "zio-streams"                 % zioVersion,
     "dev.zio"                %% "zio-test"                    % zioVersion % "test",
     "dev.zio"                %% "zio-test-sbt"                % zioVersion % "test",
-    "dev.zio"                %% "zio-interop-reactivestreams" % "2.0.0",
+    "dev.zio"                %% "zio-interop-reactivestreams" % "2.0.1",
     "dev.zio"                %% "zio-logging"                 % "2.1.4",
     "dev.zio"                %% "zio-logging-slf4j"           % "2.1.4",
     "ch.qos.logback"          % "logback-classic"             % "1.4.5",
