@@ -354,7 +354,13 @@ private class DefaultLeaseCoordinator(
 
   override def acquiredLeases: ZStream[Any, Throwable, AcquiredLease] = ZStream.unwrapScoped {
     for {
-      runloopFiber <- initialize.fork
+      // We need a forked scope with independent finalizer order, because `initialize` will call `forkScoped` after being forked,
+      // which leads to a wrong finalizer order
+      scope        <- ZIO.scope
+      childScope   <- scope.fork
+      runloopFiber <- initialize
+                        .provideEnvironment(ZEnvironment(childScope))
+                        .forkScoped
       _            <- ZIO.addFinalizer(
                         releaseLeases *> ZIO.logDebug("releaseLeases done")
                       ) // We need the runloop to be alive for this operation
