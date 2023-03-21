@@ -354,9 +354,11 @@ private class DefaultLeaseCoordinator(
 
   override def acquiredLeases: ZStream[Any, Throwable, AcquiredLease] = ZStream.unwrapScoped {
     for {
-      runloopFiber <- initialize.fork
+      runloopFiber <-
+        ZIO.acquireRelease(initialize.forkScoped)(fib => ZIO.logDebug("runloopFiber finalizer go") *> fib.interrupt)
       _            <- ZIO.addFinalizer(
-                        releaseLeases *> ZIO.logDebug("releaseLeases done")
+                        ZIO.logDebug("release the LEASES!") *>
+                          releaseLeases *> ZIO.logDebug("releaseLeases done")
                       ) // We need the runloop to be alive for this operation
     } yield ZStream
       .fromQueue(acquiredLeasesQueue)
