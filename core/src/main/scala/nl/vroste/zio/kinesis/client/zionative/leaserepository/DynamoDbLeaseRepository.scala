@@ -120,7 +120,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb, settings: Settings) exte
       .mapError(_.toThrowable)
       .unit
       .catchAll {
-        case e: ConditionalCheckFailedException =>
+        case _: ConditionalCheckFailedException =>
           ZIO.fail(Right(LeaseObsolete))
         case e                                  =>
           ZIO.fail(Left(e))
