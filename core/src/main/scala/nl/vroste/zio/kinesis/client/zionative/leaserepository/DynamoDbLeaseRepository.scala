@@ -121,8 +121,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb, settings: Settings) exte
       .unit
       .catchAll {
         case e: ConditionalCheckFailedException =>
-          ZIO.logSpan("Check failed")(ZIO.logErrorCause(Cause.fail(e))) *>
-            ZIO.fail(Right(LeaseObsolete))
+          ZIO.fail(Right(LeaseObsolete))
         case e                                  =>
           ZIO.fail(Left(e))
       }
