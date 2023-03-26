@@ -777,23 +777,19 @@ object NativeConsumerTest extends ZIOSpecDefault {
                 Serde.asciiString,
                 emitDiagnostic = e => ZIO.logDebug(e.toString)
               )
-              .mapZIOParUnordered(nrShards) { case (shard @ _, shardStream, checkpointer @ _) =>
-                shardStream.debug
-                  .take(nr.toLong)
-                  .tap(checkpointer.stage)
-                  .aggregateAsyncWithin(ZSink.collectAllN[Record[String]](nr), Schedule.fixed(5.minutes))
-                  .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-                  .tap(_ => checkpointer.checkpoint())
-                  .catchAll {
-                    case Right(_) =>
-                      ZStream.empty
-                    case Left(e)  => ZStream.fail(e)
-                  }
-                  .flattenChunks
-                  .runCollect
+              .flatMapPar(nrShards, 1) { case (shard @ _, shardStream, checkpointer @ _) =>
+                shardStream.map((_, checkpointer))
               }
-              .flattenChunks
               .take(nr.toLong)
+              .debug
+              .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
+              .tap { case (r, checkpointer) => checkpointer.checkpointNow[Any](r) }
+              .catchAll {
+                case Right(_) =>
+                  ZStream.empty
+                case Left(e)  => ZStream.fail(e)
+              }
+              .map(_._1)
 
           for {
             _        <- produceSampleRecords(streamName, nrRecords, aggregated = true)
