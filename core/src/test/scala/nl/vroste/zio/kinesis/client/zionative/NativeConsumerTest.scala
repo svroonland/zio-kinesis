@@ -116,16 +116,16 @@ object NativeConsumerTest extends ZIOSpecDefault {
             producedShardsAndSequence <-
               produceSampleRecords(streamName, nrRecords, chunkSize = 500) // Deterministic order
             _                         <- Consumer
-                                             .shardedStream(
-                                               streamName,
-                                               applicationName,
-                                               Serde.asciiString,
-                                               emitDiagnostic = onDiagnostic("worker1")
-                                             )
-                                             .flatMapPar(Int.MaxValue) { case (shard @ _, shardStream, checkpointer) =>
-                                               shardStream.tap(checkpointer.stage)
-                                             }
-                                             .take(nrRecords.toLong)
+                                           .shardedStream(
+                                             streamName,
+                                             applicationName,
+                                             Serde.asciiString,
+                                             emitDiagnostic = onDiagnostic("worker1")
+                                           )
+                                           .flatMapPar(Int.MaxValue) { case (shard @ _, shardStream, checkpointer) =>
+                                             shardStream.tap(checkpointer.stage)
+                                           }
+                                           .take(nrRecords.toLong)
                                            .runCollect
             checkpoints               <- getCheckpoints(applicationName)
             expectedCheckpoints        =
@@ -178,7 +178,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
                                workerIdentifier = "worker2",
                                emitDiagnostic = onDiagnostic("worker2")
                              )
-                             .flatMapPar(Int.MaxValue) { case (shard @ _, shardStream, checkpointer) =>
+                             .flatMapPar(Int.MaxValue) { case (shard @ _, shardStream, checkpointer @ _) =>
                                shardStream
                              }
                              .take(1)
@@ -778,9 +778,18 @@ object NativeConsumerTest extends ZIOSpecDefault {
                 emitDiagnostic = e => ZIO.logDebug(e.toString)
               )
               .mapZIOParUnordered(nrShards) { case (shard @ _, shardStream, checkpointer @ _) =>
-                shardStream
-                  .tap(checkpointer.stage)
+                shardStream.debug
                   .take(nr.toLong)
+                  .tap(checkpointer.stage)
+                  .aggregateAsyncWithin(ZSink.collectAllN[Record[String]](nr), Schedule.fixed(5.minutes))
+                  .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
+                  .tap(_ => checkpointer.checkpoint())
+                  .catchAll {
+                    case Right(_) =>
+                      ZStream.empty
+                    case Left(e)  => ZStream.fail(e)
+                  }
+                  .flattenChunks
                   .runCollect
               }
               .flattenChunks
@@ -798,6 +807,41 @@ object NativeConsumerTest extends ZIOSpecDefault {
               equalTo((0 until nrRecords).toList)
             )
         }
+      },
+      test("interrupted child streams") {
+        val stream =
+          ZStream.unwrapScoped {
+            ZIO
+              .addFinalizer(
+                (ZIO.logDebug(s"Finalizing top level stream") *> ZIO
+                  .logDebug(s"Done finalizing top level stream"))
+                  .tapErrorCause(c => ZIO.logErrorCause(s"Error finalizing top level stream", c))
+              )
+              .as {
+
+                ZStream
+                  .fromIterable(List(1, 2, 3))
+                  .map { i =>
+                    ZStream.unwrapScoped {
+                      ZIO
+                        .addFinalizer(
+                          (ZIO.logDebug(s"Finalizing child stream ${i}") *> ZIO.sleep(1.second) *> ZIO
+                            .logDebug(s"DONE finalizing child stream ${i}"))
+                            .tapErrorCause(c => ZIO.logErrorCause(s"Error finalizing child stream ${i}", c))
+                        )
+                        .as {
+                          (ZStream
+                            .fromIterable(1 to 100)
+                            .rechunk(10) concat ZStream.never)
+                        }
+                    }
+                  }
+              }
+          }
+            .flattenParUnbounded()
+            .take(250)
+
+        stream.runDrain *> assertCompletesZIO
       }
     ).provideLayerShared(env) @@
       TestAspect.timed @@
