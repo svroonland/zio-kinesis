@@ -9,14 +9,13 @@ import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.LeaseCoordinationSettings
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
-import software.amazon.awssdk.services.dynamodb.model.ResourceNotFoundException
 import zio.Console._
 import zio.aws.cloudwatch.CloudWatch
 import zio.aws.dynamodb.DynamoDb
 import zio.aws.kinesis.Kinesis
 import zio.aws.kinesis.model.primitives.{ PositiveIntegerObject, StreamName }
 import zio.aws.kinesis.model.{ DescribeStreamRequest, ScalingType, UpdateShardCountRequest }
-import zio.stream.{ ZPipeline, ZSink, ZStream }
+import zio.stream.{ ZSink, ZStream }
 import zio.test.Assertion._
 import zio.test._
 import zio.{ System, _ }
