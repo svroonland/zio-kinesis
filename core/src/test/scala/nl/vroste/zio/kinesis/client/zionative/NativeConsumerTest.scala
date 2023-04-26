@@ -447,6 +447,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
           applicationName: String,
           workerId: String,
           emitDiagnostic: DiagnosticEvent => UIO[Unit],
+          onStarted: UIO[Any] = ZIO.unit,
           checkpointInterval: Duration = 1.second,
           renewInterval: Duration = 3.seconds
         ) =
@@ -465,6 +466,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
             )
             .flatMapPar(Int.MaxValue) { case (shard @ _, shardStream, checkpointer) =>
               shardStream
+                .tap(_ => onStarted)
                 .tap(checkpointer.stage)
                 .aggregateAsyncWithin(ZSink.collectAllN[Record[String]](200000), Schedule.fixed(checkpointInterval))
                 .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
@@ -480,22 +482,22 @@ object NativeConsumerTest extends ZIOSpecDefault {
                 }
             }
 
-        // The events we have to wait for:
-        // 1. At least one LeaseAcquired by worker 1.
-        // 2. LeaseAcquired for the same shard by another worker, but it's not a steal (?)
-        // maybe NOT a LeaseReleased by worker 1
         def testIsComplete(events: List[(String, Instant, DiagnosticEvent)]) = {
-          for {
-            acquiredByWorker1      <- Some(events.collect {
-                                        case (worker, _, event: DiagnosticEvent.LeaseAcquired) if worker == "worker1" =>
-                                          event.shardId
-                                      }).filter(_.nonEmpty)
-            acquiredByOtherWorkers <- Some(events.collect {
-                                        case (worker, _, event: DiagnosticEvent.LeaseAcquired) if worker != "worker1" =>
-                                          event.shardId
-                                      }).filter(_.nonEmpty)
-          } yield acquiredByWorker1.toSet subsetOf acquiredByOtherWorkers.toSet
-        }.getOrElse(false)
+          def getCurrentHeldLeasesByWorker =
+            events.foldLeft(Map.empty[String, Set[String]]) { case (acc, (worker, _, event)) =>
+              event match {
+                case LeaseAcquired(shardId, _) => acc + (worker -> (acc.getOrElse(worker, Set.empty) + shardId))
+                case LeaseReleased(shardId)    => acc + (worker -> (acc.getOrElse(worker, Set.empty) - shardId))
+                case _                         => acc
+              }
+            }
+
+          val leasesByAliveWorkers = getCurrentHeldLeasesByWorker.collect {
+            case (worker, leases) if worker != "worker1" => leases
+          }.flatten
+
+          leasesByAliveWorkers.size == nrShards
+        }
 
         withRandomStreamAndApplicationName(nrShards) { (streamName, applicationName) =>
           for {
@@ -512,6 +514,8 @@ object NativeConsumerTest extends ZIOSpecDefault {
                                   .flatMap(events => done.succeed(()).when(testIsComplete(events)))
                                   .unit
 
+            consumer1Started <- Promise.make[Throwable, Unit]
+
             _ <- (
                    ZStream
                      .mergeAll(3)(
@@ -521,13 +525,14 @@ object NativeConsumerTest extends ZIOSpecDefault {
                          applicationName,
                          "worker1",
                          handleEvent("worker1"),
+                         consumer1Started.succeed(()),
                          checkpointInterval = 5.minutes,
-                         renewInterval = 5.minutes
+                         renewInterval = 5.minutes // Such that it appears to be dead
                        ),
-                       ZStream.fromZIO(ZIO.sleep(5.seconds)) *> // Give worker1 the first lease
+                       ZStream.fromZIO(consumer1Started.await) *> // Give worker1 the first lease
                          consumer(streamName, applicationName, "worker2", handleEvent("worker2"))
                            .ensuring(ZIO.logWarning("worker2 DONE")),
-                       ZStream.fromZIO(ZIO.sleep(5.seconds)) *> // Give worker1 the first lease
+                       ZStream.fromZIO(consumer1Started.await) *> // Give worker1 the first lease
                          consumer(streamName, applicationName, "worker3", handleEvent("worker3"))
                            .ensuring(ZIO.logWarning("Worker3 DONE"))
                      )
@@ -541,7 +546,8 @@ object NativeConsumerTest extends ZIOSpecDefault {
                            .filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
                        )
                        .tap(allEvents => ZIO.logDebug(allEvents.mkString("\n")))
-                   } raceFirst done.await
+                   }
+                   .disconnect raceFirst done.await
           } yield assertCompletes
         }
       },
