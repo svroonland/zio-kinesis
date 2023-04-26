@@ -462,7 +462,8 @@ object NativeConsumerTest extends ZIOSpecDefault {
                 refreshAndTakeInterval = checkpointInterval,
                 maxParallelLeaseAcquisitions = 1
               ),
-              emitDiagnostic = emitDiagnostic
+              emitDiagnostic = emitDiagnostic,
+              shardAssignmentStrategy = ShardAssignmentStrategy.balanced(renewInterval + 1.second)
             )
             .flatMapPar(Int.MaxValue) { case (shard @ _, shardStream, checkpointer) =>
               shardStream
