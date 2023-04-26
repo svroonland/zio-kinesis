@@ -3,10 +3,12 @@ package nl.vroste.zio.kinesis.interop.futures
 import nl.vroste.zio.kinesis.client.ProducerRecord
 import nl.vroste.zio.kinesis.client.serde.Serde
 
+import scala.annotation.nowarn
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
 import scala.concurrent.{ Await, Future }
 
+@nowarn
 object ProducerExample extends App {
   val producer = Producer.make[String]("my-stream", Serde.asciiString, metricsCollector = m => println(m))
 
