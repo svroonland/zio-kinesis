@@ -132,7 +132,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
 
           } yield assert(checkpoints)(Assertion.hasSameElements(expectedCheckpoints))
         }
-      }, // TODO does not work anymore since ZIO 2.0.3
+      },
       test("continue from the next message after the last checkpoint") {
         val nrRecords = 200
         val nrShards  = 1
