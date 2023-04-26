@@ -6,7 +6,7 @@ import nl.vroste.zio.kinesis.client.TestUtil.{ retryOnResourceNotFound, withStre
 import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
-import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
+import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.{ LeaseAcquired, LeaseReleased, PollComplete }
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.LeaseCoordinationSettings
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
 import zio.Console._
@@ -364,88 +364,78 @@ object NativeConsumerTest extends ZIOSpecDefault {
 
         withRandomStreamAndApplicationName(nrShards) { (streamName, applicationName) =>
           for {
-            consumer1Done <- Promise.make[Throwable, Unit]
-            producer      <- produceSampleRecords(streamName, nrRecords, chunkSize = 50, throttle = Some(1.second))
-                               .tapError(consumer1Done.fail(_))
-                               .fork
-            events        <- Ref.make[List[(String, Instant, DiagnosticEvent)]](List.empty)
-            emitDiagnostic = (workerId: String) =>
-                               (event: DiagnosticEvent) =>
-                                 onDiagnostic(workerId)(event) *>
-                                   zio.Clock.currentDateTime
-                                     .map(_.toInstant())
-                                     .flatMap(time => events.update(_ :+ ((workerId, time, event))))
+            consumer1Started <- Promise.make[Throwable, Unit]
+            consumer2Started <- Promise.make[Throwable, Unit]
+            consumer3Started <- Promise.make[Throwable, Unit]
+            producer         <-
+              produceSampleRecords(streamName, nrRecords, chunkSize = 50, throttle = Some(1.second)).forkScoped
+            events           <- Ref.make[List[(String, Instant, DiagnosticEvent)]](List.empty)
+            emitDiagnostic    = (workerId: String) =>
+                                  (event: DiagnosticEvent) =>
+                                    onDiagnostic(workerId)(event) *>
+                                      zio.Clock.currentDateTime
+                                        .map(_.toInstant())
+                                        .flatMap(time => events.update(_ :+ ((workerId, time, event))))
 
-            _         <- {
-                           for {
+            waitForAllLeasesReacquired = {
+              def getCurrentHeldLeases = for {
+                allEvents <- events.get
+                heldLeases = allEvents.foldLeft(Set.empty[String]) { case (acc, (_, _, event)) =>
+                               event match {
+                                 case LeaseAcquired(shardId, _) => acc + shardId
+                                 case LeaseReleased(shardId)    => acc - shardId
+                                 case _                         => acc
+                               }
+                             }
+              } yield heldLeases
 
-                             worker1 <- (consumer(streamName, applicationName, "worker1", emitDiagnostic("worker1"))
-                                          .take(10) // Such that it has had time to claim some leases
-                                          .runDrain
-                                          .tapError(e => ZIO.logError(s"Worker1 failed with error: ${e}"))
-                                          .tapError(consumer1Done.fail(_))
-                                          *> ZIO.logWarning("worker1 done") *> consumer1Done.succeed(())).fork
+              getCurrentHeldLeases.delay(100.millis).repeatUntil(_.size == nrShards)
+            }
 
-                             worker2 <- consumer(streamName, applicationName, "worker2", emitDiagnostic("worker2"))
-                                          .ensuring(
-                                            ZIO.logWarning("worker2 DONE")
-                                          )
-                                          .runDrain
-                                          .delay(5.seconds)
-                                          .fork
-                             worker3 <- consumer(streamName, applicationName, "worker3", emitDiagnostic("worker3"))
-                                          .ensuring(
-                                            ZIO.logWarning("worker3 DONE")
-                                          )
-                                          .runDrain
-                                          .delay(5.seconds)
-                                          .fork
+            _ <- {
+                   for {
 
-                             _ <- consumer1Done.await
-                             _ <- ZIO.logDebug("Consumer1 is done")
-                             _ <- ZIO.sleep(10.seconds)
-                             _ <- ZIO.logDebug("Interrupting producer")
-                             _ <- producer.interrupt
-                             _ <- ZIO.logDebug("Interrupting streams")
-                             _ <- worker2.interrupt
-                                    .tap(_ => ZIO.logInfo("Done interrupting worker 2"))
-                                    //                         .tapErrorCause(e => ZIO.logError("Error interrupting worker 2:", e))
-                                    .ignore zipPar worker3.interrupt
-                                    .tap(_ => ZIO.logInfo("Done interrupting worker 3"))
-                                    //                         .tapErrorCause(e => ZIO.logError("Error interrupting worker 3:", e))
-                                    .ignore zipPar worker1.join
-                                    .tap(_ => ZIO.logInfo("Done interrupting worker 1"))
-                                    //                         .tapErrorCause(e => ZIO.logError("Error joining worker 1:", e))
-                                    .ignore
-                           } yield ()
-                         }.onInterrupt(
-                           events.get
-                             .map(
-                               _.filterNot(_._3.isInstanceOf[PollComplete])
-                                 .filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
-                             )
-                             .tap(allEvents => ZIO.logDebug(allEvents.mkString("\n")))
-                         )
-            allEvents <- events.get.map(
-                           _.filterNot(_._3.isInstanceOf[PollComplete])
-                             .filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
-                         )
-            _          = println(allEvents.mkString("\n"))
+                     worker1 <- (consumer(streamName, applicationName, "worker1", emitDiagnostic("worker1"))
+                                  .tap(_ => consumer1Started.succeed(()))
+                                  .runDrain
+                                  .tapError(e => ZIO.logError(s"Worker1 failed with error: ${e}"))
+                                  *> ZIO.logWarning("worker1 done")).forkScoped
 
-            // Workers 2 and 3 should have later-timestamped LeaseAcquired for all shards that were released by Worker 1
-            worker1Released      = allEvents.collect { case ("worker1", time, DiagnosticEvent.LeaseReleased(shard)) =>
-                                     time -> shard
-                                   }
-            releaseTime          = worker1Released.last._1
-            acquiredAfterRelease = allEvents.collect {
-                                     case (worker, time, DiagnosticEvent.LeaseAcquired(shard, _))
-                                         if worker != "worker1" && !time.isBefore(releaseTime) =>
-                                       shard
-                                   }
+                     worker2 <- consumer(streamName, applicationName, "worker2", emitDiagnostic("worker2"))
+                                  .ensuring(
+                                    ZIO.logWarning("worker2 DONE")
+                                  )
+                                  .tap(_ => consumer2Started.succeed(()))
+                                  .runDrain
+                                  .forkScoped
+                     worker3 <- consumer(streamName, applicationName, "worker3", emitDiagnostic("worker3"))
+                                  .ensuring(
+                                    ZIO.logWarning("worker3 DONE")
+                                  )
+                                  .tap(_ => consumer3Started.succeed(()))
+                                  .runDrain
+                                  .forkScoped
 
-          } yield assert(worker1Released.map(_._2).toSet)(
-            hasIntersection(acquiredAfterRelease.toSet)(hasSameElements(worker1Released.map(_._2).toSet))
-          )
+                     _ <- consumer1Started.await *> consumer2Started.await *> consumer3Started.await
+                     _ <- ZIO.logDebug("All consumers have started, interrupting consumer 1")
+                     _ <- worker1.interrupt
+                     _ <- waitForAllLeasesReacquired
+                     _ <- ZIO.logDebug("Interrupting producer")
+                     _ <- producer.interrupt
+                     _ <- ZIO.logDebug("Interrupting streams")
+                     _ <- (worker2.interrupt.tap(_ => ZIO.logInfo("Done interrupting worker 2"))) *>
+                            worker3.interrupt.tap(_ => ZIO.logInfo("Done interrupting worker 3"))
+                   } yield ()
+                 }.onInterrupt(
+                   events.get
+                     .map(
+                       _.filterNot(_._3.isInstanceOf[PollComplete])
+                         .filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
+                     )
+                     .tap(allEvents => ZIO.logDebug(allEvents.mkString("\n")))
+                 )
+
+          } yield assertCompletes
         }
       },
       test("workers must take over from a zombie consumer") {
