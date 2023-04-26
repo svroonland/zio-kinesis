@@ -149,12 +149,12 @@ object ShardAssignmentStrategy {
         s"${zombieWorkers.size} zombie workers), we need ${minNrLeasesToTake} more with an optional ${optional}"
     ) *> (if (minNrLeasesToTake > 0 || unownedLeases.nonEmpty)
             for {
-              leasesWithoutOwner         <- shuffle(allLeases.filter(_.owner.isEmpty)).map(_.take(maxNrLeasesToTake))
-              leasesExpired              <- shuffle(expiredLeases).map(_.take(maxNrLeasesToTake - leasesWithoutOwner.size))
-              leasesWithoutOwnerOrExpired = leasesWithoutOwner ++ leasesExpired
+              leasesWithoutOwner         <- shuffle(allLeases.filter(_.owner.isEmpty))
+              leasesExpired              <- shuffle(expiredLeases)
+              leasesWithoutOwnerOrExpired = (leasesWithoutOwner ++ leasesExpired).take(maxNrLeasesToTake + optional)
 
               // We can only steal from our target budget, not the optional ones
-              remaining = Math.max(0, minNrLeasesToTake - leasesWithoutOwnerOrExpired.size)
+              remaining = Math.min(maxNrLeasesToTake, Math.max(0, minNrLeasesToTake - leasesWithoutOwnerOrExpired.size))
               toSteal  <- leasesToSteal(allLeases, workerId, target, nrLeasesToSteal = remaining)
             } yield (leasesWithoutOwnerOrExpired ++ toSteal).map(_.key).toSet
           else ZIO.succeed(Set.empty[String]))

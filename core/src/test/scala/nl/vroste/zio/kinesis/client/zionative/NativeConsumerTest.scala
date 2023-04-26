@@ -953,5 +953,4 @@ object NativeConsumerTest extends ZIOSpecDefault {
           }
         }
     }
-
 }
