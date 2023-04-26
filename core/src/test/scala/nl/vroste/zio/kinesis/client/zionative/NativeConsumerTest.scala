@@ -132,7 +132,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
 
           } yield assert(checkpoints)(Assertion.hasSameElements(expectedCheckpoints))
         }
-      } @@ TestAspect.ignore, // TODO does not work anymore since ZIO 2.0.3
+      }, // TODO does not work anymore since ZIO 2.0.3
       test("continue from the next message after the last checkpoint") {
         val nrRecords = 200
         val nrShards  = 1
@@ -838,8 +838,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
     ).provideLayerShared(env) @@
       TestAspect.timed @@
       TestAspect.withLiveClock @@
-//  TestAspect.sequential @@ // For CircleCI
-//      TestAspect.nonFlaky(10) @@
+      TestAspect.sequential @@ // For CircleCI
       TestAspect.timeoutWarning(45.seconds) @@
       TestAspect.timeout(120.seconds)
 
