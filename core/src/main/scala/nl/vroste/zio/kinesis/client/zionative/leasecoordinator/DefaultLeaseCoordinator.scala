@@ -452,11 +452,10 @@ private[zionative] object DefaultLeaseCoordinator {
                            .acquireRelease(
                              Queue
                                .bounded[(Lease, Promise[Nothing, Unit])](128)
-                           )(_.shutdown)
-                           .ensuring(ZIO.logDebug("Acquired leases queue shutdown"))
+                           )(_.shutdown *> ZIO.logDebug("Acquired leases queue shutdown"))
       table           <- ZIO.service[LeaseRepository]
       state           <- Ref.make(State.empty)
-      serialExecution <- SerialExecution.keyed[String].ensuring(ZIO.logDebug("Shutting down runloop"))
+      serialExecution <- ZIO.acquireRelease(SerialExecution.keyed[String])(_ => ZIO.logDebug("Shutting down runloop"))
       c                = new DefaultLeaseCoordinator(
                            table,
                            applicationName,
