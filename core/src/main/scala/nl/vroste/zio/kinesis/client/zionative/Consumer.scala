@@ -266,9 +266,10 @@ object Consumer {
               listShards
           }
 
-          streamDescriptionFib.join
-            .flatMap(makeFetcher)
-            .ensuring(ZIO.logDebug("Fetcher shut down")) zipPar (
+          ZIO.acquireRelease(
+            streamDescriptionFib.join
+              .flatMap(makeFetcher)
+          )(_ => ZIO.logDebug("Fetcher shut down")) zipPar (
             // Fetch shards and initialize the lease coordinator at the same time
             // When we have the shards, we inform the lease coordinator. When the lease table
             // still has to be created, we have the shards in time for lease claiming begins.
