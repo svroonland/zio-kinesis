@@ -1,6 +1,5 @@
 package nl.vroste.zio.kinesis.interop.futures
 
-import zio.aws.core.config
 import izumi.reflect.Tag
 import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
@@ -13,8 +12,7 @@ import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClientBuilder
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClientBuilder
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClientBuilder
 import zio._
-
-import scala.annotation.nowarn
+import zio.aws.core.config
 
 /**
  * A scala-native Future based interface to the zio-kinesis Producer
@@ -69,7 +67,6 @@ object Producer {
    * @return
    *   A Managed Producer
    */
-  @nowarn // Scala warns that Tag is unused, but removing it gives missing implicits errors
   def make[T: Tag](
     streamName: String,
     serializer: Serializer[Any, T],
