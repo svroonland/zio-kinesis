@@ -217,8 +217,8 @@ private[client] class DynamicConsumerLive(
             workerIdentifier,
             new ZioShardProcessorFactory(queues)
           )
-          leaseTableName.fold(configsBuilder)(configsBuilder.tableName)
-          metricsNamespace.fold(configsBuilder)(configsBuilder.namespace)
+          val withTableName  = leaseTableName.fold(configsBuilder)(configsBuilder.tableName)
+          metricsNamespace.fold(withTableName)(withTableName.namespace)
         }
         config         = configureKcl(
                            SchedulerConfig.makeDefault(configsBuilder, kinesisAsyncClient, initialPosition, streamName)
