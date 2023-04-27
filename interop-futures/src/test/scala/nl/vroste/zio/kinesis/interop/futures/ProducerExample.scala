@@ -8,13 +8,20 @@ import scala.concurrent.duration._
 import scala.concurrent.{ Await, Future }
 
 object ProducerExample extends App {
+
+  /** Used to prevent warnings about not using the result of an expression. */
+  @inline private def exec[A](f: => A): Unit = {
+    val _ = f
+  }
+
   val producer = Producer.make[String]("my-stream", Serde.asciiString, metricsCollector = m => println(m))
 
   val done = Future.traverse(List(1 to 10)) { i =>
     producer.produce(ProducerRecord("key1", s"msg${i}"))
   }
 
-  Await.result(done, 30.seconds)
+  exec(Await.result(done, 30.seconds))
 
   producer.close()
+
 }

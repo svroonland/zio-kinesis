@@ -49,14 +49,17 @@ object ShardAssignmentStrategyTest extends ZIOSpecDefault {
             s"For ${leases.size} leases, ${nrWorkers} workers, nr owned leases ${nrOwnedLeases}: expecting share between ${minExpectedShare} and ${maxExpectedShare}"
           )
 
-          val minExpectedToSteal =
+          val minExpectedToTake =
             Math.max(0, minExpectedShare - nrOwnedLeases) // We could own more than our fair share
-          val maxExpectedToSteal =
-            Math.max(0, maxExpectedShare - nrOwnedLeases) // We could own more than our fair share
+          val maxExpectedToTake =
+            Math.max(
+              0,
+              maxExpectedShare - nrOwnedLeases + (leases.size % nrWorkers)
+            ) // We could own more than our fair share
 
           for {
             toSteal <- leasesToTake(leases, workerId(1))
-          } yield assert(toSteal.size)(isWithin(minExpectedToSteal, maxExpectedToSteal))
+          } yield assert(toSteal.size)(isWithin(minExpectedToTake, maxExpectedToTake))
         }
       },
       test("takes unclaimed leases first") {

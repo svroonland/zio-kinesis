@@ -137,7 +137,8 @@ object ShardAssignmentStrategy {
 
     val target = minTarget
 
-    val ourLeases = allLeases.filter(_.owner.contains(workerId))
+    val ourLeases     = allLeases.filter(_.owner.contains(workerId))
+    val unownedLeases = allLeases.filter(_.owner.isEmpty)
 
     val minNrLeasesToTake = Math.max(0, target - ourLeases.size)
     val maxNrLeasesToTake = Math.max(0, target + optional - ourLeases.size)
@@ -146,14 +147,14 @@ object ShardAssignmentStrategy {
     ZIO.logInfo(
       s"We have ${ourLeases.size}, we would like to have at least ${target}/${allLeases.size} leases (${activeWorkers.size} active workers, " +
         s"${zombieWorkers.size} zombie workers), we need ${minNrLeasesToTake} more with an optional ${optional}"
-    ) *> (if (minNrLeasesToTake > 0)
+    ) *> (if (minNrLeasesToTake > 0 || unownedLeases.nonEmpty)
             for {
-              leasesWithoutOwner         <- shuffle(allLeases.filter(_.owner.isEmpty)).map(_.take(maxNrLeasesToTake))
-              leasesExpired              <- shuffle(expiredLeases).map(_.take(maxNrLeasesToTake - leasesWithoutOwner.size))
-              leasesWithoutOwnerOrExpired = leasesWithoutOwner ++ leasesExpired
+              leasesWithoutOwner         <- shuffle(allLeases.filter(_.owner.isEmpty))
+              leasesExpired              <- shuffle(expiredLeases)
+              leasesWithoutOwnerOrExpired = (leasesWithoutOwner ++ leasesExpired).take(maxNrLeasesToTake + optional)
 
               // We can only steal from our target budget, not the optional ones
-              remaining = Math.max(0, minNrLeasesToTake - leasesWithoutOwnerOrExpired.size)
+              remaining = Math.min(maxNrLeasesToTake, Math.max(0, minNrLeasesToTake - leasesWithoutOwnerOrExpired.size))
               toSteal  <- leasesToSteal(allLeases, workerId, target, nrLeasesToSteal = remaining)
             } yield (leasesWithoutOwnerOrExpired ++ toSteal).map(_.key).toSet
           else ZIO.succeed(Set.empty[String]))
