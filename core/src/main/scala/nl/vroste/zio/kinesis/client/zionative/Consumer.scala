@@ -266,9 +266,7 @@ object Consumer {
               listShards
           }
 
-          streamDescriptionFib.join
-            .flatMap(makeFetcher)
-            .ensuring(ZIO.logDebug("Fetcher shut down")) zipPar (
+          streamDescriptionFib.join.flatMap(makeFetcher) zipPar (
             // Fetch shards and initialize the lease coordinator at the same time
             // When we have the shards, we inform the lease coordinator. When the lease table
             // still has to be created, we have the shards in time for lease claiming begins.
@@ -298,71 +296,72 @@ object Consumer {
           )
         }
 
-    ZStream.unwrapScoped {
-      createDependencies.map { case (fetcher, (leaseCoordinator, updateShardsFib)) =>
-        leaseCoordinator.acquiredLeases
-          .terminateOnFiberFailure(updateShardsFib)
-          .collect { case AcquiredLease(shardId, leaseLost) =>
-            (shardId, leaseLost)
-          }
-          .mapZIOParUnordered(leaseCoordinationSettings.maxParallelLeaseAcquisitions) { case (shardId, leaseLost) =>
-            for {
-              checkpointer    <- leaseCoordinator.makeCheckpointer(shardId)
-              env             <- ZIO.environment[R]
-              checkpointOpt   <- leaseCoordinator.getCheckpointForShard(shardId)
-              startingPosition = checkpointOpt
-                                   .map(checkpointToStartingPosition(_, initialPosition))
-                                   .getOrElse(InitialPosition.toStartingPosition(initialPosition))
-              shardStream      = fetcher
-                                   .shardRecordStream(ShardId(shardId), startingPosition)
-                                   .catchAll {
-                                     case Left(e)                            =>
-                                       ZStream.fromZIO(
-                                         ZIO.logSpan(s"Shard stream ${shardId} failed")(ZIO.logErrorCause(Cause.fail(e)))
-                                       ) *>
-                                         ZStream.fail(e)
-                                     case Right(EndOfShard(childShards @ _)) =>
-                                       ZStream.fromZIO(
-                                         ZIO.logDebug(
-                                           s"Found end of shard for ${shardId}. " +
-                                             s"Child shards are ${childShards.map(_.shardId).mkString(", ")}"
+    ZStream.logAnnotate("worker", workerIdentifier) *>
+      ZStream.unwrapScoped {
+        createDependencies.map { case (fetcher, (leaseCoordinator, updateShardsFib)) =>
+          leaseCoordinator.acquiredLeases
+            .terminateOnFiberFailure(updateShardsFib)
+            .collect { case AcquiredLease(shardId, leaseLost) =>
+              (shardId, leaseLost)
+            }
+            .mapZIOParUnordered(leaseCoordinationSettings.maxParallelLeaseAcquisitions) { case (shardId, leaseLost) =>
+              for {
+                checkpointer    <- leaseCoordinator.makeCheckpointer(shardId)
+                env             <- ZIO.environment[R]
+                checkpointOpt   <- leaseCoordinator.getCheckpointForShard(shardId)
+                startingPosition = checkpointOpt
+                                     .map(checkpointToStartingPosition(_, initialPosition))
+                                     .getOrElse(InitialPosition.toStartingPosition(initialPosition))
+                shardStream      = fetcher
+                                     .shardRecordStream(ShardId(shardId), startingPosition)
+                                     .catchAll {
+                                       case Left(e)                            =>
+                                         ZStream.fromZIO(
+                                           ZIO.logSpan(s"Shard stream ${shardId} failed")(ZIO.logErrorCause(Cause.fail(e)))
                                          ) *>
-                                           checkpointer.markEndOfShard() *>
-                                           leaseCoordinator.childShardsDetected(childShards)
-                                       ) *> ZStream.empty
-                                   }
-                                   .mapChunksZIO { chunk => // mapM is slow
-                                     chunk
-                                       .mapZIO(record => toRecords(shardId, record))
-                                       .map(_.flatten)
-                                       .tap { records =>
-                                         records.lastOption.fold(ZIO.unit) { r =>
-                                           val extendedSequenceNumber =
-                                             ExtendedSequenceNumber(
-                                               r.sequenceNumber,
-                                               r.subSequenceNumber.getOrElse(0L)
-                                             )
-                                           checkpointer.setMaxSequenceNumber(extendedSequenceNumber)
+                                           ZStream.fail(e)
+                                       case Right(EndOfShard(childShards @ _)) =>
+                                         ZStream.fromZIO(
+                                           ZIO.logDebug(
+                                             s"Found end of shard for ${shardId}. " +
+                                               s"Child shards are ${childShards.map(_.shardId).mkString(", ")}"
+                                           ) *>
+                                             checkpointer.markEndOfShard() *>
+                                             leaseCoordinator.childShardsDetected(childShards)
+                                         ) *> ZStream.empty
+                                     }
+                                     .mapChunksZIO { chunk => // mapM is slow
+                                       chunk
+                                         .mapZIO(record => toRecords(shardId, record))
+                                         .map(_.flatten)
+                                         .tap { records =>
+                                           records.lastOption.fold(ZIO.unit) { r =>
+                                             val extendedSequenceNumber =
+                                               ExtendedSequenceNumber(
+                                                 r.sequenceNumber,
+                                                 r.subSequenceNumber.getOrElse(0L)
+                                               )
+                                             checkpointer.setMaxSequenceNumber(extendedSequenceNumber)
+                                           }
                                          }
-                                       }
-                                   }
-                                   .dropWhile(r => !checkpointOpt.forall(aggregatedRecordIsAfterCheckpoint(r, _)))
-                                   .terminateOnPromiseCompleted(leaseLost)
-            } yield (
-              shardId,
-              shardStream.ensuring {
-                checkpointer.checkpointAndRelease.catchAll {
-                  case Left(e)               =>
-                    ZIO.logWarning(s"Error in checkpoint and release: ${e}").unit
-                  case Right(ShardLeaseLost) =>
-                    ZIO.unit // This is fine during shutdown
-                }
-              }.provideEnvironment(env),
-              checkpointer
-            )
-          }
+                                     }
+                                     .dropWhile(r => !checkpointOpt.forall(aggregatedRecordIsAfterCheckpoint(r, _)))
+                                     .terminateOnPromiseCompleted(leaseLost)
+              } yield (
+                shardId,
+                shardStream.ensuring {
+                  checkpointer.checkpointAndRelease.catchAll {
+                    case Left(e)               =>
+                      ZIO.logWarning(s"Error in checkpoint and release: ${e}").unit
+                    case Right(ShardLeaseLost) =>
+                      ZIO.unit // This is fine during shutdown
+                  }
+                }.provideEnvironment(env),
+                checkpointer
+              )
+            }
+        }
       }
-    }
   }
 
   /**

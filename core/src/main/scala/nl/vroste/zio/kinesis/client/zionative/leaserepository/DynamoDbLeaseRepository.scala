@@ -22,7 +22,7 @@ import zio.aws.dynamodb.{ model, DynamoDb }
 import zio.stream.ZStream
 
 import java.util.concurrent.TimeoutException
-import scala.util.{ Failure, Try }
+import scala.util.Try
 import scala.collection.compat._
 
 // TODO this thing should have a global throttling / backoff
@@ -120,9 +120,8 @@ private class DynamoDbLeaseRepository(client: DynamoDb, settings: Settings) exte
       .mapError(_.toThrowable)
       .unit
       .catchAll {
-        case e: ConditionalCheckFailedException =>
-          ZIO.logSpan("Check failed")(ZIO.logErrorCause(Cause.fail(e))) *>
-            ZIO.fail(Right(LeaseObsolete))
+        case _: ConditionalCheckFailedException =>
+          ZIO.fail(Right(LeaseObsolete))
         case e                                  =>
           ZIO.fail(Left(e))
       }
@@ -201,7 +200,8 @@ private class DynamoDbLeaseRepository(client: DynamoDb, settings: Settings) exte
     client
       .updateItem(request)
       .mapError(_.toThrowable)
-      .timeoutFail(new TimeoutException(s"Timeout updating checkpoint"))(settings.timeout)
+      // TODO timeouts used in finalizers cause interrupted exceptions..
+//      .timeoutFail(new TimeoutException(s"Timeout updating checkpoint"))(settings.timeout)
       .unit
       .catchAll {
         case _: ConditionalCheckFailedException =>
@@ -286,9 +286,6 @@ private class DynamoDbLeaseRepository(client: DynamoDb, settings: Settings) exte
           ),
         parentShardIds = getValue("parentShardIds").map(_.ss.toList.flatten).getOrElse(List.empty)
       )
-    }.recoverWith { case e =>
-      ZIO.logErrorCause(s"Error deserializing lease: $item", Cause.fail(e))
-      Failure(e)
     }
 
   private def toSequenceNumberOrSpecialCheckpoint(

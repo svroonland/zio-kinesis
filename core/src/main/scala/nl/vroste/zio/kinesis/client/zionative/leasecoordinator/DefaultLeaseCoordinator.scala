@@ -148,7 +148,9 @@ private class DefaultLeaseCoordinator(
 
     table
       .releaseLease(applicationName, updatedLease)
-      .timeout(settings.releaseLeaseTimeout)
+      // TODO THIS TIMEOUT CAUSES THE INTERRUPTION ERROR...! So it's about racing in the finalizer..
+//      .timeout(settings.releaseLeaseTimeout)
+      .asSome
       .tap(result =>
         ZIO.logWarning(s"Timeout while releasing lease for shard ${lease.key}, ignored").when(result.isEmpty)
       )
@@ -354,7 +356,13 @@ private class DefaultLeaseCoordinator(
 
   override def acquiredLeases: ZStream[Any, Throwable, AcquiredLease] = ZStream.unwrapScoped {
     for {
-      runloopFiber <- initialize.fork
+      // We need a forked scope with independent finalizer order, because `initialize` will call `forkScoped` after being forked,
+      // which leads to a wrong finalizer order
+      scope        <- ZIO.scope
+      childScope   <- scope.fork
+      runloopFiber <- initialize
+                        .provideEnvironment(ZEnvironment(childScope))
+                        .forkScoped
       _            <- ZIO.addFinalizer(
                         releaseLeases *> ZIO.logDebug("releaseLeases done")
                       ) // We need the runloop to be alive for this operation
@@ -444,11 +452,10 @@ private[zionative] object DefaultLeaseCoordinator {
                            .acquireRelease(
                              Queue
                                .bounded[(Lease, Promise[Nothing, Unit])](128)
-                           )(_.shutdown)
-                           .ensuring(ZIO.logDebug("Acquired leases queue shutdown"))
+                           )(_.shutdown *> ZIO.logDebug("Acquired leases queue shutdown"))
       table           <- ZIO.service[LeaseRepository]
       state           <- Ref.make(State.empty)
-      serialExecution <- SerialExecution.keyed[String].ensuring(ZIO.logDebug("Shutting down runloop"))
+      serialExecution <- ZIO.acquireRelease(SerialExecution.keyed[String])(_ => ZIO.logDebug("Shutting down runloop"))
       c                = new DefaultLeaseCoordinator(
                            table,
                            applicationName,

@@ -4,6 +4,7 @@ import zio.aws.core.aspects.AwsCallAspect
 import zio.aws.kinesis.model._
 import zio.aws.kinesis.{ model, Kinesis }
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
+import zio.aws.kinesis.model.primitives.StreamName
 import zio.{ IO, ZEnvironment }
 import zio.stream.ZStream
 
@@ -37,32 +38,35 @@ class StubClient extends Kinesis { self =>
   override def describeStreamConsumer(
     request: model.DescribeStreamConsumerRequest
   ): IO[AwsError, DescribeStreamConsumerResponse.ReadOnly] = ???
-  override def listStreams(request: model.ListStreamsRequest): IO[AwsError, ListStreamsResponse.ReadOnly]             = ???
-  override def putRecord(request: model.PutRecordRequest): IO[AwsError, PutRecordResponse.ReadOnly]                   = ???
+
+  override def listStreams(request: ListStreamsRequest): ZStream[Any, AwsError, StreamName] = ???
+
+  override def listStreamsPaginated(request: ListStreamsRequest): IO[AwsError, ListStreamsResponse.ReadOnly]       = ???
+  override def putRecord(request: model.PutRecordRequest): IO[AwsError, PutRecordResponse.ReadOnly]                = ???
   override def updateShardCount(
     request: model.UpdateShardCountRequest
   ): IO[AwsError, UpdateShardCountResponse.ReadOnly] = ???
-  override def startStreamEncryption(request: model.StartStreamEncryptionRequest): IO[AwsError, Unit]                 = ???
-  override def deregisterStreamConsumer(request: model.DeregisterStreamConsumerRequest): IO[AwsError, Unit]           = ???
-  override def stopStreamEncryption(request: model.StopStreamEncryptionRequest): IO[AwsError, Unit]                   = ???
-  override def putRecords(request: model.PutRecordsRequest): IO[AwsError, PutRecordsResponse.ReadOnly]                = ???
+  override def startStreamEncryption(request: model.StartStreamEncryptionRequest): IO[AwsError, Unit]              = ???
+  override def deregisterStreamConsumer(request: model.DeregisterStreamConsumerRequest): IO[AwsError, Unit]        = ???
+  override def stopStreamEncryption(request: model.StopStreamEncryptionRequest): IO[AwsError, Unit]                = ???
+  override def putRecords(request: model.PutRecordsRequest): IO[AwsError, PutRecordsResponse.ReadOnly]             = ???
   override def getShardIterator(
     request: model.GetShardIteratorRequest
   ): IO[AwsError, GetShardIteratorResponse.ReadOnly] = ???
   override def enableEnhancedMonitoring(
     request: model.EnableEnhancedMonitoringRequest
   ): IO[AwsError, EnableEnhancedMonitoringResponse.ReadOnly] = ???
-  override def createStream(request: model.CreateStreamRequest): IO[AwsError, Unit]                                   = ???
+  override def createStream(request: model.CreateStreamRequest): IO[AwsError, Unit]                                = ???
   override def registerStreamConsumer(
     request: model.RegisterStreamConsumerRequest
   ): IO[AwsError, RegisterStreamConsumerResponse.ReadOnly] = ???
-  override def describeLimits(request: model.DescribeLimitsRequest): IO[AwsError, DescribeLimitsResponse.ReadOnly]    = ???
+  override def describeLimits(request: model.DescribeLimitsRequest): IO[AwsError, DescribeLimitsResponse.ReadOnly] = ???
   override def subscribeToShard(
     request: SubscribeToShardRequest
   ): ZStream[Any, AwsError, SubscribeToShardEvent.ReadOnly] = ???
-  override def getRecords(request: model.GetRecordsRequest): IO[AwsError, GetRecordsResponse.ReadOnly]                = ???
-  override def listShardsPaginated(request: ListShardsRequest): IO[AwsError, ListShardsResponse.ReadOnly]             = ???
-  override def updateStreamMode(request: UpdateStreamModeRequest): IO[AwsError, Unit]                                 = ???
+  override def getRecords(request: model.GetRecordsRequest): IO[AwsError, GetRecordsResponse.ReadOnly]             = ???
+  override def listShardsPaginated(request: ListShardsRequest): IO[AwsError, ListShardsResponse.ReadOnly]          = ???
+  override def updateStreamMode(request: UpdateStreamModeRequest): IO[AwsError, Unit]                              = ???
   override def listStreamConsumersPaginated(
     request: ListStreamConsumersRequest
   ): IO[AwsError, ListStreamConsumersResponse.ReadOnly] = ???
