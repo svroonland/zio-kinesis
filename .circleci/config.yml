@@ -13,7 +13,7 @@ jobs:
       sbt_command:
         type: string
       resource_class:
-        default: medium
+        default: large
         type: string
     docker:
       - image: << parameters.image >>
@@ -88,7 +88,6 @@ workflows:
           name: test213_dynamic_consumer
           image: hseeberger/scala-sbt:17.0.2_1.6.2_2.13.8
           sbt_command: ++2.13.8! dynamicConsumer/test
-          resource_class: large
           requires:
             - lint
           filters:
