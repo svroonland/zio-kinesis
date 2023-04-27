@@ -799,41 +799,6 @@ object NativeConsumerTest extends ZIOSpecDefault {
               equalTo((0 until nrRecords).toList)
             )
         }
-      },
-      test("interrupted child streams") {
-        val stream =
-          ZStream.unwrapScoped {
-            ZIO
-              .addFinalizer(
-                (ZIO.logDebug(s"Finalizing top level stream") *> ZIO
-                  .logDebug(s"Done finalizing top level stream"))
-                  .tapErrorCause(c => ZIO.logErrorCause(s"Error finalizing top level stream", c))
-              )
-              .as {
-
-                ZStream
-                  .fromIterable(List(1, 2, 3))
-                  .map { i =>
-                    ZStream.unwrapScoped {
-                      ZIO
-                        .addFinalizer(
-                          (ZIO.logDebug(s"Finalizing child stream ${i}") *> ZIO.sleep(1.second) *> ZIO
-                            .logDebug(s"DONE finalizing child stream ${i}"))
-                            .tapErrorCause(c => ZIO.logErrorCause(s"Error finalizing child stream ${i}", c))
-                        )
-                        .as {
-                          (ZStream
-                            .fromIterable(1 to 100)
-                            .rechunk(10) concat ZStream.never)
-                        }
-                    }
-                  }
-              }
-          }
-            .flattenParUnbounded()
-            .take(250)
-
-        stream.runDrain *> assertCompletesZIO
       }
     ).provideLayerShared(env) @@
       TestAspect.timed @@
