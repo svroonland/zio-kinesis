@@ -2,12 +2,17 @@ package nl.vroste.zio.kinesis.client.dynamicconsumer
 
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.kinesis.checkpoint.CheckpointConfig
-import software.amazon.kinesis.common.{ ConfigsBuilder, InitialPositionInStreamExtended }
+import software.amazon.kinesis.common.{
+  ConfigsBuilder,
+  InitialPositionInStream,
+  InitialPositionInStreamExtended,
+  StreamConfig
+}
 import software.amazon.kinesis.coordinator.CoordinatorConfig
 import software.amazon.kinesis.leases.LeaseManagementConfig
 import software.amazon.kinesis.lifecycle.LifecycleConfig
 import software.amazon.kinesis.metrics.MetricsConfig
-import software.amazon.kinesis.processor.ProcessorConfig
+import software.amazon.kinesis.processor.{ ProcessorConfig, SingleStreamTracker }
 import software.amazon.kinesis.retrieval.RetrievalConfig
 import software.amazon.kinesis.retrieval.fanout.FanOutConfig
 import software.amazon.kinesis.retrieval.polling.PollingConfig
@@ -25,13 +30,15 @@ case class SchedulerConfig(
   metrics: MetricsConfig,
   processor: ProcessorConfig,
   retrieval: RetrievalConfig,
+  initialPositionInStreamExtended: InitialPositionInStreamExtended =
+    InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.LATEST),
   private val kinesisClient: KinesisAsyncClient,
   private val streamName: String
 ) {
   def withInitialPosition(pos: InitialPositionInStreamExtended): SchedulerConfig =
     copy(
       leaseManagement = leaseManagement.initialPositionInStream(pos),
-      retrieval = retrieval.initialPositionInStreamExtended(pos)
+      initialPositionInStreamExtended = initialPositionInStreamExtended
     )
 
   def withEnhancedFanOut: SchedulerConfig =
