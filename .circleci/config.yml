@@ -8,9 +8,12 @@ jobs:
   run_with_localstack:
     parameters:
       image:
-        default: hseeberger/scala-sbt:17.0.1_1.6.0_2.13.7
+        default: hseeberger/scala-sbt:17.0.2_1.6.2_2.13.8
         type: string
       sbt_command:
+        type: string
+      resource_class:
+        default: medium
         type: string
     docker:
       - image: << parameters.image >>
@@ -24,6 +27,7 @@ jobs:
           AWS_ACCESS_KEY_ID: dummy-key
           AWS_SECRET_ACCESS_KEY: dummy-key
           DEBUG: "1"
+    resource_class: << parameters.resource_class >>
 
     steps:
       - checkout
@@ -39,7 +43,7 @@ jobs:
             - "~/.m2"
   release:
     docker:
-      - image: hseeberger/scala-sbt:17.0.1_1.6.0_2.13.7
+      - image: hseeberger/scala-sbt:17.0.2_1.6.2_2.13.8
     steps:
       - checkout
       - run: git fetch --tags
@@ -50,7 +54,7 @@ jobs:
       - run: export GPG_TTY=$(tty)
       - run: echo $PGP_SECRET | base64 --decode | gpg --batch --import
       - run: echo "credentials += Credentials(\"Sonatype Nexus Repository Manager\", \"oss.sonatype.org\", \"$SONATYPE_USER\", \"$SONATYPE_PASSWORD\")" > ~/.sbt/1.0/sonatype.sbt
-      - run: sbt ciRelease
+      - run: sbt ci-release
 
 workflows:
   version: 2
@@ -62,19 +66,19 @@ workflows:
           filters:
             tags:
               only: << pipeline.parameters.tag_regex >>
-#      - run_with_localstack:
-#          name: test300
-#          image: hseeberger/scala-sbt:16_1.5.2_3.0.0
-#          sbt_command: ++3.0.0! core/test interopFutures/test
-#          requires:
-#            - lint
-#          filters:
-#            tags:
-#              only: << pipeline.parameters.tag_regex >>
+      - run_with_localstack:
+          name: test31
+          image: hseeberger/scala-sbt:17.0.2_1.6.2_3.1.1
+          sbt_command: ++3.2.0! core/test interopFutures/test
+          requires:
+            - lint
+          filters:
+            tags:
+              only: << pipeline.parameters.tag_regex >>
       - run_with_localstack:
           name: test213
-          image: hseeberger/scala-sbt:17.0.1_1.6.0_2.13.7
-          sbt_command: ++2.13.7! interopFutures/compile core/test interopFutures/test Compile/doc
+          image: hseeberger/scala-sbt:17.0.2_1.6.2_2.13.8
+          sbt_command: ++2.13.8! interopFutures/compile core/test interopFutures/test Compile/doc
           requires:
             - lint
           filters:
@@ -82,8 +86,9 @@ workflows:
               only: << pipeline.parameters.tag_regex >>
       - run_with_localstack:
           name: test213_dynamic_consumer
-          image: hseeberger/scala-sbt:17.0.1_1.6.0_2.13.7
-          sbt_command: ++2.13.7! dynamicConsumer/test
+          image: hseeberger/scala-sbt:17.0.2_1.6.2_2.13.8
+          sbt_command: ++2.13.8! dynamicConsumer/test
+          resource_class: large
           requires:
             - lint
           filters:
@@ -91,7 +96,7 @@ workflows:
               only: << pipeline.parameters.tag_regex >>
       - run_with_localstack:
           name: test212
-          image: hseeberger/scala-sbt:17.0.1_1.6.0_2.12.15
+          image: hseeberger/scala-sbt:17.0.2_1.6.2_2.12.15
           sbt_command: ++2.12.15! interopFutures/compile core/test interopFutures/test Compile/doc
           requires:
             - lint
@@ -104,9 +109,12 @@ workflows:
             - test213
             - test213_dynamic_consumer
             - test212
+#          filters:
+#            branches:
+#              only:
+#                - master
+#            tags:
+#              only: /^v.*/
           filters:
-            branches:
-              only:
-                - master
             tags:
-              only: /^v.*/
+              only: << pipeline.parameters.tag_regex >>
