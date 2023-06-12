@@ -1,7 +1,7 @@
 import xerial.sbt.Sonatype.GitHubHosting
 
-val mainScala = "2.13.10"
-val allScala  = Seq("2.12.17", mainScala, "3.3.0")
+val mainScala = "2.13.11"
+val allScala  = Seq("2.12.18", mainScala, "3.3.0")
 
 val excludeInferAny = { options: Seq[String] => options.filterNot(Set("-Xlint:infer-any")) }
 
@@ -41,7 +41,7 @@ inThisBuild(
 )
 
 val zioVersion    = "2.0.14"
-val zioAwsVersion = "6.20.74.1"
+val zioAwsVersion = "6.20.78.2"
 
 lazy val root = project
   .in(file("."))
