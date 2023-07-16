@@ -259,7 +259,7 @@ object Consumer {
         .map(_.streamDescription)
         .forkScoped // joined later
         .flatMap { streamDescriptionFib =>
-          val fetchShards = streamDescriptionFib.join.flatMap { streamDescription =>
+          val fetchInitialShards = streamDescriptionFib.join.flatMap { streamDescription =>
             if (!streamDescription.hasMoreShards)
               ZIO.succeed(streamDescription.shards.map(s => s.shardId -> s).toMap)
             else
@@ -282,7 +282,8 @@ object Consumer {
                                       workerIdentifier,
                                       emitDiagnostic,
                                       leaseCoordinationSettings,
-                                      fetchShards.provideEnvironment(env),
+                                      fetchInitialShards.provideEnvironment(env),
+                                      listShards.provideEnvironment(env),
                                       shardAssignmentStrategy,
                                       initialPosition
                                     )
