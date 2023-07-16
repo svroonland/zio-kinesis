@@ -322,7 +322,7 @@ object Consumer {
                                            ZStream.fail(e)
                                        case Right(EndOfShard(childShards @ _)) =>
                                          ZStream.fromZIO(
-                                           ZIO.logDebug(
+                                           ZIO.logInfo(
                                              s"Found end of shard for ${shardId}. " +
                                                s"Child shards are ${childShards.map(_.shardId).mkString(", ")}"
                                            ) *>
@@ -330,22 +330,22 @@ object Consumer {
                                              leaseCoordinator.childShardsDetected(childShards)
                                          ) *> ZStream.empty
                                      }
-                                     .mapChunksZIO { chunk => // mapM is slow
-                                       chunk
+                                     .mapChunksZIO {
+                                       _
                                          .mapZIO(record => toRecords(shardId, record))
                                          .map(_.flatten)
-                                         .tap { records =>
-                                           records.lastOption.fold(ZIO.unit) { r =>
-                                             val extendedSequenceNumber =
-                                               ExtendedSequenceNumber(
-                                                 r.sequenceNumber,
-                                                 r.subSequenceNumber.getOrElse(0L)
-                                               )
-                                             checkpointer.setMaxSequenceNumber(extendedSequenceNumber)
-                                           }
-                                         }
                                      }
                                      .dropWhile(r => !checkpointOpt.forall(aggregatedRecordIsAfterCheckpoint(r, _)))
+                                     .mapChunksZIO { chunk =>
+                                        chunk.lastOption.fold(ZIO.unit) { r =>
+                                          val extendedSequenceNumber =
+                                            ExtendedSequenceNumber(
+                                              r.sequenceNumber,
+                                              r.subSequenceNumber.getOrElse(0L)
+                                            )
+                                          checkpointer.setMaxSequenceNumber(extendedSequenceNumber)
+                                        }.as(chunk)
+                                     }
                                      .terminateOnPromiseCompleted(leaseLost)
               } yield (
                 shardId,

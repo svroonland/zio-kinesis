@@ -23,6 +23,7 @@ import zio.{ System, _ }
 import scala.collection.compat._
 import java.time.Instant
 import java.{ util => ju }
+import zio.aws.kinesis.model.StreamStatus
 
 object NativeConsumerTest extends ZIOSpecDefault {
   /*
@@ -799,7 +800,46 @@ object NativeConsumerTest extends ZIOSpecDefault {
               equalTo((0 until nrRecords).toList)
             )
         }
-      }
+      },
+      test("regression: correctly switch from parent to child when parent is empty") {
+        val nrShards  = 1
+        val nrShardsAfterScaling = 2
+        val nrRecords = 10
+
+        withRandomStreamAndApplicationName(nrShards) { (streamName, applicationName) =>
+          def consume(nr: Int) =
+            Consumer
+              .shardedStream(
+                streamName,
+                applicationName,
+                Serde.asciiString,
+                emitDiagnostic = e => ZIO.logDebug(e.toString)
+              )
+              .flatMapPar(nrShards, 1) { case (shard @ _, shardStream, checkpointer @ _) =>
+                shardStream.map((_, checkpointer))
+              }
+              .take(nr.toLong)
+              .debug
+              .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
+              .tap { case (r, checkpointer) => checkpointer.checkpointNow[Any](r) }
+              .catchAll {
+                case Right(_) =>
+                  ZStream.empty
+                case Left(e)  => ZStream.fail(e)
+              }
+              .map(_._1)
+
+          for {
+            _                 <- produceSampleRecords(streamName, nrRecords, aggregated = true)
+            _                 <- consume(nrRecords).runCollect
+            _                 <- scaleStream(streamName, nrShardsAfterScaling)
+            consumer          <- consume(1).runCollect.forkScoped
+            parentsCompleted   = getCheckpoints(applicationName).map(_.values.count(_ == "SHARD_END") == nrShards)
+            _                 <- parentsCompleted.delay(200.millis).repeatUntil(identity)
+            _                 <- consumer.interrupt
+          } yield assertCompletes
+        }
+      } @@ awsOnly,
     ).provideLayerShared(env) @@
       TestAspect.timed @@
       TestAspect.withLiveClock @@
@@ -813,6 +853,8 @@ object NativeConsumerTest extends ZIOSpecDefault {
 
   val awsLayer: ZLayer[Any, Throwable, CloudWatch with Kinesis with DynamoDb] =
     if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()
+
+  val awsOnly = if (useAws) TestAspect.identity else TestAspect.ignore
 
   val env: ZLayer[Any, Nothing, Scope with CloudWatch with Kinesis with DynamoDb with LeaseRepository] =
     Scope.default >+> awsLayer.orDie >+> DynamoDbLeaseRepository.live >+>
@@ -904,6 +946,16 @@ object NativeConsumerTest extends ZIOSpecDefault {
     ZIO
       .service[LeaseRepository]
       .flatMap(_.deleteTable(tableName).unit)
+
+  def scaleStream(streamName: String, desiredShardCount: Int) = {
+    val isActive = Kinesis.describeStream(DescribeStreamRequest(StreamName(streamName))).map(_.streamDescription.streamStatus == StreamStatus.ACTIVE)
+
+    val awaitActive = ZIO.ifZIO(isActive)(ZIO.unit, isActive.delay(200.millis).repeatUntil(identity).unit)
+
+    Kinesis
+      .updateShardCount(UpdateShardCountRequest(StreamName(streamName), PositiveIntegerObject(desiredShardCount), ScalingType.UNIFORM_SCALING)) *> awaitActive
+  }.mapError(_.toThrowable)
+
 
   def withRandomStreamAndApplicationName[R, A](nrShards: Int)(
     f: (String, String) => ZIO[R, Throwable, A]
