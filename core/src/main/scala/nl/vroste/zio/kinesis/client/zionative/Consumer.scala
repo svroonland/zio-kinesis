@@ -322,7 +322,7 @@ object Consumer {
                                            ZStream.fail(e)
                                        case Right(EndOfShard(childShards @ _)) =>
                                          ZStream.fromZIO(
-                                           ZIO.logInfo(
+                                           ZIO.logDebug(
                                              s"Found end of shard for ${shardId}. " +
                                                s"Child shards are ${childShards.map(_.shardId).mkString(", ")}"
                                            ) *>
