@@ -331,20 +331,21 @@ object Consumer {
                                          ) *> ZStream.empty
                                      }
                                      .mapChunksZIO {
-                                       _
-                                         .mapZIO(record => toRecords(shardId, record))
+                                       _.mapZIO(record => toRecords(shardId, record))
                                          .map(_.flatten)
                                      }
                                      .dropWhile(r => !checkpointOpt.forall(aggregatedRecordIsAfterCheckpoint(r, _)))
                                      .mapChunksZIO { chunk =>
-                                        chunk.lastOption.fold(ZIO.unit) { r =>
-                                          val extendedSequenceNumber =
-                                            ExtendedSequenceNumber(
-                                              r.sequenceNumber,
-                                              r.subSequenceNumber.getOrElse(0L)
-                                            )
-                                          checkpointer.setMaxSequenceNumber(extendedSequenceNumber)
-                                        }.as(chunk)
+                                       chunk.lastOption
+                                         .fold(ZIO.unit) { r =>
+                                           val extendedSequenceNumber =
+                                             ExtendedSequenceNumber(
+                                               r.sequenceNumber,
+                                               r.subSequenceNumber.getOrElse(0L)
+                                             )
+                                           checkpointer.setMaxSequenceNumber(extendedSequenceNumber)
+                                         }
+                                         .as(chunk)
                                      }
                                      .terminateOnPromiseCompleted(leaseLost)
               } yield (
