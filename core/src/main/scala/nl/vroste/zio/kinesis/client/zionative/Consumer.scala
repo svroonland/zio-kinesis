@@ -251,7 +251,7 @@ object Consumer {
     def createDependencies: ZIO[
       Kinesis with Scope with LeaseRepository,
       Throwable,
-      (Fetcher, (LeaseCoordinator, Fiber.Runtime[Throwable, Long]))
+      (Fetcher, LeaseCoordinator)
     ] =
       Kinesis
         .describeStream(DescribeStreamRequest(StreamName(streamName)))
@@ -288,23 +288,16 @@ object Consumer {
                                       initialPosition
                                     )
               _                <- ZIO.logInfo("Lease coordinator created")
-              // Periodically refresh shards
-              updateShardsFib  <- (listShards flatMap leaseCoordinator.updateShards)
-                                    .repeat(Schedule.spaced(leaseCoordinationSettings.shardRefreshInterval))
-                                    .delay(leaseCoordinationSettings.shardRefreshInterval)
-                                    .forkScoped // Joined in the top level stream with acquiredLeases
-            } yield leaseCoordinator -> updateShardsFib
+            } yield leaseCoordinator
           )
         }
 
     ZStream.logAnnotate("worker", workerIdentifier) *>
       ZStream.unwrapScoped {
-        createDependencies.map { case (fetcher, (leaseCoordinator, updateShardsFib)) =>
-          leaseCoordinator.acquiredLeases
-            .terminateOnFiberFailure(updateShardsFib)
-            .collect { case AcquiredLease(shardId, leaseLost) =>
-              (shardId, leaseLost)
-            }
+        createDependencies.map { case (fetcher, leaseCoordinator) =>
+          leaseCoordinator.acquiredLeases.collect { case AcquiredLease(shardId, leaseLost) =>
+            (shardId, leaseLost)
+          }
             .mapZIOParUnordered(leaseCoordinationSettings.maxParallelLeaseAcquisitions) { case (shardId, leaseLost) =>
               for {
                 checkpointer    <- leaseCoordinator.makeCheckpointer(shardId)
