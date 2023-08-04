@@ -64,9 +64,9 @@ private class DefaultLeaseCoordinator(
   private def initialize: ZIO[Scope, Throwable, Unit] =
     (for {
       // Read existing leases or create lease table
-      _                           <- refreshLeases.catchSome { case _: ResourceNotFoundException =>
-                                       table.createLeaseTableIfNotExists(applicationName)
-                                     }
+      _ <- refreshLeases.catchSome { case _: ResourceNotFoundException =>
+             table.createLeaseTableIfNotExists(applicationName)
+           }
 
       periodicRefreshAndTakeLeases = repeatAndRetry(settings.refreshAndTakeInterval) {
                                        (refreshLeases *> takeLeases(currentShards))
@@ -419,7 +419,9 @@ private class DefaultLeaseCoordinator(
                                         updateStateWithDiagnosticEvents(_.releaseLease(updatedLease, _)) *>
                                         emitDiagnostic(DiagnosticEvent.LeaseReleased(shard)) *>
                                         emitDiagnostic(DiagnosticEvent.ShardEnded(shard)).when(shardEnded) <*
-                                        takeLeases(currentShards).ignore.fork.when(shardEnded) // When it fails, the runloop will try it again sooner
+                                        takeLeases(currentShards).ignore.fork.when(
+                                          shardEnded
+                                        ) // When it fails, the runloop will try it again sooner
                                     ).when(release)).orDie
                                 }
     } yield ()
