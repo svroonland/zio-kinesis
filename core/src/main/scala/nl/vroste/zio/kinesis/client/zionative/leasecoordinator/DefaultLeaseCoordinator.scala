@@ -52,7 +52,8 @@ private class DefaultLeaseCoordinator(
   settings: LeaseCoordinationSettings,
   strategy: ShardAssignmentStrategy,
   initialPosition: InitialPosition,
-  shards: Task[Map[ShardId, Shard.ReadOnly]]
+  initialShards: Task[Map[ShardId, Shard.ReadOnly]],
+  currentShards: Task[Map[ShardId, Shard.ReadOnly]]
 ) extends LeaseCoordinator {
 
   import DefaultLeaseCoordinator._
@@ -60,33 +61,28 @@ private class DefaultLeaseCoordinator(
 
   val now = zio.Clock.currentDateTime.map(_.toInstant())
 
-  private def initialize: ZIO[Scope, Throwable, Unit] = {
-    val getLeasesOrInitializeLeaseTable = refreshLeases.catchSome { case _: ResourceNotFoundException =>
-      table.createLeaseTableIfNotExists(applicationName) *> shards.flatMap(updateShards)
-    }
-
-    val periodicRefreshAndTakeLeases = repeatAndRetry(settings.refreshAndTakeInterval) {
-      (refreshLeases *> takeLeases)
-        .tapError(e => ZIO.logError(s"Refresh & take leases failed, will retry: ${e}"))
-    }
-
-    // Optimized for the 'second startup or later' situation: lease table exists and covers all shards
-    // Consumer will periodically update shards anyway
-    // Wait for shards if the lease table does not exist yet, otherwise we assume there's leases
-    // for all shards already, so just fork it. If there's new shards, the next `takeLeases` will
-    // claim leases for them.
+  private def initialize: ZIO[Scope, Throwable, Unit] =
     (for {
-      _ <- getLeasesOrInitializeLeaseTable
+      // Read existing leases or create lease table
+      _ <- refreshLeases.catchSome { case _: ResourceNotFoundException =>
+             table.createLeaseTableIfNotExists(applicationName)
+           }
+
+      periodicRefreshAndTakeLeases = repeatAndRetry(settings.refreshAndTakeInterval) {
+                                       (refreshLeases *> takeLeases(currentShards))
+                                         .tapError(e => ZIO.logError(s"Refresh & take leases failed, will retry: ${e}"))
+                                     }
+
       // Initialization. If it fails, we will try in the loop
-      _ <- (takeLeases.retryN(1).ignore *> periodicRefreshAndTakeLeases)
-             .ensuring(ZIO.logDebug("Shutting down refresh & take lease loop"))
-             .forkScoped
-      _ <- repeatAndRetry(settings.renewInterval)(renewLeases)
-             .ensuring(ZIO.logDebug("Shutting down renew lease loop"))
-             .forkScoped
+      // initialShards will have been executed in the background so for efficiency we use it here
+      _                           <- (takeLeases(initialShards).retryN(1).ignore *> periodicRefreshAndTakeLeases)
+                                       .ensuring(ZIO.logDebug("Shutting down refresh & take lease loop"))
+                                       .forkScoped
+      _                           <- repeatAndRetry(settings.renewInterval)(renewLeases)
+                                       .ensuring(ZIO.logDebug("Shutting down renew lease loop"))
+                                       .forkScoped
     } yield ())
       .tapErrorCause(c => ZIO.logErrorCause("Error in DefaultLeaseCoordinator initialize", c))
-  }
 
   override def updateShards(shards: Map[ShardId, Shard.ReadOnly]): UIO[Unit] =
     updateStateWithDiagnosticEvents(_.updateShards(shards))
@@ -322,35 +318,39 @@ private class DefaultLeaseCoordinator(
    *
    * The effect fails with a Throwable when having failed to take one or more leases
    */
-  val takeLeases: ZIO[Any, Throwable, Unit] =
+  def takeLeases(getShards: Task[Map[ShardId, Shard.ReadOnly]]): ZIO[Any, Throwable, Unit] =
     for {
-      leases          <- state.get.map(_.currentLeases.values.toSet)
-      shards          <- state.get.map(_.shards.view.map { case (k, v) => ShardId.unwrap(k) -> v }.toMap)
+      // We need to have up to date shard information to adequately decide which shards are consumable and avoid race conditions
+      _      <- getShards.flatMap(updateShards)
+      leases <- state.get.map(_.currentLeases.values.toSet)
+      shards <- state.get.map(_.shards.view.map { case (k, v) => ShardId.unwrap(k) -> v }.toMap)
+
       leaseMap         = leases.map(s => s.lease.key -> s.lease).toMap
       openLeases       = leases.collect {
                            case LeaseState(lease, completed @ _, lastUpdated) if !shardHasEnded(lease) =>
                              (lease, lastUpdated)
                          }
       consumableShards = shardsReadyToConsume(shards, leaseMap)
-      desiredShards   <- strategy.desiredShards(openLeases, consumableShards.keySet, workerId)
-      _               <- ZIO.logInfo(s"Desired shard assignment: ${desiredShards.mkString(",")}")
-      toTake           = leaseMap.values.filter(l => desiredShards.contains(l.key) && !l.owner.contains(workerId))
-      _               <- claimLeasesForShardsWithoutLease(desiredShards, shards, leaseMap)
-      _               <- ZIO
-                           .logInfo(s"Going to take ${toTake.size} leases from other workers: ${toTake.mkString(",")}")
-                           .when(toTake.nonEmpty)
-      _               <- foreachParNUninterrupted_(settings.maxParallelLeaseAcquisitions)(toTake) { lease =>
-                           val updatedLease = lease.claim(workerId)
-                           (table.claimLease(applicationName, updatedLease) *>
-                             serialExecutionByShard(updatedLease.key)(registerNewAcquiredLease(updatedLease))).catchAll {
-                             case Right(UnableToClaimLease) =>
-                               ZIO.logInfo(
-                                 s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
-                               )
-                             case Left(e)                   =>
-                               ZIO.logError(s"Got error ${e}") *> ZIO.fail(e)
-                           }
+
+      desiredShards <- strategy.desiredShards(openLeases, consumableShards.keySet, workerId)
+      _             <- ZIO.logInfo(s"Desired shard assignment: ${desiredShards.mkString(",")}")
+      toTake         = leaseMap.values.filter(l => desiredShards.contains(l.key) && !l.owner.contains(workerId))
+      _             <- claimLeasesForShardsWithoutLease(desiredShards, shards, leaseMap)
+      _             <- ZIO
+                         .logInfo(s"Going to take ${toTake.size} leases from other workers: ${toTake.mkString(",")}")
+                         .when(toTake.nonEmpty)
+      _             <- foreachParNUninterrupted_(settings.maxParallelLeaseAcquisitions)(toTake) { lease =>
+                         val updatedLease = lease.claim(workerId)
+                         (table.claimLease(applicationName, updatedLease) *>
+                           serialExecutionByShard(updatedLease.key)(registerNewAcquiredLease(updatedLease))).catchAll {
+                           case Right(UnableToClaimLease) =>
+                             ZIO.logInfo(
+                               s"Unable to claim lease for shard ${lease.key}, beaten to it by another worker?"
+                             )
+                           case Left(e)                   =>
+                             ZIO.logError(s"Got error ${e}") *> ZIO.fail(e)
                          }
+                       }
     } yield ()
 
   override def acquiredLeases: ZStream[Any, Throwable, AcquiredLease] = ZStream.unwrapScoped {
@@ -418,7 +418,9 @@ private class DefaultLeaseCoordinator(
                                         updateStateWithDiagnosticEvents(_.releaseLease(updatedLease, _)) *>
                                         emitDiagnostic(DiagnosticEvent.LeaseReleased(shard)) *>
                                         emitDiagnostic(DiagnosticEvent.ShardEnded(shard)).when(shardEnded) <*
-                                        takeLeases.ignore.fork.when(shardEnded) // When it fails, the runloop will try it again sooner
+                                        takeLeases(currentShards).ignore.fork.when(
+                                          shardEnded
+                                        ) // When it fails, the runloop will try it again sooner
                                     ).when(release)).orDie
                                 }
     } yield ()
@@ -442,7 +444,8 @@ private[zionative] object DefaultLeaseCoordinator {
     workerId: String,
     emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => ZIO.unit,
     settings: LeaseCoordinationSettings,
-    shards: Task[Map[ShardId, Shard.ReadOnly]],
+    initialShards: Task[Map[ShardId, Shard.ReadOnly]],
+    currentShards: Task[Map[ShardId, Shard.ReadOnly]],
     strategy: ShardAssignmentStrategy,
     initialPosition: InitialPosition
   ): ZIO[Scope with LeaseRepository, Throwable, LeaseCoordinator] =
@@ -466,7 +469,8 @@ private[zionative] object DefaultLeaseCoordinator {
                            settings,
                            strategy,
                            initialPosition,
-                           shards
+                           initialShards,
+                           currentShards
                          )
     } yield c)
       .tapErrorCause(c => ZIO.logSpan("Error creating DefaultLeaseCoordinator")(ZIO.logErrorCause(c)))
@@ -487,11 +491,6 @@ private[zionative] object DefaultLeaseCoordinator {
   private def shardHasEnded(l: Lease) = l.checkpoint.contains(Left(SpecialCheckpoint.ShardEnd))
 
   private def parentShardsCompleted(shard: Shard.ReadOnly, leases: Map[String, Lease]): Boolean =
-    //    println(
-    //      s"Shard ${shard} has parents ${shard.parentShardIds.mkString(",")}. " +
-    //        s"Leases for these: ${shard.parentShardIds.map(id => leases.find(_.key == id).mkString(","))}"
-    //    )
-
     // Either there is no lease / the lease has already been cleaned up or it is checkpointed with SHARD_END
     shard.parentShardIds.forall(leases.get(_).exists(shardHasEnded))
 

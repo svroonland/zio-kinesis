@@ -251,7 +251,7 @@ object Consumer {
     def createDependencies: ZIO[
       Kinesis with Scope with LeaseRepository,
       Throwable,
-      (Fetcher, (LeaseCoordinator, Fiber.Runtime[Throwable, Long]))
+      (Fetcher, LeaseCoordinator)
     ] =
       Kinesis
         .describeStream(DescribeStreamRequest(StreamName(streamName)))
@@ -259,7 +259,7 @@ object Consumer {
         .map(_.streamDescription)
         .forkScoped // joined later
         .flatMap { streamDescriptionFib =>
-          val fetchShards = streamDescriptionFib.join.flatMap { streamDescription =>
+          val fetchInitialShards = streamDescriptionFib.join.flatMap { streamDescription =>
             if (!streamDescription.hasMoreShards)
               ZIO.succeed(streamDescription.shards.map(s => s.shardId -> s).toMap)
             else
@@ -282,28 +282,22 @@ object Consumer {
                                       workerIdentifier,
                                       emitDiagnostic,
                                       leaseCoordinationSettings,
-                                      fetchShards.provideEnvironment(env),
+                                      fetchInitialShards.provideEnvironment(env),
+                                      listShards.provideEnvironment(env),
                                       shardAssignmentStrategy,
                                       initialPosition
                                     )
               _                <- ZIO.logInfo("Lease coordinator created")
-              // Periodically refresh shards
-              updateShardsFib  <- (listShards flatMap leaseCoordinator.updateShards)
-                                    .repeat(Schedule.spaced(leaseCoordinationSettings.shardRefreshInterval))
-                                    .delay(leaseCoordinationSettings.shardRefreshInterval)
-                                    .forkScoped // Joined in the top level stream with acquiredLeases
-            } yield leaseCoordinator -> updateShardsFib
+            } yield leaseCoordinator
           )
         }
 
     ZStream.logAnnotate("worker", workerIdentifier) *>
       ZStream.unwrapScoped {
-        createDependencies.map { case (fetcher, (leaseCoordinator, updateShardsFib)) =>
-          leaseCoordinator.acquiredLeases
-            .terminateOnFiberFailure(updateShardsFib)
-            .collect { case AcquiredLease(shardId, leaseLost) =>
-              (shardId, leaseLost)
-            }
+        createDependencies.map { case (fetcher, leaseCoordinator) =>
+          leaseCoordinator.acquiredLeases.collect { case AcquiredLease(shardId, leaseLost) =>
+            (shardId, leaseLost)
+          }
             .mapZIOParUnordered(leaseCoordinationSettings.maxParallelLeaseAcquisitions) { case (shardId, leaseLost) =>
               for {
                 checkpointer    <- leaseCoordinator.makeCheckpointer(shardId)
@@ -330,22 +324,23 @@ object Consumer {
                                              leaseCoordinator.childShardsDetected(childShards)
                                          ) *> ZStream.empty
                                      }
-                                     .mapChunksZIO { chunk => // mapM is slow
-                                       chunk
-                                         .mapZIO(record => toRecords(shardId, record))
+                                     .mapChunksZIO {
+                                       _.mapZIO(record => toRecords(shardId, record))
                                          .map(_.flatten)
-                                         .tap { records =>
-                                           records.lastOption.fold(ZIO.unit) { r =>
-                                             val extendedSequenceNumber =
-                                               ExtendedSequenceNumber(
-                                                 r.sequenceNumber,
-                                                 r.subSequenceNumber.getOrElse(0L)
-                                               )
-                                             checkpointer.setMaxSequenceNumber(extendedSequenceNumber)
-                                           }
-                                         }
                                      }
                                      .dropWhile(r => !checkpointOpt.forall(aggregatedRecordIsAfterCheckpoint(r, _)))
+                                     .mapChunksZIO { chunk =>
+                                       chunk.lastOption
+                                         .fold(ZIO.unit) { r =>
+                                           val extendedSequenceNumber =
+                                             ExtendedSequenceNumber(
+                                               r.sequenceNumber,
+                                               r.subSequenceNumber.getOrElse(0L)
+                                             )
+                                           checkpointer.setMaxSequenceNumber(extendedSequenceNumber)
+                                         }
+                                         .as(chunk)
+                                     }
                                      .terminateOnPromiseCompleted(leaseLost)
               } yield (
                 shardId,
