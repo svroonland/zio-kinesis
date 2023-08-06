@@ -9,7 +9,7 @@ import zio.{ Schedule, _ }
  * Default values are compatible with KCL defaults (TODO not quite yet)
  *
  * @param refreshAndTakeInterval
- *   Interval at which leases are refreshed and possibly new leases taken
+ *   Interval at which shards and leases are refreshed and possibly new leases taken
  * @param renewInterval
  *   Interval at which leases are renewed to prevent them expiring
  * @param maxParallelLeaseAcquisitions
@@ -23,8 +23,6 @@ import zio.{ Schedule, _ }
  * @param renewRetrySchedule
  *   Schedule that controls retries when exceptions occur when renewing a lease. The lease is released (internally only)
  *   when the schedule fails.
- * @param shardRefreshInterval
- *   Interval at which the stream's shards are refreshed
  */
 final case class LeaseCoordinationSettings(
   renewInterval: Duration = 3.seconds,
@@ -32,7 +30,5 @@ final case class LeaseCoordinationSettings(
   maxParallelLeaseAcquisitions: Int = 10,
   maxParallelLeaseRenewals: Int = 10,
   releaseLeaseTimeout: Duration = 10.seconds,
-  renewRetrySchedule: Schedule[Any, Throwable, Any] =
-    Util.exponentialBackoff(3.second, 30.seconds, maxRecurs = Some(3)),
-  shardRefreshInterval: Duration = 30.seconds
+  renewRetrySchedule: Schedule[Any, Throwable, Any] = Util.exponentialBackoff(3.second, 30.seconds, maxRecurs = Some(3))
 )
