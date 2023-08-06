@@ -19,10 +19,12 @@ import zio.stream.{ ZSink, ZStream }
 import zio.test.Assertion._
 import zio.test._
 import zio.{ System, _ }
+import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.Lease
 
 import scala.collection.compat._
 import java.time.Instant
 import java.{ util => ju }
+import zio.aws.kinesis.model.StreamStatus
 
 object NativeConsumerTest extends ZIOSpecDefault {
   /*
@@ -799,7 +801,95 @@ object NativeConsumerTest extends ZIOSpecDefault {
               equalTo((0 until nrRecords).toList)
             )
         }
-      }
+      },
+      test("regression: correctly switch from parent to child when parent is empty") {
+        val nrShards             = 1
+        val nrShardsAfterScaling = 2
+        val nrRecords            = 10
+
+        withRandomStreamAndApplicationName(nrShards) { (streamName, applicationName) =>
+          def consume(nr: Int) =
+            Consumer
+              .shardedStream(
+                streamName,
+                applicationName,
+                Serde.asciiString,
+                emitDiagnostic = e => ZIO.logDebug(e.toString)
+              )
+              .flatMapPar(nrShards, 1) { case (shard @ _, shardStream, checkpointer @ _) =>
+                shardStream.map((_, checkpointer))
+              }
+              .take(nr.toLong)
+              .debug
+              .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
+              .tap { case (r, checkpointer) => checkpointer.checkpointNow[Any](r) }
+              .catchAll {
+                case Right(_) =>
+                  ZStream.empty
+                case Left(e)  => ZStream.fail(e)
+              }
+              .map(_._1)
+
+          for {
+            _               <- produceSampleRecords(streamName, nrRecords, aggregated = true)
+            _               <- consume(nrRecords).runCollect
+            _               <- scaleStream(streamName, nrShardsAfterScaling)
+            consumer        <- consume(1).runCollect.forkScoped
+            parentsCompleted = getCheckpoints(applicationName).map(_.values.count(_ == "SHARD_END") == nrShards)
+            _               <- parentsCompleted.delay(200.millis).repeatUntil(identity)
+            _               <- consumer.interrupt
+          } yield assertCompletes
+        }
+      } @@ awsOnly,
+      test("regression: will not consume child shards while parent is still active") {
+        val nrRecords           = 1
+        val firstShard          = "shardId-000000000000"
+        val checkpointsToSample = 200L
+
+        withRandomStreamAndApplicationName(1) { (streamName, applicationName) =>
+          def consume(nr: Int) =
+            Consumer
+              .shardedStream(
+                streamName,
+                applicationName,
+                Serde.asciiString,
+                emitDiagnostic = e => ZIO.logDebug(e.toString)
+              )
+              .flatMapPar(Int.MaxValue, 1) { case (shard @ _, shardStream, checkpointer @ _) =>
+                shardStream.map((_, shard, checkpointer))
+              }
+              .take(nr.toLong)
+              .debug
+              .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
+              .tap { case (r, shard, checkpointer) =>
+                checkpointer.checkpointNow[Any](r).unless(shard == firstShard)
+              }
+              .catchAll {
+                case Right(_) =>
+                  ZStream.empty
+                case Left(e)  => ZStream.fail(e)
+              }
+              .map(_._1)
+
+          def shardHasBeenConsumed(lease: Lease) =
+            lease.key == firstShard ||
+              lease.owner.nonEmpty ||
+              lease.checkpoint.exists(entry => entry == Left(SpecialCheckpoint.ShardEnd) || entry.isRight)
+
+          for {
+            _            <- produceSampleRecords(streamName, nrRecords, aggregated = true)
+            _            <- consume(nrRecords).runCollect
+            _            <- scaleStream(streamName, 2)
+            consumer     <- consume(nrRecords + 1).runCollect.forkScoped
+            activeShards <- ZStream
+                              .repeatZIOWithSchedule(getLeases(applicationName).exit, Schedule.spaced(10.millis))
+                              .collect { case Exit.Success(leases) => leases.count(shardHasBeenConsumed) }
+                              .take(checkpointsToSample)
+                              .runCollect
+            _            <- consumer.interrupt
+          } yield assert(activeShards)(forall(isLessThanEqualTo(1)))
+        }
+      } @@ awsOnly
     ).provideLayerShared(env) @@
       TestAspect.timed @@
       TestAspect.withLiveClock @@
@@ -813,6 +903,8 @@ object NativeConsumerTest extends ZIOSpecDefault {
 
   val awsLayer: ZLayer[Any, Throwable, CloudWatch with Kinesis with DynamoDb] =
     if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()
+
+  val awsOnly = if (useAws) TestAspect.identity else TestAspect.ignore
 
   val env: ZLayer[Any, Nothing, Scope with CloudWatch with Kinesis with DynamoDb with LeaseRepository] =
     Scope.default >+> awsLayer.orDie >+> DynamoDbLeaseRepository.live >+>
@@ -885,12 +977,19 @@ object NativeConsumerTest extends ZIOSpecDefault {
       leases <- table.getLeases(applicationName).runCollect
     } yield assert(leases)(forall(hasField("owner", _.owner, isNone)))
 
+  def getLeases(
+    applicationName: String
+  ): ZIO[LeaseRepository, Throwable, Chunk[Lease]] =
+    for {
+      table  <- ZIO.service[LeaseRepository]
+      leases <- table.getLeases(applicationName).runCollect
+    } yield leases
+
   def getCheckpoints(
     applicationName: String
   ): ZIO[LeaseRepository, Throwable, Map[String, String]] =
     for {
-      table      <- ZIO.service[LeaseRepository]
-      leases     <- table.getLeases(applicationName).runCollect
+      leases     <- getLeases(applicationName)
       checkpoints = leases.collect {
                       case l if l.checkpoint.isDefined =>
                         l.key -> (l.checkpoint.get match {
@@ -904,6 +1003,23 @@ object NativeConsumerTest extends ZIOSpecDefault {
     ZIO
       .service[LeaseRepository]
       .flatMap(_.deleteTable(tableName).unit)
+
+  def scaleStream(streamName: String, desiredShardCount: Int) = {
+    val isActive = Kinesis
+      .describeStream(DescribeStreamRequest(StreamName(streamName)))
+      .map(_.streamDescription.streamStatus == StreamStatus.ACTIVE)
+
+    val awaitActive = ZIO.ifZIO(isActive)(ZIO.unit, isActive.delay(200.millis).repeatUntil(identity).unit)
+
+    Kinesis
+      .updateShardCount(
+        UpdateShardCountRequest(
+          StreamName(streamName),
+          PositiveIntegerObject(desiredShardCount),
+          ScalingType.UNIFORM_SCALING
+        )
+      ) *> awaitActive
+  }.mapError(_.toThrowable)
 
   def withRandomStreamAndApplicationName[R, A](nrShards: Int)(
     f: (String, String) => ZIO[R, Throwable, A]
