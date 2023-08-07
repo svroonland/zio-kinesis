@@ -33,11 +33,11 @@ object LocalStackServices {
    * https://github.com/localstack/localstack#user-content-announcements. These ports can be overridden using the url
    * parameters below for earlier versions of localstack.
    * @param kinesisUri
-   *   Defaults to `http://localhost:4566`
+   *   Defaults to `https://localhost:4566`
    * @param cloudwatchUri
-   *   Defaults to `http://localhost:4566`
+   *   Defaults to `https://localhost:4566`
    * @param dynamoDbUri
-   *   Defaults to `http://localhost:4566`
+   *   Defaults to `https://localhost:4566`
    * @param accessKey
    *   Defaults to `dummy-key`
    * @param secretAccessKey
@@ -49,9 +49,9 @@ object LocalStackServices {
    *   for localstack usage
    */
   def localStackAwsLayer(
-    kinesisUri: URI = URI.create("http://localhost:4566"),
-    cloudwatchUri: URI = URI.create("http://localhost:4566"),
-    dynamoDbUri: URI = URI.create("http://localhost:4566"),
+    kinesisUri: URI = URI.create("https://localhost:4566"),
+    cloudwatchUri: URI = URI.create("https://localhost:4566"),
+    dynamoDbUri: URI = URI.create("https://localhost:4566"),
     accessKey: String = "dummy-key",
     secretAccessKey: String = "dummy-key",
     region: Region = Region.of("us-east-1")
@@ -63,10 +63,9 @@ object LocalStackServices {
       HttpClientBuilder
         .make(
           maxConcurrency =
-            25,               // localstack 11.2 has hardcoded limit of 128 and we need to share with a few clients below
+            25, // localstack 11.2 has hardcoded limit of 128 and we need to share with a few clients below
           maxPendingConnectionAcquires = 20,
           readTimeout = 10.seconds,
-          allowHttp2 = false, // Localstack does not support HTTP2
           build = _.connectionMaxIdleTime(10.seconds.asJava)
             .writeTimeout(10.seconds.asJava)
             .buildWithDefaults(
