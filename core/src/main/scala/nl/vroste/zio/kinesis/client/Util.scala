@@ -5,57 +5,6 @@ import zio.stream.ZStream
 
 object Util {
   implicit class ZStreamExtensions[-R, +E, +O](val stream: ZStream[R, E, O]) extends AnyVal {
-    // ZStream's groupBy using distributedWithDynamic is not performant enough, maybe because
-    // it breaks chunks
-    final def groupByKey2[K](
-      getKey: O => K,
-      substreamChunkBuffer: Int = 32 // Number of chunks to buffer per substream
-    ): ZStream[R, E, (K, ZStream[Any, E, O])] =
-      ZStream.unwrapScoped[R] {
-        type GroupQueueValues = Exit[Option[E], Chunk[O]]
-
-        for {
-          substreamsQueue <- Queue
-                               .unbounded[Exit[Option[E], (K, Queue[GroupQueueValues])]]
-
-          substreamsQueuesMap <- Ref.make(Map.empty[K, Queue[GroupQueueValues]])
-          inStream             = {
-            def addToSubStream(key: K, values: Chunk[O]): ZIO[Any, Nothing, Unit] =
-              for {
-                substreams <- substreamsQueuesMap.get
-                _          <- if (substreams.contains(key))
-                                substreams(key).offer(Exit.succeed(values))
-                              else
-                                Queue
-                                  .bounded[GroupQueueValues](substreamChunkBuffer)
-                                  .tap(_.offer(Exit.succeed(values)))
-                                  .tap(q => substreamsQueuesMap.update(_ + (key -> q)))
-                                  .tap(q => substreamsQueue.offer(Exit.succeed((key, q))))
-                                  .unit
-              } yield ()
-
-            stream.mapChunksZIO { chunk =>
-              ZIO
-                .foreachDiscard(chunk.groupBy(getKey)) { case (k, chunk) =>
-                  ZIO.uninterruptible(addToSubStream(k, chunk))
-                }
-                .as(Chunk.empty)
-            }
-          }
-          _                   <- ZIO.addFinalizer(
-                                   substreamsQueuesMap.get.flatMap(map =>
-                                     ZIO.foreachDiscard(map.values)(_.offer(Exit.fail(None)).catchAllCause(_ => ZIO.unit))
-                                   )
-                                 )
-        } yield inStream mergeHaltEither ZStream.fromQueueWithShutdown(substreamsQueue).flattenExitOption.map {
-          case (key, substreamQueue) =>
-            val substream = ZStream
-              .fromQueueWithShutdown(substreamQueue)
-              .flattenExitOption
-              .flattenChunks
-            (key, substream)
-        }
-      }
 
     def terminateOnFiberFailure[E1 >: E](fib: Fiber[E1, Any]): ZStream[R, E1, O] =
       stream
