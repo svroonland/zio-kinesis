@@ -23,7 +23,7 @@ services:
       - "4566:4566"
 #
   kinesis-mock:
-    image: "ghcr.io/etspaceman/kinesis-mock:0.1.7"
+    image: "ghcr.io/etspaceman/kinesis-mock:0.4.4"
     environment:
       LOG_LEVEL: DEBUG
       UPDATE_SHARD_COUNT_DURATION: "5000ms"
