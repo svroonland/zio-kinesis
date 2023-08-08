@@ -51,21 +51,23 @@ private[client] final class ProducerLive[R, R1, T](
       .mapZIOParUnordered(settings.shardPredictionParallelism)(addPredictedShardToRequestsChunk)
       .flattenChunks
       // Aggregate records per shard
-      .groupByKey2(_.predictedShard, chunkBufferSize)
-      .flatMapPar(Int.MaxValue, chunkBufferSize) { case (shardId @ _, requests) =>
-        ZStream.scoped(ShardMap.md5.orDie).flatMap { digest =>
-          if (aggregate)
-            requests.aggregateAsync(aggregator).mapConcatZIO(_.toProduceRequest(digest).map(_.toList))
-          else requests
-        }
-      })
-      .groupByKey2(_.predictedShard, chunkBufferSize) // TODO can we avoid this second group by?
-      .flatMapPar(Int.MaxValue, chunkBufferSize)(
-        Function.tupled(throttleShardRequests)
-      )
+      .groupByKey(_.predictedShard, chunkBufferSize)(
+        { case (shardId @ _, requests) =>
+          ZStream.scoped(ShardMap.md5.orDie).flatMap { digest =>
+            if (aggregate)
+              requests.aggregateAsync(aggregator).mapConcatZIO(_.toProduceRequest(digest).map(_.toList))
+            else requests
+          }
+        },
+        chunkBufferSize
+      ))
+      .groupByKey(_.predictedShard, chunkBufferSize)(
+        throttleShardRequests,
+        chunkBufferSize
+      )                   // TODO can we avoid this second group by?
       // Batch records up to the Kinesis PutRecords request limits as long as downstream is busy
       .aggregateAsync(batcher)
-      .filter(_.nonEmpty)                             // TODO why would this be necessary?
+      .filter(_.nonEmpty) // TODO why would this be necessary?
       // Several putRecords requests in parallel
       .flatMapPar(settings.maxParallelRequests, chunkBufferSize)(b => ZStream.fromZIO(countInFlight(processBatch(b))))
       .collect { case (Some(response), requests) => (response, requests) }
