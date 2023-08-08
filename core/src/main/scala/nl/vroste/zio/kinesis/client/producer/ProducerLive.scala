@@ -38,7 +38,6 @@ private[client] final class ProducerLive[R, R1, T](
   md5Pool: ZPool[Throwable, MessageDigest]
 ) extends Producer[T] {
   import ProducerLive._
-  import Util.ZStreamExtensions
 
   val runloop: ZIO[Any, Nothing, Unit] = {
     val retries         = ZStream.fromQueue(failedQueue, maxChunkSize = maxChunkSize)
