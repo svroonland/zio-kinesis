@@ -79,7 +79,7 @@ object FetchMode {
    *   Schedule for retrying in case of connection issues
    */
   final case class EnhancedFanOut(
-    deregisterConsumerAtShutdown: Boolean = false, // TODO
+    deregisterConsumerAtShutdown: Boolean = true,
     maxSubscriptionsPerSecond: Int = 10,
     retrySchedule: Schedule[Any, Any, (Duration, Long)] = Util.exponentialBackoff(5.second, 1.minute)
   ) extends FetchMode
