@@ -8,7 +8,7 @@ import software.amazon.awssdk.services.kinesis.model.ResourceInUseException
 import zio._
 import zio.aws.kinesis.Kinesis
 import zio.aws.kinesis.model._
-import zio.aws.kinesis.model.primitives.{ ConsumerName, ShardId, StreamARN }
+import zio.aws.kinesis.model.primitives.{ ConsumerARN, ConsumerName, ShardId, StreamARN }
 import zio.stream.ZStream
 
 import scala.util.control.NonFatal
@@ -24,7 +24,10 @@ object EnhancedFanOutFetcher {
   ): ZIO[Scope with Kinesis, Throwable, Fetcher] =
     for {
       env                <- ZIO.environment[Kinesis]
-      consumerARN        <- registerConsumerIfNotExists(streamDescription.streamARN, workerId)
+      consumerARN        <-
+        ZIO.acquireRelease(registerConsumerIfNotExists(streamDescription.streamARN, workerId))(
+          deregisterConsumer(_).when(config.deregisterConsumerAtShutdown)
+        )
       subscribeThrottled <- Util.throttledFunctionN(config.maxSubscriptionsPerSecond, 1.second) {
                               (pos: StartingPosition, shardId: String) =>
                                 ZIO.succeed(
@@ -78,9 +81,9 @@ object EnhancedFanOutFetcher {
       }.provideEnvironment(env)
     }
 
-  private def registerConsumerIfNotExists(streamARN: String, consumerName: String) =
+  private def registerConsumerIfNotExists(streamARN: StreamARN, consumerName: String) =
     Kinesis
-      .registerStreamConsumer(RegisterStreamConsumerRequest(StreamARN(streamARN), ConsumerName(consumerName)))
+      .registerStreamConsumer(RegisterStreamConsumerRequest(streamARN, ConsumerName(consumerName)))
       .mapError(_.toThrowable)
       .map(_.consumer.consumerARN)
       .catchSome { case e: ResourceInUseException =>
@@ -97,6 +100,13 @@ object EnhancedFanOutFetcher {
           .filterOrElseWith(_.consumerStatus != ConsumerStatus.DELETING)(_ => ZIO.fail(e))
           .map(_.consumerARN)
       }
+
+  private def deregisterConsumer(consumerARN: ConsumerARN) =
+    Kinesis
+      .deregisterStreamConsumer(DeregisterStreamConsumerRequest(consumerARN = consumerARN))
+      .mapError(_.toThrowable)
+      .tapError(_ => ZIO.logError(s"Unable to deregister consumer ${consumerARN}"))
+      .ignore
 }
 
 object FetchUtil {
