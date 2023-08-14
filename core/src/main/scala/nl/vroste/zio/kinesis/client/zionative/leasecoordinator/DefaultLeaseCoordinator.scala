@@ -379,8 +379,17 @@ private class DefaultLeaseCoordinator(
 
   override def makeCheckpointer(shardId: String) =
     for {
-      state  <- Ref.make(DefaultCheckpointer.State.empty)
-      permit <- Semaphore.make(1)
+      leaseOpt      <- state.get.map(_.getLease(shardId))
+      lastCheckpoint = leaseOpt.flatMap(_.checkpoint).flatMap(_.toOption)
+      state         <- Ref.make(
+                         DefaultCheckpointer.State(
+                           staged = None,
+                           lastCheckpoint = lastCheckpoint,
+                           maxSequenceNumber = None,
+                           shardEnded = false
+                         )
+                       )
+      permit        <- Semaphore.make(1)
     } yield new DefaultCheckpointer(
       shardId,
       state,
