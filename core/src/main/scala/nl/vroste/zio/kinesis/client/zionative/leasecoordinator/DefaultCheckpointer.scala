@@ -87,6 +87,8 @@ private[zionative] class DefaultCheckpointer(
 
   override def markEndOfShard(): UIO[Unit] =
     state.update(_.copy(shardEnded = true))
+
+  override def lastCheckpoint: UIO[Option[ExtendedSequenceNumber]] = state.get.map(_.lastCheckpoint)
 }
 
 private[zionative] object DefaultCheckpointer {
