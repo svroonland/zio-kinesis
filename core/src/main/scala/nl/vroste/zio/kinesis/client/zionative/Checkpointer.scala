@@ -123,4 +123,8 @@ trait Checkpointer {
 
       }
 
+  /**
+   * Get the last made checkpoint for this shard
+   */
+  def lastCheckpoint: UIO[Option[ExtendedSequenceNumber]]
 }
