@@ -92,7 +92,7 @@ object ProducerTest extends ZIOSpecDefault {
       },
       test("produce requests with batching duration") {
 
-        val streamName = "zio-test-stream-producer-3"
+        val streamName = "zio-test-stream-producer-4"
         val batchTime  = 1.second
 
         withStream(streamName, 1) {
