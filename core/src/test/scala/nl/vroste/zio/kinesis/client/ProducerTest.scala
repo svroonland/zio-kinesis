@@ -72,7 +72,11 @@ object ProducerTest extends ZIOSpecDefault {
 
         withStream(streamName, 1) {
           Producer
-            .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 128, shardPrediction = Producer.ShardPrediction.Disabled))
+            .make(
+              streamName,
+              Serde.asciiString,
+              ProducerSettings(bufferSize = 128, shardPrediction = Producer.ShardPrediction.Disabled)
+            )
             .flatMap { producer =>
               for {
                 _         <- printLine("Producing record!").orDie
@@ -83,6 +87,23 @@ object ProducerTest extends ZIOSpecDefault {
                 (time2, _) = result2
                 _         <- printLine(time2.toMillis.toString).orDie
               } yield assertCompletes
+            }
+        }
+      },
+      test("produce requests with batching duration") {
+
+        val streamName = "zio-test-stream-producer-3"
+        val batchTime  = 1.second
+
+        withStream(streamName, 1) {
+          Producer
+            .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 128, batchDuration = Some(batchTime)))
+            .flatMap { producer =>
+              for {
+                _        <- printLine("Producing record!").orDie
+                result   <- producer.produce(ProducerRecord("bla1", "bla1value")).timed
+                (time, _) = result
+              } yield assert(time)(Assertion.isGreaterThan(batchTime))
             }
         }
       },
@@ -396,7 +417,10 @@ object ProducerTest extends ZIOSpecDefault {
                              .make(
                                streamName,
                                Serde.asciiString,
-                               ProducerSettings(aggregation = Producer.Aggregation.ByPredictedShard(), metricsInterval = 3.second),
+                               ProducerSettings(
+                                 aggregation = Producer.Aggregation.ByPredictedShard(),
+                                 metricsInterval = 3.second
+                               ),
                                metricsCollector = metrics.offer(_).unit
                              )
                              .flatMap { producer =>

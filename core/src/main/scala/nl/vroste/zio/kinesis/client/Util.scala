@@ -1,8 +1,7 @@
 package nl.vroste.zio.kinesis.client
 
 import zio._
-import zio.stream.ZStream
-import zio.stream.ZSink
+import zio.stream.{ ZSink, ZStream }
 
 object Util {
   implicit class ZStreamExtensions[-R, +E, +O](val stream: ZStream[R, E, O]) extends AnyVal {

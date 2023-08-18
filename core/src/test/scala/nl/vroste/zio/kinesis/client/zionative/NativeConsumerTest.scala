@@ -919,10 +919,11 @@ object NativeConsumerTest extends ZIOSpecDefault {
     indexStart: Int = 1,
     aggregated: Boolean = false
   ): ZIO[Kinesis with Scope, Throwable, Chunk[ProduceResponse]] = {
-    val aggregation = if (aggregated)
-      Producer.Aggregation.ByPredictedShard()
-    else
-      Producer.Aggregation.Disabled
+    val aggregation =
+      if (aggregated)
+        Producer.Aggregation.ByPredictedShard()
+      else
+        Producer.Aggregation.Disabled
 
     Producer
       .make(streamName, Serde.asciiString, ProducerSettings(maxParallelRequests = 1, aggregation = aggregation))
@@ -943,7 +944,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
           .runCollect
           .map(Chunk.fromIterable)
       }
-    }
+  }
 
   def produceSampleRecordsMassivelyParallel(
     streamName: String,

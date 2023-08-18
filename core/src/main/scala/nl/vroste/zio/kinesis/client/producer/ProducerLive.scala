@@ -34,6 +34,7 @@ private[client] final class ProducerLive[R, R1, T](
   inFlightCalls: Ref[Int],
   shardPrediction: RichShardPrediction
 ) extends Producer[T] {
+  import Util.ZStreamExtensions
   import ProducerLive._
   import Util.ZStreamExtensions
 
@@ -327,8 +328,8 @@ private[client] final class ProducerLive[R, R1, T](
                              } yield (done.await, ProduceRequest(data, PartitionKey(r.partitionKey), onDone, now, null))
                            }
       _                 <- queue.offerAll(requests.map(_._2))
-      awaitResult        = if (chunk.nonEmpty) done.await else ZIO.succeed(Chunk.empty)
-    } yield awaitResult).provideEnvironment(env)
+      await              = if (chunk.nonEmpty) done.await else ZIO.succeed(Chunk.empty)
+    } yield await).provideEnvironment(env)
 }
 
 private[client] object ProducerLive {

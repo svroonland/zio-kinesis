@@ -120,13 +120,13 @@ final case class ProducerSettings(
   aggregation match {
     case Producer.Aggregation.ByPredictedShard(_) =>
       require(aggregation != Producer.Aggregation.Disabled, "Aggregation requires shard prediction to be enabled")
-    case Producer.Aggregation.Disabled => ()
+    case Producer.Aggregation.Disabled            => ()
   }
 
   shardPrediction match {
     case Producer.ShardPrediction.Enabled(parallelism) =>
       require(parallelism > 0, "shardPredictionParallelism must be > 0")
-    case Producer.ShardPrediction.Disabled => ()
+    case Producer.ShardPrediction.Disabled             => ()
   }
 }
 
