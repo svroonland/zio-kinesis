@@ -44,6 +44,8 @@ import java.time.Instant
  */
 trait Producer[T] {
 
+  def produceAsync(r: ProducerRecord[T]): Task[Task[ProduceResponse]]
+
   /**
    * Produce a single record
    *
@@ -53,7 +55,9 @@ trait Producer[T] {
    * @return
    *   Task that fails if the records fail to be produced with a non-recoverable error
    */
-  def produce(r: ProducerRecord[T]): Task[ProduceResponse]
+  def produce(r: ProducerRecord[T]): Task[ProduceResponse] = produceAsync(r).flatten
+
+  def produceChunkAsync(chunk: Chunk[ProducerRecord[T]]): Task[Task[Chunk[ProduceResponse]]]
 
   /**
    * Backpressures when too many requests are in flight
@@ -61,7 +65,7 @@ trait Producer[T] {
    * @return
    *   Task that fails if any of the records fail to be produced with a non-recoverable error
    */
-  def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[Chunk[ProduceResponse]]
+  def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[Chunk[ProduceResponse]] = produceChunkAsync(chunk).flatten
 
   /**
    * ZSink interface to the Producer
@@ -106,7 +110,8 @@ final case class ProducerSettings(
   updateShardInterval: Duration = 30.seconds,
   aggregate: Boolean = false,
   allowedErrorRate: Double = 0.05,
-  shardPredictionParallelism: Int = 8
+  shardPredictionParallelism: Int = 8,
+  batchDuration: Option[Duration] = None
 ) {
   require(allowedErrorRate > 0 && allowedErrorRate <= 1.0, "allowedErrorRate must be between 0 and 1 (inclusive)")
 }

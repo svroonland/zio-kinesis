@@ -66,6 +66,23 @@ object ProducerTest extends ZIOSpecDefault {
             }
         }
       },
+      test("produce requests with batching duration") {
+
+        val streamName = "zio-test-stream-producer-3"
+        val batchTime  = 1.second
+
+        withStream(streamName, 1) {
+          Producer
+            .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 128, batchDuration = Some(batchTime)))
+            .flatMap { producer =>
+              for {
+                _        <- printLine("Producing record!").orDie
+                result   <- producer.produce(ProducerRecord("bla1", "bla1value")).timed
+                (time, _) = result
+              } yield assert(time)(Assertion.isGreaterThan(batchTime))
+            }
+        }
+      },
       test("support a ramp load") {
         val streamName = "zio-test-stream-producer-ramp"
 
