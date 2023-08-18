@@ -66,6 +66,26 @@ object ProducerTest extends ZIOSpecDefault {
             }
         }
       },
+      test("produce records when prediction is disabled") {
+
+        val streamName = "zio-test-stream-producer-3"
+
+        withStream(streamName, 1) {
+          Producer
+            .make(streamName, Serde.asciiString, ProducerSettings(bufferSize = 128, shardPrediction = Producer.ShardPrediction.Disabled))
+            .flatMap { producer =>
+              for {
+                _         <- printLine("Producing record!").orDie
+                result    <- producer.produce(ProducerRecord("bla1", "bla1value")).timed
+                (time, _)  = result
+                _         <- printLine(time.toMillis.toString).orDie
+                result2   <- producer.produce(ProducerRecord("bla1", "bla1value")).timed
+                (time2, _) = result2
+                _         <- printLine(time2.toMillis.toString).orDie
+              } yield assertCompletes
+            }
+        }
+      },
       test("support a ramp load") {
         val streamName = "zio-test-stream-producer-ramp"
 
@@ -127,7 +147,7 @@ object ProducerTest extends ZIOSpecDefault {
                                 bufferSize = 16384 * 48,
                                 maxParallelRequests = 24,
                                 metricsInterval = 5.seconds,
-                                aggregate = true
+                                aggregation = Producer.Aggregation.ByPredictedShard()
                               ),
                               metrics =>
                                 totalMetrics
@@ -280,7 +300,7 @@ object ProducerTest extends ZIOSpecDefault {
                                 .make(
                                   streamName,
                                   Serde.asciiString,
-                                  ProducerSettings(aggregate = true),
+                                  ProducerSettings(aggregation = Producer.Aggregation.ByPredictedShard()),
                                   metricsCollector = m => totalMetrics.update(_ + m)
                                 )
                                 .flatMap(_.produceChunk(Chunk.fromIterable(records)) *> printLine(s"Chunk completed").orDie)
@@ -305,7 +325,7 @@ object ProducerTest extends ZIOSpecDefault {
                                   .make(
                                     streamName,
                                     Serde.asciiString,
-                                    ProducerSettings(aggregate = true),
+                                    ProducerSettings(aggregation = Producer.Aggregation.ByPredictedShard()),
                                     metricsCollector = m => totalMetrics.update(_ + m)
                                   )
                                   .flatMap(_.produceChunk(Chunk.fromIterable(records)))
@@ -376,7 +396,7 @@ object ProducerTest extends ZIOSpecDefault {
                              .make(
                                streamName,
                                Serde.asciiString,
-                               ProducerSettings(aggregate = true, metricsInterval = 3.second),
+                               ProducerSettings(aggregation = Producer.Aggregation.ByPredictedShard(), metricsInterval = 3.second),
                                metricsCollector = metrics.offer(_).unit
                              )
                              .flatMap { producer =>
