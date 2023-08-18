@@ -131,20 +131,7 @@ final case class ProducerSettings(
 }
 
 object Producer {
-  sealed trait ShardPrediction extends Product with Serializable { self =>
-    import ShardPrediction._
-
-    def isEnabled: Boolean = self match {
-      case Disabled   => false
-      case Enabled(_) => true
-    }
-
-    def getParallelism: Int = self match {
-      case Disabled     => 1
-      case Enabled(par) => par
-    }
-  }
-
+  sealed trait ShardPrediction extends Product with Serializable
   object ShardPrediction {
     case object Disabled                           extends ShardPrediction
     final case class Enabled(parallelism: Int = 8) extends ShardPrediction
