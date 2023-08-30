@@ -66,7 +66,8 @@ private[client] final class ProducerLive[R, R1, T](
       .viaMatch(shardPrediction) { case enabled: RichShardPrediction.Enabled =>
         _.groupByKey(_.predictedShard, chunkBufferSize)(throttleShardRequests(enabled.throttler), chunkBufferSize)
       }
-      // Batch records up to the Kinesis PutRecords request limits as long as downstream is busy
+      // If timeout has been provided batch records up to the timeout / Kinesis PutRecords request limits.
+      // Otherwise batch records up to the Kinesis PutRecords request limits as long as downstream is busy.
       .aggregateAsyncWithinDuration(batcher, settings.batchDuration)
       .filter(_.nonEmpty) // TODO why would this be necessary?
       // Several putRecords requests in parallel

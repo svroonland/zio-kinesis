@@ -45,12 +45,22 @@ import java.security.MessageDigest
  */
 trait Producer[T] {
 
+  /**
+   * Produce a single record without awaiting the result.
+   *
+   * Backpressures when too many requests are in flight.
+   *
+   * @param r
+   * @return
+   *   Outer task completes when the record is queued for processing.
+   *   Inner task completes when the record is produced or failed to be produced with a non-recoverable error.
+   */
   def produceAsync(r: ProducerRecord[T]): Task[Task[ProduceResponse]]
 
   /**
-   * Produce a single record
+   * Produce a single record.
    *
-   * Backpressures when too many requests are in flight
+   * Backpressures when too many requests are in flight.
    *
    * @param r
    * @return
@@ -58,13 +68,24 @@ trait Producer[T] {
    */
   final def produce(r: ProducerRecord[T]): Task[ProduceResponse] = produceAsync(r).flatten
 
-  def produceChunkAsync(chunk: Chunk[ProducerRecord[T]]): Task[Task[Chunk[ProduceResponse]]]
-
   /**
-   * Backpressures when too many requests are in flight
+   * Produce a chunk of records without awaiting the result.
+   *
+   * Backpressures when too many requests are in flight.
    *
    * @return
    *   Task that fails if any of the records fail to be produced with a non-recoverable error
+   */
+  def produceChunkAsync(chunk: Chunk[ProducerRecord[T]]): Task[Task[Chunk[ProduceResponse]]]
+
+  /**
+   * Produce a chunk of records.
+   *
+   * Backpressures when too many requests are in flight.
+   *
+   * @return
+   *   Outer task completes when all records are queued for processing.
+   *   Inner task completes when all records are produced or when a record failed to be produced with a non-recoverable error.
    */
   final def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[Chunk[ProduceResponse]] =
     produceChunkAsync(chunk).flatten
@@ -102,6 +123,10 @@ trait Producer[T] {
  *   The maximum allowed rate of errors before throttling is applied
  * @param shardPredictionParallelism
  *   Max number of parallel shard predictions (MD5 hashing)
+ * @param batchDuration
+ *   Max duration a batch is kept open before it is sent to Kinesis. If None, the batch is sent as soon
+ *   as a worker becomes available. Setting this to a larger value will reduce the number of requests to Kinesis and
+ *   decrease cpu usage, but will increase latency.
  */
 final case class ProducerSettings(
   bufferSize: Int = 8192,
@@ -119,35 +144,24 @@ final case class ProducerSettings(
 
   aggregation match {
     case Producer.Aggregation.ByPredictedShard(_) =>
-      require(aggregation != Producer.Aggregation.Disabled, "Aggregation requires shard prediction to be enabled")
+      require(shardPrediction.isEnabled, "Aggregation requires shard prediction to be enabled")
     case Producer.Aggregation.Disabled            => ()
-  }
-
-  shardPrediction match {
-    case Producer.ShardPrediction.Enabled(parallelism) =>
-      require(parallelism > 0, "shardPredictionParallelism must be > 0")
-    case Producer.ShardPrediction.Disabled             => ()
   }
 }
 
 object Producer {
-  sealed trait ShardPrediction extends Product with Serializable
-  object ShardPrediction {
-    case object Disabled                           extends ShardPrediction
-    final case class Enabled(parallelism: Int = 8) extends ShardPrediction
+  sealed trait ShardPrediction extends Product with Serializable {
+    def isEnabled: Boolean = this match {
+      case ShardPrediction.Disabled => false
+      case _: ShardPrediction.Enabled => true
+    }
   }
 
-  sealed trait RichShardPrediction extends Product with Serializable
-
-  object RichShardPrediction {
-    case object Disabled extends RichShardPrediction
-    final case class Enabled(
-      parallelism: Int,
-      throttler: ShardThrottler,
-      md5Pool: ZPool[Nothing, MessageDigest],
-      shards: Ref[ShardMap],
-      triggerUpdateShards: UIO[Unit]
-    ) extends RichShardPrediction
+  object ShardPrediction {
+    case object Disabled                           extends ShardPrediction
+    final case class Enabled(parallelism: Int = 8) extends ShardPrediction {
+      require(parallelism > 0, "shardPredictionParallelism must be > 0")
+    }
   }
 
   sealed trait Aggregation extends Product with Serializable
@@ -158,6 +172,19 @@ object Producer {
   }
 
   final case class ProduceResponse(shardId: String, sequenceNumber: String, attempts: Int, completed: Instant)
+
+  private[client] sealed trait RichShardPrediction extends Product with Serializable
+
+  private[client] object RichShardPrediction {
+    case object Disabled extends RichShardPrediction
+    final case class Enabled(
+      parallelism: Int,
+      throttler: ShardThrottler,
+      md5Pool: ZPool[Nothing, MessageDigest],
+      shards: Ref[ShardMap],
+      triggerUpdateShards: UIO[Unit]
+    ) extends RichShardPrediction
+  }
 
   /**
    * Create a Producer of `T` values to stream `streamName`
