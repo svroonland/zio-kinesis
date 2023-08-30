@@ -42,14 +42,15 @@ private[client] final class ProducerLive[R, R1, T](
     val retries         = ZStream.fromQueue(failedQueue, maxChunkSize = maxChunkSize)
     val chunkBufferSize = Math.ceil(settings.bufferSize * 1.0 / maxChunkSize).toInt
 
-    // Failed records get precedence
-    (retries merge ZStream
+    val newRequests = ZStream
       .fromQueue(queue, maxChunkSize)
+      // Potentially add shard prediction to requests. If disabled predictedShard will be null
       .viaMatch(shardPrediction) { case enabled: RichShardPrediction.Enabled =>
         _.mapChunks(Chunk.single)
           .mapZIOParUnordered(enabled.parallelism)(addPredictedShardToRequestsChunk(enabled.md5Pool, enabled.shards))
           .flattenChunks
       }
+      // Potentially aggregate records into KPL style aggregated records
       .viaMatch((settings.aggregation, shardPrediction)) {
         case (Aggregation.ByPredictedShard(timeout), RichShardPrediction.Enabled(_, _, md5Pool, _, _)) =>
           _.groupByKey(_.predictedShard, chunkBufferSize)(
@@ -62,9 +63,13 @@ private[client] final class ProducerLive[R, R1, T](
             },
             chunkBufferSize
           )
-      })
-      .viaMatch(shardPrediction) { case enabled: RichShardPrediction.Enabled =>
-        _.groupByKey(_.predictedShard, chunkBufferSize)(throttleShardRequests(enabled.throttler), chunkBufferSize)
+      }
+
+    retries
+      .merge(newRequests)
+      // Potentially throttle requests per shard
+      .viaMatch(shardPrediction) { case RichShardPrediction.Enabled(_, Some(throttler), _, _, _) =>
+        _.groupByKey(_.predictedShard, chunkBufferSize)(throttleShardRequests(throttler), chunkBufferSize)
       }
       // If timeout has been provided batch records up to the timeout / Kinesis PutRecords request limits.
       // Otherwise batch records up to the Kinesis PutRecords request limits as long as downstream is busy.
@@ -194,9 +199,9 @@ private[client] final class ProducerLive[R, R1, T](
 
     for {
       _ <- shardPrediction match {
-             case enabled: RichShardPrediction.Enabled =>
-               ZIO.foreachDiscard(requests)(r => enabled.throttler.getForShard(r.predictedShard).flatMap(_.addFailure))
-             case _                                    => ZIO.unit
+             case RichShardPrediction.Enabled(_, Some(throttler), _, _, _) =>
+               ZIO.foreachDiscard(requests)(r => throttler.getForShard(r.predictedShard).flatMap(_.addFailure))
+             case _                                                        => ZIO.unit
            }
       _ <- ZIO.logWarning(s"Failed to produce ${failedCount} records").when(newFailed.nonEmpty)
       _ <- ZIO.logWarning(responses.take(10).flatMap(_.errorCode.toOption).mkString(", ")).when(newFailed.nonEmpty)
