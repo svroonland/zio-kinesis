@@ -42,7 +42,7 @@ object ExampleApp extends ZIOAppDefault {
   val recordProcessingTime: Duration  = 1.millisecond
 
   val producerSettings = ProducerSettings(
-    aggregate = true,
+    aggregation = Producer.Aggregation.ByPredictedShard(),
     metricsInterval = 5.seconds,
     bufferSize = 8192 * 8,
     maxParallelRequests = 10

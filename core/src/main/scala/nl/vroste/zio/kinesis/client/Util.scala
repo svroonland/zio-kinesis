@@ -1,10 +1,18 @@
 package nl.vroste.zio.kinesis.client
 
 import zio._
-import zio.stream.ZStream
+import zio.stream.{ ZSink, ZStream }
 
 object Util {
   implicit class ZStreamExtensions[-R, +E, +O](val stream: ZStream[R, E, O]) extends AnyVal {
+
+    def aggregateAsyncWithinDuration[R1 <: R, E1 >: E, A >: O, B](
+      aggregator: ZSink[R1, E1, A, A, B],
+      timeout: Option[Duration] = None
+    ): ZStream[R1, E1, B] =
+      timeout.fold(stream.aggregateAsync(aggregator))(timeout =>
+        stream.aggregateAsyncWithin(aggregator, Schedule.spaced(timeout))
+      )
 
     def terminateOnFiberFailure[E1 >: E](fib: Fiber[E1, Any]): ZStream[R, E1, O] =
       stream
@@ -14,6 +22,16 @@ object Util {
 
     def terminateOnPromiseCompleted[E1 >: E](p: Promise[Nothing, _]): ZStream[R, E1, O] =
       stream.map(Exit.succeed).mergeHaltEither(ZStream.fromZIO(p.await).as(Exit.fail(None))).flattenExitOption
+
+    def viaIf[R1 <: R, E1 >: E, O1 >: O](condition: Boolean)(
+      f: ZStream[R, E, O] => ZStream[R1, E1, O1]
+    ): ZStream[R1, E1, O1] =
+      if (condition) f(stream) else stream
+
+    def viaMatch[A, R1 <: R, E1 >: E, O1 >: O](value: A)(
+      f: PartialFunction[A, ZStream[R, E, O] => ZStream[R1, E1, O1]]
+    ): ZStream[R1, E1, O1] =
+      if (f.isDefinedAt(value)) f(value)(stream) else stream
   }
 
   /**
