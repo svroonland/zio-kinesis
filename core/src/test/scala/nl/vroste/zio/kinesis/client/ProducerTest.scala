@@ -75,7 +75,11 @@ object ProducerTest extends ZIOSpecDefault {
             .make(
               streamName,
               Serde.asciiString,
-              ProducerSettings(bufferSize = 128, shardPrediction = Producer.ShardPrediction.Disabled)
+              ProducerSettings(
+                bufferSize = 128,
+                shardPrediction = Producer.ShardPrediction.Disabled,
+                throttling = Producer.Throttling.Disabled
+              )
             )
             .flatMap { producer =>
               for {
