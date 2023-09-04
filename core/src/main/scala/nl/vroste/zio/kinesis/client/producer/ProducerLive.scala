@@ -19,7 +19,7 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.time.Instant
 import scala.util.control.NonFatal
-import nl.vroste.zio.kinesis.client.Producer.{ Aggregation, RichShardPrediction }
+import nl.vroste.zio.kinesis.client.Producer.{ Aggregation, RichShardPrediction, RichThrottling }
 
 private[client] final class ProducerLive[R, R1, T](
   client: Kinesis,
@@ -32,7 +32,8 @@ private[client] final class ProducerLive[R, R1, T](
   streamName: StreamName,
   metricsCollector: ProducerMetrics => ZIO[R1, Nothing, Unit],
   inFlightCalls: Ref[Int],
-  shardPrediction: RichShardPrediction
+  shardPrediction: RichShardPrediction,
+  throttling: RichThrottling
 ) extends Producer[T] {
   import Util.ZStreamExtensions
   import ProducerLive._
@@ -52,7 +53,7 @@ private[client] final class ProducerLive[R, R1, T](
       }
       // Potentially aggregate records into KPL style aggregated records
       .viaMatch((settings.aggregation, shardPrediction)) {
-        case (Aggregation.ByPredictedShard(timeout), RichShardPrediction.Enabled(_, _, md5Pool, _, _)) =>
+        case (Aggregation.ByPredictedShard(timeout), RichShardPrediction.Enabled(_, md5Pool, _, _)) =>
           _.groupByKey(_.predictedShard, chunkBufferSize)(
             { case (shardId @ _, requests) =>
               ZStream.scoped(md5Pool.get).flatMap { digest =>
@@ -68,7 +69,7 @@ private[client] final class ProducerLive[R, R1, T](
     retries
       .merge(newRequests)
       // Potentially throttle requests per shard
-      .viaMatch(shardPrediction) { case RichShardPrediction.Enabled(_, Some(throttler), _, _, _) =>
+      .viaMatch(throttling) { case RichThrottling.Enabled(throttler) =>
         _.groupByKey(_.predictedShard, chunkBufferSize)(throttleShardRequests(throttler), chunkBufferSize)
       }
       // If timeout has been provided batch records up to the timeout / Kinesis PutRecords request limits.
@@ -198,10 +199,8 @@ private[client] final class ProducerLive[R, R1, T](
     val failedCount = requests.map(_.aggregateCount).sum
 
     for {
-      _ <- shardPrediction match {
-             case RichShardPrediction.Enabled(_, Some(throttler), _, _, _) =>
-               ZIO.foreachDiscard(requests)(r => throttler.getForShard(r.predictedShard).flatMap(_.addFailure))
-             case _                                                        => ZIO.unit
+      _ <- ZIO.whenCase(throttling) { case RichThrottling.Enabled(throttler) =>
+             ZIO.foreachDiscard(requests)(r => throttler.getForShard(r.predictedShard).flatMap(_.addFailure))
            }
       _ <- ZIO.logWarning(s"Failed to produce ${failedCount} records").when(newFailed.nonEmpty)
       _ <- ZIO.logWarning(responses.take(10).flatMap(_.errorCode.toOption).mkString(", ")).when(newFailed.nonEmpty)

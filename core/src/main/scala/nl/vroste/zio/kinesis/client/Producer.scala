@@ -134,12 +134,19 @@ final case class ProducerSettings(
   updateShardInterval: Duration = 30.seconds,
   shardPrediction: Producer.ShardPrediction = Producer.ShardPrediction.Enabled(),
   aggregation: Producer.Aggregation = Producer.Aggregation.Disabled,
+  throttling: Producer.Throttling = Producer.Throttling.Enabled(),
   batchDuration: Option[Duration] = None
 ) {
   aggregation match {
     case Producer.Aggregation.ByPredictedShard(_) =>
       require(shardPrediction.isEnabled, "Aggregation requires shard prediction to be enabled")
-    case Producer.Aggregation.Disabled            => ()
+    case _                                        => ()
+  }
+
+  throttling match {
+    case Producer.Throttling.Enabled(_) =>
+      require(shardPrediction.isEnabled, "Throttling requires shard prediction to be enabled")
+    case _                              => ()
   }
 }
 
@@ -176,8 +183,7 @@ object Producer {
      * @param throttling
      *   Throttling settings for per-shard throttling. If None, throttling is disabled.
      */
-    final case class Enabled(parallelism: Int = 8, throttling: Throttling = Throttling.Enabled())
-        extends ShardPrediction {
+    final case class Enabled(parallelism: Int = 8) extends ShardPrediction {
       require(parallelism > 0, "shardPredictionParallelism must be > 0")
     }
   }
@@ -203,13 +209,21 @@ object Producer {
 
   private[client] object RichShardPrediction {
     case object Disabled extends RichShardPrediction
+
     final case class Enabled(
       parallelism: Int,
-      throttler: Option[ShardThrottler],
       md5Pool: ZPool[Nothing, MessageDigest],
       shards: Ref[ShardMap],
       triggerUpdateShards: UIO[Unit]
     ) extends RichShardPrediction
+  }
+
+  private[client] sealed trait RichThrottling extends Product with Serializable
+
+  private[client] object RichThrottling {
+    case object Disabled extends RichThrottling
+
+    final case class Enabled(throttler: ShardThrottler) extends RichThrottling
   }
 
   /**
@@ -245,8 +259,8 @@ object Producer {
       failedQueue    <- ZIO.acquireRelease(Queue.bounded[ProduceRequest](settings.bufferSize))(_.shutdown)
 
       richShardPrediction <- settings.shardPrediction match {
-                               case ShardPrediction.Disabled                                   => ZIO.succeed(RichShardPrediction.Disabled)
-                               case ShardPrediction.Enabled(predictionParallelism, throttling) =>
+                               case ShardPrediction.Disabled                       => ZIO.succeed(RichShardPrediction.Disabled)
+                               case ShardPrediction.Enabled(predictionParallelism) =>
                                  for {
                                    shardMap            <- getShardMap(StreamName(streamName))
                                    currentShardMap     <- Ref.make(shardMap)
@@ -262,22 +276,22 @@ object Producer {
                                                               .ignore,
                                                             settings.updateShardInterval
                                                           )
-                                   throttler           <- throttling match {
-                                                            case Throttling.Disabled                  =>
-                                                              ZIO.succeed(None)
-                                                            case Throttling.Enabled(allowedErrorRate) =>
-                                                              ShardThrottler.make(allowedError = allowedErrorRate).map(Some(_))
-                                                          }
                                    md5Pool             <-
                                      ZPool.make(ShardMap.md5, settings.maxParallelRequests + predictionParallelism)
                                  } yield RichShardPrediction.Enabled(
                                    predictionParallelism,
-                                   throttler,
                                    md5Pool,
                                    currentShardMap,
                                    triggerUpdateShards
                                  )
                              }
+
+      richThrottling <- settings.throttling match {
+                          case Throttling.Disabled                  =>
+                            ZIO.succeed(RichThrottling.Disabled)
+                          case Throttling.Enabled(allowedErrorRate) =>
+                            ShardThrottler.make(allowedError = allowedErrorRate).map(RichThrottling.Enabled(_))
+                        }
 
       producer = new ProducerLive[R, R1, T](
                    client,
@@ -290,7 +304,8 @@ object Producer {
                    StreamName(streamName),
                    metricsCollector,
                    inFlightCalls,
-                   richShardPrediction
+                   richShardPrediction,
+                   richThrottling
                  )
       _       <- producer.runloop.forkScoped                                             // Fiber cannot fail
       _       <- producer.metricsCollection.ensuring(producer.collectMetrics).forkScoped // Fiber cannot fail
