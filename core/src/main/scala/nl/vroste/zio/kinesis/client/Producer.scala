@@ -11,6 +11,7 @@ import zio.aws.kinesis.model.{ ListShardsRequest, ShardFilter, ShardFilterType }
 import zio.stream.ZSink
 
 import java.time.Instant
+import java.security.MessageDigest
 
 /**
  * Producer for Kinesis records
@@ -45,23 +46,49 @@ import java.time.Instant
 trait Producer[T] {
 
   /**
-   * Produce a single record
+   * Produce a single record without awaiting the result.
    *
-   * Backpressures when too many requests are in flight
+   * Backpressures when too many requests are in flight.
+   *
+   * @param r
+   * @return
+   *   Outer task completes when the record is queued for processing. Inner task completes when the record is produced
+   *   or failed to be produced with a non-recoverable error.
+   */
+  def produceAsync(r: ProducerRecord[T]): Task[Task[ProduceResponse]]
+
+  /**
+   * Produce a single record.
+   *
+   * Backpressures when too many requests are in flight.
    *
    * @param r
    * @return
    *   Task that fails if the records fail to be produced with a non-recoverable error
    */
-  def produce(r: ProducerRecord[T]): Task[ProduceResponse]
+  final def produce(r: ProducerRecord[T]): Task[ProduceResponse] = produceAsync(r).flatten
 
   /**
-   * Backpressures when too many requests are in flight
+   * Produce a chunk of records without awaiting the result.
+   *
+   * Backpressures when too many requests are in flight.
    *
    * @return
    *   Task that fails if any of the records fail to be produced with a non-recoverable error
    */
-  def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[Chunk[ProduceResponse]]
+  def produceChunkAsync(chunk: Chunk[ProducerRecord[T]]): Task[Task[Chunk[ProduceResponse]]]
+
+  /**
+   * Produce a chunk of records.
+   *
+   * Backpressures when too many requests are in flight.
+   *
+   * @return
+   *   Outer task completes when all records are queued for processing. Inner task completes when all records are
+   *   produced or when a record failed to be produced with a non-recoverable error.
+   */
+  final def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[Chunk[ProduceResponse]] =
+    produceChunkAsync(chunk).flatten
 
   /**
    * ZSink interface to the Producer
@@ -89,13 +116,14 @@ trait Producer[T] {
  *   Interval at which metrics are published
  * @param updateShardInterval
  *   Interval at which the stream's shards are refreshed
- * @param aggregate
- *   Aggregate records Enabling this setting can give higher throughput for small records, by working around the 1000
- *   records/s limit per shard.
- * @param allowedErrorRate
- *   The maximum allowed rate of errors before throttling is applied
- * @param shardPredictionParallelism
- *   Max number of parallel shard predictions (MD5 hashing)
+ * @param shardPrediction
+ *   Settings for shard prediction
+ * @param aggregation
+ *   Settings for aggregation
+ * @param batchDuration
+ *   Max duration a batch is kept open before it is sent to Kinesis. If None, the batch is sent as soon as a worker
+ *   becomes available. Setting this to a larger value will reduce the number of requests to Kinesis and decrease cpu
+ *   usage, but will increase latency.
  */
 final case class ProducerSettings(
   bufferSize: Int = 8192,
@@ -104,15 +132,99 @@ final case class ProducerSettings(
   failedDelay: Duration = 100.millis,
   metricsInterval: Duration = 30.seconds,
   updateShardInterval: Duration = 30.seconds,
-  aggregate: Boolean = false,
-  allowedErrorRate: Double = 0.05,
-  shardPredictionParallelism: Int = 8
+  shardPrediction: Producer.ShardPrediction = Producer.ShardPrediction.Enabled(),
+  aggregation: Producer.Aggregation = Producer.Aggregation.Disabled,
+  throttling: Producer.Throttling = Producer.Throttling.Enabled(),
+  batchDuration: Option[Duration] = None
 ) {
-  require(allowedErrorRate > 0 && allowedErrorRate <= 1.0, "allowedErrorRate must be between 0 and 1 (inclusive)")
+  aggregation match {
+    case Producer.Aggregation.ByPredictedShard(_) =>
+      require(shardPrediction.isEnabled, "Aggregation requires shard prediction to be enabled")
+    case _                                        => ()
+  }
+
+  throttling match {
+    case Producer.Throttling.Enabled(_) =>
+      require(shardPrediction.isEnabled, "Throttling requires shard prediction to be enabled")
+    case _                              => ()
+  }
 }
 
 object Producer {
+
+  sealed trait Throttling extends Product with Serializable
+
+  object Throttling {
+    case object Disabled extends Throttling
+
+    /**
+     * @param allowedErrorRate
+     *   The maximum allowed rate of errors before throttling is applied
+     */
+    final case class Enabled(allowedErrorRate: Double = 0.05) extends Throttling {
+      require(allowedErrorRate > 0 && allowedErrorRate <= 1.0, "allowedErrorRate must be between 0 and 1 (inclusive)")
+    }
+
+  }
+
+  sealed trait ShardPrediction extends Product with Serializable {
+    def isEnabled: Boolean = this match {
+      case ShardPrediction.Disabled   => false
+      case _: ShardPrediction.Enabled => true
+    }
+  }
+
+  object ShardPrediction {
+    case object Disabled extends ShardPrediction
+
+    /**
+     * @param parallelism
+     *   Max number of parallel shard predictions (MD5 hashing)
+     * @param throttling
+     *   Throttling settings for per-shard throttling. If None, throttling is disabled.
+     */
+    final case class Enabled(parallelism: Int = 8) extends ShardPrediction {
+      require(parallelism > 0, "shardPredictionParallelism must be > 0")
+    }
+  }
+
+  sealed trait Aggregation extends Product with Serializable
+
+  object Aggregation {
+    case object Disabled extends Aggregation
+
+    /**
+     * Aggregates records based on their predicted shard
+     *
+     * @param aggregationDuration
+     *   Max duration for which an aggregate record is kept open. If None, the aggregate is closed as soon as downstream
+     *   is ready to process it.
+     */
+    final case class ByPredictedShard(aggregationDuration: Option[Duration] = None) extends Aggregation
+  }
+
   final case class ProduceResponse(shardId: String, sequenceNumber: String, attempts: Int, completed: Instant)
+
+  private[client] sealed trait RichShardPrediction extends Product with Serializable
+
+  private[client] object RichShardPrediction {
+    case object Disabled extends RichShardPrediction
+
+    final case class Enabled(
+      parallelism: Int,
+      md5Pool: ZPool[Nothing, MessageDigest],
+      shards: Ref[ShardMap],
+      triggerUpdateShards: UIO[Unit]
+    ) extends RichShardPrediction
+  }
+
+  private[client] sealed trait RichThrottling extends Product with Serializable
+
+  private[client] object RichThrottling {
+    case object Disabled extends RichThrottling
+
+    final case class Enabled(throttler: ShardThrottler) extends RichThrottling
+  }
 
   /**
    * Create a Producer of `T` values to stream `streamName`
@@ -139,25 +251,47 @@ object Producer {
     metricsCollector: ProducerMetrics => ZIO[R1, Nothing, Unit] = (_: ProducerMetrics) => ZIO.unit
   ): ZIO[Scope with R with R1 with Kinesis, Throwable, Producer[T]] =
     for {
-      client          <- ZIO.service[Kinesis]
-      env             <- ZIO.environment[R]
-      queue           <- ZIO.acquireRelease(Queue.bounded[ProduceRequest](settings.bufferSize))(_.shutdown)
-      currentMetrics  <- instant.map(CurrentMetrics.empty).flatMap(Ref.make(_))
-      shardMap        <- getShardMap(StreamName(streamName))
-      currentShardMap <- Ref.make(shardMap)
-      inFlightCalls   <- Ref.make(0)
-      failedQueue     <- ZIO.acquireRelease(Queue.bounded[ProduceRequest](settings.bufferSize))(_.shutdown)
+      client         <- ZIO.service[Kinesis]
+      env            <- ZIO.environment[R]
+      queue          <- ZIO.acquireRelease(Queue.bounded[ProduceRequest](settings.bufferSize))(_.shutdown)
+      currentMetrics <- instant.map(CurrentMetrics.empty).flatMap(Ref.make(_))
+      inFlightCalls  <- Ref.make(0)
+      failedQueue    <- ZIO.acquireRelease(Queue.bounded[ProduceRequest](settings.bufferSize))(_.shutdown)
 
-      triggerUpdateShards <- Util.periodicAndTriggerableOperation(
-                               (ZIO.logDebug("Refreshing shard map") *>
-                                 (getShardMap(StreamName(streamName)) flatMap currentShardMap.set) *>
-                                 ZIO.logInfo("Shard map was refreshed"))
-                                 .tapError(e => ZIO.logError(s"Error refreshing shard map: ${e}").ignore)
-                                 .ignore,
-                               settings.updateShardInterval
-                             )
-      throttler           <- ShardThrottler.make(allowedError = settings.allowedErrorRate)
-      md5Pool             <- ZPool.make(ShardMap.md5, settings.shardPredictionParallelism + settings.maxParallelRequests)
+      richShardPrediction <- settings.shardPrediction match {
+                               case ShardPrediction.Disabled                       => ZIO.succeed(RichShardPrediction.Disabled)
+                               case ShardPrediction.Enabled(predictionParallelism) =>
+                                 for {
+                                   shardMap            <- getShardMap(StreamName(streamName))
+                                   currentShardMap     <- Ref.make(shardMap)
+                                   triggerUpdateShards <- Util.periodicAndTriggerableOperation(
+                                                            (ZIO.logDebug("Refreshing shard map") *>
+                                                              (getShardMap(
+                                                                StreamName(streamName)
+                                                              ) flatMap currentShardMap.set) *>
+                                                              ZIO.logInfo("Shard map was refreshed"))
+                                                              .tapError(e =>
+                                                                ZIO.logError(s"Error refreshing shard map: ${e}").ignore
+                                                              )
+                                                              .ignore,
+                                                            settings.updateShardInterval
+                                                          )
+                                   md5Pool             <-
+                                     ZPool.make(ShardMap.md5, settings.maxParallelRequests + predictionParallelism)
+                                 } yield RichShardPrediction.Enabled(
+                                   predictionParallelism,
+                                   md5Pool,
+                                   currentShardMap,
+                                   triggerUpdateShards
+                                 )
+                             }
+
+      richThrottling <- settings.throttling match {
+                          case Throttling.Disabled                  =>
+                            ZIO.succeed(RichThrottling.Disabled)
+                          case Throttling.Enabled(allowedErrorRate) =>
+                            ShardThrottler.make(allowedError = allowedErrorRate).map(RichThrottling.Enabled(_))
+                        }
 
       producer = new ProducerLive[R, R1, T](
                    client,
@@ -166,15 +300,12 @@ object Producer {
                    failedQueue,
                    serializer,
                    currentMetrics,
-                   currentShardMap,
                    settings,
                    StreamName(streamName),
                    metricsCollector,
-                   settings.aggregate,
                    inFlightCalls,
-                   triggerUpdateShards,
-                   throttler,
-                   md5Pool
+                   richShardPrediction,
+                   richThrottling
                  )
       _       <- producer.runloop.forkScoped                                             // Fiber cannot fail
       _       <- producer.metricsCollection.ensuring(producer.collectMetrics).forkScoped // Fiber cannot fail
