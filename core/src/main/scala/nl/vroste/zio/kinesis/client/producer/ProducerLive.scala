@@ -19,6 +19,7 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.time.Instant
 import scala.util.control.NonFatal
+import nl.vroste.zio.kinesis.client.Producer.{ Aggregation, RichShardPrediction, RichThrottling }
 
 private[client] final class ProducerLive[R, R1, T](
   client: Kinesis,
@@ -27,45 +28,53 @@ private[client] final class ProducerLive[R, R1, T](
   failedQueue: Queue[ProduceRequest],
   serializer: Serializer[R, T],
   currentMetrics: Ref[CurrentMetrics],
-  shards: Ref[ShardMap],
   settings: ProducerSettings,
   streamName: StreamName,
   metricsCollector: ProducerMetrics => ZIO[R1, Nothing, Unit],
-  aggregate: Boolean = false,
   inFlightCalls: Ref[Int],
-  triggerUpdateShards: UIO[Unit],
-  throttler: ShardThrottler,
-  md5Pool: ZPool[Throwable, MessageDigest]
+  shardPrediction: RichShardPrediction,
+  throttling: RichThrottling
 ) extends Producer[T] {
+  import Util.ZStreamExtensions
   import ProducerLive._
+  import Util.ZStreamExtensions
 
   val runloop: ZIO[Any, Nothing, Unit] = {
     val retries         = ZStream.fromQueue(failedQueue, maxChunkSize = maxChunkSize)
     val chunkBufferSize = Math.ceil(settings.bufferSize * 1.0 / maxChunkSize).toInt
 
-    // Failed records get precedence
-    (retries merge ZStream
+    val newRequests = ZStream
       .fromQueue(queue, maxChunkSize)
-      .mapChunksZIO(chunk => ZIO.logTrace(s"Dequeued chunk of size ${chunk.size}").as(Chunk.single(chunk)))
-      .mapZIOParUnordered(settings.shardPredictionParallelism)(addPredictedShardToRequestsChunk)
-      .flattenChunks
-      // Aggregate records per shard
-      .groupByKey(_.predictedShard, chunkBufferSize)(
-        { case (shardId @ _, requests) =>
-          ZStream.scoped(ShardMap.md5.orDie).flatMap { digest =>
-            if (aggregate)
-              requests.aggregateAsync(aggregator).mapConcatZIO(_.toProduceRequest(digest).map(_.toList))
-            else requests
-          }
-        },
-        chunkBufferSize
-      ))
-      .groupByKey(_.predictedShard, chunkBufferSize)(
-        throttleShardRequests,
-        chunkBufferSize
-      )                   // TODO can we avoid this second group by?
-      // Batch records up to the Kinesis PutRecords request limits as long as downstream is busy
-      .aggregateAsync(batcher)
+      // Potentially add shard prediction to requests. If disabled predictedShard will be null
+      .viaMatch(shardPrediction) { case enabled: RichShardPrediction.Enabled =>
+        _.mapChunks(Chunk.single)
+          .mapZIOParUnordered(enabled.parallelism)(addPredictedShardToRequestsChunk(enabled.md5Pool, enabled.shards))
+          .flattenChunks
+      }
+      // Potentially aggregate records into KPL style aggregated records
+      .viaMatch((settings.aggregation, shardPrediction)) {
+        case (Aggregation.ByPredictedShard(timeout), RichShardPrediction.Enabled(_, md5Pool, _, _)) =>
+          _.groupByKey(_.predictedShard, chunkBufferSize)(
+            { case (shardId @ _, requests) =>
+              ZStream.scoped(md5Pool.get).flatMap { digest =>
+                requests
+                  .aggregateAsyncWithinDuration(aggregator, timeout)
+                  .mapConcatZIO(_.toProduceRequest(digest).map(_.toList))
+              }
+            },
+            chunkBufferSize
+          )
+      }
+
+    retries
+      .merge(newRequests)
+      // Potentially throttle requests per shard
+      .viaMatch(throttling) { case RichThrottling.Enabled(throttler) =>
+        _.groupByKey(_.predictedShard, chunkBufferSize)(throttleShardRequests(throttler), chunkBufferSize)
+      }
+      // If timeout has been provided batch records up to the timeout / Kinesis PutRecords request limits.
+      // Otherwise batch records up to the Kinesis PutRecords request limits as long as downstream is busy.
+      .aggregateAsyncWithinDuration(batcher, settings.batchDuration)
       .filter(_.nonEmpty) // TODO why would this be necessary?
       // Several putRecords requests in parallel
       .flatMapPar(settings.maxParallelRequests, chunkBufferSize)(b => ZStream.fromZIO(countInFlight(processBatch(b))))
@@ -76,7 +85,9 @@ private[client] final class ProducerLive[R, R1, T](
       .orDie
   }
 
-  private def addPredictedShardToRequestsChunk(chunk: Chunk[ProduceRequest]) =
+  private def addPredictedShardToRequestsChunk(md5Pool: ZPool[Nothing, MessageDigest], shards: Ref[ShardMap])(
+    chunk: Chunk[ProduceRequest]
+  ) =
     ZIO.scoped {
       (md5Pool.get zip shards.get).flatMap { case (md5, shardMap) =>
         chunk.mapZIO { r =>
@@ -87,7 +98,9 @@ private[client] final class ProducerLive[R, R1, T](
       }
     }
 
-  private def throttleShardRequests(shardId: ShardId, requests: ZStream[Any, Throwable, ProduceRequest]) =
+  private def throttleShardRequests(
+    throttler: ShardThrottler
+  )(shardId: ShardId, requests: ZStream[Any, Throwable, ProduceRequest]) =
     ZStream.fromZIO(throttler.getForShard(shardId)).flatMap { throttlerForShard =>
       requests
         .mapChunks(
@@ -150,6 +163,16 @@ private[client] final class ProducerLive[R, R1, T](
       r                             <- checkShardPredictionErrors(responseAndRequests, m1)
       (hasShardPredictionErrors, m2) = r
       m3                            <- handleFailures(newFailed, repredict = hasShardPredictionErrors, m2)
+      _                             <- currentMetrics.getAndUpdate(succeeded.foldLeft(_) { case (metrics, (_, request)) =>
+                                         if (request.isAggregated) {
+                                           metrics.addSuccesses(
+                                             Chunk.fill(request.aggregateCount)(request.attemptNumber),
+                                             Chunk.fill(request.aggregateCount)(java.time.Duration.between(request.timestamp, now))
+                                           )
+                                         } else {
+                                           metrics.addSuccess(request.attemptNumber, java.time.Duration.between(request.timestamp, now))
+                                         }
+                                       })
       _                             <- ZIO.foreachDiscard(succeeded) { case (response, request) =>
                                          request.complete(
                                            ZIO.succeed(
@@ -176,22 +199,29 @@ private[client] final class ProducerLive[R, R1, T](
     val failedCount = requests.map(_.aggregateCount).sum
 
     for {
-      _ <- ZIO.foreachDiscard(requests)(r => throttler.getForShard(r.predictedShard).flatMap(_.addFailure))
+      _ <- ZIO.whenCase(throttling) { case RichThrottling.Enabled(throttler) =>
+             ZIO.foreachDiscard(requests)(r => throttler.getForShard(r.predictedShard).flatMap(_.addFailure))
+           }
       _ <- ZIO.logWarning(s"Failed to produce ${failedCount} records").when(newFailed.nonEmpty)
       _ <- ZIO.logWarning(responses.take(10).flatMap(_.errorCode.toOption).mkString(", ")).when(newFailed.nonEmpty)
 
       // The shard map may not yet be updated unless we're experiencing high latency
       updatedFailed <- if (repredict)
-                         ZIO.scoped {
-                           ShardMap.md5.orDie.flatMap { digest =>
-                             shards.get.map(shardMap =>
-                               requests.map(r =>
-                                 r.newAttempt.copy(predictedShard =
-                                   shardMap.shardForPartitionKey(digest, r.partitionKey)
+                         shardPrediction match {
+                           case enabled: RichShardPrediction.Enabled =>
+                             ZIO.scoped {
+                               enabled.md5Pool.get.flatMap { digest =>
+                                 enabled.shards.get.map(shardMap =>
+                                   requests.map(r =>
+                                     r.newAttempt.copy(predictedShard =
+                                       shardMap.shardForPartitionKey(digest, r.partitionKey)
+                                     )
+                                   )
                                  )
-                               )
-                             )
-                           }
+                               }
+                             }
+                           case _                                    =>
+                             ZIO.dieMessage("Shard prediction is disabled")
                          }
                        else
                          ZIO.succeed(requests.map(_.newAttempt))
@@ -208,7 +238,7 @@ private[client] final class ProducerLive[R, R1, T](
     metrics: CurrentMetrics
   ): ZIO[Any, Nothing, (Boolean, CurrentMetrics)] = {
     val shardPredictionErrors = responseAndRequests.filter { case (result, request) =>
-      result.shardId.exists(_ != request.predictedShard)
+      (request.predictedShard != null) && result.shardId.exists(_ != request.predictedShard)
     }
 
     val (succeeded, failed) = shardPredictionErrors.partition(_._1.errorCode.isEmpty)
@@ -217,19 +247,24 @@ private[client] final class ProducerLive[R, R1, T](
 
     ZIO
       .when(shardPredictionErrors.nonEmpty) {
-        val maxProduceRequestTimestamp = shardPredictionErrors
-          .map(_._2.timestamp.toEpochMilli)
-          .max
+        shardPrediction match {
+          case enabled: RichShardPrediction.Enabled =>
+            val maxProduceRequestTimestamp = shardPredictionErrors
+              .map(_._2.timestamp.toEpochMilli)
+              .max
 
-        ZIO.logWarning(
-          s"${succeeded.map(_._2.aggregateCount).sum} records (aggregated as ${succeeded.size}) ended up " +
-            s"on a different shard than expected and/or " +
-            s"${failed.map(_._2.aggregateCount).sum} records (aggregated as ${failed.size}) would end up " +
-            s"on a different shard than expected if they had succeeded. This may happen after a reshard."
-        ) *> triggerUpdateShards.fork.whenZIO { // Fiber cannot fail
-          shards
-            .getAndUpdate(_.invalidate)
-            .map(shardMap => !shardMap.invalid && shardMap.lastUpdated.toEpochMilli < maxProduceRequestTimestamp)
+            ZIO.logWarning(
+              s"${succeeded.map(_._2.aggregateCount).sum} records (aggregated as ${succeeded.size}) ended up " +
+                s"on a different shard than expected and/or " +
+                s"${failed.map(_._2.aggregateCount).sum} records (aggregated as ${failed.size}) would end up " +
+                s"on a different shard than expected if they had succeeded. This may happen after a reshard."
+            ) *> enabled.triggerUpdateShards.fork.whenZIO { // Fiber cannot fail
+              enabled.shards
+                .getAndUpdate(_.invalidate)
+                .map(shardMap => !shardMap.invalid && shardMap.lastUpdated.toEpochMilli < maxProduceRequestTimestamp)
+            }
+          case _                                    =>
+            ZIO.dieMessage("Shard prediction is disabled")
         }
       }
       .as((shardPredictionErrors.nonEmpty, updatedMetrics))
@@ -266,18 +301,15 @@ private[client] final class ProducerLive[R, R1, T](
     .delay(settings.metricsInterval)
     .repeat(Schedule.fixed(settings.metricsInterval))
 
-  override def produce(r: ProducerRecord[T]): Task[ProduceResponse] =
+  override def produceAsync(r: ProducerRecord[T]): Task[Task[ProduceResponse]] =
     (for {
       now             <- instant
       ar              <- makeProduceRequest(r, serializer, now)
       (await, request) = ar
       _               <- queue.offer(request)
-      response        <- await
-      latency          = java.time.Duration.between(now, response.completed)
-      _               <- currentMetrics.getAndUpdate(_.addSuccess(response.attempts, latency))
-    } yield response).provideEnvironment(env)
+    } yield await).provideEnvironment(env)
 
-  override def produceChunk(chunk: Chunk[ProducerRecord[T]]): Task[Chunk[ProduceResponse]] =
+  override def produceChunkAsync(chunk: Chunk[ProducerRecord[T]]): Task[Task[Chunk[ProduceResponse]]] =
     (for {
       now <- instant
 
@@ -301,11 +333,8 @@ private[client] final class ProducerLive[R, R1, T](
                              } yield (done.await, ProduceRequest(data, PartitionKey(r.partitionKey), onDone, now, null))
                            }
       _                 <- queue.offerAll(requests.map(_._2))
-      results           <- if (chunk.nonEmpty) done.await else ZIO.succeed(Chunk.empty)
-      latencies          = results.map(r => java.time.Duration.between(now, r.completed))
-      _                 <- currentMetrics.getAndUpdate(_.addSuccesses(results.map(_.attempts), latencies))
-    } yield results)
-      .provideEnvironment(env)
+      await              = if (chunk.nonEmpty) done.await else ZIO.succeed(Chunk.empty)
+    } yield await).provideEnvironment(env)
 }
 
 private[client] object ProducerLive {
