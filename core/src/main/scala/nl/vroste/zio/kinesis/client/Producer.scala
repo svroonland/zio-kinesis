@@ -120,6 +120,8 @@ trait Producer[T] {
  *   Settings for shard prediction
  * @param aggregation
  *   Settings for aggregation
+ * @param throttling
+ *   Throttling settings for per-shard throttling
  * @param batchDuration
  *   Max duration a batch is kept open before it is sent to Kinesis. If None, the batch is sent as soon as a worker
  *   becomes available. Setting this to a larger value will reduce the number of requests to Kinesis and decrease cpu
@@ -180,8 +182,6 @@ object Producer {
     /**
      * @param parallelism
      *   Max number of parallel shard predictions (MD5 hashing)
-     * @param throttling
-     *   Throttling settings for per-shard throttling. If None, throttling is disabled.
      */
     final case class Enabled(parallelism: Int = 8) extends ShardPrediction {
       require(parallelism > 0, "shardPredictionParallelism must be > 0")
