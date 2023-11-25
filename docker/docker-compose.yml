@@ -20,12 +20,3 @@ services:
       DEBUG: "1"
     ports:
       - "4566:4566"
-#
-  kinesis-mock:
-    image: "ghcr.io/etspaceman/kinesis-mock:0.4.4"
-    environment:
-      LOG_LEVEL: DEBUG
-      UPDATE_SHARD_COUNT_DURATION: "5000ms"
-    ports:
-      - 4567:4567
-      - 4568:4568
