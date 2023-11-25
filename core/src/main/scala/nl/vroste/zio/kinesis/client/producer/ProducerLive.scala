@@ -3,7 +3,7 @@ package nl.vroste.zio.kinesis.client.producer
 import io.netty.handler.timeout.ReadTimeoutException
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client._
-import nl.vroste.zio.kinesis.client.producer.ProducerLive.ProduceRequest
+import nl.vroste.zio.kinesis.client.producer.ProducerLive._
 import nl.vroste.zio.kinesis.client.serde.Serializer
 import software.amazon.awssdk.core.exception.SdkException
 import software.amazon.awssdk.services.kinesis.model.{ KinesisException, ResourceInUseException }

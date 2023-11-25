@@ -65,44 +65,25 @@ lazy val core = (project in file("core"))
 
 lazy val stdSettings: Seq[sbt.Def.SettingsDefinition] = Seq(
   Compile / compile / javacOptions ++= Seq("--release", "8"),
-  Compile / compile / scalacOptions ++= {
-    // This is for scala.collection.compat._
-    if (scalaBinaryVersion.value == "2.13")
-      Seq("-Wconf:cat=unused-imports:silent")
-    else Seq.empty
-  } ++ Seq("-release", "8"),
-  Test / compile / scalacOptions ++= {
-    // This is for scala.collection.compat._
-    if (scalaBinaryVersion.value == "2.13")
-      Seq("-Wconf:cat=unused-imports:silent")
-    else Seq.empty
-  },
-  Compile / doc / scalacOptions ++= {
-    // This is for scala.collection.compat._
-    if (scalaBinaryVersion.value == "2.13")
-      Seq("-Wconf:cat=unused-imports:silent")
-    else Seq.empty
-  },
   Compile / scalacOptions ~= excludeInferAny,
   // Suppresses problems with Scaladoc @throws links
   testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework"),
   libraryDependencies ++= Seq(
-    "dev.zio"                %% "zio"                         % zioVersion,
-    "dev.zio"                %% "zio-streams"                 % zioVersion,
-    "dev.zio"                %% "zio-test"                    % zioVersion % "test",
-    "dev.zio"                %% "zio-test-sbt"                % zioVersion % "test",
-    "dev.zio"                %% "zio-interop-reactivestreams" % "2.0.2",
-    "dev.zio"                %% "zio-logging"                 % "2.1.15",
-    "dev.zio"                %% "zio-logging-slf4j"           % "2.1.15",
-    "ch.qos.logback"          % "logback-classic"             % "1.4.11",
-    "org.scala-lang.modules" %% "scala-collection-compat"     % "2.11.0",
-    "org.hdrhistogram"        % "HdrHistogram"                % "2.1.12",
-    "dev.zio"                %% "zio-aws-core"                % zioAwsVersion,
-    "dev.zio"                %% "zio-aws-kinesis"             % zioAwsVersion,
-    "dev.zio"                %% "zio-aws-dynamodb"            % zioAwsVersion,
-    "dev.zio"                %% "zio-aws-cloudwatch"          % zioAwsVersion,
-    "dev.zio"                %% "zio-aws-netty"               % zioAwsVersion,
-    "javax.xml.bind"          % "jaxb-api"                    % "2.3.1"
+    "dev.zio"         %% "zio"                         % zioVersion,
+    "dev.zio"         %% "zio-streams"                 % zioVersion,
+    "dev.zio"         %% "zio-test"                    % zioVersion % "test",
+    "dev.zio"         %% "zio-test-sbt"                % zioVersion % "test",
+    "dev.zio"         %% "zio-interop-reactivestreams" % "2.0.2",
+    "dev.zio"         %% "zio-logging"                 % "2.1.15",
+    "dev.zio"         %% "zio-logging-slf4j"           % "2.1.15",
+    "ch.qos.logback"   % "logback-classic"             % "1.4.11",
+    "org.hdrhistogram" % "HdrHistogram"                % "2.1.12",
+    "dev.zio"         %% "zio-aws-core"                % zioAwsVersion,
+    "dev.zio"         %% "zio-aws-kinesis"             % zioAwsVersion,
+    "dev.zio"         %% "zio-aws-dynamodb"            % zioAwsVersion,
+    "dev.zio"         %% "zio-aws-cloudwatch"          % zioAwsVersion,
+    "dev.zio"         %% "zio-aws-netty"               % zioAwsVersion,
+    "javax.xml.bind"   % "jaxb-api"                    % "2.3.1"
   )
 )
 

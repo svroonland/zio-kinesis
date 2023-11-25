@@ -69,7 +69,7 @@ workflows:
       - run_with_localstack:
           name: test3
           image: hseeberger/scala-sbt:17.0.2_1.6.2_3.1.1
-          sbt_command: ++3.3.0! core/test interopFutures/test
+          sbt_command: ++3.3.1! core/test interopFutures/test
           requires:
             - lint
           filters:
@@ -93,21 +93,11 @@ workflows:
           filters:
             tags:
               only: << pipeline.parameters.tag_regex >>
-      - run_with_localstack:
-          name: test212
-          image: hseeberger/scala-sbt:17.0.2_1.6.2_2.12.15
-          sbt_command: ++2.12.15! interopFutures/compile core/test interopFutures/test Compile/doc
-          requires:
-            - lint
-          filters:
-            tags:
-              only: << pipeline.parameters.tag_regex >>
       - release:
           requires:
             - test3
             - test213
             - test213_dynamic_consumer
-            - test212
           filters:
             branches:
               only:
