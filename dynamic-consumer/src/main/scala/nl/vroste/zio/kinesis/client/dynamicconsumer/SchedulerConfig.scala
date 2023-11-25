@@ -33,7 +33,7 @@ case class SchedulerConfig(
   def withInitialPosition(pos: InitialPositionInStreamExtended): SchedulerConfig =
     copy(
       leaseManagement = leaseManagement.initialPositionInStream(pos),
-      initialPositionInStreamExtended = initialPositionInStreamExtended
+      initialPositionInStreamExtended = pos
     )
 
   def withEnhancedFanOut: SchedulerConfig =
