@@ -21,7 +21,6 @@ import zio.test._
 import zio.{ System, _ }
 import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.Lease
 
-import scala.collection.compat._
 import java.time.Instant
 import java.{ util => ju }
 import zio.aws.kinesis.model.StreamStatus

@@ -1,6 +1,5 @@
 package nl.vroste.zio.kinesis.client.zionative
 
-import scala.collection.compat._
 import java.time.Instant
 import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.Lease
 import zio.ZIO
