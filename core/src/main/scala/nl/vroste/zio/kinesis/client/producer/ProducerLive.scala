@@ -3,7 +3,7 @@ package nl.vroste.zio.kinesis.client.producer
 import io.netty.handler.timeout.ReadTimeoutException
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client._
-import nl.vroste.zio.kinesis.client.producer.ProducerLive.ProduceRequest
+import nl.vroste.zio.kinesis.client.producer.ProducerLive._
 import nl.vroste.zio.kinesis.client.serde.Serializer
 import software.amazon.awssdk.core.exception.SdkException
 import software.amazon.awssdk.services.kinesis.model.{ KinesisException, ResourceInUseException }
@@ -37,7 +37,6 @@ private[client] final class ProducerLive[R, R1, T](
 ) extends Producer[T] {
   import Util.ZStreamExtensions
   import ProducerLive._
-  import Util.ZStreamExtensions
 
   val runloop: ZIO[Any, Nothing, Unit] = {
     val retries         = ZStream.fromQueue(failedQueue, maxChunkSize = maxChunkSize)

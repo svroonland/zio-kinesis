@@ -10,7 +10,7 @@ import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.{
   UnableToClaimLease
 }
 import nl.vroste.zio.kinesis.client.zionative._
-import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator.State
+import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultLeaseCoordinator._
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.ZioExtensions.foreachParNUninterrupted_
 import software.amazon.awssdk.services.dynamodb.model.ResourceNotFoundException
 import zio._

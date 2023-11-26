@@ -23,7 +23,6 @@ import zio.stream.ZStream
 
 import java.util.concurrent.TimeoutException
 import scala.util.Try
-import scala.collection.compat._
 
 // TODO this thing should have a global throttling / backoff
 // via a Tap that tries to find the optimal maximal throughput

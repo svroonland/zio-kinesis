@@ -10,14 +10,16 @@ pull_request_rules:
       - author=scala-steward
       - "status-success=ci/circleci: test213"
       - "status-success=ci/circleci: test213_dynamic_consumer"
-      - "status-success=ci/circleci: test212"
-      - "status-success=ci/circleci: test31"
+      - "status-success=ci/circleci: test3"
     actions:
       merge:
         method: squash
   - name: Automatic merge on approval
     conditions:
       - "#approved-reviews-by>=1"
+      - "status-success=ci/circleci: test213"
+      - "status-success=ci/circleci: test213_dynamic_consumer"
+      - "status-success=ci/circleci: test3"
     actions:
       merge:
         method: merge
