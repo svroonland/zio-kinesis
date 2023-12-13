@@ -145,7 +145,7 @@ private class DefaultLeaseCoordinator(
     table
       .releaseLease(applicationName, updatedLease)
       // TODO THIS TIMEOUT CAUSES THE INTERRUPTION ERROR...! So it's about racing in the finalizer..
-//      .timeout(settings.releaseLeaseTimeout)
+      .timeout(settings.releaseLeaseTimeout)
       .asSome
       .tap(result =>
         ZIO.logWarning(s"Timeout while releasing lease for shard ${lease.key}, ignored").when(result.isEmpty)
