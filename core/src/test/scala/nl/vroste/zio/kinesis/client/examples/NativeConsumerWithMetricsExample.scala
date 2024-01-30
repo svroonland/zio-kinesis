@@ -20,7 +20,7 @@ object NativeConsumerWithMetricsExample extends ZIOAppDefault {
       .flatMap { metrics =>
         Consumer
           .shardedStream(
-            streamName = "my-stream",
+            streamIdentifier = "my-stream",
             applicationName = applicationName,
             deserializer = Serde.asciiString,
             workerIdentifier = workerIdentifier,

@@ -1,5 +1,6 @@
 package nl.vroste.zio.kinesis.client.dynamicconsumer
 
+import nl.vroste.zio.kinesis.client.StreamIdentifier
 import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.{ Checkpointer, Record }
 import zio.aws.cloudwatch.CloudWatch
 import zio.aws.dynamodb.DynamoDb
@@ -23,8 +24,8 @@ trait DynamicConsumer {
    * Uses DynamoDB for lease coordination between different instances of consumers with the same application name and
    * for offset checkpointing.
    *
-   * @param streamName
-   *   Name of the Kinesis stream
+   * @param streamIdentifier
+   *   Stream to consume from. Either just the name or the whole arn.
    * @param applicationName
    *   Application name for coordinating shard leases
    * @param deserializer
@@ -54,7 +55,7 @@ trait DynamicConsumer {
    *   individual shard
    */
   def shardedStream[R, T](
-    streamName: String,
+    streamIdentifier: StreamIdentifier,
     applicationName: String,
     deserializer: Deserializer[R, T],
     requestShutdown: UIO[Unit] = ZIO.never,
@@ -138,7 +139,7 @@ object DynamicConsumer {
 
   // Accessor
   def shardedStream[R, T](
-    streamName: String,
+    streamIdentifier: StreamIdentifier,
     applicationName: String,
     deserializer: Deserializer[R, T],
     requestShutdown: UIO[Unit] = ZIO.never,
@@ -159,7 +160,7 @@ object DynamicConsumer {
         .service[DynamicConsumer]
         .map(
           _.shardedStream(
-            streamName,
+            streamIdentifier,
             applicationName,
             deserializer,
             requestShutdown,
@@ -177,8 +178,8 @@ object DynamicConsumer {
    * Similar to `shardedStream` accessor but provides the `recordProcessor` callback function for processing records and
    * takes care of checkpointing. The other difference is that it returns a ZIO of unit rather than a ZStream.
    *
-   * @param streamName
-   *   Name of the Kinesis stream
+   * @param streamIdentifier
+   *   Stream to consume from. Either just the name or the whole arn.
    * @param applicationName
    *   Application name for coordinating shard leases
    * @param deserializer
@@ -214,7 +215,7 @@ object DynamicConsumer {
    *   stream fails
    */
   def consumeWith[R, RC, T](
-    streamName: String,
+    streamIdentifier: StreamIdentifier,
     applicationName: String,
     deserializer: Deserializer[R, T],
     requestShutdown: UIO[Unit] = ZIO.never,
@@ -235,7 +236,7 @@ object DynamicConsumer {
         consumer <- ZIO.service[DynamicConsumer]
         _        <- consumer
                       .shardedStream(
-                        streamName,
+                        streamIdentifier,
                         applicationName,
                         deserializer,
                         requestShutdown,

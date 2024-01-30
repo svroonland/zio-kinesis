@@ -9,7 +9,7 @@ object NativeConsumerBasicUsageExample extends ZIOAppDefault {
   override def run: ZIO[ZIOAppArgs with Scope, Any, Any] =
     Consumer
       .shardedStream(
-        streamName = "my-stream",
+        streamIdentifier = "my-stream",
         applicationName = "my-application",
         deserializer = Serde.asciiString,
         workerIdentifier = "worker1"

@@ -47,7 +47,7 @@ object DynamicConsumerFakeTest extends ZIOSpecDefault {
       refCheckpointedList <- Ref.make[Seq[Record[_]]](Seq.empty)
       _                   <- DynamicConsumer
                                .consumeWith(
-                                 streamName = "my-stream",
+                                 streamIdentifier = "my-stream",
                                  applicationName = "my-application",
                                  deserializer = Serde.asciiString,
                                  workerIdentifier = "worker1",
@@ -65,7 +65,7 @@ object DynamicConsumerFakeTest extends ZIOSpecDefault {
       q  <- Queue.unbounded[Record[String]]
       _  <- DynamicConsumer
               .consumeWith(
-                streamName = "my-stream",
+                streamIdentifier = "my-stream",
                 applicationName = "my-application",
                 deserializer = Serde.asciiString,
                 workerIdentifier = "worker1",

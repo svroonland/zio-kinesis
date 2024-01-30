@@ -13,7 +13,7 @@ object DynamicConsumerBasicUsageExample extends ZIOAppDefault {
   override def run: ZIO[Any with ZIOAppArgs with Scope, Any, Any] =
     DynamicConsumer
       .shardedStream(
-        streamName = "my-stream",
+        streamIdentifier = "my-stream",
         applicationName = "my-application",
         deserializer = Serde.asciiString,
         workerIdentifier = "worker1"

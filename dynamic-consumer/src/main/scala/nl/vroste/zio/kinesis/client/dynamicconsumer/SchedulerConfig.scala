@@ -1,5 +1,6 @@
 package nl.vroste.zio.kinesis.client.dynamicconsumer
 
+import nl.vroste.zio.kinesis.client.StreamIdentifier
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import software.amazon.kinesis.checkpoint.CheckpointConfig
 import software.amazon.kinesis.common.{ ConfigsBuilder, InitialPositionInStream, InitialPositionInStreamExtended }
@@ -28,7 +29,7 @@ case class SchedulerConfig(
   initialPositionInStreamExtended: InitialPositionInStreamExtended =
     InitialPositionInStreamExtended.newInitialPosition(InitialPositionInStream.LATEST),
   private val kinesisClient: KinesisAsyncClient,
-  private val streamName: String
+  private val streamIdentifier: StreamIdentifier
 ) {
   def withInitialPosition(pos: InitialPositionInStreamExtended): SchedulerConfig =
     copy(
@@ -36,21 +37,30 @@ case class SchedulerConfig(
       initialPositionInStreamExtended = pos
     )
 
-  def withEnhancedFanOut: SchedulerConfig =
+  def withEnhancedFanOut: SchedulerConfig = {
+    val config           = new FanOutConfig(kinesisClient)
+      .applicationName(retrieval.applicationName())
+    val configWithStream = streamIdentifier match {
+      case StreamIdentifier.StreamIdentifierByName(streamName) => config.streamName(streamName)
+      case StreamIdentifier.StreamIdentifierByArn(_)           => ??? // TODO
+    }
     copy(
-      retrieval = retrieval.retrievalSpecificConfig(
-        new FanOutConfig(kinesisClient)
-          .streamName(streamName)
-          .applicationName(retrieval.applicationName())
-      )
+      retrieval = retrieval.retrievalSpecificConfig(configWithStream)
     )
+  }
 
-  def withPolling: SchedulerConfig =
+  def withPolling: SchedulerConfig = {
+    val config = streamIdentifier match {
+      case StreamIdentifier.StreamIdentifierByName(streamName) => new PollingConfig(streamName, kinesisClient)
+      case StreamIdentifier.StreamIdentifierByArn(_)           => ??? // TODO
+    }
+
     copy(
       retrieval = retrieval.retrievalSpecificConfig(
-        new PollingConfig(streamName, kinesisClient)
+        config
       )
     )
+  }
 
 }
 
@@ -59,7 +69,7 @@ object SchedulerConfig {
     builder: ConfigsBuilder,
     kinesisClient: KinesisAsyncClient,
     initialPositionInStreamExtended: InitialPositionInStreamExtended,
-    streamName: String
+    streamIdentifier: StreamIdentifier
   ) =
     SchedulerConfig(
       checkpoint = builder.checkpointConfig(),
@@ -70,6 +80,6 @@ object SchedulerConfig {
       processor = builder.processorConfig(),
       retrieval = builder.retrievalConfig(),
       kinesisClient = kinesisClient,
-      streamName = streamName
+      streamIdentifier = streamIdentifier
     ).withInitialPosition(initialPositionInStreamExtended)
 }

@@ -33,6 +33,8 @@ class Consumer private (
    *
    * Simply provide an asynchronous function that is applied to each record and the rest is taken care of. The function
    * will be called for every record in the stream, with a parallelism.
+   * @param streamIdentifier
+   *   Stream to consume from. Either just the name or the whole arn.
    * @param checkpointBatchSize
    *   Maximum number of records before checkpointing
    * @param checkpointDuration
@@ -46,7 +48,7 @@ class Consumer private (
    *   fails
    */
   def consumeWith[T](
-    streamName: String,
+    streamIdentifier: StreamIdentifier,
     applicationName: String,
     deserializer: Deserializer[Any, T],
     workerIdentifier: String = "worker1",
@@ -62,7 +64,7 @@ class Consumer private (
   ): CancelableFuture[Unit] =
     runtime.unsafe.runToFuture {
       zionative.Consumer.consumeWith(
-        streamName,
+        streamIdentifier,
         applicationName,
         deserializer,
         workerIdentifier,
