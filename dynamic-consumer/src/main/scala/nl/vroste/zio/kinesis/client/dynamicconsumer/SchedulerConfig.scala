@@ -40,8 +40,8 @@ case class SchedulerConfig(
     copy(
       retrieval = retrieval.retrievalSpecificConfig(
         new FanOutConfig(kinesisClient)
-          .applicationName(retrieval.applicationName())
           .streamName(streamName)
+          .applicationName(retrieval.applicationName())
       )
     )
 

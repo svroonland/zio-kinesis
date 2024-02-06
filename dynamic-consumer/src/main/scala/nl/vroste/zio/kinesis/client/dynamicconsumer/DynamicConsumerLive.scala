@@ -217,8 +217,7 @@ private[client] class DynamicConsumerLive(
             workerIdentifier,
             new ZioShardProcessorFactory(queues)
           )
-
-          val withTableName = leaseTableName.fold(configsBuilder)(configsBuilder.tableName)
+          val withTableName  = leaseTableName.fold(configsBuilder)(configsBuilder.tableName)
           metricsNamespace.fold(withTableName)(withTableName.namespace)
         }
         config         = configureKcl(

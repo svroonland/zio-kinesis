@@ -20,7 +20,7 @@ object DynamicConsumerFakeExample extends ZIOAppDefault {
       refCheckpointedList <- Ref.make[Seq[Record[Any]]](Seq.empty)
       exitCode            <- DynamicConsumer
                                .consumeWith(
-                                 streamIdentifier = "my-stream",
+                                 streamName = "my-stream",
                                  applicationName = "my-application",
                                  deserializer = Serde.asciiString,
                                  workerIdentifier = "worker1",

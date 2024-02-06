@@ -177,8 +177,8 @@ object DynamicConsumer {
    * Similar to `shardedStream` accessor but provides the `recordProcessor` callback function for processing records and
    * takes care of checkpointing. The other difference is that it returns a ZIO of unit rather than a ZStream.
    *
-   * @param streamIdentifier
-   *   Stream to consume from. Either just the name or the whole arn.
+   * @param streamName
+   *   Name of the Kinesis stream
    * @param applicationName
    *   Application name for coordinating shard leases
    * @param deserializer
