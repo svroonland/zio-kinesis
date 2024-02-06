@@ -5,7 +5,6 @@ import nl.vroste.zio.kinesis.client.serde.Deserializer
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
-import software.amazon.awssdk.arns.Arn
 import software.amazon.kinesis.common.{ ConfigsBuilder, InitialPositionInStreamExtended }
 import software.amazon.kinesis.coordinator.Scheduler
 import software.amazon.kinesis.exceptions.ShutdownException
@@ -19,7 +18,6 @@ import software.amazon.kinesis.processor.{
 import software.amazon.kinesis.retrieval.KinesisClientRecord
 import zio._
 import zio.stream.ZStream
-import nl.vroste.zio.kinesis.client.StreamIdentifier
 import scala.jdk.CollectionConverters._
 
 private[client] class DynamicConsumerLive(
@@ -29,7 +27,7 @@ private[client] class DynamicConsumerLive(
   implicit val unsafe: Unsafe
 ) extends DynamicConsumer {
   override def shardedStream[R, T](
-    streamIdentifier: StreamIdentifier,
+    streamName: String,
     applicationName: String,
     deserializer: Deserializer[R, T],
     requestShutdown: UIO[Unit],
@@ -210,36 +208,23 @@ private[client] class DynamicConsumerLive(
         queues <- Queues.make
 
         configsBuilder = {
+          val configsBuilder = new ConfigsBuilder(
+            streamName,
+            applicationName,
+            kinesisAsyncClient,
+            dynamoDbAsyncClient,
+            cloudWatchAsyncClient,
+            workerIdentifier,
+            new ZioShardProcessorFactory(queues)
+          )
 
-          val configsBuilder = streamIdentifier match {
-            case StreamIdentifier.StreamIdentifierByName(streamName) =>
-              new ConfigsBuilder(
-                streamName,
-                applicationName,
-                kinesisAsyncClient,
-                dynamoDbAsyncClient,
-                cloudWatchAsyncClient,
-                workerIdentifier,
-                new ZioShardProcessorFactory(queues)
-              )
-            case StreamIdentifier.StreamIdentifierByArn(streamARN)   =>
-              new ConfigsBuilder(
-                Arn.fromString(streamARN),
-                applicationName,
-                kinesisAsyncClient,
-                dynamoDbAsyncClient,
-                cloudWatchAsyncClient,
-                workerIdentifier,
-                new ZioShardProcessorFactory(queues)
-              )
-          }
-          val withTableName  = leaseTableName.fold(configsBuilder)(configsBuilder.tableName)
+          val withTableName = leaseTableName.fold(configsBuilder)(configsBuilder.tableName)
           metricsNamespace.fold(withTableName)(withTableName.namespace)
         }
-        config = configureKcl(
-                   SchedulerConfig.makeDefault(configsBuilder, kinesisAsyncClient, initialPosition, streamIdentifier)
-                 )
-        env   <- ZIO.environment[R]
+        config         = configureKcl(
+                           SchedulerConfig.makeDefault(configsBuilder, kinesisAsyncClient, initialPosition, streamName)
+                         )
+        env           <- ZIO.environment[R]
 
         scheduler    <- ZIO.attempt(
                           new Scheduler(
@@ -251,13 +236,7 @@ private[client] class DynamicConsumerLive(
                             config.processor,
                             config.retrieval.streamTracker(
                               new SingleStreamTracker(
-                                streamIdentifier match {
-                                  case StreamIdentifier.StreamIdentifierByName(streamName) =>
-                                    software.amazon.kinesis.common.StreamIdentifier.singleStreamInstance(streamName)
-                                  case StreamIdentifier.StreamIdentifierByArn(streamARN)   =>
-                                    software.amazon.kinesis.common.StreamIdentifier
-                                      .singleStreamInstance(Arn.fromString(streamARN))
-                                },
+                                software.amazon.kinesis.common.StreamIdentifier.singleStreamInstance(streamName),
                                 config.initialPositionInStreamExtended
                               )
                             )

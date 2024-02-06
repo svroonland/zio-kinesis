@@ -1,6 +1,5 @@
 package nl.vroste.zio.kinesis.client.dynamicconsumer
 
-import nl.vroste.zio.kinesis.client.StreamIdentifier
 import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.{ Checkpointer, Record }
 import zio.aws.cloudwatch.CloudWatch
 import zio.aws.dynamodb.DynamoDb
@@ -55,7 +54,7 @@ trait DynamicConsumer {
    *   individual shard
    */
   def shardedStream[R, T](
-    streamIdentifier: StreamIdentifier,
+    streamName: String,
     applicationName: String,
     deserializer: Deserializer[R, T],
     requestShutdown: UIO[Unit] = ZIO.never,
@@ -139,7 +138,7 @@ object DynamicConsumer {
 
   // Accessor
   def shardedStream[R, T](
-    streamIdentifier: StreamIdentifier,
+    streamName: String,
     applicationName: String,
     deserializer: Deserializer[R, T],
     requestShutdown: UIO[Unit] = ZIO.never,
@@ -160,7 +159,7 @@ object DynamicConsumer {
         .service[DynamicConsumer]
         .map(
           _.shardedStream(
-            streamIdentifier,
+            streamName,
             applicationName,
             deserializer,
             requestShutdown,
@@ -215,7 +214,7 @@ object DynamicConsumer {
    *   stream fails
    */
   def consumeWith[R, RC, T](
-    streamIdentifier: StreamIdentifier,
+    streamName: String,
     applicationName: String,
     deserializer: Deserializer[R, T],
     requestShutdown: UIO[Unit] = ZIO.never,
@@ -236,7 +235,7 @@ object DynamicConsumer {
         consumer <- ZIO.service[DynamicConsumer]
         _        <- consumer
                       .shardedStream(
-                        streamIdentifier,
+                        streamName,
                         applicationName,
                         deserializer,
                         requestShutdown,

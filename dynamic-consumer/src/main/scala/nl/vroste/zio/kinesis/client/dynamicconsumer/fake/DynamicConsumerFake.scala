@@ -1,6 +1,5 @@
 package nl.vroste.zio.kinesis.client.dynamicconsumer.fake
 
-import nl.vroste.zio.kinesis.client.StreamIdentifier
 import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.{ Checkpointer, Record }
 import nl.vroste.zio.kinesis.client.dynamicconsumer.{ DynamicConsumer, ExtendedSequenceNumber, SchedulerConfig }
 import nl.vroste.zio.kinesis.client.serde.{ Deserializer, Serializer }
@@ -14,7 +13,7 @@ private[client] class DynamicConsumerFake(
   refCheckpointedList: Ref[Seq[Record[Any]]]
 ) extends DynamicConsumer {
   override def shardedStream[R, T](
-    streamIdentifier: StreamIdentifier,
+    streamName: String,
     applicationName: String,
     deserializer: Deserializer[R, T],
     requestShutdown: UIO[Unit],
