@@ -41,7 +41,7 @@ inThisBuild(
 )
 
 val zioVersion    = "2.0.21"
-val zioAwsVersion = "7.21.15.5"
+val zioAwsVersion = "7.21.15.8"
 
 lazy val root = project
   .in(file("."))
@@ -76,7 +76,7 @@ lazy val stdSettings: Seq[sbt.Def.SettingsDefinition] = Seq(
     "dev.zio"         %% "zio-interop-reactivestreams" % "2.0.2",
     "dev.zio"         %% "zio-logging"                 % "2.2.0",
     "dev.zio"         %% "zio-logging-slf4j"           % "2.2.0",
-    "ch.qos.logback"   % "logback-classic"             % "1.4.14",
+    "ch.qos.logback"   % "logback-classic"             % "1.5.0",
     "org.hdrhistogram" % "HdrHistogram"                % "2.1.12",
     "dev.zio"         %% "zio-aws-core"                % zioAwsVersion,
     "dev.zio"         %% "zio-aws-kinesis"             % zioAwsVersion,
