@@ -18,7 +18,7 @@ import zio._
 import zio.aws.cloudwatch.CloudWatch
 import zio.aws.kinesis.Kinesis
 import zio.aws.kinesis.model._
-import zio.aws.kinesis.model.primitives.{ SequenceNumber, ShardId, StreamName, Timestamp }
+import zio.aws.kinesis.model.primitives.{ SequenceNumber, ShardId, Timestamp }
 import zio.stream.ZStream
 
 import java.time.Instant
@@ -131,8 +131,8 @@ object Consumer {
    * DIAGNOSTIC EVENTS An optional function `emitDiagnostic` can be passed to be called when interesting events happen
    * in the Consumer. This is useful for logging and for metrics.
    *
-   * @param streamName
-   *   Name of the kinesis stream
+   * @param streamIdentifier
+   *   Stream to consume from. Either just the name or the whole arn.
    * @param applicationName
    *   Name of the application. This is used as the table name for lease coordination (DynamoDB)
    * @param deserializer
@@ -156,7 +156,7 @@ object Consumer {
    *   Stream of tuples of (shard ID, shard stream, checkpointer)
    */
   def shardedStream[R, T](
-    streamName: String,
+    streamIdentifier: StreamIdentifier,
     applicationName: String,
     deserializer: Deserializer[R, T],
     workerIdentifier: String = "worker1",
@@ -234,12 +234,18 @@ object Consumer {
       streamDescription: StreamDescription.ReadOnly
     ): ZIO[Scope with Kinesis, Throwable, Fetcher] =
       fetchMode match {
-        case c: Polling        => PollingFetcher.make(streamDescription.streamName, c, emitDiagnostic)
-        case c: EnhancedFanOut => EnhancedFanOutFetcher.make(streamDescription, workerIdentifier, c, emitDiagnostic)
+        case c: Polling        => PollingFetcher.make(StreamIdentifier.fromARN(streamDescription.streamARN), c, emitDiagnostic)
+        case c: EnhancedFanOut =>
+          EnhancedFanOutFetcher.make(
+            StreamIdentifier.fromARN(streamDescription.streamARN),
+            workerIdentifier,
+            c,
+            emitDiagnostic
+          )
       }
 
     val listShards: ZIO[Kinesis, Throwable, Map[ShardId, Shard.ReadOnly]] = Kinesis
-      .listShards(ListShardsRequest(streamName = Some(StreamName(streamName))))
+      .listShards(ListShardsRequest(streamName = streamIdentifier.name, streamARN = streamIdentifier.arn))
       .mapError(_.toThrowable)
       .runCollect
       .map(_.map(l => (l.shardId, l)).toMap)
@@ -254,7 +260,7 @@ object Consumer {
       (Fetcher, LeaseCoordinator)
     ] =
       Kinesis
-        .describeStream(DescribeStreamRequest(StreamName(streamName)))
+        .describeStream(DescribeStreamRequest(streamName = streamIdentifier.name, streamARN = streamIdentifier.arn))
         .mapError(_.toThrowable)
         .map(_.streamDescription)
         .forkScoped // joined later
@@ -366,6 +372,8 @@ object Consumer {
    * like parallel streaming, checkpointing and resharding.
    *
    * Simply provide an effectful function that is applied to each record and the rest is taken care of.
+   * @param streamIdentifier
+   *   Stream to consume from. Either just the name or the whole arn.
    * @param checkpointBatchSize
    *   Maximum number of records before checkpointing
    * @param checkpointDuration
@@ -380,7 +388,7 @@ object Consumer {
    *   A ZIO that completes with Unit when record processing is stopped or fails when the consumer stream fails
    */
   def consumeWith[R, RC, T](
-    streamName: String,
+    streamIdentifier: StreamIdentifier,
     applicationName: String,
     deserializer: Deserializer[R, T],
     workerIdentifier: String = "worker1",
@@ -400,7 +408,7 @@ object Consumer {
   ] =
     for {
       _ <- shardedStream(
-             streamName,
+             streamIdentifier,
              applicationName,
              deserializer,
              workerIdentifier,

@@ -23,8 +23,8 @@ trait DynamicConsumer {
    * Uses DynamoDB for lease coordination between different instances of consumers with the same application name and
    * for offset checkpointing.
    *
-   * @param streamName
-   *   Name of the Kinesis stream
+   * @param streamIdentifier
+   *   Stream to consume from. Either just the name or the whole arn.
    * @param applicationName
    *   Application name for coordinating shard leases
    * @param deserializer

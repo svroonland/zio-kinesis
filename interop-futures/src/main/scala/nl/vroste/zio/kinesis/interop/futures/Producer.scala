@@ -55,10 +55,10 @@ class Producer[T] private (
 object Producer {
 
   /**
-   * Create a Producer of `T` values to stream `streamName`
+   * Create a Producer of `T` values to stream `streamIdentifier`
    *
-   * @param streamName
-   *   Stream to produce to
+   * @param streamIdentifier
+   *   Stream to produce to. Either just the name or the whole arn.
    * @param serializer
    *   Serializer for values of type T
    * @param settings
@@ -71,7 +71,7 @@ object Producer {
    */
   @nowarn // Scala warns that Tag is unused, but removing it gives missing implicits errors
   def make[T: Tag](
-    streamName: String,
+    streamIdentifier: StreamIdentifier,
     serializer: Serializer[Any, T],
     settings: ProducerSettings = ProducerSettings(),
     metricsCollector: ProducerMetrics => Unit = (_: ProducerMetrics) => (),
@@ -89,7 +89,7 @@ object Producer {
 
     val producer = ZLayer.scoped {
       client.Producer
-        .make(streamName, serializer, settings, metricsCollector = m => ZIO.attempt(metricsCollector(m)).orDie)
+        .make(streamIdentifier, serializer, settings, metricsCollector = m => ZIO.attempt(metricsCollector(m)).orDie)
     }
 
     val layer = sdkClients >>> producer

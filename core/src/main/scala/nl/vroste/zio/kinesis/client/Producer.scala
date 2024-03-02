@@ -6,7 +6,6 @@ import nl.vroste.zio.kinesis.client.serde.Serializer
 import zio.Clock.instant
 import zio._
 import zio.aws.kinesis.Kinesis
-import zio.aws.kinesis.model.primitives.StreamName
 import zio.aws.kinesis.model.{ ListShardsRequest, ShardFilter, ShardFilterType }
 import zio.stream.ZSink
 
@@ -227,10 +226,10 @@ object Producer {
   }
 
   /**
-   * Create a Producer of `T` values to stream `streamName`
+   * Create a Producer of `T` values to stream `streamIdentifier`
    *
-   * @param streamName
-   *   Stream to produce to
+   * @param streamIdentifier
+   *   Stream to produce to. Either just the name or the whole arn.
    * @param serializer
    *   Serializer for values of type T
    * @param settings
@@ -245,7 +244,7 @@ object Producer {
    *   A Managed Producer
    */
   def make[R, R1, T](
-    streamName: String,
+    streamIdentifier: StreamIdentifier,
     serializer: Serializer[R, T],
     settings: ProducerSettings = ProducerSettings(),
     metricsCollector: ProducerMetrics => ZIO[R1, Nothing, Unit] = (_: ProducerMetrics) => ZIO.unit
@@ -262,12 +261,12 @@ object Producer {
                                case ShardPrediction.Disabled                       => ZIO.succeed(RichShardPrediction.Disabled)
                                case ShardPrediction.Enabled(predictionParallelism) =>
                                  for {
-                                   shardMap            <- getShardMap(StreamName(streamName))
+                                   shardMap            <- getShardMap(streamIdentifier)
                                    currentShardMap     <- Ref.make(shardMap)
                                    triggerUpdateShards <- Util.periodicAndTriggerableOperation(
                                                             (ZIO.logDebug("Refreshing shard map") *>
                                                               (getShardMap(
-                                                                StreamName(streamName)
+                                                                streamIdentifier
                                                               ) flatMap currentShardMap.set) *>
                                                               ZIO.logInfo("Shard map was refreshed"))
                                                               .tapError(e =>
@@ -301,7 +300,7 @@ object Producer {
                    serializer,
                    currentMetrics,
                    settings,
-                   StreamName(streamName),
+                   streamIdentifier,
                    metricsCollector,
                    inFlightCalls,
                    richShardPrediction,
@@ -311,10 +310,16 @@ object Producer {
       _       <- producer.metricsCollection.ensuring(producer.collectMetrics).forkScoped // Fiber cannot fail
     } yield producer
 
-  private def getShardMap(streamName: StreamName): ZIO[Kinesis, Throwable, ShardMap] = {
+  private def getShardMap(streamIdentifier: StreamIdentifier): ZIO[Kinesis, Throwable, ShardMap] = {
     val shardFilter = ShardFilter(ShardFilterType.AT_LATEST) // Currently open shards
     Kinesis
-      .listShards(ListShardsRequest(Some(streamName), shardFilter = Some(shardFilter)))
+      .listShards(
+        ListShardsRequest(
+          shardFilter = Some(shardFilter),
+          streamName = streamIdentifier.name,
+          streamARN = streamIdentifier.arn
+        )
+      )
       .mapError(_.toThrowable)
       .runCollect
       .flatMap(shards => instant.map(ShardMap.fromShards(shards, _)))
