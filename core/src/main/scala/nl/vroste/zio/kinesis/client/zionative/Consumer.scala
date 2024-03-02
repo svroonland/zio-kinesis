@@ -235,7 +235,13 @@ object Consumer {
     ): ZIO[Scope with Kinesis, Throwable, Fetcher] =
       fetchMode match {
         case c: Polling        => PollingFetcher.make(StreamIdentifier.fromARN(streamDescription.streamARN), c, emitDiagnostic)
-        case c: EnhancedFanOut => EnhancedFanOutFetcher.make(streamDescription, workerIdentifier, c, emitDiagnostic)
+        case c: EnhancedFanOut =>
+          EnhancedFanOutFetcher.make(
+            StreamIdentifier.fromARN(streamDescription.streamARN),
+            workerIdentifier,
+            c,
+            emitDiagnostic
+          )
       }
 
     val listShards: ZIO[Kinesis, Throwable, Map[ShardId, Shard.ReadOnly]] = Kinesis
