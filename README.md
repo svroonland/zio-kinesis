@@ -1,5 +1,7 @@
 [![Sonatype Nexus (Releases)](https://img.shields.io/maven-central/v/nl.vroste/zio-kinesis_2.13/0)](https://repo1.maven.org/maven2/nl/vroste/zio-kinesis_2.13/) [![Sonatype Nexus (Snapshots)](https://img.shields.io/nexus/s/nl.vroste/zio-kinesis_2.13?server=https://oss.sonatype.org)](https://oss.sonatype.org/content/repositories/snapshots/nl/vroste/zio-kinesis_2.13/)
 
+_Use and like this library? Consider [sponsoring](https://github.com/sponsors/svroonland) its ongoing development and maintenance_
+
 
 # ZIO Kinesis
 
