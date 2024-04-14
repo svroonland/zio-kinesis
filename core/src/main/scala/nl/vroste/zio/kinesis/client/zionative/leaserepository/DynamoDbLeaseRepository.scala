@@ -199,8 +199,8 @@ private class DynamoDbLeaseRepository(client: DynamoDb, settings: Settings) exte
     client
       .updateItem(request)
       .mapError(_.toThrowable)
-      // TODO timeouts used in finalizers cause interrupted exceptions..
-//      .timeoutFail(new TimeoutException(s"Timeout updating checkpoint"))(settings.timeout)
+      .disconnect
+      .timeoutFail(new TimeoutException(s"Timeout updating checkpoint"))(settings.timeout)
       .unit
       .catchAll {
         case _: ConditionalCheckFailedException =>
