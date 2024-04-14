@@ -10,7 +10,7 @@ import software.amazon.awssdk.services.kinesis.model.{ KinesisException, Resourc
 import zio.Clock.instant
 import zio._
 import zio.aws.kinesis.Kinesis
-import zio.aws.kinesis.model.primitives.{ PartitionKey, StreamName }
+import zio.aws.kinesis.model.primitives.PartitionKey
 import zio.aws.kinesis.model.{ PutRecordsRequest, PutRecordsRequestEntry, PutRecordsResponse, PutRecordsResultEntry }
 import zio.stream.{ ZChannel, ZSink, ZStream }
 
@@ -29,7 +29,7 @@ private[client] final class ProducerLive[R, R1, T](
   serializer: Serializer[R, T],
   currentMetrics: Ref[CurrentMetrics],
   settings: ProducerSettings,
-  streamName: StreamName,
+  streamIdentifier: StreamIdentifier,
   metricsCollector: ProducerMetrics => ZIO[R1, Nothing, Unit],
   inFlightCalls: Ref[Int],
   shardPrediction: RichShardPrediction,
@@ -130,11 +130,14 @@ private[client] final class ProducerLive[R, R1, T](
                   )
 
       // Avoid an allocation
-      response <- client
-                    .putRecords(new PutRecordsRequest(batch.map(_.asPutRecordsRequestEntry), streamName))
-                    .mapError(_.toThrowable)
-                    .tapError(e => ZIO.logWarning(s"Error producing records, will retry if recoverable: $e"))
-                    .retry(scheduleCatchRecoverable && settings.backoffRequests)
+      response <-
+        client
+          .putRecords(
+            new PutRecordsRequest(batch.map(_.asPutRecordsRequestEntry), streamIdentifier.name, streamIdentifier.arn)
+          )
+          .mapError(_.toThrowable)
+          .tapError(e => ZIO.logWarning(s"Error producing records, will retry if recoverable: $e"))
+          .retry(scheduleCatchRecoverable && settings.backoffRequests)
     } yield (Some(response), batch)).catchSome { case NonFatal(e) =>
       ZIO.logWarning("Failed to process batch") *>
         ZIO.foreachDiscard(batch)(_.complete(ZIO.fail(e))).as((None, batch))

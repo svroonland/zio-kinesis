@@ -1,5 +1,6 @@
 package nl.vroste.zio.kinesis.client.zionative.fetcher
 
+import nl.vroste.zio.kinesis.client.StreamIdentifier.StreamIdentifierByArn
 import nl.vroste.zio.kinesis.client.Util
 import nl.vroste.zio.kinesis.client.zionative.Consumer.childShardToShard
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
@@ -17,7 +18,7 @@ object EnhancedFanOutFetcher {
   import FetchUtil.repeatWhileNotNone
 
   def make(
-    streamDescription: StreamDescription.ReadOnly,
+    streamIdentifier: StreamIdentifierByArn,
     workerId: String,
     config: FetchMode.EnhancedFanOut,
     emitDiagnostic: DiagnosticEvent => UIO[Unit]
@@ -25,7 +26,7 @@ object EnhancedFanOutFetcher {
     for {
       env                <- ZIO.environment[Kinesis]
       consumerARN        <-
-        ZIO.acquireRelease(registerConsumerIfNotExists(streamDescription.streamARN, workerId))(
+        ZIO.acquireRelease(registerConsumerIfNotExists(streamIdentifier.streamARN, workerId))(
           deregisterConsumer(_).when(config.deregisterConsumerAtShutdown)
         )
       subscribeThrottled <- Util.throttledFunctionN(config.maxSubscriptionsPerSecond, 1.second) {

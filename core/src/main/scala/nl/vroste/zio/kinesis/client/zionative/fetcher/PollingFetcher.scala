@@ -1,4 +1,5 @@
 package nl.vroste.zio.kinesis.client.zionative.fetcher
+import nl.vroste.zio.kinesis.client.StreamIdentifier
 import nl.vroste.zio.kinesis.client.Util._
 import nl.vroste.zio.kinesis.client.zionative.Consumer.{ childShardToShard, retryOnThrottledWithSchedule }
 import nl.vroste.zio.kinesis.client.zionative.Fetcher.EndOfShard
@@ -8,13 +9,7 @@ import zio._
 import zio.aws.core.AwsError
 import zio.aws.kinesis.Kinesis
 import zio.aws.kinesis.model._
-import zio.aws.kinesis.model.primitives.{
-  GetRecordsInputLimit,
-  MillisBehindLatest,
-  SequenceNumber,
-  ShardIterator,
-  StreamName
-}
+import zio.aws.kinesis.model.primitives.{ GetRecordsInputLimit, MillisBehindLatest, SequenceNumber, ShardIterator }
 import zio.stream.ZStream
 
 /**
@@ -33,7 +28,7 @@ object PollingFetcher {
   private case class PollState(shardIteratorType: ShardIteratorType, sequenceNumber: Option[SequenceNumber])
 
   def make(
-    streamName: String,
+    streamIdentifier: StreamIdentifier,
     config: FetchMode.Polling,
     emitDiagnostic: DiagnosticEvent => UIO[Unit]
   ): ZIO[Scope with Kinesis, Throwable, Fetcher] =
@@ -58,7 +53,15 @@ object PollingFetcher {
       ): ZStream[Kinesis, Throwable, GetRecordsResponse.ReadOnly] = ZStream.unwrapScoped {
         for {
           initialShardIterator <-
-            getShardIterator(GetShardIteratorRequest(StreamName(streamName), shardId, iteratorType, sequenceNr))
+            getShardIterator(
+              GetShardIteratorRequest(
+                shardId = shardId,
+                shardIteratorType = iteratorType,
+                startingSequenceNumber = sequenceNr,
+                streamName = streamIdentifier.name,
+                streamARN = streamIdentifier.arn
+              )
+            )
               .map(_.shardIterator.toOption.get)
               .mapError(_.toThrowable)
               .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))

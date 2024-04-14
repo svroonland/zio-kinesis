@@ -1,5 +1,7 @@
 [![Sonatype Nexus (Releases)](https://img.shields.io/maven-central/v/nl.vroste/zio-kinesis_2.13/0)](https://repo1.maven.org/maven2/nl/vroste/zio-kinesis_2.13/) [![Sonatype Nexus (Snapshots)](https://img.shields.io/nexus/s/nl.vroste/zio-kinesis_2.13?server=https://oss.sonatype.org)](https://oss.sonatype.org/content/repositories/snapshots/nl/vroste/zio-kinesis_2.13/)
 
+_Use and like this library? Consider [sponsoring](https://github.com/sponsors/svroonland) its ongoing development and maintenance_
+
 
 # ZIO Kinesis
 
@@ -96,7 +98,7 @@ object ConsumeWithExample extends ZIOAppDefault {
   override def run: ZIO[Any with ZIOAppArgs with Scope, Any, Any] =
     Consumer
             .consumeWith(
-              streamName = "my-stream",
+              streamIdentifier = "my-stream",
               applicationName = "my-application",
               deserializer = Serde.asciiString,
               workerIdentifier = "worker1",
@@ -121,7 +123,7 @@ object NativeConsumerBasicUsageExample extends ZIOAppDefault {
   override def run: ZIO[ZIOAppArgs with Scope, Any, Any] =
     Consumer
             .shardedStream(
-              streamName = "my-stream",
+              streamIdentifier = "my-stream",
               applicationName = "my-application",
               deserializer = Serde.asciiString,
               workerIdentifier = "worker1"
@@ -263,12 +265,12 @@ import zio.Console.printLine
 import zio._
 
 object ProducerExample extends ZIOAppDefault {
-  val streamName      = "my_stream"
+  val streamIdentifier      = "my_stream"
   val applicationName = "my_awesome_zio_application"
 
   val env = client.defaultAwsLayer ++ Scope.default
 
-  val program = Producer.make(streamName, Serde.asciiString).flatMap { producer =>
+  val program = Producer.make(streamIdentifier, Serde.asciiString).flatMap { producer =>
     val record = ProducerRecord("key1", "message1")
 
     for {
@@ -318,7 +320,7 @@ import zio.Console.printLine
 import zio._
 
 object ProducerWithMetricsExample extends ZIOAppDefault {
-  val streamName      = "my_stream"
+  val streamIdentifier      = "my_stream"
   val applicationName = "my_awesome_zio_application"
 
   val env = client.defaultAwsLayer ++ Scope.default
@@ -327,7 +329,7 @@ object ProducerWithMetricsExample extends ZIOAppDefault {
     totalMetrics <- Ref.make(ProducerMetrics.empty)
     producer     <- Producer
             .make(
-              streamName,
+              streamIdentifier,
               Serde.asciiString,
               ProducerSettings(),
               metrics => totalMetrics.updateAndGet(_ + metrics).flatMap(m => printLine(m.toString).orDie)
@@ -419,7 +421,7 @@ object DynamicConsumerConsumeWithExample extends ZIOAppDefault {
   override def run: ZIO[Any with ZIOAppArgs with Scope, Any, Any] =
     DynamicConsumer
             .consumeWith(
-              streamName = "my-stream",
+              streamIdentifier = "my-stream",
               applicationName = "my-application",
               deserializer = Serde.asciiString,
               workerIdentifier = "worker1",
@@ -459,7 +461,7 @@ object DynamicConsumerFakeExample extends ZIOAppDefault {
       refCheckpointedList <- Ref.make[Seq[Record[Any]]](Seq.empty)
       exitCode            <- DynamicConsumer
               .consumeWith(
-                streamName = "my-stream",
+                streamIdentifier = "my-stream",
                 applicationName = "my-application",
                 deserializer = Serde.asciiString,
                 workerIdentifier = "worker1",
@@ -493,7 +495,7 @@ object DynamicConsumerBasicUsageExample extends ZIOAppDefault {
   override def run: ZIO[Any with ZIOAppArgs with Scope, Any, Any] =
     DynamicConsumer
             .shardedStream(
-              streamName = "my-stream",
+              streamIdentifier = "my-stream",
               applicationName = "my-application",
               deserializer = Serde.asciiString,
               workerIdentifier = "worker1"
