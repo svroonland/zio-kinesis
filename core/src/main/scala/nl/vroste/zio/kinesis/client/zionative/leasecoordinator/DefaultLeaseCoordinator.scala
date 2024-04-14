@@ -144,7 +144,7 @@ private class DefaultLeaseCoordinator(
 
     table
       .releaseLease(applicationName, updatedLease)
-      // TODO THIS TIMEOUT CAUSES THE INTERRUPTION ERROR...! So it's about racing in the finalizer..
+      .disconnect
       .timeout(settings.releaseLeaseTimeout)
       .asSome
       .tap(result =>
