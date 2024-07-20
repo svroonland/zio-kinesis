@@ -1,6 +1,6 @@
 import xerial.sbt.Sonatype.GitHubHosting
 
-val mainScala = "2.13.13"
+val mainScala = "2.13.14"
 val allScala  = Seq(mainScala, "3.4.1")
 
 val excludeInferAny = { options: Seq[String] => options.filterNot(Set("-Xlint:infer-any")) }
@@ -41,7 +41,7 @@ inThisBuild(
 )
 
 val zioVersion    = "2.1.6"
-val zioAwsVersion = "7.21.15.12"
+val zioAwsVersion = "7.21.15.13"
 
 lazy val root = project
   .in(file("."))
@@ -74,8 +74,8 @@ lazy val stdSettings: Seq[sbt.Def.SettingsDefinition] = Seq(
     "dev.zio"         %% "zio-test"                    % zioVersion % "test",
     "dev.zio"         %% "zio-test-sbt"                % zioVersion % "test",
     "dev.zio"         %% "zio-interop-reactivestreams" % "2.0.2",
-    "dev.zio"         %% "zio-logging"                 % "2.2.2",
-    "dev.zio"         %% "zio-logging-slf4j"           % "2.2.2",
+    "dev.zio"         %% "zio-logging"                 % "2.2.4",
+    "dev.zio"         %% "zio-logging-slf4j"           % "2.2.4",
     "ch.qos.logback"   % "logback-classic"             % "1.5.6",
     "org.hdrhistogram" % "HdrHistogram"                % "2.1.12",
     "dev.zio"         %% "zio-aws-core"                % zioAwsVersion,
@@ -107,7 +107,7 @@ lazy val dynamicConsumer = (project in file("dynamic-consumer"))
     name                       := "zio-kinesis-dynamic-consumer",
     assembly / assemblyJarName := "zio-kinesis-dynamic-consumer" + version.value + ".jar",
     libraryDependencies ++= Seq(
-      "software.amazon.kinesis" % "amazon-kinesis-client" % "2.5.8"
+      "software.amazon.kinesis" % "amazon-kinesis-client" % "2.6.0"
     )
   )
   .dependsOn(core % "compile->compile;test->test")
