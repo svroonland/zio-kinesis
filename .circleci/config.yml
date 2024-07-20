@@ -17,15 +17,16 @@ jobs:
         type: string
     docker:
       - image: << parameters.image >>
-      - image: localstack/localstack
+      - image: localstack/localstack:latest
         environment:
           LOCALSTACK_HOST: localstack
-          SERVICES: 'kinesis,cloudwatch,dynamodb'
+          SERVICES: 'cloudwatch,dynamodb'
           USE_SSL: "false"
           DEFAULT_REGION: 'us-east-1'
           AWS_DEFAULT_REGION: "us-east-1"
           AWS_ACCESS_KEY_ID: dummy-key
           AWS_SECRET_ACCESS_KEY: dummy-key
+          UPDATE_SHARD_COUNT_DURATION: "10000ms"
           DEBUG: "1"
     resource_class: << parameters.resource_class >>
 
