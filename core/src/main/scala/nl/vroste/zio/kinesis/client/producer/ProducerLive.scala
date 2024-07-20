@@ -215,9 +215,8 @@ private[client] final class ProducerLive[R, R1, T](
                                enabled.md5Pool.get.flatMap { digest =>
                                  enabled.shards.get.map(shardMap =>
                                    requests.map(r =>
-                                     r.newAttempt.copy(predictedShard =
-                                       shardMap.shardForPartitionKey(digest, r.partitionKey)
-                                     )
+                                     r.newAttempt
+                                       .copy(predictedShard = shardMap.shardForPartitionKey(digest, r.partitionKey))
                                    )
                                  )
                                }
@@ -342,10 +341,10 @@ private[client] final class ProducerLive[R, R1, T](
 private[client] object ProducerLive {
   type ShardId = String
 
-  val maxChunkSize: Int        = 1024            // Stream-internal max chunk size
-  val maxRecordsPerRequest     = 500             // This is a Kinesis API limitation
-  val maxPayloadSizePerRequest = 5 * 1024 * 1024 // 5 MB
-  val maxPayloadSizePerRecord  =
+  val maxChunkSize: Int             = 1024            // Stream-internal max chunk size
+  val maxRecordsPerRequest          = 500             // This is a Kinesis API limitation
+  val maxPayloadSizePerRequest      = 5 * 1024 * 1024 // 5 MB
+  val maxPayloadSizePerRecord       =
     1 * 1024 * 921 // 1 MB TODO actually 90%, to avoid underestimating and getting Kinesis errors
   val maxIngestionPerShardPerSecond = 1 * 1024 * 1024 // 1 MB
   val maxRecordsPerShardPerSecond   = 1000
@@ -395,8 +394,8 @@ private[client] object ProducerLive {
       case _: IOException                                   => true
       case _: ResourceInUseException                        =>
         true // Also covers DELETING, but will result in ResourceNotFoundException on a subsequent attempt
-      case e: SdkException if Option(e.getCause).isDefined  => isRecoverableException(e.getCause)
-      case _                                                => false
+      case e: SdkException if Option(e.getCause).isDefined => isRecoverableException(e.getCause)
+      case _                                               => false
     }
 
   def payloadSizeForEntry(entry: PutRecordsRequestEntry): Int =
