@@ -63,7 +63,7 @@ workflows:
     jobs:
       - run_with_localstack:
           name: lint
-          sbt_command: ++2.13.7! check
+          sbt_command: ++2.13.14! check
           filters:
             tags:
               only: << pipeline.parameters.tag_regex >>
@@ -79,7 +79,7 @@ workflows:
       - run_with_localstack:
           name: test213
           image: hseeberger/scala-sbt:17.0.2_1.6.2_2.13.8
-          sbt_command: ++2.13.13! interopFutures/compile core/test interopFutures/test Compile/doc
+          sbt_command: ++2.13.14! interopFutures/compile core/test interopFutures/test Compile/doc
           requires:
             - lint
           filters:
@@ -88,7 +88,7 @@ workflows:
       - run_with_localstack:
           name: test213_dynamic_consumer
           image: hseeberger/scala-sbt:17.0.2_1.6.2_2.13.8
-          sbt_command: ++2.13.13! dynamicConsumer/test
+          sbt_command: ++2.13.14! dynamicConsumer/test
           requires:
             - lint
           filters:
