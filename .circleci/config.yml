@@ -8,7 +8,7 @@ jobs:
   run_with_localstack:
     parameters:
       image:
-        default: hseeberger/scala-sbt:17.0.2_1.6.2_2.13.8
+        default: sbtscala/scala-sbt:eclipse-temurin-jammy-22_36_1.10.1_2.13.14
         type: string
       sbt_command:
         type: string
@@ -44,7 +44,7 @@ jobs:
             - "~/.m2"
   release:
     docker:
-      - image: hseeberger/scala-sbt:17.0.2_1.6.2_2.13.8
+      - image: sbtscala/scala-sbt:eclipse-temurin-jammy-22_36_1.10.1_2.13.14
     steps:
       - checkout
       - run: git fetch --tags
@@ -69,7 +69,7 @@ workflows:
               only: << pipeline.parameters.tag_regex >>
       - run_with_localstack:
           name: test3
-          image: hseeberger/scala-sbt:17.0.2_1.6.2_3.1.1
+          image: sbtscala/scala-sbt:eclipse-temurin-jammy-21.0.2_13_1.9.9_3.3.1
           sbt_command: ++3.3.1! core/test interopFutures/test
           requires:
             - lint
@@ -78,7 +78,6 @@ workflows:
               only: << pipeline.parameters.tag_regex >>
       - run_with_localstack:
           name: test213
-          image: hseeberger/scala-sbt:17.0.2_1.6.2_2.13.8
           sbt_command: ++2.13.14! interopFutures/compile core/test interopFutures/test Compile/doc
           requires:
             - lint
@@ -87,7 +86,6 @@ workflows:
               only: << pipeline.parameters.tag_regex >>
       - run_with_localstack:
           name: test213_dynamic_consumer
-          image: hseeberger/scala-sbt:17.0.2_1.6.2_2.13.8
           sbt_command: ++2.13.14! dynamicConsumer/test
           requires:
             - lint
