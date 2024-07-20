@@ -17,7 +17,7 @@ jobs:
         type: string
     docker:
       - image: << parameters.image >>
-      - image: localstack/localstack:latest
+      - image: localstack/localstack:3.4.0
         environment:
           LOCALSTACK_HOST: localstack
           SERVICES: 'cloudwatch,dynamodb'
