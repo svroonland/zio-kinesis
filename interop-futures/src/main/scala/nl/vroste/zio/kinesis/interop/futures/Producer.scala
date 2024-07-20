@@ -14,8 +14,6 @@ import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClientBuilder
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClientBuilder
 import zio._
 
-import scala.annotation.nowarn
-
 /**
  * A scala-native Future based interface to the zio-kinesis Producer
  */
