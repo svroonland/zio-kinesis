@@ -1,6 +1,5 @@
 package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
 
-import nl.vroste.zio.kinesis.client.Util.ZStreamExtensions
 import nl.vroste.zio.kinesis.client.zionative.Consumer.InitialPosition
 import nl.vroste.zio.kinesis.client.zionative.LeaseCoordinator.AcquiredLease
 import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.{
@@ -53,7 +52,8 @@ private class DefaultLeaseCoordinator(
   strategy: ShardAssignmentStrategy,
   initialPosition: InitialPosition,
   initialShards: Task[Map[ShardId, Shard.ReadOnly]],
-  currentShards: Task[Map[ShardId, Shard.ReadOnly]]
+  currentShards: Task[Map[ShardId, Shard.ReadOnly]],
+  scope: Scope
 ) extends LeaseCoordinator {
 
   import DefaultLeaseCoordinator._
@@ -354,23 +354,10 @@ private class DefaultLeaseCoordinator(
                        }
     } yield ()
 
-  override def acquiredLeases: ZStream[Any, Throwable, AcquiredLease] = ZStream.unwrapScoped {
-    for {
-      // We need a forked scope with independent finalizer order, because `initialize` will call `forkScoped` after being forked,
-      // which leads to a wrong finalizer order
-      scope        <- ZIO.scope
-      childScope   <- scope.fork
-      runloopFiber <- initialize
-                        .provideEnvironment(ZEnvironment(childScope))
-                        .forkScoped
-      _            <- ZIO.addFinalizer(
-                        releaseLeases *> ZIO.logDebug("releaseLeases done")
-                      ) // We need the runloop to be alive for this operation
-    } yield ZStream
+  override def acquiredLeases: ZStream[Any, Throwable, AcquiredLease] =
+    ZStream
       .fromQueue(acquiredLeasesQueue)
       .map { case (lease, complete) => AcquiredLease(lease.key, complete) }
-      .terminateOnFiberFailure(runloopFiber)
-  }
 
   override def getCheckpointForShard(shardId: String): UIO[Option[Either[SpecialCheckpoint, ExtendedSequenceNumber]]] =
     for {
@@ -390,13 +377,18 @@ private class DefaultLeaseCoordinator(
                          )
                        )
       permit        <- Semaphore.make(1)
-    } yield new DefaultCheckpointer(
-      shardId,
-      state,
-      permit,
-      (checkpoint, release) => serialExecutionByShard(shardId)(updateCheckpoint(shardId, checkpoint, release)),
-      serialExecutionByShard(shardId)(releaseLease(shardId))
-    )
+      checkpointer   = new DefaultCheckpointer(
+                         shardId,
+                         state,
+                         permit,
+                         (checkpoint, release) =>
+                           serialExecutionByShard(shardId)(updateCheckpoint(shardId, checkpoint, release)),
+                         serialExecutionByShard(shardId)(releaseLease(shardId))
+                       )
+      _             <- scope.addFinalizer(
+                         checkpointer.checkpointAndRelease.ignore
+                       ) // As a fallback when our shard streams do their finalization after the main stream
+    } yield checkpointer
 
   private def updateCheckpoint(
     shard: String,
@@ -468,6 +460,8 @@ private[zionative] object DefaultLeaseCoordinator {
       table           <- ZIO.service[LeaseRepository]
       state           <- Ref.make(State.empty)
       serialExecution <- ZIO.acquireRelease(SerialExecution.keyed[String])(_ => ZIO.logDebug("Shutting down runloop"))
+      scope           <- ZIO.scope
+      childScope      <- scope.fork
       c                = new DefaultLeaseCoordinator(
                            table,
                            applicationName,
@@ -480,8 +474,13 @@ private[zionative] object DefaultLeaseCoordinator {
                            strategy,
                            initialPosition,
                            initialShards,
-                           currentShards
+                           currentShards,
+                           scope
                          )
+      _               <- c.initialize.provideEnvironment(ZEnvironment(childScope))
+      _               <- ZIO.addFinalizer(
+                           c.releaseLeases *> ZIO.logDebug("releaseLeases done")
+                         ) // We need the runloop to be alive for this operation
     } yield c)
       .tapErrorCause(c => ZIO.logSpan("Error creating DefaultLeaseCoordinator")(ZIO.logErrorCause(c)))
 
