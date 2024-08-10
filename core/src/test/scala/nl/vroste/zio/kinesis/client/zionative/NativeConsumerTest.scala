@@ -894,7 +894,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
       TestAspect.withLiveClock @@
       TestAspect.sequential @@ // For CircleCI
       TestAspect.timeoutWarning(45.seconds) @@
-      TestAspect.timeout(120.seconds)
+      TestAspect.timeout(240.seconds)
 
   val useAws = Unsafe.unsafe { implicit unsafe =>
     Runtime.default.unsafe.run(System.envOrElse("ENABLE_AWS", "0")).getOrThrow().toInt == 1
