@@ -466,7 +466,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
               emitDiagnostic = emitDiagnostic,
               shardAssignmentStrategy = ShardAssignmentStrategy.balanced(renewInterval + 1.second)
             )
-            .flatMapPar(Int.MaxValue) { case (shard @ _, shardStream, checkpointer) =>
+            .flatMapPar(nrShards) { case (shard @ _, shardStream, checkpointer) =>
               shardStream
                 .tap(_ => onStarted)
                 .tap(checkpointer.stage)
@@ -484,6 +484,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
                 }
             }
 
+        // Test is complete when worker 2 and 3 have all leases
         def testIsComplete(events: List[(String, Instant, DiagnosticEvent)]) = {
           def getCurrentHeldLeasesByWorker =
             events.foldLeft(Map.empty[String, Set[String]]) { case (acc, (worker, _, event)) =>
@@ -518,38 +519,33 @@ object NativeConsumerTest extends ZIOSpecDefault {
 
             consumer1Started <- Promise.make[Throwable, Unit]
 
-            _ <- (
-                   ZStream
-                     .mergeAll(3)(
-                       // The zombie consumer: not updating checkpoints and not renewing leases
-                       consumer(
-                         streamName,
-                         applicationName,
-                         "worker1",
-                         handleEvent("worker1"),
-                         consumer1Started.succeed(()),
-                         checkpointInterval = 5.minutes,
-                         renewInterval = 5.minutes // Such that it appears to be dead
-                       ),
-                       ZStream.fromZIO(consumer1Started.await) *> // Give worker1 the first lease
-                         consumer(streamName, applicationName, "worker2", handleEvent("worker2"))
-                           .ensuring(ZIO.logWarning("worker2 DONE")),
-                       ZStream.fromZIO(consumer1Started.await) *> // Give worker1 the first lease
-                         consumer(streamName, applicationName, "worker3", handleEvent("worker3"))
-                           .ensuring(ZIO.logWarning("Worker3 DONE"))
-                     )
-                     .runDrain
-                     .tapErrorCause(c => ZIO.logError(s"${c.prettyPrint}"))
-                   )
-                   .withFinalizer { _ =>
-                     events.get
-                       .map(
-                         _.filterNot(_._3.isInstanceOf[PollComplete])
-                           .filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
-                       )
-                       .tap(allEvents => ZIO.logDebug(allEvents.mkString("\n")))
-                   }
-                   .disconnect raceFirst done.await
+            // The zombie consumer: not updating checkpoints and not renewing leases
+            s1 <- consumer(
+                    streamName,
+                    applicationName,
+                    "worker1",
+                    handleEvent("worker1"),
+                    consumer1Started.succeed(()),
+                    checkpointInterval = 5.minutes,
+                    renewInterval = 5.minutes // Such that it appears to be dead
+                  ).runDrain.forkScoped
+            s2 <- (ZStream.fromZIO(consumer1Started.await) *> // Give worker1 the first lease
+                    consumer(streamName, applicationName, "worker2", handleEvent("worker2"))
+                      .ensuring(ZIO.logWarning("worker2 DONE"))).runDrain.forkScoped
+            s3 <- (ZStream.fromZIO(consumer1Started.await) *> // Give worker1 the first lease
+                    consumer(streamName, applicationName, "worker3", handleEvent("worker3"))
+                      .ensuring(ZIO.logWarning("Worker3 DONE"))).runDrain.forkScoped
+                    .tapErrorCause(c => ZIO.logError(s"${c.prettyPrint}"))
+            _  <- done.await
+            _  <- s1.interrupt
+            _  <- s2.interrupt
+            _  <- s3.interrupt
+            _  <- events.get
+                    .map(
+                      _.filterNot(_._3.isInstanceOf[PollComplete])
+                        .filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
+                    )
+                    .tap(allEvents => ZIO.logDebug(allEvents.mkString("\n")))
           } yield assertCompletes
         }
       },
@@ -575,9 +571,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
               .flatMapPar(Int.MaxValue) { case (shard @ _, shardStream, checkpointer) =>
                 val out = shardStream
                   .tap(checkpointer.stage)
-                  .aggregateAsyncWithin(ZSink.collectAllN[Record[String]](200), Schedule.fixed(1.second))
                   .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-                  .mapConcat(_.lastOption)
                   .tap(_ => checkpointer.checkpoint())
                   .catchAll {
                     case Right(_) =>
