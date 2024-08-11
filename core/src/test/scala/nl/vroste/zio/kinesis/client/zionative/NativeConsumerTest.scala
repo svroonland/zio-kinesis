@@ -571,9 +571,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
               .flatMapPar(Int.MaxValue) { case (shard @ _, shardStream, checkpointer) =>
                 val out = shardStream
                   .tap(checkpointer.stage)
-                  .aggregateAsyncWithin(ZSink.collectAllN[Record[String]](200), Schedule.fixed(1.second))
                   .mapError[Either[Throwable, ShardLeaseLost.type]](Left(_))
-                  .mapConcat(_.lastOption)
                   .tap(_ => checkpointer.checkpoint())
                   .catchAll {
                     case Right(_) =>
