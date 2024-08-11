@@ -64,7 +64,7 @@ object LocalStackServices {
         .make(
           maxConcurrency =
             25, // localstack 11.2 has hardcoded limit of 128 and we need to share with a few clients below
-          maxPendingConnectionAcquires = 50,
+          maxPendingConnectionAcquires = 20,
           readTimeout = 10.seconds,
           build = _.connectionMaxIdleTime(10.seconds.asJava)
             .writeTimeout(10.seconds.asJava)
