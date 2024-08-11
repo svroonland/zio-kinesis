@@ -548,8 +548,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
                            .filterNot(_._3.isInstanceOf[DiagnosticEvent.Checkpoint])
                        )
                        .tap(allEvents => ZIO.logDebug(allEvents.mkString("\n")))
-                   }
-                   .disconnect raceFirst done.await
+                   } raceFirst done.await
           } yield assertCompletes
         }
       },
