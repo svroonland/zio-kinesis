@@ -14,8 +14,6 @@ import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClientBuilder
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClientBuilder
 import zio._
 
-import scala.annotation.nowarn
-
 /**
  * A scala-native Future based interface to the zio-kinesis Producer
  */
@@ -69,7 +67,6 @@ object Producer {
    * @return
    *   A Managed Producer
    */
-  @nowarn // Scala warns that Tag is unused, but removing it gives missing implicits errors
   def make[T: Tag](
     streamIdentifier: StreamIdentifier,
     serializer: Serializer[Any, T],
