@@ -36,7 +36,8 @@ inThisBuild(
         url("https://github.com/svroonland")
       )
     ),
-    resolvers += "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots"
+    resolvers += "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots",
+    scalacOptions += "-source 3.3"
   )
 )
 
