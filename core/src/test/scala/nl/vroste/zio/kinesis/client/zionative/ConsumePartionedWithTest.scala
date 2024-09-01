@@ -143,5 +143,5 @@ object ConsumePartionedWithTest extends ZIOSpecDefault {
       .@@(withLiveClock)
       .@@(timeout(7.minutes))
       .@@(withLiveRandom)
-      .provideLayerShared(Runtime.removeDefaultLoggers >>> awsLayer >+> DynamoDbLeaseRepository.live)
+      .provideShared(awsLayer, DynamoDbLeaseRepository.live)
 }

@@ -27,7 +27,6 @@ object FakeRecordProcessor {
         for {
           processed <- refProcessed.updateAndGet(xs => xs :+ data)
           sizeAfter  = processed.distinct.size
-          _          = println(s"process records count ${processed.size}, rec = $data")
           _         <- ZIO.logInfo(s"process records count ${processed.size}, rec = $data")
         } yield sizeAfter
 
@@ -41,7 +40,6 @@ object FakeRecordProcessor {
                expectedCount =>
                  for {
                    sizeAfter <- updateRefProcessed
-                   _          = println(s"processed $sizeAfter, expected $expectedCount")
                    _         <- ZIO.logInfo(s"processed $sizeAfter, expected $expectedCount")
                    _         <-
                      ZIO.when(sizeAfter == expectedCount)(
