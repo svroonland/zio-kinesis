@@ -12,7 +12,7 @@ final class LockingCheckpointer[T](
   import LockingCheckpointer.State
 
   /**
-   * Lock the checkpointer on the key of the record. If the key is already locked, the checkpointer will be blocked
+   * Lock the checkpointer on the key of the record. If the key is already locked, the caller will be blocked
    * until the key is unlocked by checkpointing.
    */
   def lock(record: Record[T]): UIO[Unit] = {
