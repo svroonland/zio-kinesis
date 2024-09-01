@@ -3,7 +3,7 @@ package nl.vroste.zio.kinesis.client.zionative
 import nl.vroste.zio.kinesis.client.Record
 import zio._
 
-final class LockingCheckpointer[T](
+final class LockingCheckpointer[T] private (
   stateRef: Ref[LockingCheckpointer.State],
   checkpointer: Checkpointer,
   maxCheckpointSize: Long,
