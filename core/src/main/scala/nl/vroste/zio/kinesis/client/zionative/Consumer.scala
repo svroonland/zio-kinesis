@@ -430,8 +430,8 @@ object Consumer {
    * Apply an effectful function to each record in a stream.
    *
    * This function ensures that a checkpoint is performed between every 2 records with the same partition key. This is
-   * useful when you want to ensure that records with the same partition key are processed in order. Even in the
-   * presence of failure, only a at most 1 record per partition key will be reprocessed.
+   * useful when you want to process a shard in paralel but ensure that records with the same partition key are
+   * processed in order. Even in the presence of failure, only a at most 1 record per partition key will be reprocessed.
    *
    * @param streamIdentifier
    *   Stream to consume from. Either just the name or the whole arn.
@@ -497,21 +497,21 @@ object Consumer {
       emitDiagnostic,
       shardAssignmentStrategy
     ).flatMapPar(Int.MaxValue) { case (_, shardStream, checkpointer) =>
-      ZStream.fromZIO(LockingCheckpointer.make[T](checkpointer, checkpointBatchSize, checkpointDuration)).flatMap {
-        lockingCheckpointer =>
-          shardStream
-            .tap(lockingCheckpointer.lock)
-            // Use mapZIOPar even when parallelism is 1 to ensure that locking happens on a seperate fiber.
-            .mapZIOPar(processorParallelism)(r => recordProcessor(r).as(r))
-            .tap(lockingCheckpointer.stage)
-            .mapError(Left(_))
-            .merge(ZStream.fromZIO(lockingCheckpointer.checkpointLoop(checkpointRetrySchedule)))
-            .catchAll {
-              case Left(e)               =>
-                ZStream.fail(e)
-              case Right(ShardLeaseLost) =>
-                ZStream.empty
-            }
+      val makeLockingCheckpointer = LockingCheckpointer.make[T](checkpointer, checkpointBatchSize, checkpointDuration)
+      ZStream.fromZIO(makeLockingCheckpointer).flatMap { lockingCheckpointer =>
+        shardStream
+          .tap(lockingCheckpointer.lock)
+          // Use mapZIOPar even when parallelism is 1 to ensure that locking happens on a seperate fiber.
+          .mapZIOPar(processorParallelism)(r => recordProcessor(r).as(r))
+          .tap(lockingCheckpointer.stage)
+          .mapError(Left(_))
+          .merge(ZStream.fromZIO(lockingCheckpointer.checkpointLoop(checkpointRetrySchedule)))
+          .catchAll {
+            case Left(e)               =>
+              ZStream.fail(e)
+            case Right(ShardLeaseLost) =>
+              ZStream.empty
+          }
       }
     }.runDrain
 
