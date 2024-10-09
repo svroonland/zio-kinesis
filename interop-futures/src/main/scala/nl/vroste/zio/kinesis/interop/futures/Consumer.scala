@@ -16,6 +16,7 @@ import zio.{ CancelableFuture, Unsafe, ZIO }
 
 import scala.concurrent.duration._
 import scala.concurrent.{ ExecutionContext, Future }
+import nl.vroste.zio.kinesis.client.zionative.ConsumptionBehaviour
 
 /**
  * A scala-native Future based interface to the zio-kinesis Consumer
@@ -73,8 +74,10 @@ class Consumer private (
         initialPosition,
         emitDiagnostic = e => ZIO.attempt(emitDiagnostic(e)).orDie,
         shardAssignmentStrategy,
-        checkpointBatchSize,
-        zio.Duration.fromScala(checkpointDuration)
+        ConsumptionBehaviour.default(
+          checkpointBatchSize,
+          zio.Duration.fromScala(checkpointDuration)
+        )
       )(record => ZIO.fromFuture(recordProcessor(record)))
     }
 
