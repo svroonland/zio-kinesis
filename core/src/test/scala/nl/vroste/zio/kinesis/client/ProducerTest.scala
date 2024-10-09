@@ -1,22 +1,18 @@
 package nl.vroste.zio.kinesis.client
 
-import nl.vroste.zio.kinesis.client
-import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.producer.ProducerLive.{ batcher, ProduceRequest }
 import nl.vroste.zio.kinesis.client.producer.{ ProducerLive, ProducerMetrics, ShardMap }
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.awssdk.services.kinesis.model.KinesisException
 import zio.Console.printLine
-import zio.aws.cloudwatch.CloudWatch
-import zio.aws.dynamodb.DynamoDb
 import zio.aws.kinesis.Kinesis
 import zio.aws.kinesis.model.primitives.{ PositiveIntegerObject, StreamName }
 import zio.aws.kinesis.model.{ ScalingType, UpdateShardCountRequest }
 import zio.stream.{ ZPipeline, ZStream }
 import zio.test.Assertion._
 import zio.test.TestAspect._
-import zio.test.{ Gen, _ }
-import zio.{ Chunk, Queue, Ref, ZIO, ZLayer, _ }
+import zio.test._
+import zio._
 
 import java.security.MessageDigest
 import java.time.Instant
@@ -24,11 +20,6 @@ import java.util.UUID
 
 object ProducerTest extends ZIOSpecDefault {
   import TestUtil._
-
-  val useAws = scala.sys.env.getOrElse("ENABLE_AWS", "0").toInt == 1
-
-  val env: ZLayer[TestEnvironment, Nothing, CloudWatch with Kinesis with DynamoDb] =
-    (if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()).orDie
 
   def spec =
     suite("Producer")(
@@ -463,7 +454,7 @@ object ProducerTest extends ZIOSpecDefault {
           } yield assertCompletes
         }
       } @@ TestAspect.timeout(2.minute)
-    ).provideLayer(env ++ Scope.default) @@
+    ).provideLayer(awsLayer ++ Scope.default) @@
       sequential @@
       withLiveClock @@
       TestAspect.timeout(2.minute) @@

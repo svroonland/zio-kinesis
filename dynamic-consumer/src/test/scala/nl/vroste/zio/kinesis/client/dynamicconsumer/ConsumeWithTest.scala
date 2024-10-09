@@ -14,6 +14,7 @@ import zio.test.Assertion.equalTo
 import zio.test.TestAspect.{ timeout, withLiveClock, withLiveRandom }
 import zio.test.{ assert, ZIOSpecDefault }
 import zio.{ durationInt, Promise, Ref, ZIO, ZLayer }
+import nl.vroste.zio.kinesis.client.FakeRecordProcessor
 
 object ConsumeWithTest extends ZIOSpecDefault {
   import TestUtil._
@@ -48,20 +49,18 @@ object ConsumeWithTest extends ZIOSpecDefault {
                                       .tapError(e => printLine(s"error1: $e"))
                                       .retry(retryOnResourceNotFound)
                 _                <- printLine("Starting dynamic consumer")
+                processer         = FakeRecordProcessor.make[String](
+                                      refProcessed,
+                                      finishedConsuming,
+                                      expectedCount = nrRecords
+                                    )
                 _                <- consumeWith[Any, Any, String](
                                       streamName,
                                       applicationName = applicationName,
                                       deserializer = Serde.asciiString,
                                       checkpointBatchSize = 2,
                                       configureKcl = _.withPolling
-                                    ) {
-                                      FakeRecordProcessor
-                                        .make(
-                                          refProcessed,
-                                          finishedConsuming,
-                                          expectedCount = nrRecords
-                                        )
-                                    } raceFirst finishedConsuming.await
+                                    )(r => processer(r.data)) raceFirst finishedConsuming.await
                 processedRecords <- refProcessed.get
               } yield assert(processedRecords.distinct.size)(equalTo(nrRecords)))
 
@@ -94,35 +93,33 @@ object ConsumeWithTest extends ZIOSpecDefault {
                                       .tapError(e => printLine(s"error1: $e"))
                                       .retry(retryOnResourceNotFound)
                 _                <- printLine("Starting dynamic consumer - about to fail")
+                processor         = FakeRecordProcessor
+                                      .makeFailing[Any, String](
+                                        refProcessed,
+                                        finishedConsuming,
+                                        failFunction = (_: Any) == "msg31"
+                                      )
                 _                <- consumeWith[Any, Any, String](
                                       streamName,
                                       applicationName = applicationName,
                                       deserializer = Serde.asciiString,
                                       checkpointBatchSize = batchSize,
                                       configureKcl = _.withPolling
-                                    ) {
-                                      FakeRecordProcessor
-                                        .makeFailing(
-                                          refProcessed,
-                                          finishedConsuming,
-                                          failFunction = (_: Any) == "msg31"
-                                        )
-                                    }.ignore
+                                    )(r => processor(r.data)).ignore
                 _                <- printLine("Starting dynamic consumer - about to succeed")
+                processor2        = FakeRecordProcessor
+                                      .make[String](
+                                        refProcessed,
+                                        finishedConsuming,
+                                        expectedCount = nrRecords
+                                      )
                 _                <- consumeWith[Any, Any, String](
                                       streamName,
                                       applicationName = applicationName,
                                       deserializer = Serde.asciiString,
                                       checkpointBatchSize = batchSize,
                                       configureKcl = _.withPolling
-                                    ) {
-                                      FakeRecordProcessor
-                                        .make(
-                                          refProcessed,
-                                          finishedConsuming,
-                                          expectedCount = nrRecords
-                                        )
-                                    } raceFirst finishedConsuming.await
+                                    )(r => processor2(r.data)) raceFirst finishedConsuming.await
                 processedRecords <- refProcessed.get
               } yield assert(processedRecords.distinct.size)(equalTo(nrRecords)))
             }

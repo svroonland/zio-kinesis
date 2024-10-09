@@ -15,8 +15,10 @@ object ConsumeWithExample extends ZIOAppDefault {
         applicationName = "my-application",
         deserializer = Serde.asciiString,
         workerIdentifier = "worker1",
-        checkpointBatchSize = 1000L,
-        checkpointDuration = 5.minutes
+        consumptionBehaviour = ConsumptionBehaviour.default(
+          checkpointBatchSize = 1000,
+          checkpointDuration = 5.minutes
+        )
       )(record => printLine(s"Processing record $record"))
       .provideLayer(Consumer.defaultEnvironment)
       .exitCode

@@ -1,10 +1,8 @@
 package nl.vroste.zio.kinesis.client.zionative
 
-import nl.vroste.zio.kinesis.client
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
 import nl.vroste.zio.kinesis.client.TestUtil.{ retryOnResourceNotFound, withStream }
 import nl.vroste.zio.kinesis.client._
-import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.{ LeaseAcquired, LeaseReleased, PollComplete }
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.LeaseCoordinationSettings
@@ -18,7 +16,7 @@ import zio.aws.kinesis.model.{ DescribeStreamRequest, ScalingType, UpdateShardCo
 import zio.stream.{ ZSink, ZStream }
 import zio.test.Assertion._
 import zio.test._
-import zio.{ System, _ }
+import zio._
 import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.Lease
 
 import java.time.Instant
@@ -833,7 +831,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
             _               <- consumer.interrupt
           } yield assertCompletes
         }
-      } @@ awsOnly,
+      } @@ TestUtil.awsOnly,
       test("regression: will not consume child shards while parent is still active") {
         val nrRecords           = 1
         val firstShard          = "shardId-000000000000"
@@ -882,7 +880,7 @@ object NativeConsumerTest extends ZIOSpecDefault {
             _            <- consumer.interrupt
           } yield assert(activeShards)(forall(isLessThanEqualTo(1)))
         }
-      } @@ awsOnly
+      } @@ TestUtil.awsOnly
     ).provideLayerShared(env) @@
       TestAspect.timed @@
       TestAspect.withLiveClock @@
@@ -890,17 +888,8 @@ object NativeConsumerTest extends ZIOSpecDefault {
       TestAspect.timeoutWarning(45.seconds) @@
       TestAspect.timeout(120.seconds)
 
-  val useAws = Unsafe.unsafe { implicit unsafe =>
-    Runtime.default.unsafe.run(System.envOrElse("ENABLE_AWS", "0")).getOrThrow().toInt == 1
-  }
-
-  val awsLayer: ZLayer[Any, Throwable, CloudWatch with Kinesis with DynamoDb] =
-    if (useAws) client.defaultAwsLayer else LocalStackServices.localStackAwsLayer()
-
-  val awsOnly = if (useAws) TestAspect.identity else TestAspect.ignore
-
   val env: ZLayer[Any, Nothing, Scope with CloudWatch with Kinesis with DynamoDb with LeaseRepository] =
-    Scope.default >+> awsLayer.orDie >+> DynamoDbLeaseRepository.live >+>
+    Scope.default >+> TestUtil.awsLayer >+> DynamoDbLeaseRepository.live >+>
       Runtime.removeDefaultLoggers >+>
       Runtime.addLogger(ZLogger.default.map(println(_)).filterLogLevel(_ >= LogLevel.Debug))
 
