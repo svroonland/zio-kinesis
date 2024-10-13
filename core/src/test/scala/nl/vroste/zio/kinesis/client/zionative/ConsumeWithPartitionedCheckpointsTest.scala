@@ -13,7 +13,7 @@ import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepos
 object ConsumeWithPartitionedCheckpointsTest extends ZIOSpecDefault {
   override def spec =
     suite("ConsumeWithPartitionedCheckpoints")(
-      test("consumePartitionedWith should consume records produced on all shards") {
+      test("consumeWith with partitioned checkpoint behaviour should consume records produced on all shards") {
         withRandomStreamEnv(2) { (streamName, applicationName) =>
           val nrRecords = 4
 
@@ -32,7 +32,7 @@ object ConsumeWithPartitionedCheckpointsTest extends ZIOSpecDefault {
                                      streamName,
                                      applicationName = applicationName,
                                      deserializer = Serde.asciiString,
-                                     consumptionBehaviour = ConsumptionBehaviour.partitionedCheckpoints(checkpointBatchSize = 2)
+                                     checkpointBehaviour = CheckpointBehaviour.partitionedCheckpoints(checkpointBatchSize = 2)
                                    )(r => processor(r.data)) raceFirst finishedConsuming.await
               processedRecords  <- refProcessed.get
             } yield assert(processedRecords.distinct.size)(equalTo(nrRecords))
@@ -40,7 +40,7 @@ object ConsumeWithPartitionedCheckpointsTest extends ZIOSpecDefault {
         }
       },
       test(
-        "consumePartitionedWith should, after a restart due to a record processing error, consume records produced on all shards"
+        "consumeWith with partitioned checkpoint behaviour should, after a restart due to a record processing error, consume records produced on all shards"
       ) {
         withRandomStreamEnv(2) { (streamName, applicationName) =>
           val nrRecords = 50
@@ -62,8 +62,8 @@ object ConsumeWithPartitionedCheckpointsTest extends ZIOSpecDefault {
                                        streamName,
                                        applicationName = applicationName,
                                        deserializer = Serde.asciiString,
-                                       consumptionBehaviour =
-                                         ConsumptionBehaviour.partitionedCheckpoints(checkpointBatchSize = batchSize)
+                                       checkpointBehaviour =
+                                         CheckpointBehaviour.partitionedCheckpoints(checkpointBatchSize = batchSize)
                                      )(r => prosessor(r.data))
                                      .ignore
               _                  = println("Starting dynamic consumer - about to succeed")
@@ -76,7 +76,7 @@ object ConsumeWithPartitionedCheckpointsTest extends ZIOSpecDefault {
                                      streamName,
                                      applicationName = applicationName,
                                      deserializer = Serde.asciiString,
-                                     consumptionBehaviour = ConsumptionBehaviour.partitionedCheckpoints(checkpointBatchSize = batchSize)
+                                     checkpointBehaviour = CheckpointBehaviour.partitionedCheckpoints(checkpointBatchSize = batchSize)
                                    )(r => processor2(r.data)) raceFirst finishedConsuming.await
               processedRecords  <- refProcessed.get
             } yield assert(processedRecords.distinct.size)(equalTo(nrRecords))
@@ -84,7 +84,7 @@ object ConsumeWithPartitionedCheckpointsTest extends ZIOSpecDefault {
         }
       },
       test(
-        "consumePartitionedWith should checkpoint before consuming the second record with the same key"
+        "consumeWith with partitioned checkpoint behaviour should checkpoint before consuming the second record with the same key"
       ) {
         withRandomStreamEnv(1) { (streamName, applicationName) =>
           val records = List(
@@ -118,7 +118,7 @@ object ConsumeWithPartitionedCheckpointsTest extends ZIOSpecDefault {
                                   streamName,
                                   applicationName = applicationName,
                                   deserializer = Serde.asciiString,
-                                  consumptionBehaviour = ConsumptionBehaviour.partitionedCheckpoints(
+                                  checkpointBehaviour = CheckpointBehaviour.partitionedCheckpoints(
                                     checkpointBatchSize =
                                       1000, // ensure we will not checkpoint due to batch size or timeout
                                     checkpointDuration = Duration.Infinity

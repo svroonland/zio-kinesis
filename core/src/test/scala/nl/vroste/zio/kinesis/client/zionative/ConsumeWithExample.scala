@@ -15,7 +15,7 @@ object ConsumeWithExample extends ZIOAppDefault {
         applicationName = "my-application",
         deserializer = Serde.asciiString,
         workerIdentifier = "worker1",
-        consumptionBehaviour = ConsumptionBehaviour.default(
+        checkpointBehaviour = CheckpointBehaviour.default(
           checkpointBatchSize = 1000,
           checkpointDuration = 5.minutes
         )

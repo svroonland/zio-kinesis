@@ -5,7 +5,7 @@ import nl.vroste.zio.kinesis.client.Util
 import zio.stream.ZStream
 import nl.vroste.zio.kinesis.client.Record
 
-trait ConsumptionBehaviour[-R] {
+trait CheckpointBehaviour[-R] {
   def processShardStream[RC <: R, T](
     shardStream: ZStream[Any, Throwable, Record[T]],
     checkpointer: Checkpointer,
@@ -13,7 +13,7 @@ trait ConsumptionBehaviour[-R] {
   ): ZIO[RC, Throwable, Unit]
 }
 
-object ConsumptionBehaviour {
+object CheckpointBehaviour {
 
   /**
    * Default consumption behaviour. No special guarantees are made about ordering or checkpointing.
@@ -29,7 +29,7 @@ object ConsumptionBehaviour {
     checkpointBatchSize: Long = 200,
     checkpointDuration: Duration = 5.minutes,
     processorParallelism: Int = 1
-  ): ConsumptionBehaviour[Any] = new ConsumptionBehaviour[Any] {
+  ): CheckpointBehaviour[Any] = new CheckpointBehaviour[Any] {
     def processShardStream[RC, T](
       shardStream: ZStream[Any, Throwable, Record[T]],
       checkpointer: Checkpointer,
@@ -63,7 +63,7 @@ object ConsumptionBehaviour {
     checkpointRetrySchedule: Schedule[R, Throwable, Any] =
       Util.exponentialBackoff(min = 1.second, max = 1.minute, maxRecurs = Some(5)),
     processorParallelism: Int = 1
-  ): ConsumptionBehaviour[R] = new ConsumptionBehaviour[R] {
+  ): CheckpointBehaviour[R] = new CheckpointBehaviour[R] {
     def processShardStream[RC <: R, T](
       shardStream: ZStream[Any, Throwable, Record[T]],
       checkpointer: Checkpointer,

@@ -390,9 +390,9 @@ object Consumer {
    *   Function that is called for events happening in the Consumer. For diagnostics / metrics
    * @param shardAssignmentStrategy
    *   How to assign shards to this worker
-   * @param consumptionBehaviour
+   * @param checkpointBehaviour
    *   How to process records. Default is to checkpoint after a fixed number of records or a fixed duration. Other
-   *   built-in behaviours can be found in the companion object of ConsumptionBehaviour.
+   *   built-in behaviours can be found in the companion object of CheckpointBehaviour
    * @param recordProcessor
    *   A function for processing a `Record[T]`
    * @tparam R
@@ -412,7 +412,7 @@ object Consumer {
     initialPosition: InitialPosition = InitialPosition.TrimHorizon,
     emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => ZIO.unit,
     shardAssignmentStrategy: ShardAssignmentStrategy = ShardAssignmentStrategy.balanced(),
-    consumptionBehaviour: ConsumptionBehaviour[R] = ConsumptionBehaviour.default()
+    checkpointBehaviour: CheckpointBehaviour[R] = CheckpointBehaviour.default()
   )(
     recordProcessor: Record[T] => RIO[RC, Unit]
   ): ZIO[
@@ -432,7 +432,7 @@ object Consumer {
              emitDiagnostic,
              shardAssignmentStrategy
            ).mapZIOPar(Int.MaxValue) { case (_, shardStream, checkpointer) =>
-             consumptionBehaviour.processShardStream(shardStream, checkpointer, recordProcessor)
+             checkpointBehaviour.processShardStream(shardStream, checkpointer, recordProcessor)
            }.runDrain
     } yield ()
 
