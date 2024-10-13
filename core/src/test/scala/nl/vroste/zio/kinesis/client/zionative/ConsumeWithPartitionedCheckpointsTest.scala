@@ -62,8 +62,7 @@ object ConsumeWithPartitionedCheckpointsTest extends ZIOSpecDefault {
                                        streamName,
                                        applicationName = applicationName,
                                        deserializer = Serde.asciiString,
-                                       checkpointBehaviour =
-                                         CheckpointBehaviour.partitionedCheckpoints(checkpointBatchSize = batchSize)
+                                       checkpointBehaviour = CheckpointBehaviour.partitionedCheckpoints(checkpointBatchSize = batchSize)
                                      )(r => prosessor(r.data))
                                      .ignore
               _                  = println("Starting dynamic consumer - about to succeed")
