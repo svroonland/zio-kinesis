@@ -15,6 +15,9 @@ import zio.stream.ZStream
 import zio._
 
 import java.util.UUID
+import zio.aws.cloudwatch.CloudWatch
+import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
+import zio.test.TestAspect
 
 object TestUtil {
 
@@ -234,4 +237,12 @@ object TestUtil {
       .runDrain
       .tapErrorCause(e => ZIO.logErrorCause(s"Producing records chunk failed", e)) *>
       ZIO.logInfo("Producing records is done!")
+
+  private val useAws = scala.sys.env.getOrElse("ENABLE_AWS", "0").toInt == 1
+
+  val awsLayer: ZLayer[Any, Nothing, CloudWatch with Kinesis with DynamoDb] =
+    (if (useAws) defaultAwsLayer else LocalStackServices.localStackAwsLayer()).orDie
+
+  val awsOnly = if (useAws) TestAspect.identity else TestAspect.ignore
+
 }
