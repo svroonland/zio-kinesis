@@ -22,10 +22,13 @@ object ConsumptionBehaviour {
    *   Maximum number of records before checkpointing
    * @param checkpointDuration
    *   Maximum interval before checkpointing
+   * @param processorParallelism
+   *   Number of fibers to process records in parallel per shard
    */
   def default(
     checkpointBatchSize: Long = 200,
-    checkpointDuration: Duration = 5.minutes
+    checkpointDuration: Duration = 5.minutes,
+    processorParallelism: Int = 1
   ): ConsumptionBehaviour[Any] = new ConsumptionBehaviour[Any] {
     def processShardStream[RC, T](
       shardStream: ZStream[Any, Throwable, Record[T]],
@@ -33,7 +36,7 @@ object ConsumptionBehaviour {
       processRecord: Record[T] => RIO[RC, Unit]
     ): ZIO[RC, Throwable, Unit] =
       shardStream
-        .tap(record => processRecord(record) *> checkpointer.stage(record))
+        .mapZIOPar(processorParallelism)(r => processRecord(r) *> checkpointer.stage(r).as(r))
         .viaFunction(checkpointer.checkpointBatched[RC](nr = checkpointBatchSize, interval = checkpointDuration))
         .runDrain
   }
@@ -43,24 +46,6 @@ object ConsumptionBehaviour {
    * when you want to process a shard in paralel but ensure that records with the same partition key are processed in
    * order. Even in the presence of failure, only a at most 1 record per partition key will be reprocessed.
    *
-   * @param streamIdentifier
-   *   Stream to consume from. Either just the name or the whole arn.
-   * @param applicationName
-   *   Name of the application. This is used as the table name for lease coordination (DynamoDB)
-   * @param deserializer
-   *   Record deserializer
-   * @param workerIdentifier
-   *   Identifier of this worker, used for lease coordination. Must be unique for each worker
-   * @param fetchMode
-   *   How to fetch records: Polling or EnhancedFanOut, including config parameters
-   * @param leaseCoordinationSettings
-   *   Config parameters for lease coordination
-   * @param initialPosition
-   *   When no checkpoint exists yet for a shard, start processing from this position
-   * @param emitDiagnostic
-   *   Function that is called for events happening in the Consumer. For diagnostics / metrics
-   * @param shardAssignmentStrategy
-   *   How to assign shards to this worker
    * @param checkpointBatchSize
    *   Maximum number of records before checkpointing
    * @param checkpointDuration
@@ -69,8 +54,6 @@ object ConsumptionBehaviour {
    *   Schedule for retrying checkpointing in case of failure
    * @param processorParallelism
    *   Number of fibers to process records in parallel per shard
-   * @param recordProcessor
-   *   A function for processing a `Record[T]`
    * @return
    *   A ZIO that completes with Unit when record processing is stopped or fails when the consumer stream fails
    */
@@ -90,7 +73,7 @@ object ConsumptionBehaviour {
       makeLockingCheckpointer.flatMap { lockingCheckpointer =>
         shardStream
           .tap(lockingCheckpointer.lock)
-          // Use mapZIOPar even when parallelism is 1 to ensure that locking happens on a seperate fiber.
+          // Use mapZIOPar even when parallelism is 1 to ensure that locking happens on a separate fiber.
           .mapZIOPar(processorParallelism)(r => processRecord(r).as(r))
           .tap(lockingCheckpointer.stage)
           .mapError(Left(_))
