@@ -374,10 +374,25 @@ object Consumer {
    * Simply provide an effectful function that is applied to each record and the rest is taken care of.
    * @param streamIdentifier
    *   Stream to consume from. Either just the name or the whole arn.
-   * @param checkpointBatchSize
-   *   Maximum number of records before checkpointing
-   * @param checkpointDuration
-   *   Maximum interval before checkpointing
+   * @param applicationName
+   *   Name of the application. This is used as the table name for lease coordination (DynamoDB)
+   * @param deserializer
+   *   Record deserializer
+   * @param workerIdentifier
+   *   Identifier of this worker, used for lease coordination. Must be unique for each worker
+   * @param fetchMode
+   *   How to fetch records: Polling or EnhancedFanOut, including config parameters
+   * @param leaseCoordinationSettings
+   *   Config parameters for lease coordination
+   * @param initialPosition
+   *   When no checkpoint exists yet for a shard, start processing from this position
+   * @param emitDiagnostic
+   *   Function that is called for events happening in the Consumer. For diagnostics / metrics
+   * @param shardAssignmentStrategy
+   *   How to assign shards to this worker
+   * @param checkpointBehaviour
+   *   How to process records. Default is to checkpoint after a fixed number of records or a fixed duration. Other
+   *   built-in behaviours can be found in the companion object of CheckpointBehaviour
    * @param recordProcessor
    *   A function for processing a `Record[T]`
    * @tparam R
@@ -397,8 +412,7 @@ object Consumer {
     initialPosition: InitialPosition = InitialPosition.TrimHorizon,
     emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => ZIO.unit,
     shardAssignmentStrategy: ShardAssignmentStrategy = ShardAssignmentStrategy.balanced(),
-    checkpointBatchSize: Long = 200,
-    checkpointDuration: Duration = 5.minutes
+    checkpointBehaviour: CheckpointBehaviour[R] = CheckpointBehaviour.default()
   )(
     recordProcessor: Record[T] => RIO[RC, Unit]
   ): ZIO[
@@ -417,12 +431,8 @@ object Consumer {
              initialPosition,
              emitDiagnostic,
              shardAssignmentStrategy
-           ).flatMapPar(Int.MaxValue) { case (_, shardStream, checkpointer) =>
-             shardStream
-               .tap(record => recordProcessor(record) *> checkpointer.stage(record))
-               .viaFunction(
-                 checkpointer.checkpointBatched[RC](nr = checkpointBatchSize, interval = checkpointDuration)
-               )
+           ).mapZIOPar(Int.MaxValue) { case (_, shardStream, checkpointer) =>
+             checkpointBehaviour.processShardStream(shardStream, checkpointer, recordProcessor)
            }.runDrain
     } yield ()
 
