@@ -1,4 +1,5 @@
 import xerial.sbt.Sonatype.GitHubHosting
+import org.typelevel.scalacoptions.ScalacOptions
 
 val mainScala = "2.13.15"
 val allScala  = Seq(mainScala, "3.3.3")
@@ -36,7 +37,9 @@ inThisBuild(
         url("https://github.com/svroonland")
       )
     ),
-    resolvers += "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots"
+    resolvers += "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots",
+    // Workaround for "/Users/steven/projects/personal/zio/zio-kinesis/core/src/main/scala/nl/vroste/zio/kinesis/client/zionative/Consumer.scala:317:17: pattern var shardStream in value $anonfun is never used"
+    tpolecatExcludeOptions += ScalacOptions.warnUnusedPatVars
   )
 )
 
