@@ -1,23 +1,23 @@
 package nl.vroste.zio.kinesis.client
 
+import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.producer.ProducerMetrics
 import nl.vroste.zio.kinesis.client.serde.{ Serde, Serializer }
 import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException }
 import zio.Console.printLine
 import zio.Schedule.WithState
+import zio._
+import zio.aws.cloudwatch.CloudWatch
 import zio.aws.dynamodb.DynamoDb
 import zio.aws.dynamodb.model.DeleteTableRequest
-import zio.aws.dynamodb.model.primitives.TableName
+import zio.aws.dynamodb.model.primitives.TableArn
 import zio.aws.kinesis.Kinesis
 import zio.aws.kinesis.model._
 import zio.aws.kinesis.model.primitives._
 import zio.stream.ZStream
-import zio._
+import zio.test.TestAspect
 
 import java.util.UUID
-import zio.aws.cloudwatch.CloudWatch
-import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
-import zio.test.TestAspect
 
 object TestUtil {
 
@@ -37,7 +37,7 @@ object TestUtil {
         applicationName <- Random.nextUUID.map("zio-test-" + _.toString)
         _               <- createStream(streamName, shards)
         _               <- getShards(streamName)
-        _               <- ZIO.addFinalizer(DynamoDb.deleteTable(DeleteTableRequest(TableName(applicationName))).ignore)
+        _               <- ZIO.addFinalizer(DynamoDb.deleteTable(DeleteTableRequest(TableArn(applicationName))).ignore)
         result          <- f(streamName, applicationName)
       } yield result
     }

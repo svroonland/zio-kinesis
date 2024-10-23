@@ -17,7 +17,7 @@ import software.amazon.awssdk.services.dynamodb.model.{
 import zio._
 import zio.aws.dynamodb
 import zio.aws.dynamodb.model._
-import zio.aws.dynamodb.model.primitives.{ AttributeName, ConditionExpression, TableName }
+import zio.aws.dynamodb.model.primitives.{ AttributeName, ConditionExpression, TableArn }
 import zio.aws.dynamodb.{ model, DynamoDb }
 import zio.stream.ZStream
 
@@ -37,7 +37,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb, settings: Settings) exte
     val attributeDefinitions = List(attributeDefinition("leaseKey", ScalarAttributeType.S))
 
     val request = model.CreateTableRequest(
-      tableName = TableName(tableName),
+      tableName = TableArn(tableName),
       keySchema = keySchema,
       attributeDefinitions = attributeDefinitions,
       billingMode = Some(settings.tableParameters.billingMode),
@@ -55,7 +55,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb, settings: Settings) exte
 
     def describeTable: Task[model.TableStatus] =
       client
-        .describeTable(DescribeTableRequest(TableName(tableName)))
+        .describeTable(DescribeTableRequest(TableArn(tableName)))
         .flatMap(_.getTable)
         .flatMap(_.getTableStatus)
         .mapError(_.toThrowable)
@@ -94,7 +94,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb, settings: Settings) exte
 
   override def getLeases(tableName: String): ZStream[Any, Throwable, Lease] =
     client
-      .scan(ScanRequest(TableName(tableName)))
+      .scan(ScanRequest(TableArn(tableName)))
       .mapError(_.toThrowable)
       .mapZIO(item => ZIO.fromTry(toLease(item.view.mapValues(_.asEditable).toMap)))
 
@@ -163,7 +163,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb, settings: Settings) exte
   ) = {
     import ImplicitConversions.toAttributeValue
     UpdateItemRequest(
-      TableName(tableName),
+      TableArn(tableName),
       key = DynamoDbItem("leaseKey" -> lease.key),
       expected = Some(Map(AttributeName("leaseCounter") -> expectedAttributeValue(lease.counter - 1)))
     )
@@ -238,7 +238,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb, settings: Settings) exte
   ): ZIO[Any, Either[Throwable, LeaseAlreadyExists.type], Unit] = {
     val request =
       PutItemRequest(
-        TableName(tableName),
+        TableArn(tableName),
         toDynamoItem(lease),
         conditionExpression = Some(ConditionExpression("attribute_not_exists(leaseKey)"))
       )
@@ -259,7 +259,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb, settings: Settings) exte
   override def deleteTable(
     tableName: String
   ): ZIO[Any, Throwable, Unit] = {
-    val request = DeleteTableRequest(TableName(tableName))
+    val request = DeleteTableRequest(TableArn(tableName))
     client
       .deleteTable(request)
       .mapError(_.toThrowable)
