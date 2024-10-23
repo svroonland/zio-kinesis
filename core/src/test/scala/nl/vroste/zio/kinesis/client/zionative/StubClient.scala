@@ -70,4 +70,11 @@ class StubClient extends Kinesis { self =>
   override def listStreamConsumersPaginated(
     request: ListStreamConsumersRequest
   ): IO[AwsError, ListStreamConsumersResponse.ReadOnly] = ???
+
+  override def putResourcePolicy(request: PutResourcePolicyRequest): IO[AwsError, Unit] = ???
+
+  override def deleteResourcePolicy(request: DeleteResourcePolicyRequest): IO[AwsError, Unit] = ???
+
+  override def getResourcePolicy(request: GetResourcePolicyRequest): IO[AwsError, GetResourcePolicyResponse.ReadOnly] =
+    ???
 }
