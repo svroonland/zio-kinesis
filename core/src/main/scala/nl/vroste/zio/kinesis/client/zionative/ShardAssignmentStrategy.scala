@@ -146,11 +146,11 @@ object ShardAssignmentStrategy {
     ZIO.logInfo(
       s"We have ${ourLeases.size}, we would like to have at least ${target}/${allLeases.size} leases (${activeWorkers.size} active workers, " +
         s"${zombieWorkers.size} zombie workers), we need ${minNrLeasesToTake} more with an optional ${optional}"
-    ) *> (if (minNrLeasesToTake > 0 || unownedLeases.nonEmpty)
+    ) *> (if (minNrLeasesToTake > 0 || unownedLeases.nonEmpty || expiredLeases.nonEmpty)
             for {
-              leasesWithoutOwner         <- shuffle(allLeases.filter(_.owner.isEmpty))
+              leasesWithoutOwner         <- shuffle(unownedLeases)
               leasesExpired              <- shuffle(expiredLeases)
-              leasesWithoutOwnerOrExpired = (leasesWithoutOwner ++ leasesExpired).take(maxNrLeasesToTake + optional)
+              leasesWithoutOwnerOrExpired = (leasesWithoutOwner ++ leasesExpired).take(maxNrLeasesToTake)
 
               // We can only steal from our target budget, not the optional ones
               remaining = Math.min(maxNrLeasesToTake, Math.max(0, minNrLeasesToTake - leasesWithoutOwnerOrExpired.size))
