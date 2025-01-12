@@ -1,105 +1,92 @@
 package nl.vroste.zio.kinesis.client.zionative
 
-import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.Lease
-import nl.vroste.zio.kinesis.client.zionative.ShardAssignmentStrategy.leasesToTake
-import zio.test.Assertion._
+import nl.vroste.zio.kinesis.client.zionative.ShardAssignmentStrategy.{ leasesToHave, LeaseInfo }
 import zio.test.{ Gen, ZIOSpecDefault, _ }
 
 object ShardAssignmentStrategyTest extends ZIOSpecDefault {
-  val leaseDistributionGen = leases(Gen.int(2, 100), Gen.int(2, 10))
-
-  def workerId(w: Int): String = s"worker-${w}"
-
-  def leases(nrShards: Gen[Any, Int], nrWorkers: Gen[Any, Int], allOwned: Boolean = true) =
+  private def randomLeaseInfo =
     for {
-      nrShards    <- nrShards
-      nrWorkers   <- nrWorkers
-      randomWorker = Gen.int(1, nrWorkers)
-      leases      <- genTraverse(0 until nrShards) { shard =>
-                       for {
-                         worker     <-
-                           (if (allOwned) randomWorker.map(Some(_)) else Gen.option(randomWorker)).map(_.map(workerId))
-                         counter    <- Gen.long(1, 1000)
-                         sequenceNr <-
-                           Gen.option(Gen.int(0, Int.MaxValue / 2).map(_.toString).map(ExtendedSequenceNumber(_, 0L)))
-                       } yield Lease(s"shard-${shard}", worker, counter, sequenceNr.map(Right(_)), Seq.empty)
-                     }
-    } yield leases
+      nrShards        <- Gen.int(1, 500)
+      nrWorkers       <- Gen.int(1, 300) // More workers than shards
+      thisWorker      <- Gen.int(1, nrWorkers).map(_.toString)
+      workerIsExpired <- Gen.listOfN(nrWorkers)(Gen.boolean).map((1 to nrWorkers).zip(_)).map(_.toMap)
+      workerForShard  <- Gen.listOfN(nrShards)(
+                           Gen.oneOf(
+                             // Decrease chance of unowned lease
+                             Gen.int(1, nrWorkers).map(Some(_)),
+                             Gen.int(1, nrWorkers).map(Some(_)),
+                             Gen.int(1, nrWorkers).map(Some(_)),
+                             Gen.int(1, nrWorkers).map(Some(_)),
+                             Gen.none
+                           )
+                         )
+    } yield thisWorker -> workerForShard.zipWithIndex.map { case (worker, shardNr) =>
+      // Our own leases or those of other workers cannot be expired
+      LeaseInfo(
+        s"shard-${shardNr}",
+        worker.map(_.toString),
+        worker.exists(workerIsExpired(_)) && !worker.map(_.toString).contains(thisWorker) && worker.isDefined
+      )
+    }
 
   override def spec =
-    suite("Lease coordinator")(
-      test("does not want to steal leases if its the only worker") {
-        check(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.const(1))) { leases =>
-          assertZIO(leasesToTake(leases, workerId(1)))(isEmpty)
-        }
-      },
-      test("steals some leases when its not the only worker") {
-        check(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.const(1))) { leases =>
-          assertZIO(leasesToTake(leases, workerId(2)))(isNonEmpty)
-        }
-      },
-      test("takes leases if it has less than its equal share") {
-        check(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10), allOwned = false)) { leases =>
-          val workers          = leases.map(_.owner).collect { case Some(owner) => owner }.toSet
-          val nrWorkers        = (workers + workerId(1)).size
-          val nrOwnedLeases    = leases.map(_.owner).collect { case Some(owner) if owner == workerId(1) => 1 }.size
-          val minExpectedShare = Math.floor(leases.size * 1.0 / nrWorkers).toInt
-          val maxExpectedShare = minExpectedShare + (leases.size % nrWorkers)
-          println(
-            s"For ${leases.size} leases, ${nrWorkers} workers, nr owned leases ${nrOwnedLeases}: expecting share between ${minExpectedShare} and ${maxExpectedShare}"
-          )
+    suite("ShardAssignmentStrategy")(
+      suite("balanced")(
+        test(
+          "wants to have its fair share of the list of leases it already owns + expired or unowned leases + leases from other workers in order of busiest"
+        ) {
+          check(randomLeaseInfo) { case (thisWorker, allLeases) =>
+            val leaseMap = allLeases.map(l => l.key -> l).toMap
+            for {
+              desired <- leasesToHave(allLeases, thisWorker).map(_.map(leaseMap(_)))
 
-          val minExpectedToTake =
-            Math.max(0, minExpectedShare - nrOwnedLeases) // We could own more than our fair share
-          val maxExpectedToTake =
-            Math.max(
-              0,
-              maxExpectedShare - nrOwnedLeases + (leases.size % nrWorkers)
-            ) // We could own more than our fair share
+              activeWorkers   = allLeases.filterNot(_.isExpired).flatMap(_.owner).toSet
+              nrActiveWorkers = (activeWorkers + thisWorker).size
 
-          for {
-            toSteal <- leasesToTake(leases, workerId(1))
-          } yield assert(toSteal.size)(isWithin(minExpectedToTake, maxExpectedToTake))
-        }
-      },
-      test("takes unclaimed leases first") {
-        check(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10), allOwned = false)) { leases =>
-          for {
-            toTake          <- leasesToTake(leases, workerId(1))
-            fromOtherWorkers = toTake.map(shard => leases.find(_.key == shard).get).dropWhile(_.owner.isEmpty)
-          } yield assert(fromOtherWorkers)(forall(hasField("owner", _.owner, isNone)))
-        }
-      },
-      test("steals leases randomly to reduce contention for the same lease") {
-        check(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10), allOwned = true)) { leases =>
-          for {
-            toSteal1 <- leasesToTake(leases, workerId(1))
-            toSteal2 <- leasesToTake(leases, workerId(1))
-          } yield assert(toSteal1)(not(equalTo(toSteal2))) || assert(toSteal1)(hasSize(isLessThanEqualTo(1)))
-        }
-      } @@ TestAspect.flaky(3), // Randomness is randomly not-random
-      test("steals from the busiest workers first") {
-        check(leases(nrShards = Gen.int(2, 100), nrWorkers = Gen.int(1, 10))) { leases =>
-          val leasesByWorker = leases
-            .groupBy(_.owner)
-            .collect { case (Some(owner), leases) => owner -> leases }
-            .toList
-            .sortBy { case (worker, leases) => (leases.size * -1, worker) }
-          val busiestWorkers = leasesByWorker.map(_._1)
+              minLeasesByWorker = Math.floor(allLeases.size * 1.0 / (nrActiveWorkers * 1.0)).toInt
+              maxLeasesByWorker = minLeasesByWorker + (allLeases.size % nrActiveWorkers)
+              nrOptionalLeases  = maxLeasesByWorker - minLeasesByWorker
 
-          for {
-            toSteal       <- leasesToTake(leases, workerId(1))
-            // The order of workers should be equal to the order of busiest workers
-            toStealWorkers =
-              changedElements(toSteal.map(shard => leases.find(_.key == shard).get).map(_.owner.get).toList)
-          } yield assert(toStealWorkers)(equalTo(busiestWorkers.take(toStealWorkers.size)))
+              thisWorkerLeases  = desired.filter(_.owner.contains(thisWorker))
+              freeDesiredLeases = desired.filter(l => l.owner.isEmpty || l.isExpired)
+
+              stolenLeases      = (desired -- thisWorkerLeases -- freeDesiredLeases)
+              stolenFromWorkers =
+                stolenLeases.groupBy(_.owner.get).view.mapValues(_.size).toSeq.sortBy(_._2).reverse.map(_._1)
+
+              otherActiveWorkerLeases =
+                allLeases.filterNot(_.isExpired).filterNot(_.owner.contains(thisWorker)).filterNot(_.owner.isEmpty)
+              busiestWorkers          =
+                otherActiveWorkerLeases
+                  .groupBy(_.owner.get)
+                  .view
+                  .mapValues(_.size)
+                  .toSeq
+                  .sortBy { case (workerId, nrLeases) => (nrLeases, workerId) }
+                  .reverse
+                  .map(_._1)
+
+              freeLeases = allLeases.filter(l => l.owner.isEmpty || l.isExpired)
+
+//              _  =
+//                println(
+//                  s"This worker: ${thisWorker}, all leases (${allLeases.size}): ${allLeases.mkString(",")}, desired (${desired.size}): ${desired.toSeq.sortBy(_.key).mkString(",")}, activeWorkers: ${nrActiveWorkers}, min = ${minLeasesByWorker}, max = ${maxLeasesByWorker}, free leases desired = ${freeDesiredLeases.size}, stolen from workers: ${stolenFromWorkers.mkString(",")}"
+//                )
+            } yield assertTrue(
+              desired.size >= minLeasesByWorker &&
+                desired.size <= maxLeasesByWorker &&
+                // It should desire its own leases first
+                thisWorkerLeases.size >= Math.min(allLeases.count(_.owner.contains(thisWorker)), minLeasesByWorker) &&
+                // If taking more than our own leases, we should prioritize expired and unowned
+                (desired.size <= thisWorkerLeases.size || (freeDesiredLeases
+                  .take(nrOptionalLeases)
+                  .size >= Math.min(nrOptionalLeases, freeLeases.size))) &&
+                // If stealing leases, it should have prioritized the busiest workers
+                stolenFromWorkers == busiestWorkers.take(stolenFromWorkers.size)
+            )
+          }
+
         }
-      }
-    )
-
-  def changedElements[A](as: List[A]): List[A] =
-    as.foldLeft(List.empty[A]) { case (acc, a) => if (acc.lastOption.contains(a)) acc else acc :+ a }
-
-  def genTraverse[R, A, B](elems: Iterable[A])(f: A => Gen[R, B]): Gen[R, List[B]] =
-    Gen.collectAll(elems.map(f))
+      )
+    ) @@ TestAspect.samples(1000)
 }
