@@ -54,8 +54,8 @@ lazy val root = project
     )
   )
   .settings(stdSettings: _*)
-  .aggregate(core, interopFutures, dynamicConsumer)
-  .dependsOn(core, interopFutures, dynamicConsumer)
+  .aggregate(core, interopFutures, dynamicConsumer, testUtils)
+  .dependsOn(core, interopFutures, dynamicConsumer, testUtils)
 
 lazy val core = (project in file("core"))
   .enablePlugins(ProtobufPlugin)
@@ -112,5 +112,16 @@ lazy val dynamicConsumer = (project in file("dynamic-consumer"))
     libraryDependencies ++= Seq(
       "software.amazon.kinesis" % "amazon-kinesis-client" % "3.0.1"
     )
+  )
+  .dependsOn(core % "compile->compile;test->test")
+
+lazy val testUtils = (project in file("test-utils"))
+  .settings(stdSettings: _*)
+  .settings(
+    name                       := "zio-kinesis-test",
+    assembly / assemblyJarName := "zio-kinesis-test" + version.value + ".jar"
+//    libraryDependencies ++= Seq(
+//      "software.amazon.kinesis" % "amazon-kinesis-client" % "3.0.1"
+//    )
   )
   .dependsOn(core % "compile->compile;test->test")
