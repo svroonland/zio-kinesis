@@ -2,6 +2,10 @@ package nl.vroste.zio.kinesis.client
 
 import zio._
 
+/**
+ * Can be used for both native `Consumer.consumeWith` and `DynamicConsumer.consumeWith` to create a fake record
+ * processor that can be used to test record processing against accumulated state in `refProcessed: Ref[Seq[T]]`
+ */
 object FakeRecordProcessor {
   def make[T](
     refProcessed: Ref[Seq[T]],
