@@ -3,7 +3,7 @@ package nl.vroste.zio.kinesis.client.producer
 import nl.vroste.zio.kinesis.client.producer.ShardThrottler.DynamicThrottler
 import zio.test.Assertion._
 import zio.test._
-import zio.{ZIO, _}
+import zio.{ ZIO, _ }
 
 object ShardThrottlerTest extends ZIOSpecDefault {
   override def spec =

@@ -3,13 +3,24 @@ package nl.vroste.zio.kinesis.client.zionative
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.PollComplete
 import nl.vroste.zio.kinesis.client.zionative.FetchMode.Polling
 import nl.vroste.zio.kinesis.client.zionative.fetcher.PollingFetcher
-import software.amazon.awssdk.services.kinesis.model.{ExpiredIteratorException, ProvisionedThroughputExceededException}
+import software.amazon.awssdk.services.kinesis.model.{
+  ExpiredIteratorException,
+  ProvisionedThroughputExceededException
+}
 import zio._
 import zio.aws.core.AwsError
 import zio.aws.core.aspects.AwsCallAspect
 import zio.aws.kinesis.model.primitives._
-import zio.aws.kinesis.model.{ChildShard, GetRecordsResponse, GetShardIteratorResponse, HashKeyRange, Record, ShardIteratorType, StartingPosition}
-import zio.aws.kinesis.{Kinesis, model}
+import zio.aws.kinesis.model.{
+  ChildShard,
+  GetRecordsResponse,
+  GetShardIteratorResponse,
+  HashKeyRange,
+  Record,
+  ShardIteratorType,
+  StartingPosition
+}
+import zio.aws.kinesis.{ model, Kinesis }
 import zio.stream.ZStream
 import zio.test.Assertion._
 import zio.test._

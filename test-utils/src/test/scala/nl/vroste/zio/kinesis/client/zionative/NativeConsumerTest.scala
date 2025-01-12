@@ -1,10 +1,10 @@
 package nl.vroste.zio.kinesis.client.zionative
 
 import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
-import nl.vroste.zio.kinesis.client.TestUtil.{retryOnResourceNotFound, withStream}
+import nl.vroste.zio.kinesis.client.TestUtil.{ retryOnResourceNotFound, withStream }
 import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.serde.Serde
-import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.{LeaseAcquired, LeaseReleased, PollComplete}
+import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent.{ LeaseAcquired, LeaseReleased, PollComplete }
 import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.Lease
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.LeaseCoordinationSettings
 import nl.vroste.zio.kinesis.client.zionative.leaserepository.DynamoDbLeaseRepository
@@ -13,14 +13,14 @@ import zio._
 import zio.aws.cloudwatch.CloudWatch
 import zio.aws.dynamodb.DynamoDb
 import zio.aws.kinesis.Kinesis
-import zio.aws.kinesis.model.primitives.{PositiveIntegerObject, StreamName}
-import zio.aws.kinesis.model.{DescribeStreamRequest, ScalingType, StreamStatus, UpdateShardCountRequest}
-import zio.stream.{ZSink, ZStream}
+import zio.aws.kinesis.model.primitives.{ PositiveIntegerObject, StreamName }
+import zio.aws.kinesis.model.{ DescribeStreamRequest, ScalingType, StreamStatus, UpdateShardCountRequest }
+import zio.stream.{ ZSink, ZStream }
 import zio.test.Assertion._
 import zio.test._
 
 import java.time.Instant
-import java.{util => ju}
+import java.{ util => ju }
 
 object NativeConsumerTest extends ZIOSpecDefault {
   /*
