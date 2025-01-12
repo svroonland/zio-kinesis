@@ -516,7 +516,7 @@ DynamicConsumer is resource-safe thanks to ZIO's `Scope`: after stream completio
 
 ### `zio-kinesis-test` module
 
-This optional module gives access to utility functions in `TestUtils` that may be helpful for testing purposes eg:
+This optional module gives access to utility functions in `TestUtil` that may be helpful for testing purposes eg:
 - creation of Kinesis streams in localstack with cleanup for a named stream
 - creation of Kinesis streams in localstack with cleanup for a randomly named stream
 - the `FakeRecordProcessor` which will holds processed record state and is designed for use with the native 
