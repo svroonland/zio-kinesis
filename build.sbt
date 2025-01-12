@@ -124,4 +124,4 @@ lazy val testUtils = (project in file("test-utils"))
 //      "software.amazon.kinesis" % "amazon-kinesis-client" % "3.0.1"
 //    )
   )
-  .dependsOn(core % "compile->compile;test->test")
+  .dependsOn(dynamicConsumer % "compile->compile;test->test")
