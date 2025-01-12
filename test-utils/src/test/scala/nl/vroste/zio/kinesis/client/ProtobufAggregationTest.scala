@@ -1,9 +1,10 @@
 package nl.vroste.zio.kinesis.client
-import zio.aws.kinesis.model.PutRecordsRequestEntry
+
 import nl.vroste.zio.kinesis.client.serde.Serde
 import nl.vroste.zio.kinesis.client.zionative.protobuf.Messages
 import zio.ZIO
-import zio.aws.kinesis.model.primitives.{ Data, PartitionKey }
+import zio.aws.kinesis.model.PutRecordsRequestEntry
+import zio.aws.kinesis.model.primitives.{Data, PartitionKey}
 import zio.test.Assertion._
 import zio.test._
 
