@@ -117,11 +117,10 @@ object ShardAssignmentStrategy {
     allLeases: Seq[LeaseInfo],
     workerId: String
   ): ZIO[Any, Nothing, Set[String]] = {
-    val allWorkers    = allLeases.flatMap(_.owner).toSet + workerId
+    // Determine min and optional target number of leases to have
     val expiredLeases = allLeases.filter(_.isExpired)
     val activeWorkers =
       (allLeases.toSet -- expiredLeases).flatMap(_.owner) + workerId
-    val zombieWorkers = allWorkers -- activeWorkers
 
     val minTarget = Math.floor(allLeases.size * 1.0 / (activeWorkers.size * 1.0)).toInt
 
@@ -129,41 +128,43 @@ object ShardAssignmentStrategy {
     // These we will not steal, only take
     val optional = allLeases.size % activeWorkers.size
 
-    val target = minTarget
+    def logPlan(ourLeases: Seq[LeaseInfo]) = {
+      val minNrLeasesToTake = Math.max(0, minTarget - ourLeases.size)
+      val allWorkers        = allLeases.flatMap(_.owner).toSet + workerId
+      val zombieWorkers     = allWorkers -- activeWorkers
+      ZIO.logInfo(
+        s"We have ${ourLeases.size}, we would like to have at least ${minTarget}/${allLeases.size} leases (${activeWorkers.size} active workers, " +
+          s"${zombieWorkers.size} zombie workers), we need ${minNrLeasesToTake} more with an optional ${optional}"
+      ) *> ZIO.logInfo(s"Found expired leases: ${expiredLeases.map(_.key).mkString(",")}").when(expiredLeases.nonEmpty)
+    }
 
     for {
       randomAllLeases <- ZIO.randomWith(_.shuffle(allLeases))
       ourLeases        = randomAllLeases.filter(_.owner.contains(workerId))
       unownedLeases    = randomAllLeases.filter(_.owner.isEmpty)
       expiredLeases    = randomAllLeases.filter(_.isExpired)
-      _               <-
-        ZIO.logInfo(s"Found expired leases: ${expiredLeases.map(_.key).mkString(",")}").when(expiredLeases.nonEmpty)
-      ownedLeases      = randomAllLeases.filter { lease =>
-                           !lease.isExpired && lease.owner.isDefined && !lease.owner.contains(workerId)
-                         }
+
+      _          <- logPlan(ourLeases)
+      ownedLeases = randomAllLeases.filter { lease =>
+                      !lease.isExpired && lease.owner.isDefined && !lease.owner.contains(workerId)
+                    }
       // Surpluses leases, with the busiest worker first
-      surpluses        = ownedLeases
-                           .groupBy(_.owner)
-                           .values
-                           .map(_.drop(minTarget))
-                           .filter(_.nonEmpty)
-                           .toSeq
-                           .sortBy(leases => (leases.size, leases.head.owner.get))
-                           .reverse
-                           .flatten
+      surpluses   = ownedLeases
+                      .groupBy(_.owner)
+                      .values
+                      .map(_.drop(minTarget))
+                      .filter(_.nonEmpty)
+                      .toSeq
+                      .sortBy(leases => (leases.size, leases.head.owner.get))
+                      .reverse
+                      .flatten
 
       randomFreeLeases <- ZIO.randomWith(_.shuffle(unownedLeases ++ expiredLeases))
       sortedLeases      = ourLeases ++ randomFreeLeases ++ surpluses
 
-      (targetLeases, optionalLeases) = sortedLeases.splitAt(target)
+      (targetLeases, optionalLeases) = sortedLeases.splitAt(minTarget)
       leasesToTake                   = (targetLeases ++ optionalLeases.take(optional).takeWhile(l => l.owner.isEmpty || l.isExpired))
 
-      minNrLeasesToTake = Math.max(0, target - ourLeases.size)
-      _                <-
-        ZIO.logInfo(
-          s"We have ${ourLeases.size}, we would like to have at least ${target}/${allLeases.size} leases (${activeWorkers.size} active workers, " +
-            s"${zombieWorkers.size} zombie workers), we need ${minNrLeasesToTake} more with an optional ${optional}"
-        )
     } yield leasesToTake.map(_.key).toSet
   }
 }
