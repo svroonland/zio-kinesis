@@ -94,7 +94,7 @@ object ConsumeWithTest extends ZIOSpecDefault {
                                       .retry(retryOnResourceNotFound)
                 _                <- printLine("Starting dynamic consumer - about to fail")
                 processor         = FakeRecordProcessor
-                                      .makeFailing[Any, String](
+                                      .makeFailing[String](
                                         refProcessed,
                                         finishedConsuming,
                                         failFunction = (_: Any) == "msg31"

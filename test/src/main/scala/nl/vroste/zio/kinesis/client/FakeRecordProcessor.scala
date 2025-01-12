@@ -7,13 +7,38 @@ import zio._
  * processor that can be used to test record processing against accumulated state in `refProcessed: Ref[Seq[T]]`
  */
 object FakeRecordProcessor {
+
+  /**
+   * Creates a fake record processor
+   *
+   * @param refProcessed
+   *   Ref to accumulate processed records
+   * @param promise
+   *   Promise to signal when `expectedCount`` number of records have been processed
+   * @param expectedCount
+   * @tparam T
+   *   Type of the record
+   * @return
+   */
   def make[T](
     refProcessed: Ref[Seq[T]],
     promise: Promise[Nothing, Unit],
     expectedCount: Int
   ): T => RIO[Any, Unit] = process(refProcessed, promise, Right(expectedCount))
 
-  def makeFailing[RC, T](
+  /**
+   * Creates a fake record processor
+   *
+   * @param refProcessed
+   *   Ref to accumulate processed records
+   * @param promise
+   *   Promise to signal when `expectedCount`` number of records have been processed
+   * @param failFunction
+   * @tparam T
+   *   Type of the record
+   * @return
+   */
+  def makeFailing[T](
     refProcessed: Ref[Seq[T]],
     promise: Promise[Nothing, Unit],
     failFunction: T => Boolean
