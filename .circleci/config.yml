@@ -70,7 +70,7 @@ workflows:
       - run_with_localstack:
           name: test3
           image: sbtscala/scala-sbt:eclipse-temurin-23.0.1_11_1.10.5_3.3.4
-          sbt_command: ++3.3.3! testCoreAndDynamicConsumer/test interopFutures/test
+          sbt_command: ++3.3.3! core/test interopFutures/test
           requires:
             - lint
           filters:
@@ -78,7 +78,15 @@ workflows:
               only: << pipeline.parameters.tag_regex >>
       - run_with_localstack:
           name: test213
-          sbt_command: ++2.13.15! interopFutures/compile testCoreAndDynamicConsumer/test interopFutures/test Compile/doc
+          sbt_command: ++2.13.15! interopFutures/compile core/test interopFutures/test Compile/doc
+          requires:
+            - lint
+          filters:
+            tags:
+              only: << pipeline.parameters.tag_regex >>
+      - run_with_localstack:
+          name: test213_dynamic_consumer
+          sbt_command: ++2.13.15! dynamicConsumer/test
           requires:
             - lint
           filters:
