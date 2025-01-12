@@ -516,13 +516,14 @@ DynamicConsumer is resource-safe thanks to ZIO's `Scope`: after stream completio
 
 ### `zio-kinesis-test` module
 
-It gives access to utility functions for testing purposes eg:
+This optional module gives access to utility functions that may be helpful for testing purposes eg:
 - creation of Kinesis streams in localstack with cleanup for a named stream
 - creation of Kinesis streams in localstack with cleanup for a randomly named stream
-- the `FakeRecordProcessor` which will holds processed record state and can be programed to fail on a specific record,
+- the `FakeRecordProcessor` which will holds processed record state and can be programed to fail on a specific record
+- plus many more functions such production of records
 and is designed for use with the native `Consumer.consumeWith` and `DynamicConsumer.consumeWith` functions.
 
-To add the `zio-kinesis-test` module to your `build.sbt`:
+To use, add the `zio-kinesis-test` module to your `build.sbt`:
 
 ```scala
 libraryDependencies += "nl.vroste" %% "zio-kinesis-test" % "<version>"
