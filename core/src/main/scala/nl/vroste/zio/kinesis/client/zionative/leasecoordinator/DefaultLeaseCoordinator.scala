@@ -75,12 +75,12 @@ private class DefaultLeaseCoordinator(
 
       // Initialization. If it fails, we will try in the loop
       // initialShards will have been executed in the background so for efficiency we use it here
-      _                           <- (takeLeases(initialShards).retryN(1).ignore *> periodicRefreshAndTakeLeases)
-                                       .ensuring(ZIO.logDebug("Shutting down refresh & take lease loop"))
-                                       .forkScoped
-      _                           <- repeatAndRetry(settings.renewInterval)(renewLeases)
-                                       .ensuring(ZIO.logDebug("Shutting down renew lease loop"))
-                                       .forkScoped
+      _ <- (takeLeases(initialShards).retryN(1).ignore *> periodicRefreshAndTakeLeases)
+             .ensuring(ZIO.logDebug("Shutting down refresh & take lease loop"))
+             .forkScoped
+      _ <- repeatAndRetry(settings.renewInterval)(renewLeases)
+             .ensuring(ZIO.logDebug("Shutting down renew lease loop"))
+             .forkScoped
     } yield ())
       .tapErrorCause(c => ZIO.logErrorCause("Error in DefaultLeaseCoordinator initialize", c))
 
@@ -289,7 +289,7 @@ private class DefaultLeaseCoordinator(
                              )
                              .when(shardsWithoutLease.nonEmpty)
       _                 <- ZIO
-                             .foreachParDiscard(shardsWithoutLease)({ shard =>
+                             .foreachParDiscard(shardsWithoutLease) { shard =>
                                val lease = Lease(
                                  key = shard.shardId,
                                  owner = Some(workerId),
@@ -306,7 +306,7 @@ private class DefaultLeaseCoordinator(
                                  case Left(e)                   =>
                                    ZIO.logError(s"Error creating lease: ${e}") *> ZIO.fail(e)
                                }
-                             })
+                             }
                              .withParallelism(settings.maxParallelLeaseAcquisitions)
     } yield ()
 
