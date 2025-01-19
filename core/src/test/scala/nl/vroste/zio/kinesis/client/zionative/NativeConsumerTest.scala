@@ -113,20 +113,20 @@ object NativeConsumerTest extends ZIOSpecDefault {
           for {
             producedShardsAndSequence <-
               produceSampleRecords(streamName, nrRecords, chunkSize = 500) // Deterministic order
-            _                         <- Consumer
-                                           .shardedStream(
-                                             streamName,
-                                             applicationName,
-                                             Serde.asciiString,
-                                             emitDiagnostic = onDiagnostic("worker1")
-                                           )
-                                           .flatMapPar(Int.MaxValue) { case (shard @ _, shardStream, checkpointer) =>
-                                             shardStream.tap(checkpointer.stage)
-                                           }
-                                           .take(nrRecords.toLong)
-                                           .runCollect
-            checkpoints               <- getCheckpoints(applicationName)
-            expectedCheckpoints        =
+            _                  <- Consumer
+                                    .shardedStream(
+                                      streamName,
+                                      applicationName,
+                                      Serde.asciiString,
+                                      emitDiagnostic = onDiagnostic("worker1")
+                                    )
+                                    .flatMapPar(Int.MaxValue) { case (shard @ _, shardStream, checkpointer) =>
+                                      shardStream.tap(checkpointer.stage)
+                                    }
+                                    .take(nrRecords.toLong)
+                                    .runCollect
+            checkpoints        <- getCheckpoints(applicationName)
+            expectedCheckpoints =
               producedShardsAndSequence.groupBy(_.shardId).view.mapValues(_.last.sequenceNumber).toMap
 
           } yield assert(checkpoints)(Assertion.hasSameElements(expectedCheckpoints))
@@ -236,14 +236,14 @@ object NativeConsumerTest extends ZIOSpecDefault {
                                   .tap(tp => ZIO.logInfo(s"Got tuple ${tp}"))
                                   .take(2) // 5 shards, so we expect 2
 //                            .updateService[Logger[String]](_.named("worker2"))
-            worker1          <- consumer1.runDrain.tapError(e => ZIO.logError(s"Worker1 failed: ${e}")).fork
-            _                <- consumer1Started.await
-            _                <- ZIO.logInfo("Consumer 1 has started, starting consumer 2")
-            _                <- consumer2.runDrain
-            _                <- ZIO.logInfo("Shutting down worker 1")
-            _                <- worker1.interrupt
-            _                <- ZIO.logInfo("Shutting down producer")
-            _                <- producer.interrupt
+            worker1 <- consumer1.runDrain.tapError(e => ZIO.logError(s"Worker1 failed: ${e}")).fork
+            _       <- consumer1Started.await
+            _       <- ZIO.logInfo("Consumer 1 has started, starting consumer 2")
+            _       <- consumer2.runDrain
+            _       <- ZIO.logInfo("Shutting down worker 1")
+            _       <- worker1.interrupt
+            _       <- ZIO.logInfo("Shutting down producer")
+            _       <- producer.interrupt
 
           } yield assertCompletes
         }
@@ -1017,9 +1017,8 @@ object NativeConsumerTest extends ZIOSpecDefault {
       case (streamName, applicationName) =>
         withStream(streamName, shards = nrShards) {
           ZIO.scoped[R with LeaseRepository] {
-            ZIO.addFinalizer(deleteTable(applicationName).ignore) *> { // Table may not have been created
+            ZIO.addFinalizer(deleteTable(applicationName).ignore) *> // Table may not have been created
               f(streamName, applicationName)
-            }
           }
         }
     }
