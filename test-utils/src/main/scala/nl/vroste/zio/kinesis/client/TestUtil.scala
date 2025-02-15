@@ -2,8 +2,8 @@ package nl.vroste.zio.kinesis.client
 
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.producer.ProducerMetrics
-import nl.vroste.zio.kinesis.client.serde.{ Serde, Serializer }
-import software.amazon.awssdk.services.kinesis.model.{ ResourceInUseException, ResourceNotFoundException }
+import nl.vroste.zio.kinesis.client.serde.{Serde, Serializer}
+import software.amazon.awssdk.services.kinesis.model.{ResourceInUseException, ResourceNotFoundException}
 import zio.Console.printLine
 import zio.Schedule.WithState
 import zio._
