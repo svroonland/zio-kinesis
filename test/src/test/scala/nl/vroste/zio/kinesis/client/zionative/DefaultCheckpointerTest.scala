@@ -1,4 +1,5 @@
 package nl.vroste.zio.kinesis.client.zionative
+
 import nl.vroste.zio.kinesis.client.Record
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultCheckpointer
 import nl.vroste.zio.kinesis.client.zionative.leasecoordinator.DefaultCheckpointer.UpdateCheckpoint

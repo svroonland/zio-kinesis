@@ -54,8 +54,8 @@ lazy val root = project
     )
   )
   .settings(stdSettings: _*)
-  .aggregate(core, interopFutures, dynamicConsumer)
-  .dependsOn(core, interopFutures, dynamicConsumer)
+  .aggregate(core, interopFutures, dynamicConsumer, tests, testUtils)
+  .dependsOn(core, interopFutures, dynamicConsumer, tests, testUtils)
 
 lazy val core = (project in file("core"))
   .enablePlugins(ProtobufPlugin)
@@ -114,3 +114,16 @@ lazy val dynamicConsumer = (project in file("dynamic-consumer"))
     )
   )
   .dependsOn(core % "compile->compile;test->test")
+
+lazy val testUtils = (project in file("test-utils"))
+  .settings(stdSettings: _*)
+  .settings(
+    name                       := "zio-kinesis-test-utils",
+    assembly / assemblyJarName := "zio-kinesis-test-utils" + version.value + ".jar"
+  )
+  .dependsOn(dynamicConsumer % "compile->compile;test->test")
+
+lazy val tests = (project in file("test"))
+  .dependsOn(dynamicConsumer % "compile->compile;test->test", testUtils % "compile->compile")
+  .settings(stdSettings: _*)
+  .settings(publish / skip := true)
