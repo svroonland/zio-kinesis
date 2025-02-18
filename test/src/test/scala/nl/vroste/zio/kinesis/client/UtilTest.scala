@@ -1,8 +1,8 @@
 package nl.vroste.zio.kinesis.client
 
+import zio._
 import zio.test.Assertion._
 import zio.test._
-import zio._
 
 object UtilTest extends ZIOSpecDefault {
 

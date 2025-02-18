@@ -5,6 +5,7 @@ import nl.vroste.zio.kinesis.client.producer.{ ProducerLive, ProducerMetrics, Sh
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.awssdk.services.kinesis.model.KinesisException
 import zio.Console.printLine
+import zio._
 import zio.aws.kinesis.Kinesis
 import zio.aws.kinesis.model.primitives.{ PositiveIntegerObject, StreamName }
 import zio.aws.kinesis.model.{ ScalingType, UpdateShardCountRequest }
@@ -12,7 +13,6 @@ import zio.stream.{ ZPipeline, ZStream }
 import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test._
-import zio._
 
 import java.security.MessageDigest
 import java.time.Instant
