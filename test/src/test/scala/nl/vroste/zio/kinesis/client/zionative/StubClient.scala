@@ -1,12 +1,13 @@
 package nl.vroste.zio.kinesis.client.zionative
+
+import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import zio.aws.core.AwsError
 import zio.aws.core.aspects.AwsCallAspect
 import zio.aws.kinesis.model._
-import zio.aws.kinesis.{ model, Kinesis }
-import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import zio.aws.kinesis.model.primitives.StreamName
-import zio.{ IO, ZEnvironment }
+import zio.aws.kinesis.{ model, Kinesis }
 import zio.stream.ZStream
+import zio.{ IO, ZEnvironment }
 
 class StubClient extends Kinesis { self =>
   override def withAspect[R](newAspect: AwsCallAspect[R], r: ZEnvironment[R]): Kinesis                                = self

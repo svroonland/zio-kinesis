@@ -3,7 +3,8 @@ package nl.vroste.zio.kinesis.client.dynamicconsumer
 import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.consumeWith
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
-import nl.vroste.zio.kinesis.client.{ ProducerRecord, TestUtil }
+import nl.vroste.zio.kinesis.client.ProducerRecord
+import nl.vroste.zio.kinesis.client.TestUtil._
 import zio.Console.printLine
 import zio.aws.cloudwatch.CloudWatch
 import zio.aws.dynamodb.DynamoDb
@@ -17,7 +18,6 @@ import zio.{ durationInt, Promise, Ref, ZIO, ZLayer }
 import nl.vroste.zio.kinesis.client.FakeRecordProcessor
 
 object ConsumeWithTest extends ZIOSpecDefault {
-  import TestUtil._
 
   private val loggingLayer: ZLayer[Any, Nothing, Unit] = SLF4J
     .slf4j(
@@ -94,7 +94,7 @@ object ConsumeWithTest extends ZIOSpecDefault {
                                       .retry(retryOnResourceNotFound)
                 _                <- printLine("Starting dynamic consumer - about to fail")
                 processor         = FakeRecordProcessor
-                                      .makeFailing[Any, String](
+                                      .makeFailing[String](
                                         refProcessed,
                                         finishedConsuming,
                                         failFunction = (_: Any) == "msg31"
