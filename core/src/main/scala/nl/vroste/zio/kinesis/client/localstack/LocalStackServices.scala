@@ -17,7 +17,6 @@ import software.amazon.awssdk.core.SdkSystemSetting
 import software.amazon.awssdk.http.SdkHttpConfigurationOption
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.utils.AttributeMap
-import zio.ZLayer
 
 import java.net.URI
 import zio._
