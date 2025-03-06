@@ -1,7 +1,7 @@
 import xerial.sbt.Sonatype.GitHubHosting
 import org.typelevel.scalacoptions.ScalacOptions
 
-val mainScala = "2.13.15"
+val mainScala = "2.13.16"
 val allScala  = Seq(mainScala, "3.3.5")
 
 val excludeInferAny = { options: Seq[String] => options.filterNot(Set("-Xlint:infer-any")) }
@@ -44,7 +44,7 @@ inThisBuild(
 )
 
 val zioVersion    = "2.1.14"
-val zioAwsVersion = "7.28.29.14"
+val zioAwsVersion = "7.30.32.1"
 
 lazy val root = project
   .in(file("."))
@@ -79,7 +79,7 @@ lazy val stdSettings: Seq[sbt.Def.SettingsDefinition] = Seq(
     "dev.zio"         %% "zio-interop-reactivestreams" % "2.0.2",
     "dev.zio"         %% "zio-logging"                 % "2.5.0",
     "dev.zio"         %% "zio-logging-slf4j"           % "2.5.0",
-    "ch.qos.logback"   % "logback-classic"             % "1.5.16",
+    "ch.qos.logback"   % "logback-classic"             % "1.5.17",
     "org.hdrhistogram" % "HdrHistogram"                % "2.2.2",
     "dev.zio"         %% "zio-aws-core"                % zioAwsVersion,
     "dev.zio"         %% "zio-aws-kinesis"             % zioAwsVersion,
