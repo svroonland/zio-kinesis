@@ -44,7 +44,7 @@ inThisBuild(
 )
 
 val zioVersion    = "2.1.14"
-val zioAwsVersion = "7.30.37.1"
+val zioAwsVersion = "7.30.38.2"
 
 lazy val root = project
   .in(file("."))
@@ -110,7 +110,7 @@ lazy val dynamicConsumer = (project in file("dynamic-consumer"))
     name                       := "zio-kinesis-dynamic-consumer",
     assembly / assemblyJarName := "zio-kinesis-dynamic-consumer" + version.value + ".jar",
     libraryDependencies ++= Seq(
-      "software.amazon.kinesis" % "amazon-kinesis-client" % "3.0.1"
+      "software.amazon.kinesis" % "amazon-kinesis-client" % "3.0.2"
     )
   )
   .dependsOn(core % "compile->compile;test->test")
