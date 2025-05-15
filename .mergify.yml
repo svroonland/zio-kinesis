@@ -8,8 +8,8 @@ pull_request_rules:
     conditions:
       - base=master
       - author=scala-steward
+      - "status-success=ci/circleci: lint"
       - "status-success=ci/circleci: test213"
-      - "status-success=ci/circleci: test213_dynamic_consumer"
       - "status-success=ci/circleci: test3"
     actions:
       merge:
@@ -17,8 +17,8 @@ pull_request_rules:
   - name: Automatic merge on approval
     conditions:
       - "#approved-reviews-by>=1"
+      - "status-success=ci/circleci: lint"
       - "status-success=ci/circleci: test213"
-      - "status-success=ci/circleci: test213_dynamic_consumer"
       - "status-success=ci/circleci: test3"
     actions:
       merge:
