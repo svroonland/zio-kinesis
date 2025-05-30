@@ -62,8 +62,8 @@ private class CloudWatchMetricsPublisherLive(
         shardFetchMetrics(shardId, nrRecords, behindLatest, duration, timestamp)
       case SubscribeToShardEvent(shardId, nrRecords, behindLatest)  =>
         shardFetchMetrics(shardId, nrRecords, behindLatest, 0.millis, timestamp) // TODO what to do with duration
-      case LeaseAcquired(shardId @ _, checkpoint @ _) => List.empty // Processed in periodic metrics
-      case ShardLeaseLost(shardId @ _)                =>
+      case LeaseAcquired(shardId @ _, checkpoint @ _)               => List.empty // Processed in periodic metrics
+      case ShardLeaseLost(shardId @ _)                              =>
         List(
           metric(
             "LostLeases",
@@ -73,7 +73,7 @@ private class CloudWatchMetricsPublisherLive(
             StandardUnit.Count
           )
         )
-      case LeaseRenewed(shardId @ _, duration)        =>
+      case LeaseRenewed(shardId @ _, duration)                      =>
         List(
           metric(
             "RenewLease.Time",
@@ -90,12 +90,12 @@ private class CloudWatchMetricsPublisherLive(
             StandardUnit.Count
           )
         )
-      case LeaseReleased(shardId @ _)                 => List.empty // Processed in periodic metrics
-      case NewShardDetected(shardId @ _)              => List.empty
-      case ShardEnded(shard @ _)                      => List.empty
-      case Checkpoint(shardId @ _, checkpoint @ _)    => List.empty
-      case WorkerJoined(workerId @ _)                 => List.empty // Processed in periodic metrics
-      case WorkerLeft(workerId @ _)                   => List.empty // Processed in periodic metrics
+      case LeaseReleased(shardId @ _)                               => List.empty // Processed in periodic metrics
+      case NewShardDetected(shardId @ _)                            => List.empty
+      case ShardEnded(shard @ _)                                    => List.empty
+      case Checkpoint(shardId @ _, checkpoint @ _)                  => List.empty
+      case WorkerJoined(workerId @ _)                               => List.empty // Processed in periodic metrics
+      case WorkerLeft(workerId @ _)                                 => List.empty // Processed in periodic metrics
       // TODO LeaseCreated (for new leases)
       // TODO lease taken
     }
