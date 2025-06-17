@@ -39,7 +39,8 @@ inThisBuild(
     ),
     resolvers += Resolver.sonatypeCentralSnapshots,
     // Workaround for "/Users/steven/projects/personal/zio/zio-kinesis/core/src/main/scala/nl/vroste/zio/kinesis/client/zionative/Consumer.scala:317:17: pattern var shardStream in value $anonfun is never used"
-    tpolecatExcludeOptions += ScalacOptions.warnUnusedPatVars
+    tpolecatExcludeOptions += ScalacOptions.warnUnusedPatVars,
+    publishTo                        := localStaging.value
   )
 )
 
