@@ -78,4 +78,12 @@ class StubClient extends Kinesis { self =>
 
   override def getResourcePolicy(request: GetResourcePolicyRequest): IO[AwsError, GetResourcePolicyResponse.ReadOnly] =
     ???
+
+  override def untagResource(request: UntagResourceRequest): IO[AwsError, Unit] = ???
+
+  override def listTagsForResource(
+    request: ListTagsForResourceRequest
+  ): IO[AwsError, ListTagsForResourceResponse.ReadOnly] = ???
+
+  override def tagResource(request: TagResourceRequest): IO[AwsError, Unit] = ???
 }
