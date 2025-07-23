@@ -18,7 +18,7 @@ object DynamicConsumerFakeExample extends ZIOAppDefault {
   override def run: ZIO[Any with ZIOAppArgs with Scope, Any, Any] =
     for {
       refCheckpointedList <- Ref.make[Seq[Record[Any]]](Seq.empty)
-      _            <- DynamicConsumer
+      _                   <- DynamicConsumer
                                .consumeWith(
                                  streamName = "my-stream",
                                  applicationName = "my-application",
