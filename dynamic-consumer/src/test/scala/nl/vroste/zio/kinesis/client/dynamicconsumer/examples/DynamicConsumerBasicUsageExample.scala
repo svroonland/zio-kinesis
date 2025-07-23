@@ -26,5 +26,4 @@ object DynamicConsumerBasicUsageExample extends ZIOAppDefault {
       }
       .runDrain
       .provideLayer(defaultAwsLayer >>> DynamicConsumer.live)
-      .exitCode
 }

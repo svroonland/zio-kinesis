@@ -22,5 +22,5 @@ object ProducerExample extends ZIOAppDefault {
   }
 
   override def run: ZIO[ZIOAppArgs with Scope, Any, Any] =
-    program.provideLayer(env).exitCode
+    program.provideLayer(env)
 }

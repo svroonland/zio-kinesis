@@ -98,10 +98,10 @@ object ExampleApp extends ZIOAppDefault {
                     })
     } yield ExitCode.success
 
-  override def run: ZIO[Any with ZIOAppArgs with Scope, Nothing, ExitCode] =
+  override def run: ZIO[Any with ZIOAppArgs with Scope, Nothing, Any] =
     program
       .foldCauseZIO(
-        e => ZIO.logSpan(s"Program failed: ${e.prettyPrint}")(ZIO.logErrorCause(e)).exitCode,
+        e => ZIO.logSpan(s"Program failed: ${e.prettyPrint}")(ZIO.logErrorCause(e)),
         ZIO.succeed(_)
       )
       .provideLayer(awsEnv ++ Scope.default)
