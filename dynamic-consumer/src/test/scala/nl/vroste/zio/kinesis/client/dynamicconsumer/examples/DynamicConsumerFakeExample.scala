@@ -18,7 +18,7 @@ object DynamicConsumerFakeExample extends ZIOAppDefault {
   override def run: ZIO[Any with ZIOAppArgs with Scope, Any, Any] =
     for {
       refCheckpointedList <- Ref.make[Seq[Record[Any]]](Seq.empty)
-      exitCode            <- DynamicConsumer
+      _                   <- DynamicConsumer
                                .consumeWith(
                                  streamName = "my-stream",
                                  applicationName = "my-application",
@@ -28,8 +28,7 @@ object DynamicConsumerFakeExample extends ZIOAppDefault {
                                  checkpointDuration = 5.minutes
                                )(record => printLine(s"Processing record $record").orDie)
                                .provideLayer(DynamicConsumer.fake(shards, refCheckpointedList))
-                               .exitCode
       _                   <- printLine(s"refCheckpointedList=$refCheckpointedList").orDie
-    } yield exitCode
+    } yield ()
 
 }

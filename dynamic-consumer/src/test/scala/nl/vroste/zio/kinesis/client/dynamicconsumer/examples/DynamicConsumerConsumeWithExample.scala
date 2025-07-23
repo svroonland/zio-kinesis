@@ -21,5 +21,4 @@ object DynamicConsumerConsumeWithExample extends ZIOAppDefault {
         checkpointDuration = 5.minutes
       )(record => printLine(s"Processing record $record"))
       .provideLayer(defaultAwsLayer >+> DynamicConsumer.live)
-      .exitCode
 }

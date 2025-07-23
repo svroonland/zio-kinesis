@@ -21,5 +21,4 @@ object ConsumeWithExample extends ZIOAppDefault {
         )
       )(record => printLine(s"Processing record $record"))
       .provideLayer(Consumer.defaultEnvironment)
-      .exitCode
 }

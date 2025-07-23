@@ -33,5 +33,5 @@ object ProducerWithMetricsExample extends ZIOAppDefault {
     } yield ()
   }
 
-  override def run: ZIO[Any with ZIOAppArgs with Scope, Any, Any] = program.provideLayer(env).exitCode
+  override def run: ZIO[Any with ZIOAppArgs with Scope, Any, Any] = program.provideLayer(env)
 }

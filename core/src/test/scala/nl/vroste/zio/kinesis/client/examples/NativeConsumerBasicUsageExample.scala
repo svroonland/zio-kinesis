@@ -22,5 +22,4 @@ object NativeConsumerBasicUsageExample extends ZIOAppDefault {
       }
       .runDrain
       .provideLayer(Consumer.defaultEnvironment)
-      .exitCode
 }

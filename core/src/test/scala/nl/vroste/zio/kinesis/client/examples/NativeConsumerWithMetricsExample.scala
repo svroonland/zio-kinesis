@@ -37,6 +37,5 @@ object NativeConsumerWithMetricsExample extends ZIOAppDefault {
       .provideLayer(
         (HttpClientBuilder.make() >>> Consumer.defaultEnvironment) ++ ZLayer.succeed(metricsConfig) ++ Scope.default
       )
-      .exitCode
 
 }
