@@ -44,7 +44,7 @@ inThisBuild(
   )
 )
 
-val zioVersion    = "2.1.20"
+val zioVersion    = "2.1.21"
 val zioAwsVersion = "7.32.31.2"
 
 lazy val root = project
