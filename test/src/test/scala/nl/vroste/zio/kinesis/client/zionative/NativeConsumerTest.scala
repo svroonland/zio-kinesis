@@ -14,7 +14,13 @@ import zio.aws.cloudwatch.CloudWatch
 import zio.aws.dynamodb.DynamoDb
 import zio.aws.kinesis.Kinesis
 import zio.aws.kinesis.model.primitives.{ PositiveIntegerObject, StreamName }
-import zio.aws.kinesis.model.{ DescribeStreamRequest, ScalingType, StreamStatus, UpdateShardCountRequest }
+import zio.aws.kinesis.model.{
+  DescribeStreamSummaryRequest,
+  ListShardsRequest,
+  ScalingType,
+  StreamStatus,
+  UpdateShardCountRequest
+}
 import zio.stream.{ ZSink, ZStream }
 import zio.test.Assertion._
 import zio.test._
