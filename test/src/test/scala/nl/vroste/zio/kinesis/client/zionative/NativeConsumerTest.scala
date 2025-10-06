@@ -72,9 +72,10 @@ object NativeConsumerTest extends ZIOSpecDefault {
                           .runCollect
             _        <- producer.interrupt
             shardIds <- Kinesis
-                          .describeStream(DescribeStreamRequest(StreamName(streamName)))
+                          .listShards(ListShardsRequest(streamName = Some(StreamName(streamName))))
                           .mapError(_.toThrowable)
-                          .map(_.streamDescription.shards.map(_.shardId))
+                          .runCollect
+                          .map(_.map(_.shardId))
 
           } yield assert(records.map(_.shardId).toSet)(equalTo(shardIds.map(_.toString).toSet))
         }
@@ -994,8 +995,8 @@ object NativeConsumerTest extends ZIOSpecDefault {
 
   def scaleStream(streamName: String, desiredShardCount: Int) = {
     val isActive = Kinesis
-      .describeStream(DescribeStreamRequest(StreamName(streamName)))
-      .map(_.streamDescription.streamStatus == StreamStatus.ACTIVE)
+      .describeStreamSummary(DescribeStreamSummaryRequest(StreamName(streamName)))
+      .map(_.streamDescriptionSummary.streamStatus == StreamStatus.ACTIVE)
 
     val awaitActive = ZIO.ifZIO(isActive)(ZIO.unit, isActive.delay(200.millis).repeatUntil(identity).unit)
 
