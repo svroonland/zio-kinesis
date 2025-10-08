@@ -268,8 +268,6 @@ object Consumer {
         .map(_.streamDescriptionSummary)
         .forkScoped // joined later
         .flatMap { streamDescriptionSummaryFib =>
-          val fetchInitialShards = listShards
-
           streamDescriptionSummaryFib.join.flatMap(makeFetcher) zipPar (
             // Fetch shards and initialize the lease coordinator at the same time
             // When we have the shards, we inform the lease coordinator. When the lease table
@@ -286,7 +284,6 @@ object Consumer {
                                       workerIdentifier,
                                       emitDiagnostic,
                                       leaseCoordinationSettings,
-                                      fetchInitialShards.provideEnvironment(env),
                                       listShards.provideEnvironment(env),
                                       shardAssignmentStrategy,
                                       initialPosition

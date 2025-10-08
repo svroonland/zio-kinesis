@@ -51,7 +51,6 @@ private class DefaultLeaseCoordinator(
   settings: LeaseCoordinationSettings,
   strategy: ShardAssignmentStrategy,
   initialPosition: InitialPosition,
-  initialShards: Task[Map[ShardId, Shard.ReadOnly]],
   currentShards: Task[Map[ShardId, Shard.ReadOnly]],
   scope: Scope
 ) extends LeaseCoordinator {
@@ -74,8 +73,7 @@ private class DefaultLeaseCoordinator(
                                      }
 
       // Initialization. If it fails, we will try in the loop
-      // initialShards will have been executed in the background so for efficiency we use it here
-      _ <- (takeLeases(initialShards).retryN(1).ignore *> periodicRefreshAndTakeLeases)
+      _ <- (takeLeases(currentShards).retryN(1).ignore *> periodicRefreshAndTakeLeases)
              .ensuring(ZIO.logDebug("Shutting down refresh & take lease loop"))
              .forkScoped
       _ <- repeatAndRetry(settings.renewInterval)(renewLeases)
@@ -446,7 +444,6 @@ private[zionative] object DefaultLeaseCoordinator {
     workerId: String,
     emitDiagnostic: DiagnosticEvent => UIO[Unit] = _ => ZIO.unit,
     settings: LeaseCoordinationSettings,
-    initialShards: Task[Map[ShardId, Shard.ReadOnly]],
     currentShards: Task[Map[ShardId, Shard.ReadOnly]],
     strategy: ShardAssignmentStrategy,
     initialPosition: InitialPosition
@@ -473,7 +470,6 @@ private[zionative] object DefaultLeaseCoordinator {
                            settings,
                            strategy,
                            initialPosition,
-                           initialShards,
                            currentShards,
                            scope
                          )
