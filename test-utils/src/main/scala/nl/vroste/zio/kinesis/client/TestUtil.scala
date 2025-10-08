@@ -66,13 +66,13 @@ object TestUtil {
 
   def waitForStreamActive(streamName: String): ZIO[Kinesis, Throwable, Unit] =
     Kinesis
-      .describeStream(DescribeStreamRequest(StreamName(streamName)))
+      .describeStreamSummary(DescribeStreamSummaryRequest(StreamName(streamName)))
       .mapError(_.toThrowable)
       .retryWhile {
         case _: ResourceNotFoundException => true
         case _                            => false
       }
-      .map(_.streamDescription)
+      .map(_.streamDescriptionSummary)
       .map(_.streamStatus)
       .delay(500.millis)
       .repeatUntilEquals(StreamStatus.ACTIVE)

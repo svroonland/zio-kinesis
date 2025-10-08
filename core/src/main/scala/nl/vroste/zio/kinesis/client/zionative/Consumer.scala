@@ -231,13 +231,14 @@ object Consumer {
     }
 
     def makeFetcher(
-      streamDescription: StreamDescription.ReadOnly
+      streamDescriptionSummary: StreamDescriptionSummary.ReadOnly
     ): ZIO[Scope with Kinesis, Throwable, Fetcher] =
       fetchMode match {
-        case c: Polling        => PollingFetcher.make(StreamIdentifier.fromARN(streamDescription.streamARN), c, emitDiagnostic)
+        case c: Polling        =>
+          PollingFetcher.make(StreamIdentifier.fromARN(streamDescriptionSummary.streamARN), c, emitDiagnostic)
         case c: EnhancedFanOut =>
           EnhancedFanOutFetcher.make(
-            StreamIdentifier.fromARN(streamDescription.streamARN),
+            StreamIdentifier.fromARN(streamDescriptionSummary.streamARN),
             workerIdentifier,
             c,
             emitDiagnostic
@@ -260,19 +261,14 @@ object Consumer {
       (Fetcher, LeaseCoordinator)
     ] =
       Kinesis
-        .describeStream(DescribeStreamRequest(streamName = streamIdentifier.name, streamARN = streamIdentifier.arn))
+        .describeStreamSummary(
+          DescribeStreamSummaryRequest(streamName = streamIdentifier.name, streamARN = streamIdentifier.arn)
+        )
         .mapError(_.toThrowable)
-        .map(_.streamDescription)
+        .map(_.streamDescriptionSummary)
         .forkScoped // joined later
-        .flatMap { streamDescriptionFib =>
-          val fetchInitialShards = streamDescriptionFib.join.flatMap { streamDescription =>
-            if (!streamDescription.hasMoreShards)
-              ZIO.succeed(streamDescription.shards.map(s => s.shardId -> s).toMap)
-            else
-              listShards
-          }
-
-          streamDescriptionFib.join.flatMap(makeFetcher) zipPar (
+        .flatMap { streamDescriptionSummaryFib =>
+          streamDescriptionSummaryFib.join.flatMap(makeFetcher) zipPar (
             // Fetch shards and initialize the lease coordinator at the same time
             // When we have the shards, we inform the lease coordinator. When the lease table
             // still has to be created, we have the shards in time for lease claiming begins.
@@ -288,7 +284,6 @@ object Consumer {
                                       workerIdentifier,
                                       emitDiagnostic,
                                       leaseCoordinationSettings,
-                                      fetchInitialShards.provideEnvironment(env),
                                       listShards.provideEnvironment(env),
                                       shardAssignmentStrategy,
                                       initialPosition
