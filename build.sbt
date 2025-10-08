@@ -121,7 +121,10 @@ lazy val testUtils = (project in file("test-utils"))
   .settings(stdSettings: _*)
   .settings(
     name                       := "zio-kinesis-test-utils",
-    assembly / assemblyJarName := "zio-kinesis-test-utils" + version.value + ".jar"
+    assembly / assemblyJarName := "zio-kinesis-test-utils" + version.value + ".jar",
+    libraryDependencies ++= Seq(
+      "dev.zio" %% "zio-test" % zioVersion // In comppile scope
+    )
   )
   .dependsOn(dynamicConsumer % "compile->compile;test->test")
 
