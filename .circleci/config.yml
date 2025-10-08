@@ -8,7 +8,7 @@ jobs:
   run_with_localstack:
     parameters:
       image:
-        default: sbtscala/scala-sbt:eclipse-temurin-23.0.2_7_1.10.9_2.13.16
+        default: sbtscala/scala-sbt:eclipse-temurin-24.0.1_9_1.11.7_2.13.17
         type: string
       sbt_command:
         type: string
@@ -44,7 +44,7 @@ jobs:
             - "~/.m2"
   release:
     docker:
-      - image: sbtscala/scala-sbt:eclipse-temurin-23.0.2_7_1.10.9_2.13.16
+      - image: sbtscala/scala-sbt:eclipse-temurin-24.0.1_9_1.11.7_2.13.17
     steps:
       - checkout
       - run: git fetch --tags
@@ -62,7 +62,7 @@ workflows:
     jobs:
       - run_with_localstack:
           name: lint
-          sbt_command: ++2.13.16! check
+          sbt_command: ++2.13.17! check
           filters:
             tags:
               only: << pipeline.parameters.tag_regex >>
@@ -77,7 +77,7 @@ workflows:
               only: << pipeline.parameters.tag_regex >>
       - run_with_localstack:
           name: test213
-          sbt_command: ++2.13.16! interopFutures/compile tests/test interopFutures/test Compile/doc
+          sbt_command: ++2.13.17! interopFutures/compile tests/test interopFutures/test Compile/doc
           requires:
             - lint
           filters:
