@@ -45,7 +45,7 @@ inThisBuild(
 )
 
 val zioVersion    = "2.1.21"
-val zioAwsVersion = "7.32.33.1"
+val zioAwsVersion = "7.34.9.1"
 
 lazy val root = project
   .in(file("."))
@@ -121,7 +121,10 @@ lazy val testUtils = (project in file("test-utils"))
   .settings(stdSettings: _*)
   .settings(
     name                       := "zio-kinesis-test-utils",
-    assembly / assemblyJarName := "zio-kinesis-test-utils" + version.value + ".jar"
+    assembly / assemblyJarName := "zio-kinesis-test-utils" + version.value + ".jar",
+    libraryDependencies ++= Seq(
+      "dev.zio" %% "zio-test" % zioVersion // In comppile scope
+    )
   )
   .dependsOn(dynamicConsumer % "compile->compile;test->test")
 
