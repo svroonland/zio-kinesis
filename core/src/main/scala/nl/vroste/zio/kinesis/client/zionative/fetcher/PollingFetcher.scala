@@ -9,7 +9,13 @@ import zio._
 import zio.aws.core.AwsError
 import zio.aws.kinesis.Kinesis
 import zio.aws.kinesis.model._
-import zio.aws.kinesis.model.primitives.{GetRecordsInputLimit, MillisBehindLatest, SequenceNumber, ShardIterator, StreamARN}
+import zio.aws.kinesis.model.primitives.{
+  GetRecordsInputLimit,
+  MillisBehindLatest,
+  SequenceNumber,
+  ShardIterator,
+  StreamARN
+}
 import zio.stream.ZStream
 
 /**
@@ -52,7 +58,6 @@ object PollingFetcher {
         getRecordsThrottled: GetRecordsRequest => ZIO[Kinesis, AwsError, GetRecordsResponse.ReadOnly]
       ): ZStream[Kinesis, Throwable, GetRecordsResponse.ReadOnly] = ZStream.unwrapScoped {
         for {
-          _ <- ZIO.logInfo(s"streamFromSequenceNumber on ${streamIdentifier.arn}")
           initialShardIterator <-
             getShardIterator(
               GetShardIteratorRequest(
@@ -66,7 +71,8 @@ object PollingFetcher {
               .map(_.shardIterator.toOption.get)
               .mapError(_.toThrowable)
               .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
-          doPoll               <- makePollEffectWithShardIterator(initialShardIterator, doPoll(_, getRecordsThrottled, streamIdentifier.arn))
+          doPoll               <-
+            makePollEffectWithShardIterator(initialShardIterator, doPoll(_, getRecordsThrottled, streamIdentifier.arn))
         } yield ZStream
           .repeatZIOWithSchedule(doPoll, config.pollSchedule)
           .catchAll {
@@ -100,7 +106,9 @@ object PollingFetcher {
       ): ZIO[Kinesis, Option[Throwable], GetRecordsResponse.ReadOnly] =
         for {
           responseWithDuration <-
-            getRecordsThrottled(GetRecordsRequest(currentIterator, Some(GetRecordsInputLimit(config.batchSize)), streamArn ))
+            getRecordsThrottled(
+              GetRecordsRequest(currentIterator, Some(GetRecordsInputLimit(config.batchSize)), streamArn)
+            )
               .mapError(_.toThrowable)
               .tapError(e => ZIO.logWarning(s"Error GetRecords for shard ${shardId}: ${e}"))
               .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
