@@ -9,7 +9,13 @@ import zio._
 import zio.aws.core.AwsError
 import zio.aws.kinesis.Kinesis
 import zio.aws.kinesis.model._
-import zio.aws.kinesis.model.primitives.{ GetRecordsInputLimit, MillisBehindLatest, SequenceNumber, ShardIterator }
+import zio.aws.kinesis.model.primitives.{
+  GetRecordsInputLimit,
+  MillisBehindLatest,
+  SequenceNumber,
+  ShardIterator,
+  StreamARN
+}
 import zio.stream.ZStream
 
 /**
@@ -65,7 +71,8 @@ object PollingFetcher {
               .map(_.shardIterator.toOption.get)
               .mapError(_.toThrowable)
               .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
-          doPoll               <- makePollEffectWithShardIterator(initialShardIterator, doPoll(_, getRecordsThrottled))
+          doPoll               <-
+            makePollEffectWithShardIterator(initialShardIterator, doPoll(_, getRecordsThrottled, streamIdentifier.arn))
         } yield ZStream
           .repeatZIOWithSchedule(doPoll, config.pollSchedule)
           .catchAll {
@@ -94,11 +101,14 @@ object PollingFetcher {
       // Failure with None indicates that there's no next shard iterator and the shard has ended
       def doPoll(
         currentIterator: ShardIterator,
-        getRecordsThrottled: GetRecordsRequest => ZIO[Kinesis, AwsError, GetRecordsResponse.ReadOnly]
+        getRecordsThrottled: GetRecordsRequest => ZIO[Kinesis, AwsError, GetRecordsResponse.ReadOnly],
+        streamArn: Option[StreamARN]
       ): ZIO[Kinesis, Option[Throwable], GetRecordsResponse.ReadOnly] =
         for {
           responseWithDuration <-
-            getRecordsThrottled(GetRecordsRequest(currentIterator, Some(GetRecordsInputLimit(config.batchSize))))
+            getRecordsThrottled(
+              GetRecordsRequest(currentIterator, Some(GetRecordsInputLimit(config.batchSize)), streamArn)
+            )
               .mapError(_.toThrowable)
               .tapError(e => ZIO.logWarning(s"Error GetRecords for shard ${shardId}: ${e}"))
               .retry(retryOnThrottledWithSchedule(config.throttlingBackoff))
