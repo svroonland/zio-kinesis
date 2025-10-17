@@ -2,7 +2,7 @@ import xerial.sbt.Sonatype.GitHubHosting
 import org.typelevel.scalacoptions.ScalacOptions
 
 val mainScala = "2.13.17"
-val allScala  = Seq(mainScala, "3.3.6")
+val allScala  = Seq(mainScala, "3.3.7")
 
 val excludeInferAny = { options: Seq[String] => options.filterNot(Set("-Xlint:infer-any")) }
 
