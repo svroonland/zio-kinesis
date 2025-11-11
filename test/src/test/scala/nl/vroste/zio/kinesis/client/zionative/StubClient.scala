@@ -86,4 +86,6 @@ class StubClient extends Kinesis { self =>
   ): IO[AwsError, ListTagsForResourceResponse.ReadOnly] = ???
 
   override def tagResource(request: TagResourceRequest): IO[AwsError, Unit] = ???
+
+  override def updateMaxRecordSize(request: UpdateMaxRecordSizeRequest): IO[AwsError, Unit] = ???
 }
