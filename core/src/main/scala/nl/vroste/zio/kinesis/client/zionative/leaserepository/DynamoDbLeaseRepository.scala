@@ -160,7 +160,7 @@ private class DynamoDbLeaseRepository(client: DynamoDb, settings: Settings) exte
   private def baseUpdateItemRequestForLease(
     tableName: String,
     lease: Lease
-  ) = {
+  )                                                        = {
     import ImplicitConversions.toAttributeValue
     UpdateItemRequest(
       TableArn(tableName),
