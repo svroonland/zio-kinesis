@@ -18,7 +18,7 @@ import zio._
 import zio.aws.cloudwatch.CloudWatch
 import zio.aws.kinesis.Kinesis
 import zio.aws.kinesis.model._
-import zio.aws.kinesis.model.primitives.{ SequenceNumber, ShardId, Timestamp }
+import zio.aws.kinesis.model.primitives.{ ConsumerARN, SequenceNumber, ShardId, Timestamp }
 import zio.stream.ZStream
 
 import java.time.Instant
@@ -81,7 +81,8 @@ object FetchMode {
   final case class EnhancedFanOut(
     deregisterConsumerAtShutdown: Boolean = true,
     maxSubscriptionsPerSecond: Int = 10,
-    retrySchedule: Schedule[Any, Any, (Duration, Long)] = Util.exponentialBackoff(5.second, 1.minute)
+    retrySchedule: Schedule[Any, Any, (Duration, Long)] = Util.exponentialBackoff(5.second, 1.minute),
+    consumerArn: Option[ConsumerARN] = None
   ) extends FetchMode
 }
 
