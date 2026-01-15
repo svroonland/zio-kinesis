@@ -173,7 +173,7 @@ private class CloudWatchMetricsPublisherLive(
       now            <- now
       nrWorkers      <- workers.get.map(_.size)
       nrLeases       <- heldLeases.get.map(_.size)
-      _               = println(s"Worker ${workerId} has ${nrLeases} leases")
+      _               = ZIO.logDebug(s"Worker ${workerId} has ${nrLeases} leases")
       nrWorkersMetric = metric(
                           "NumWorkers",
                           nrWorkers.toDouble,
