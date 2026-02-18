@@ -34,7 +34,7 @@ object EnhancedFanOutFetcher {
                                 ZIO.succeed(
                                   Kinesis
                                     .subscribeToShard(
-                                      SubscribeToShardRequest(consumerARN, ShardId(shardId), pos)
+                                      SubscribeToShardRequest(consumerARN, None, ShardId(shardId), pos)
                                     )
                                     .mapError(_.toThrowable)
                                 )
