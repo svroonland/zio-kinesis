@@ -17,6 +17,7 @@ import zio.aws.kinesis.model.primitives.{ PositiveIntegerObject, StreamName }
 import zio.aws.kinesis.model.{
   DescribeStreamSummaryRequest,
   ListShardsRequest,
+  RegisterStreamConsumerRequest,
   ScalingType,
   StreamStatus,
   UpdateShardCountRequest
@@ -66,6 +67,41 @@ object NativeConsumerTest extends ZIOSpecDefault {
                             applicationName,
                             Serde.asciiString,
                             fetchMode = FetchMode.Polling(batchSize = 1000),
+                            emitDiagnostic = onDiagnostic("worker1")
+                          )
+                          .flatMapPar(Int.MaxValue) { case (shard @ _, shardStream, checkpointer @ _) =>
+                            shardStream
+                              .tap(checkpointer.stage)
+                          }
+                          .take(nrRecords.toLong)
+                          .zipWithIndex
+                          .map(_._1)
+                          .runCollect
+            _        <- producer.interrupt
+            shardIds <- Kinesis
+                          .listShards(ListShardsRequest(streamName = Some(StreamName(streamName))))
+                          .mapError(_.toThrowable)
+                          .runCollect
+                          .map(_.map(_.shardId))
+
+          } yield assert(records.map(_.shardId).toSet)(equalTo(shardIds.map(_.toString).toSet))
+        }
+      },
+      test("retrieve records from all shards using Enhanced Fanout") {
+        val nrRecords = 1000
+        val nrShards  = 2
+
+        withRandomStreamAndApplicationName(nrShards) { (streamName, applicationName) =>
+          for {
+            _        <- ZIO.logInfo("Starting producer")
+            producer <- produceSampleRecords(streamName, nrRecords, chunkSize = 250).fork
+            _        <- ZIO.logInfo("Starting Enhanced Fanout consumer")
+            records  <- Consumer
+                          .shardedStream(
+                            streamName,
+                            applicationName,
+                            Serde.asciiString,
+                            fetchMode = FetchMode.EnhancedFanOut(),
                             emitDiagnostic = onDiagnostic("worker1")
                           )
                           .flatMapPar(Int.MaxValue) { case (shard @ _, shardStream, checkpointer @ _) =>
@@ -886,7 +922,70 @@ object NativeConsumerTest extends ZIOSpecDefault {
             _            <- consumer.interrupt
           } yield assert(activeShards)(forall(isLessThanEqualTo(1)))
         }
-      } @@ TestUtil.awsOnly
+      } @@ TestUtil.awsOnly,
+      test("Enhanced Fanout with valid ConsumerArn should work") {
+        val nrRecords = 100
+        val nrShards  = 1
+
+        withRandomStreamAndApplicationName(nrShards) { (streamName, applicationName) =>
+          for {
+            streamDesc  <- Kinesis
+                             .describeStreamSummary(DescribeStreamSummaryRequest(StreamName(streamName)))
+                             .mapError(_.toThrowable)
+            streamArn    = streamDesc.streamDescriptionSummary.streamARN
+            consumerArn <- Kinesis
+                             .registerStreamConsumer(
+                               RegisterStreamConsumerRequest(
+                                 streamArn,
+                                 zio.aws.kinesis.model.primitives.ConsumerName("test-consumer")
+                               )
+                             )
+                             .mapError(_.toThrowable)
+                             .map(_.consumer.consumerARN)
+            _           <- produceSampleRecords(streamName, nrRecords)
+            records     <- Consumer
+                             .shardedStream(
+                               streamName,
+                               applicationName,
+                               Serde.asciiString,
+                               fetchMode = FetchMode.EnhancedFanOut(consumerArn = Some(consumerArn)),
+                               emitDiagnostic = onDiagnostic("worker1")
+                             )
+                             .flatMapPar(Int.MaxValue) { case (_, shardStream, checkpointer) =>
+                               shardStream.tap(checkpointer.stage)
+                             }
+                             .take(nrRecords.toLong)
+                             .runCollect
+          } yield assert(records)(hasSize(equalTo(nrRecords)))
+        }
+      },
+      test("Enhanced Fanout with invalid ConsumerArn should fail") {
+        val nrRecords = 100
+        val nrShards  = 1
+
+        withRandomStreamAndApplicationName(nrShards) { (streamName, applicationName) =>
+          for {
+            invalidArn <- ZIO.succeed(
+                            zio.aws.kinesis.model.primitives.ConsumerARN(
+                              "arn:aws:kinesis:us-east-1:123456789012:stream/invalid/consumer/invalid:1234567890"
+                            )
+                          )
+            _          <- produceSampleRecords(streamName, nrRecords)
+            result     <- Consumer
+                            .shardedStream(
+                              streamName,
+                              applicationName,
+                              Serde.asciiString,
+                              fetchMode = FetchMode.EnhancedFanOut(consumerArn = Some(invalidArn)),
+                              emitDiagnostic = onDiagnostic("worker1")
+                            )
+                            .flatMapPar(Int.MaxValue) { case (_, shardStream, _) => shardStream }
+                            .take(1)
+                            .runCollect
+                            .exit
+          } yield assert(result)(fails(anything))
+        }
+      }
     ).provideLayerShared(env) @@
       TestAspect.timed @@
       TestAspect.withLiveClock @@
