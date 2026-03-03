@@ -25,10 +25,13 @@ object EnhancedFanOutFetcher {
   ): ZIO[Scope with Kinesis, Throwable, Fetcher] =
     for {
       env                <- ZIO.environment[Kinesis]
-      consumerARN        <-
-        ZIO.acquireRelease(registerConsumerIfNotExists(streamIdentifier.streamARN, workerId))(
-          deregisterConsumer(_).when(config.deregisterConsumerAtShutdown)
-        )
+      consumerARN        <- config.consumerArn match {
+                              case Some(arn) => validateConsumerExists(arn)
+                              case None      =>
+                                ZIO.acquireRelease(registerConsumerIfNotExists(streamIdentifier.streamARN, workerId))(
+                                  deregisterConsumer(_).when(config.deregisterConsumerAtShutdown)
+                                )
+                            }
       subscribeThrottled <- Util.throttledFunctionN(config.maxSubscriptionsPerSecond, 1.second) {
                               (pos: StartingPosition, shardId: String) =>
                                 ZIO.succeed(
@@ -85,8 +88,7 @@ object EnhancedFanOutFetcher {
   private def registerConsumerIfNotExists(streamARN: StreamARN, consumerName: String) =
     Kinesis
       .registerStreamConsumer(RegisterStreamConsumerRequest(streamARN, ConsumerName(consumerName)))
-      .mapError(_.toThrowable)
-      .map(_.consumer.consumerARN)
+      .mapBoth(_.toThrowable, _.consumer.consumerARN)
       .catchSome { case e: ResourceInUseException =>
         // Consumer already exists, retrieve it
         Kinesis
@@ -96,11 +98,15 @@ object EnhancedFanOutFetcher {
               consumerName = Some(ConsumerName(consumerName))
             )
           )
-          .mapError(_.toThrowable)
-          .map(_.consumerDescription)
+          .mapBoth(_.toThrowable, _.consumerDescription)
           .filterOrElseWith(_.consumerStatus != ConsumerStatus.DELETING)(_ => ZIO.fail(e))
           .map(_.consumerARN)
       }
+
+  private def validateConsumerExists(consumerARN: ConsumerARN) =
+    Kinesis
+      .describeStreamConsumer(DescribeStreamConsumerRequest(consumerARN = Some(consumerARN)))
+      .mapBoth(_.toThrowable, _ => consumerARN)
 
   private def deregisterConsumer(consumerARN: ConsumerARN) =
     Kinesis
