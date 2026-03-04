@@ -1,95 +1,134 @@
 version: 2.1
-parameters:
-  tag_regex:
-    type: string
-    default: /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/
-jobs:
-  # Parameterized job with localstack container running
-  run_with_localstack:
-    parameters:
-      image:
-        default: sbtscala/scala-sbt:eclipse-temurin-23.0.2_7_1.10.9_2.13.16
-        type: string
-      sbt_command:
-        type: string
-      resource_class:
-        default: large
-        type: string
-    docker:
-      - image: << parameters.image >>
-      - image: localstack/localstack:3.4.0
-        environment:
-          LOCALSTACK_HOST: localstack
-          SERVICES: 'cloudwatch,dynamodb'
-          USE_SSL: "false"
-          DEFAULT_REGION: 'us-east-1'
-          AWS_DEFAULT_REGION: "us-east-1"
-          AWS_ACCESS_KEY_ID: dummy-key
-          AWS_SECRET_ACCESS_KEY: dummy-key
-          UPDATE_SHARD_COUNT_DURATION: "10000ms"
-          DEBUG: "1"
-    resource_class: << parameters.resource_class >>
 
-    steps:
-      - checkout
-      - restore_cache:
-          key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
-      - run: apt update && apt install -y protobuf-compiler
-      - run: sbt << parameters.sbt_command >>
-      - save_cache:
-          key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
-          paths:
-            - "~/.ivy2/cache"
-            - "~/.sbt"
-            - "~/.m2"
-  release:
-    docker:
-      - image: sbtscala/scala-sbt:eclipse-temurin-23.0.2_7_1.10.9_2.13.16
-    steps:
-      - checkout
-      - run: git fetch --tags
-      - restore_cache:
-          key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
-      - run: apt update && apt install -y protobuf-compiler
-      - run: apt install -y gnupg
-      - run: export GPG_TTY=$(tty)
-      - run: echo $PGP_SECRET | base64 --decode | gpg --batch --import
-      - run: sbt ci-release
+orbs:
+  scala-build: liveintent/scala-build@13.1
+
+parameters:
+  ssh_key_fingerprint:
+    type: string
+    default: "d7:1a:f0:af:4a:ec:2f:04:c3:8d:d2:4f:7b:f7:1c:53"
+  cache_prefix:
+    type: string
+    default: v1
+  jdk_version:
+    type: string
+    default: "21"
+
+references:
+  tagged_release: &tagged_release
+    tags:
+      only: /^.+$/
+    branches:
+      ignore: /.*/
+
+  untagged_snapshot: &untagged_snapshot
+    tags:
+      only: /^$/
+    branches:
+      ignore: /update\/.*/
+
+  update_pr: &update_pr
+    branches:
+      only: /update\/.*/
 
 workflows:
   version: 2
-  build:
+  build_and_publish:
     jobs:
-      - run_with_localstack:
-          name: lint
-          sbt_command: ++2.13.18! check
+      - scala-build/compile:
+          pipeline_id: <<pipeline.id>>
+          pipeline_number: <<pipeline.number>>
+          name: compile
+          context:
+            - org-global
+            - artifactory
+          jdk_version: << pipeline.parameters.jdk_version >>
+          cache_prefix: << pipeline.parameters.cache_prefix >>
           filters:
             tags:
-              only: << pipeline.parameters.tag_regex >>
-      - run_with_localstack:
-          name: test3
-          image: sbtscala/scala-sbt:eclipse-temurin-23.0.1_11_1.10.5_3.3.4
-          sbt_command: ++3.3.3! tests/test interopFutures/test
-          requires:
-            - lint
+              only: /.*/
+
+      - scala-build/lint:
+          name: check
+          context: org-global
+          jdk_version: << pipeline.parameters.jdk_version >>
+          cache_prefix: << pipeline.parameters.cache_prefix >>
           filters:
             tags:
-              only: << pipeline.parameters.tag_regex >>
-      - run_with_localstack:
-          name: test213
-          sbt_command: ++2.13.18! interopFutures/compile tests/test interopFutures/test Compile/doc
+              only: /.*/
           requires:
-            - lint
+            - compile
+
+      - scala-build/test:
+          name: test
+          context: org-global
+          jdk_version: << pipeline.parameters.jdk_version >>
+          cache_prefix: << pipeline.parameters.cache_prefix >>
+          use_docker_compose: true
+          docker_compose_file: docker-compose.yml
+          docker_compose_ports: "4566"
+          requires:
+            - compile
           filters:
             tags:
-              only: << pipeline.parameters.tag_regex >>
-      - release:
+              only: /.*/
+
+      - scala-build/publish_sbt:
+          name: publish_snapshot
+          context: org-global
+          jdk_version: << pipeline.parameters.jdk_version >>
+          cache_prefix: << pipeline.parameters.cache_prefix >>
           requires:
-            - test3
-            - test213
+            - check
+            - test
           filters:
+            <<: *untagged_snapshot
+
+      - scala-build/merge_pr:
+          context: org-global
+          requires:
+            - check
+            - test
+          filters:
+            <<: *update_pr
+
+      - release?:
+          type: approval
+          requires:
+            - check
+            - test
+          filters:
+            <<: *untagged_snapshot
             branches:
-              only:
-                - master
-            tags:
-              only: /^v.*/
+              only: master
+
+      - scala-build/release:
+          name: release
+          context: [org-global, artifactory]
+          jdk_version: << pipeline.parameters.jdk_version >>
+          cache_prefix: << pipeline.parameters.cache_prefix >>
+          ssh_key_fingerprint: << pipeline.parameters.ssh_key_fingerprint >>
+          requires:
+            - release?
+          filters:
+            <<: *untagged_snapshot
+            branches:
+              only: master
+
+      - scala-build/publish_sbt:
+          name: publish_tagged_release
+          context: org-global
+          jdk_version: << pipeline.parameters.jdk_version >>
+          cache_prefix: << pipeline.parameters.cache_prefix >>
+          requires:
+            - check
+            - test
+          filters:
+            <<: *tagged_release
+
+      - scala-build/trigger_liveintent_steward:
+          context: org-global
+          requires:
+            - publish_tagged_release
+          filters:
+            <<: *tagged_release

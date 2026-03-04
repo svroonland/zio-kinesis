@@ -5,8 +5,8 @@ import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.Record
 import nl.vroste.zio.kinesis.client.dynamicconsumer.fake.DynamicConsumerFake
 import nl.vroste.zio.kinesis.client.serde.Serde
 import zio.Console.printLine
-import zio.stream.ZStream
 import zio._
+import zio.stream.ZStream
 
 /**
  * Basic usage example for `DynamicConsumerFake`

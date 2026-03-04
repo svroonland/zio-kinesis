@@ -1,7 +1,7 @@
 package nl.vroste.zio.kinesis.client.zionative
 
 import nl.vroste.zio.kinesis.client.zionative.LeaseRepository.Lease
-import zio.{ ZIO, _ }
+import zio._
 
 import java.time.Instant
 

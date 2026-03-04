@@ -1,7 +1,7 @@
 package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
 
 import nl.vroste.zio.kinesis.client.Util
-import zio.{ Schedule, _ }
+import zio._
 
 /**
  * Settings affecting lease taking, renewing and refreshing

@@ -1,9 +1,8 @@
 package nl.vroste.zio.kinesis.client.zionative
 
+import nl.vroste.zio.kinesis.client.{ Record, Util }
 import zio._
-import nl.vroste.zio.kinesis.client.Util
 import zio.stream.ZStream
-import nl.vroste.zio.kinesis.client.Record
 
 trait CheckpointBehaviour[-R] {
   def processShardStream[RC <: R, T](

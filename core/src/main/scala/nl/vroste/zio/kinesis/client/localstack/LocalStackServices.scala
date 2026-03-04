@@ -1,11 +1,5 @@
 package nl.vroste.zio.kinesis.client.localstack
 
-import zio.aws.cloudwatch.CloudWatch
-import zio.aws.core.config
-import zio.aws.core.config.AwsConfig
-import zio.aws.core.httpclient.HttpClient
-import zio.aws.dynamodb.DynamoDb
-import zio.aws.kinesis.Kinesis
 import nl.vroste.zio.kinesis.client.HttpClientBuilder
 import software.amazon.awssdk.auth.credentials.{
   AwsBasicCredentials,
@@ -17,9 +11,15 @@ import software.amazon.awssdk.core.SdkSystemSetting
 import software.amazon.awssdk.http.SdkHttpConfigurationOption
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.utils.AttributeMap
+import zio._
+import zio.aws.cloudwatch.CloudWatch
+import zio.aws.core.config
+import zio.aws.core.config.AwsConfig
+import zio.aws.core.httpclient.HttpClient
+import zio.aws.dynamodb.DynamoDb
+import zio.aws.kinesis.Kinesis
 
 import java.net.URI
-import zio._
 
 /**
  * Layers for connecting to a LocalStack (https://localstack.cloud/) environment on a local docker host

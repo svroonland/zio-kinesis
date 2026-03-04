@@ -1,7 +1,7 @@
 package nl.vroste.zio.kinesis.client.producer
 
 import io.netty.handler.timeout.ReadTimeoutException
-import nl.vroste.zio.kinesis.client.Producer.ProduceResponse
+import nl.vroste.zio.kinesis.client.Producer.{ Aggregation, ProduceResponse, RichShardPrediction, RichThrottling }
 import nl.vroste.zio.kinesis.client._
 import nl.vroste.zio.kinesis.client.producer.ProducerLive._
 import nl.vroste.zio.kinesis.client.serde.Serializer
@@ -19,7 +19,6 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.time.Instant
 import scala.util.control.NonFatal
-import nl.vroste.zio.kinesis.client.Producer.{ Aggregation, RichShardPrediction, RichThrottling }
 
 private[client] final class ProducerLive[R, R1, T](
   client: Kinesis,

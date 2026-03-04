@@ -4,7 +4,7 @@ import zio._
 import zio.stream.{ ZSink, ZStream }
 
 object Util {
-  implicit class ZStreamExtensions[-R, +E, +O](val stream: ZStream[R, E, O]) extends AnyVal {
+  implicit class ZStreamExtensions[-R, +E, +O](private val stream: ZStream[R, E, O]) extends AnyVal {
 
     def aggregateAsyncWithinDuration[R1 <: R, E1 >: E, A >: O, B](
       aggregator: ZSink[R1, E1, A, A, B],

@@ -2,7 +2,7 @@ package nl.vroste.zio.kinesis.client.zionative.leasecoordinator
 import zio.{ Cause, Exit, URIO, ZIO }
 
 object ZioExtensions {
-  implicit class OnSuccessSyntax[R, E, A](val zio: ZIO[R, E, A]) extends AnyVal {
+  implicit class OnSuccessSyntax[R, E, A](private val zio: ZIO[R, E, A]) extends AnyVal {
     final def onSuccess[R1 <: R](cleanup: A => URIO[R1, Any]): ZIO[R1, E, A] =
       zio.onExit {
         case Exit.Success(a) => cleanup(a)

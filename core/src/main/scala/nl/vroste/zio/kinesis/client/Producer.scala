@@ -9,8 +9,8 @@ import zio.aws.kinesis.Kinesis
 import zio.aws.kinesis.model.{ ListShardsRequest, ShardFilter, ShardFilterType }
 import zio.stream.ZSink
 
-import java.time.Instant
 import java.security.MessageDigest
+import java.time.Instant
 
 /**
  * Producer for Kinesis records

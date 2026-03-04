@@ -1,10 +1,10 @@
 package nl.vroste.zio.kinesis.client.dynamicconsumer
 
+import nl.vroste.zio.kinesis.client.TestUtil._
 import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.consumeWith
 import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
-import nl.vroste.zio.kinesis.client.ProducerRecord
-import nl.vroste.zio.kinesis.client.TestUtil._
+import nl.vroste.zio.kinesis.client.{ FakeRecordProcessor, ProducerRecord }
 import zio.Console.printLine
 import zio.aws.cloudwatch.CloudWatch
 import zio.aws.dynamodb.DynamoDb
@@ -15,7 +15,6 @@ import zio.test.Assertion.equalTo
 import zio.test.TestAspect.{ timeout, withLiveClock, withLiveRandom }
 import zio.test.{ assert, ZIOSpecDefault }
 import zio.{ durationInt, Promise, Ref, ZIO, ZLayer }
-import nl.vroste.zio.kinesis.client.FakeRecordProcessor
 
 object ConsumeWithTest extends ZIOSpecDefault {
 

@@ -1,9 +1,9 @@
 package nl.vroste.zio.kinesis.client.serde
 
-import java.nio.charset.StandardCharsets
 import zio.{ Chunk, ZIO }
 
 import java.nio.ByteBuffer
+import java.nio.charset.StandardCharsets
 
 private[serde] trait Serdes {
   val byteBuffer: Serde[Any, ByteBuffer] = Serde(chunk => ZIO.succeed(ByteBuffer.wrap(chunk.toArray)))(byteBuffer =>

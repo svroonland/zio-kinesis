@@ -6,6 +6,7 @@ import nl.vroste.zio.kinesis.client.localstack.LocalStackServices
 import nl.vroste.zio.kinesis.client.serde.Serde
 import software.amazon.kinesis.exceptions.ShutdownException
 import zio.Console.printLine
+import zio._
 import zio.aws.cloudwatch.CloudWatch
 import zio.aws.dynamodb.DynamoDb
 import zio.aws.kinesis.model.ScalingType
@@ -17,7 +18,6 @@ import zio.stream.{ SubscriptionRef, ZSink, ZStream }
 import zio.test.Assertion._
 import zio.test.TestAspect.{ timeout, withLiveClock }
 import zio.test._
-import zio.{ Clock, System, _ }
 
 object DynamicConsumerTest extends ZIOSpecDefault {
   import TestUtil._

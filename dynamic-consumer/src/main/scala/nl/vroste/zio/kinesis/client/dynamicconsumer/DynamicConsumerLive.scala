@@ -18,6 +18,7 @@ import software.amazon.kinesis.processor.{
 import software.amazon.kinesis.retrieval.KinesisClientRecord
 import zio._
 import zio.stream.ZStream
+
 import scala.jdk.CollectionConverters._
 
 private[client] class DynamicConsumerLive(

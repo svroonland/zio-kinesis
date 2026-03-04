@@ -10,16 +10,8 @@ import software.amazon.awssdk.services.kinesis.model.{
 import zio._
 import zio.aws.core.AwsError
 import zio.aws.core.aspects.AwsCallAspect
+import zio.aws.kinesis.model._
 import zio.aws.kinesis.model.primitives._
-import zio.aws.kinesis.model.{
-  ChildShard,
-  GetRecordsResponse,
-  GetShardIteratorResponse,
-  HashKeyRange,
-  Record,
-  ShardIteratorType,
-  StartingPosition
-}
 import zio.aws.kinesis.{ model, Kinesis }
 import zio.stream.ZStream
 import zio.test.Assertion._

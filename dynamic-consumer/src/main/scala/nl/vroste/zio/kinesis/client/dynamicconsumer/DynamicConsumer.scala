@@ -1,16 +1,16 @@
 package nl.vroste.zio.kinesis.client.dynamicconsumer
 
 import nl.vroste.zio.kinesis.client.dynamicconsumer.DynamicConsumer.{ Checkpointer, Record }
-import zio.aws.cloudwatch.CloudWatch
-import zio.aws.dynamodb.DynamoDb
-import zio.aws.kinesis.Kinesis
 import nl.vroste.zio.kinesis.client.dynamicconsumer.fake.DynamicConsumerFake
 import nl.vroste.zio.kinesis.client.serde.Deserializer
 import software.amazon.awssdk.services.kinesis.model.EncryptionType
 import software.amazon.kinesis.common.{ InitialPositionInStream, InitialPositionInStreamExtended }
 import software.amazon.kinesis.exceptions.ShutdownException
-import zio.stream.{ ZSink, ZStream }
 import zio._
+import zio.aws.cloudwatch.CloudWatch
+import zio.aws.dynamodb.DynamoDb
+import zio.aws.kinesis.Kinesis
+import zio.stream.{ ZSink, ZStream }
 
 import java.time.Instant
 import java.util.UUID
