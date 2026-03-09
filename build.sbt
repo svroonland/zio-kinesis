@@ -15,6 +15,7 @@ inThisBuild(
     Test / parallelExecution := false,
     Global / cancelable      := true,
     Test / fork              := true,
+    ghreleaseRepoName        := "zio-kinesis",
     scmInfo                  := Some(
       ScmInfo(url("https://github.com/liveintent/zio-kinesis/"), "scm:git:git@github.com:liveintent/zio-kinesis.git")
     ),
