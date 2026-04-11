@@ -5,7 +5,14 @@ import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent
 import nl.vroste.zio.kinesis.client.zionative.DiagnosticEvent._
 import zio._
 import zio.aws.cloudwatch.CloudWatch
-import zio.aws.cloudwatch.model.primitives._
+import zio.aws.cloudwatch.model.primitives.{
+  DatapointValue,
+  DimensionName,
+  DimensionValue,
+  MetricName,
+  Namespace,
+  Timestamp
+}
 import zio.aws.cloudwatch.model.{ Dimension, MetricDatum, PutMetricDataRequest, StandardUnit }
 import zio.stream.{ ZSink, ZStream }
 
