@@ -35,7 +35,7 @@ jobs:
       - restore_cache:
           key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
       - run: apt update && apt install -y protobuf-compiler
-      - run: sbt << parameters.sbt_command >>
+      - run: sbt "<< parameters.sbt_command >>"
       - save_cache:
           key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
           paths:
