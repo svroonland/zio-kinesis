@@ -2,7 +2,7 @@ version: 2.1
 parameters:
   tag_regex:
     type: string
-    default: /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/
+    default: /^v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/
 jobs:
   # Parameterized job with localstack container running
   run_with_localstack:
