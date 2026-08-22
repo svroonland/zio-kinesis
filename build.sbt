@@ -8,8 +8,8 @@ val excludeInferAny = (options: Seq[String]) => options.filterNot(Set("-Xlint:in
 inThisBuild(
   List(
     organization                     := "nl.vroste",
-    homepage                         := Some(url("https://github.com/svroonland/zio-kinesis")),
-    licenses                         := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
+    homepage                         := Some(uri("https://github.com/svroonland/zio-kinesis")),
+    licenses                         := List("Apache-2.0" -> uri("http://www.apache.org/licenses/LICENSE-2.0")),
     scalaVersion                     := mainScala,
     crossScalaVersions               := allScala,
     compileOrder                     := CompileOrder.JavaThenScala,
@@ -23,14 +23,14 @@ inThisBuild(
       case _                                   => MergeStrategy.first
     },
     scmInfo                          := Some(
-      ScmInfo(url("https://github.com/svroonland/zio-kinesis/"), "scm:git:git@github.com:svroonland/zio-kinesis.git")
+      ScmInfo(uri("https://github.com/svroonland/zio-kinesis/"), "scm:git:git@github.com:svroonland/zio-kinesis.git")
     ),
     developers                       := List(
       Developer(
         "svroonland",
         "Vroste",
         "info@vroste.nl",
-        url("https://github.com/svroonland")
+        uri("https://github.com/svroonland")
       )
     ),
     resolvers += Resolver.sonatypeCentralSnapshots,
@@ -88,8 +88,8 @@ lazy val stdSettings: Seq[sbt.Def.SettingsDefinition] = Seq(
   )
 )
 
-addCommandAlias("fmt", "all scalafmtSbt scalafmt test:scalafmt")
-addCommandAlias("check", "all scalafmtSbtCheck scalafmtCheck test:scalafmtCheck")
+addCommandAlias("fmt", "all scalafmtSbt scalafmt test/scalafmt")
+addCommandAlias("check", "all scalafmtSbtCheck scalafmtCheck test/scalafmtCheck")
 
 lazy val interopFutures = (project in file("interop-futures"))
   .settings(stdSettings*)
