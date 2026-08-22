@@ -77,7 +77,7 @@ workflows:
               only: << pipeline.parameters.tag_regex >>
       - run_with_localstack:
           name: test213
-          sbt_command: ++2.13.18! interopFutures/compile tests/test interopFutures/test Compile/doc
+          sbt_command: ++2.13.18! interopFutures / compile tests / test interopFutures / test Compile / doc
           requires:
             - lint
           filters:

@@ -88,8 +88,8 @@ lazy val stdSettings: Seq[sbt.Def.SettingsDefinition] = Seq(
   )
 )
 
-addCommandAlias("fmt", "all scalafmtSbt scalafmt test/scalafmt")
-addCommandAlias("check", "all scalafmtSbtCheck scalafmtCheck test/scalafmtCheck")
+addCommandAlias("fmt", "all scalafmtSbt scalafmt test / scalafmt")
+addCommandAlias("check", "all scalafmtSbtCheck scalafmtCheck test / scalafmtCheck")
 
 lazy val interopFutures = (project in file("interop-futures"))
   .settings(stdSettings *)
