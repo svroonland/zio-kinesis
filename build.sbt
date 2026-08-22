@@ -50,14 +50,14 @@ lazy val root = project
       scalafmtOnCompile := false
     )
   )
-  .settings(stdSettings*)
+  .settings(stdSettings *)
   .settings(publish / skip := true)
   .aggregate(core, interopFutures, dynamicConsumer, tests, testUtils)
   .dependsOn(core, interopFutures, dynamicConsumer, tests, testUtils)
 
 lazy val core = (project in file("core"))
   .enablePlugins(ProtobufPlugin)
-  .settings(stdSettings*)
+  .settings(stdSettings *)
   .settings(
     Seq(
       name := "zio-kinesis"
@@ -92,7 +92,7 @@ addCommandAlias("fmt", "all scalafmtSbt scalafmt test/scalafmt")
 addCommandAlias("check", "all scalafmtSbtCheck scalafmtCheck test/scalafmtCheck")
 
 lazy val interopFutures = (project in file("interop-futures"))
-  .settings(stdSettings*)
+  .settings(stdSettings *)
   .settings(
     name                       := "zio-kinesis-future",
     assembly / assemblyJarName := "zio-kinesis-future" + version.value + ".jar",
@@ -103,7 +103,7 @@ lazy val interopFutures = (project in file("interop-futures"))
   .dependsOn(core)
 
 lazy val dynamicConsumer = (project in file("dynamic-consumer"))
-  .settings(stdSettings*)
+  .settings(stdSettings *)
   .settings(
     name                       := "zio-kinesis-dynamic-consumer",
     assembly / assemblyJarName := "zio-kinesis-dynamic-consumer" + version.value + ".jar",
@@ -114,7 +114,7 @@ lazy val dynamicConsumer = (project in file("dynamic-consumer"))
   .dependsOn(core % "compile->compile;test->test")
 
 lazy val testUtils = (project in file("test-utils"))
-  .settings(stdSettings*)
+  .settings(stdSettings *)
   .settings(
     name                       := "zio-kinesis-test-utils",
     assembly / assemblyJarName := "zio-kinesis-test-utils" + version.value + ".jar",
@@ -126,5 +126,5 @@ lazy val testUtils = (project in file("test-utils"))
 
 lazy val tests = (project in file("test"))
   .dependsOn(dynamicConsumer % "compile->compile;test->test", testUtils % "compile->compile")
-  .settings(stdSettings*)
+  .settings(stdSettings *)
   .settings(publish / skip := true)
