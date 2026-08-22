@@ -47,6 +47,11 @@ jobs:
       - image: sbtscala/scala-sbt:eclipse-temurin-23.0.2_7_1.10.9_2.13.16
     steps:
       - checkout
+      - run:
+          name: Add GitHub to known_hosts
+          command: |
+            mkdir -p ~/.ssh
+            ssh-keyscan -H github.com >> ~/.ssh/known_hosts
       - run: git fetch --tags
       - restore_cache:
           key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
@@ -87,9 +92,9 @@ workflows:
           requires:
             - test3
             - test213
-          filters:
-            branches:
-              only:
-                - master
-            tags:
-              only: /^v.*/
+#          filters:
+#            branches:
+#              only:
+#                - master
+#            tags:
+#              only: /^v.*/
