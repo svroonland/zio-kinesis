@@ -2,7 +2,7 @@ version: 2.1
 parameters:
   tag_regex:
     type: string
-    default: /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/
+    default: /^v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/
 jobs:
   # Parameterized job with localstack container running
   run_with_localstack:
@@ -35,7 +35,7 @@ jobs:
       - restore_cache:
           key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
       - run: apt update && apt install -y protobuf-compiler
-      - run: sbt << parameters.sbt_command >>
+      - run: sbt "<< parameters.sbt_command >>"
       - save_cache:
           key: sbt-cache-{{ checksum "build.sbt" }}-{{ checksum "project/build.properties" }}-{{ checksum "project/plugins.sbt" }}
           paths:
@@ -69,7 +69,7 @@ workflows:
       - run_with_localstack:
           name: test3
           image: sbtscala/scala-sbt:eclipse-temurin-23.0.1_11_1.10.5_3.3.4
-          sbt_command: ++3.3.3! tests/test interopFutures/test
+          sbt_command: "++3.3.3! ;tests/test; interopFutures/test"
           requires:
             - lint
           filters:
@@ -77,7 +77,7 @@ workflows:
               only: << pipeline.parameters.tag_regex >>
       - run_with_localstack:
           name: test213
-          sbt_command: ++2.13.18! interopFutures/compile tests/test interopFutures/test Compile/doc
+          sbt_command: "++2.13.18! ;interopFutures/compile; tests/test; interopFutures/test; Compile/doc"
           requires:
             - lint
           filters:
