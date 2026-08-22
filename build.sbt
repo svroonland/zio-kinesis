@@ -1,10 +1,9 @@
-import xerial.sbt.Sonatype.GitHubHosting
 import org.typelevel.scalacoptions.ScalacOptions
 
 val mainScala = "2.13.18"
 val allScala  = Seq(mainScala, "3.3.8")
 
-val excludeInferAny = { options: Seq[String] => options.filterNot(Set("-Xlint:infer-any")) }
+val excludeInferAny = (options: Seq[String]) => options.filterNot(Set("-Xlint:infer-any"))
 
 inThisBuild(
   List(
@@ -25,9 +24,6 @@ inThisBuild(
     },
     scmInfo                          := Some(
       ScmInfo(url("https://github.com/svroonland/zio-kinesis/"), "scm:git:git@github.com:svroonland/zio-kinesis.git")
-    ),
-    sonatypeProjectHosting           := Some(
-      GitHubHosting("svroonland", "zio-kinesis", "info@vroste.nl")
     ),
     developers                       := List(
       Developer(
@@ -54,14 +50,14 @@ lazy val root = project
       scalafmtOnCompile := false
     )
   )
-  .settings(stdSettings: _*)
+  .settings(stdSettings*)
   .settings(publish / skip := true)
   .aggregate(core, interopFutures, dynamicConsumer, tests, testUtils)
   .dependsOn(core, interopFutures, dynamicConsumer, tests, testUtils)
 
 lazy val core = (project in file("core"))
   .enablePlugins(ProtobufPlugin)
-  .settings(stdSettings: _*)
+  .settings(stdSettings*)
   .settings(
     Seq(
       name := "zio-kinesis"
@@ -96,7 +92,7 @@ addCommandAlias("fmt", "all scalafmtSbt scalafmt test:scalafmt")
 addCommandAlias("check", "all scalafmtSbtCheck scalafmtCheck test:scalafmtCheck")
 
 lazy val interopFutures = (project in file("interop-futures"))
-  .settings(stdSettings: _*)
+  .settings(stdSettings*)
   .settings(
     name                       := "zio-kinesis-future",
     assembly / assemblyJarName := "zio-kinesis-future" + version.value + ".jar",
@@ -107,7 +103,7 @@ lazy val interopFutures = (project in file("interop-futures"))
   .dependsOn(core)
 
 lazy val dynamicConsumer = (project in file("dynamic-consumer"))
-  .settings(stdSettings: _*)
+  .settings(stdSettings*)
   .settings(
     name                       := "zio-kinesis-dynamic-consumer",
     assembly / assemblyJarName := "zio-kinesis-dynamic-consumer" + version.value + ".jar",
@@ -118,7 +114,7 @@ lazy val dynamicConsumer = (project in file("dynamic-consumer"))
   .dependsOn(core % "compile->compile;test->test")
 
 lazy val testUtils = (project in file("test-utils"))
-  .settings(stdSettings: _*)
+  .settings(stdSettings*)
   .settings(
     name                       := "zio-kinesis-test-utils",
     assembly / assemblyJarName := "zio-kinesis-test-utils" + version.value + ".jar",
@@ -130,5 +126,5 @@ lazy val testUtils = (project in file("test-utils"))
 
 lazy val tests = (project in file("test"))
   .dependsOn(dynamicConsumer % "compile->compile;test->test", testUtils % "compile->compile")
-  .settings(stdSettings: _*)
+  .settings(stdSettings*)
   .settings(publish / skip := true)
