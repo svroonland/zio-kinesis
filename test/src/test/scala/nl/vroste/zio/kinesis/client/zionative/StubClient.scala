@@ -100,4 +100,16 @@ class StubClient extends Kinesis { self =>
   override def updateAccountSettings(
     request: UpdateAccountSettingsRequest
   ): IO[AwsError, UpdateAccountSettingsResponse.ReadOnly] = ???
+
+  override def listChannels(request: ListChannelsRequest): ZStream[Any, AwsError, ChannelSummary.ReadOnly] = ???
+
+  override def listChannelsPaginated(request: ListChannelsRequest): IO[AwsError, ListChannelsResponse.ReadOnly] = ???
+
+  override def deleteChannel(request: DeleteChannelRequest): IO[AwsError, Unit] = ???
+
+  override def createChannel(request: CreateChannelRequest): IO[AwsError, CreateChannelResponse.ReadOnly] = ???
+
+  override def describeChannel(request: DescribeChannelRequest): IO[AwsError, DescribeChannelResponse.ReadOnly] = ???
+
+  override def updateChannel(request: UpdateChannelRequest): IO[AwsError, UpdateChannelResponse.ReadOnly] = ???
 }
