@@ -1,7 +1,7 @@
 import org.typelevel.scalacoptions.ScalacOptions
 
 val mainScala = "3.10.0"
-val allScala  = Seq(mainScala, "3.3.8")
+val allScala  = Seq(mainScala, "3.3.9")
 
 val excludeInferAny = (options: Seq[String]) => options.filterNot(Set("-Xlint:infer-any"))
 
